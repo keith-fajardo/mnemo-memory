@@ -22,6 +22,15 @@ For development use `uv sync --locked`. For an isolated local artifact test use
 `uv pip install --python <venv>/bin/python dist/<artifact>.whl` from a temporary directory, then
 run `mnemo-memory --help` and initialize with an explicit temporary `--data-dir`.
 
+Issue 13B verification builds both the wheel and sdist with `uv build --no-sources`, installs each
+outside the checkout, and exercises the installed stdio MCP server with the official MCP Python
+client. It also uses `uv tool install` with an isolated tool directory and temporary Codex/Claude
+homes. These checks use only synthetic fixtures and isolated Mnemo data; they neither inspect nor
+modify real client configuration or `/opt/homebrew/bin/mnemo`.
+
 Publishing is intentionally a separate gate. TestPyPI requires a user-approved permanent name
 and valid Trusted Publishing configuration (or an explicitly configured secure alternative).
 Production PyPI requires a separate explicit user approval after TestPyPI verification.
+
+The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
+Its repository name is not a PyPI-name decision: the placeholder distribution remains local only.

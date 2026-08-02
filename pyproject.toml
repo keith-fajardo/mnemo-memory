@@ -25,8 +25,10 @@ dependencies = [
 mnemo-memory = "mnemo_memory.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/example/mnemo-agent-context-placeholder"
-Source = "https://github.com/example/mnemo-agent-context-placeholder"
+Homepage = "https://github.com/keith-fajardo/mnemo-memory"
+Repository = "https://github.com/keith-fajardo/mnemo-memory"
+Issues = "https://github.com/keith-fajardo/mnemo-memory/issues"
+Documentation = "https://github.com/keith-fajardo/mnemo-memory#readme"
 
 [dependency-groups]
 dev = [
