@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from packages.application.checkpoints import CheckpointApplicationService
 from packages.application.config import LocalConfig
+from packages.application.dbt import DbtManifestApplicationService, DbtManifestParserPort
 from packages.application.services import LifecycleService
 from packages.storage import SQLiteCheckpointRepository
 
@@ -26,10 +27,12 @@ class CheckpointRuntime:
         config: LocalConfig,
         repository: SQLiteCheckpointRepository,
         checkpoint_service: CheckpointApplicationService,
+        dbt_manifest_service: DbtManifestApplicationService | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
         self.checkpoint_service = checkpoint_service
+        self.dbt_manifest_service = dbt_manifest_service
         self._closed = False
 
     def close(self) -> None:
@@ -50,7 +53,9 @@ class LocalRuntimeError(RuntimeError):
     """Safe error composing the configured local checkpoint runtime."""
 
 
-def build_checkpoint_runtime(config: LocalConfig) -> CheckpointRuntime:
+def build_checkpoint_runtime(
+    config: LocalConfig, *, dbt_parser: DbtManifestParserPort | None = None
+) -> CheckpointRuntime:
     """Open the configured SQLite profile, migrate it, and compose canonical use cases."""
     try:
         repository = SQLiteCheckpointRepository(
@@ -65,4 +70,5 @@ def build_checkpoint_runtime(config: LocalConfig) -> CheckpointRuntime:
         config,
         repository,
         CheckpointApplicationService(repository, clock=lambda: datetime.now(UTC)),
+        DbtManifestApplicationService(repository, dbt_parser) if dbt_parser is not None else None,
     )

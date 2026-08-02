@@ -410,6 +410,30 @@ class ReferenceProjectIndexRepository:
             edge for edge in self.iter_edges(scope, snapshot_id) if edge.parent_id == unique_id
         )
 
+    def get_nodes(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtManifestNode, ...]:
+        requested = set(unique_ids)
+        return tuple(
+            node for node in self.iter_nodes(scope, snapshot_id) if node.unique_id in requested
+        )
+
+    def get_upstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, child_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]:
+        requested = set(child_ids)
+        return tuple(
+            edge for edge in self.iter_edges(scope, snapshot_id) if edge.child_id in requested
+        )
+
+    def get_downstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, parent_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]:
+        requested = set(parent_ids)
+        return tuple(
+            edge for edge in self.iter_edges(scope, snapshot_id) if edge.parent_id in requested
+        )
+
     def list_snapshots(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ManifestSnapshotPage:

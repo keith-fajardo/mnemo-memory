@@ -349,10 +349,24 @@ Results: SQLite migration, reference/SQLite contract, integrity, reopen, stale-w
 read-only temporary-database validation passed. The query service and context integration remain
 deferred.
 
-##### Issue 12B.2 — Not started
+##### Issue 12B.2 — Complete
+
+Added the storage-independent manifest ingestion and lineage-query application service. It parses
+only through the supported offline adapter, persists immutable snapshots via expected-active
+activation, and serves direct or transitive scoped upstream/downstream traversal with batched
+frontiers, shortest depth, deterministic ordering, evidence, limits, and structured truncation.
+Currentness is deliberately distinct from active selection: exact comparable manifest/source-state
+evidence yields current or stale; missing or incomparable evidence yields unknown. No MCP or
+context-packet integration was added.
+
+#### Issue 12B — Complete
+
+Immutable snapshots, atomic activation, and deterministic persisted lineage queries are complete.
+Context-packet/MCP integration remains deferred to 12C.
 
 #### Issue 12C — Not started
 
 ## Issue queue
 
-Issues 10 and 11 are complete. Issue 12 is in progress; 12A and 12B.1 are complete.
+Issues 10 and 11 are complete. Issue 12 is in progress; 12A and 12B are complete and 12C has not
+started.

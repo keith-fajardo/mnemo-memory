@@ -658,6 +658,21 @@ class SQLiteCheckpointRepository:
             )
         )
 
+    def get_nodes(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtManifestNode, ...]:
+        return tuple(self._scoped_nodes_in(scope, snapshot_id, "node.unique_id", unique_ids))
+
+    def get_upstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, child_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]:
+        return tuple(self._scoped_edges_in(scope, snapshot_id, "edge.child_unique_id", child_ids))
+
+    def get_downstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, parent_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]:
+        return tuple(self._scoped_edges_in(scope, snapshot_id, "edge.parent_unique_id", parent_ids))
+
     def list_snapshots(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ManifestSnapshotPage:
@@ -759,6 +774,19 @@ class SQLiteCheckpointRepository:
             raise ProjectIndexStorageFailure("project index storage operation failed") from error
         return [self._node_from_row(row) for row in rows]
 
+    def _scoped_nodes_in(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        column: str,
+        ids: tuple[DbtNodeId, ...],
+    ) -> list[DbtManifestNode]:
+        if not ids:
+            return []
+        values = tuple(sorted({str(item) for item in ids}))
+        placeholders = ",".join("?" for _ in values)
+        return self._scoped_nodes(scope, snapshot_id, f"AND {column} IN ({placeholders})", values)
+
     def _scoped_edges(
         self,
         scope: MemoryScope,
@@ -787,6 +815,19 @@ class SQLiteCheckpointRepository:
         except sqlite3.Error as error:
             raise ProjectIndexStorageFailure("project index storage operation failed") from error
         return [self._edge_from_row(row) for row in rows]
+
+    def _scoped_edges_in(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        column: str,
+        ids: tuple[DbtNodeId, ...],
+    ) -> list[DbtLineageEdge]:
+        if not ids:
+            return []
+        values = tuple(sorted({str(item) for item in ids}))
+        placeholders = ",".join("?" for _ in values)
+        return self._scoped_edges(scope, snapshot_id, f"AND {column} IN ({placeholders})", values)
 
     @staticmethod
     def _require_project_scope(scope: MemoryScope) -> None:

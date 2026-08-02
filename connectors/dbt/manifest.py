@@ -156,6 +156,26 @@ class DbtManifestParser:
             metadata=replace(preliminary_metadata, normalized_graph_digest=normalized_digest),
         )
 
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+        source_state: SourceStateFingerprint | None,
+    ) -> DbtManifestArtifact:
+        """Application-facing adapter without exposing parser request construction upstream."""
+        return self.parse(
+            raw,
+            ManifestParseRequest(
+                scope=scope,
+                source_identity=source_identity,
+                ingested_at=ingested_at,
+                source_state=source_state,
+            ),
+        )
+
     def parse_file(self, path: Path, request: ManifestParseRequest) -> DbtManifestArtifact:
         """Read only the caller-selected artifact; the caller supplies its safe path identity."""
         try:

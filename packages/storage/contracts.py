@@ -198,6 +198,18 @@ class ProjectIndexRepository(Protocol):
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
     ) -> tuple[DbtLineageEdge, ...]: ...
 
+    def get_nodes(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtManifestNode, ...]: ...
+
+    def get_upstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, child_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]: ...
+
+    def get_downstream_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, parent_ids: tuple[DbtNodeId, ...]
+    ) -> tuple[DbtLineageEdge, ...]: ...
+
     def list_snapshots(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ManifestSnapshotPage: ...
