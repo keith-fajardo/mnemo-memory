@@ -422,16 +422,23 @@ registration paths pass without a source checkout dependency. CI now covers the 
 3.12 configuration on Linux and macOS. No package registry was queried or modified, no private
 manifest was used, and no external upload occurred.
 
-#### Issue 13C — Not started
+#### Issue 13C — Complete
 
 ##### Issue 13C.1 — Complete
 
 Read-only PyPI/TestPyPI name research selected the approved permanent distribution name
 `mnemo-unified-context`; the Python namespace and installed executable remain unchanged.
 
-##### Issue 13C.2 — In progress
+##### Issue 13C.2 — Complete
 
-Renamed local package metadata and rebuilding artifacts for the separate TestPyPI publication
-gate. Production PyPI publication remains explicitly out of scope.
+Published the approved `mnemo-unified-context` 0.1.0a1 wheel and source distribution through
+TestPyPI Trusted Publishing. The exact uploaded artifacts were independently downloaded,
+hash-verified, installed into a fresh environment, and smoke-tested. No production PyPI upload
+occurred during this stage.
 
-#### Issue 13D — Not started
+#### Issue 13D — Complete
+
+Published the exact checksum-bound TestPyPI-verified artifacts to production PyPI through the
+manual `pypi` Trusted Publishing workflow. Production metadata, both artifact hashes, fresh-wheel
+installation, CLI initialization, and packaged migration/schema resources were independently
+verified after upload. No long-lived API token was used.

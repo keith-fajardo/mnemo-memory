@@ -35,8 +35,7 @@ from the successful TestPyPI build run; it does not rebuild artifacts.
 
 The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
 The approved distribution name is `mnemo-unified-context`; the import namespace remains
-`mnemo_memory` and the installed command remains `mnemo-memory`. Approval of this workflow does
-not publish to either registry.
+`mnemo_memory` and the installed command remains `mnemo-memory`.
 
 ## TestPyPI Trusted Publishing setup
 
