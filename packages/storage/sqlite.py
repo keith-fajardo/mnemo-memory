@@ -21,6 +21,7 @@ from packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
+    DbtSnapshotId,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -31,19 +32,38 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
+from packages.domain.dbt_manifest import (
+    ArtifactCurrentness,
+    DbtArtifactMetadata,
+    DbtLineageEdge,
+    DbtManifestArtifact,
+    DbtManifestNode,
+    DbtManifestSnapshot,
+    DbtNodeId,
+    DbtResourceType,
+    LineageEdgeType,
+    SourceStateFingerprint,
+)
 
 from .contracts import (
+    ActiveSnapshotConflict,
     CheckpointNotFound,
     CheckpointPage,
     DuplicateCheckpoint,
     InvalidAbandonmentReason,
     InvalidCheckpointScope,
     InvalidLifecycleTransition,
+    InvalidManifestSnapshotScope,
+    ManifestNodeNotFound,
+    ManifestSnapshotNotFound,
+    ManifestSnapshotPage,
+    ManifestSnapshotStoreResult,
+    ProjectIndexStorageFailure,
     RepositoryStorageFailure,
     RevisionConflict,
 )
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -136,6 +156,16 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 2:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 2
+            if version < 3:
+                migration_path = _root() / "migrations" / "0003_dbt_manifest_snapshots.sql"
+                _execute_sql_script(connection, migration_path.read_text())
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 3:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -459,6 +489,447 @@ class SQLiteCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def store_and_activate(
+        self,
+        artifact: DbtManifestArtifact,
+        snapshot_id: DbtSnapshotId,
+        *,
+        expected_active_snapshot_id: DbtSnapshotId | None = None,
+    ) -> ManifestSnapshotStoreResult:
+        self._require_project_scope(artifact.scope)
+        try:
+            with self._transaction() as connection:
+                active = self._active_snapshot_row(connection, artifact.scope)
+                active_id = (
+                    None if active is None else DbtSnapshotId.from_string(active["snapshot_id"])
+                )
+                if expected_active_snapshot_id != active_id and not (
+                    expected_active_snapshot_id is None and active_id is None
+                ):
+                    raise ActiveSnapshotConflict("expected active snapshot is not current")
+                duplicate = connection.execute(
+                    "SELECT * FROM dbt_manifest_snapshots WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND content_digest = ?",
+                    (
+                        str(artifact.scope.owner_id),
+                        _maybe(artifact.scope.workspace_id),
+                        str(artifact.scope.project_id),
+                        artifact.metadata.content_digest,
+                    ),
+                ).fetchone()
+                if duplicate is not None:
+                    existing_id = DbtSnapshotId.from_string(duplicate["snapshot_id"])
+                    if active_id != existing_id:
+                        connection.execute(
+                            "UPDATE dbt_manifest_snapshots SET is_active = 0 "
+                            "WHERE owner_id = ? AND project_id = ? AND is_active = 1",
+                            (str(artifact.scope.owner_id), str(artifact.scope.project_id)),
+                        )
+                        connection.execute(
+                            "UPDATE dbt_manifest_snapshots SET is_active = 1 WHERE snapshot_id = ?",
+                            (str(existing_id),),
+                        )
+                        duplicate = connection.execute(
+                            "SELECT * FROM dbt_manifest_snapshots WHERE snapshot_id = ?",
+                            (str(existing_id),),
+                        ).fetchone()
+                    assert duplicate is not None
+                    return ManifestSnapshotStoreResult(
+                        snapshot=self._snapshot_from_row(duplicate, artifact.scope), idempotent=True
+                    )
+                self._store_project_scope(connection, artifact.scope)
+                connection.execute(
+                    "INSERT INTO dbt_manifest_snapshots VALUES ("
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    self._snapshot_values(snapshot_id, artifact, is_active=False),
+                )
+                connection.executemany(
+                    "INSERT INTO dbt_manifest_nodes VALUES ("
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [self._node_values(snapshot_id, node) for node in artifact.nodes],
+                )
+                connection.executemany(
+                    "INSERT INTO dbt_manifest_edges VALUES (?, ?, ?, ?, ?, ?)",
+                    [self._edge_values(snapshot_id, edge) for edge in artifact.edges],
+                )
+                counts = connection.execute(
+                    "SELECT (SELECT COUNT(*) FROM dbt_manifest_nodes "
+                    "WHERE snapshot_id = ?) AS nodes, (SELECT COUNT(*) "
+                    "FROM dbt_manifest_edges WHERE snapshot_id = ?) AS edges",
+                    (str(snapshot_id), str(snapshot_id)),
+                ).fetchone()
+                if (
+                    counts is None
+                    or int(counts["nodes"]) != len(artifact.nodes)
+                    or int(counts["edges"]) != len(artifact.edges)
+                ):
+                    raise ProjectIndexStorageFailure("manifest snapshot projection count mismatch")
+                if active_id is not None:
+                    connection.execute(
+                        "UPDATE dbt_manifest_snapshots SET is_active = 0 WHERE snapshot_id = ?",
+                        (str(active_id),),
+                    )
+                updated = connection.execute(
+                    "UPDATE dbt_manifest_snapshots SET is_active = 1 WHERE snapshot_id = ? "
+                    "AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+                    (
+                        str(snapshot_id),
+                        str(artifact.scope.owner_id),
+                        _maybe(artifact.scope.workspace_id),
+                        str(artifact.scope.project_id),
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise ActiveSnapshotConflict("active snapshot could not be selected")
+                return ManifestSnapshotStoreResult(
+                    snapshot=DbtManifestSnapshot(
+                        snapshot_id=snapshot_id,
+                        scope=artifact.scope,
+                        metadata=artifact.metadata,
+                        node_count=len(artifact.nodes),
+                        edge_count=len(artifact.edges),
+                        is_active=True,
+                    ),
+                    idempotent=False,
+                )
+        except (ActiveSnapshotConflict, ProjectIndexStorageFailure):
+            raise
+        except (ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+
+    def get_snapshot(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestSnapshot:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = self._scoped_snapshot_row(connection, scope, snapshot_id)
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        if row is None:
+            raise ManifestSnapshotNotFound("manifest snapshot was not found")
+        return self._snapshot_from_row(row, scope)
+
+    def get_active_snapshot(self, scope: MemoryScope) -> DbtManifestSnapshot | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = self._active_snapshot_row(connection, scope)
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        return None if row is None else self._snapshot_from_row(row, scope)
+
+    def get_node(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> DbtManifestNode:
+        nodes = self._scoped_nodes(scope, snapshot_id, "AND node.unique_id = ?", (str(unique_id),))
+        if not nodes:
+            raise ManifestNodeNotFound("manifest node was not found")
+        return nodes[0]
+
+    def iter_nodes(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> tuple[DbtManifestNode, ...]:
+        return tuple(self._scoped_nodes(scope, snapshot_id, "", ()))
+
+    def iter_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> tuple[DbtLineageEdge, ...]:
+        return tuple(self._scoped_edges(scope, snapshot_id, "", ()))
+
+    def direct_upstream(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> tuple[DbtLineageEdge, ...]:
+        self.get_node(scope, snapshot_id, unique_id)
+        return tuple(
+            self._scoped_edges(
+                scope, snapshot_id, "AND edge.child_unique_id = ?", (str(unique_id),)
+            )
+        )
+
+    def direct_downstream(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> tuple[DbtLineageEdge, ...]:
+        self.get_node(scope, snapshot_id, unique_id)
+        return tuple(
+            self._scoped_edges(
+                scope, snapshot_id, "AND edge.parent_unique_id = ?", (str(unique_id),)
+            )
+        )
+
+    def list_snapshots(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ManifestSnapshotPage:
+        self._require_project_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("offset must be non-negative and limit must be positive")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM dbt_manifest_snapshots WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? ORDER BY ingested_at DESC, "
+                    "snapshot_id ASC LIMIT ? OFFSET ?",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        limit + 1,
+                        offset,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        return ManifestSnapshotPage(
+            items=tuple(self._snapshot_from_row(row, scope) for row in rows[:limit]),
+            next_offset=offset + limit if len(rows) > limit else None,
+        )
+
+    def _store_project_scope(self, connection: sqlite3.Connection, scope: MemoryScope) -> None:
+        if scope.project_id is None:
+            raise InvalidManifestSnapshotScope("dbt snapshot operations require a project")
+        connection.execute(
+            "INSERT OR IGNORE INTO principals(owner_id) VALUES (?)", (str(scope.owner_id),)
+        )
+        if scope.workspace_id is not None:
+            connection.execute(
+                "INSERT OR IGNORE INTO workspaces(workspace_id, owner_id) VALUES (?, ?)",
+                (str(scope.workspace_id), str(scope.owner_id)),
+            )
+        connection.execute(
+            "INSERT OR IGNORE INTO projects(project_id, workspace_id, owner_id) VALUES (?, ?, ?)",
+            (str(scope.project_id), _maybe(scope.workspace_id), str(scope.owner_id)),
+        )
+
+    def _active_snapshot_row(
+        self, connection: sqlite3.Connection, scope: MemoryScope
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM dbt_manifest_snapshots WHERE owner_id = ? AND workspace_id IS ? "
+                "AND project_id = ? AND is_active = 1",
+                (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+            ).fetchone(),
+        )
+
+    def _scoped_snapshot_row(
+        self, connection: sqlite3.Connection, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM dbt_manifest_snapshots WHERE snapshot_id = ? AND owner_id = ? "
+                "AND workspace_id IS ? AND project_id = ?",
+                (
+                    str(snapshot_id),
+                    str(scope.owner_id),
+                    _maybe(scope.workspace_id),
+                    str(scope.project_id),
+                ),
+            ).fetchone(),
+        )
+
+    def _scoped_nodes(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        extra: str,
+        values: tuple[str, ...],
+    ) -> list[DbtManifestNode]:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT node.* FROM dbt_manifest_nodes AS node JOIN "
+                    "dbt_manifest_snapshots AS snapshot ON snapshot.snapshot_id = node.snapshot_id "
+                    "WHERE node.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    + extra
+                    + " ORDER BY node.unique_id ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        return [self._node_from_row(row) for row in rows]
+
+    def _scoped_edges(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        extra: str,
+        values: tuple[str, ...],
+    ) -> list[DbtLineageEdge]:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT edge.* FROM dbt_manifest_edges AS edge JOIN "
+                    "dbt_manifest_snapshots AS snapshot ON snapshot.snapshot_id = edge.snapshot_id "
+                    "WHERE edge.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    + extra
+                    + " ORDER BY edge.parent_unique_id ASC, edge.child_unique_id ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        return [self._edge_from_row(row) for row in rows]
+
+    @staticmethod
+    def _require_project_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise InvalidManifestSnapshotScope(
+                "dbt snapshot operations require explicit project scope"
+            )
+
+    @staticmethod
+    def _snapshot_values(
+        snapshot_id: DbtSnapshotId, artifact: DbtManifestArtifact, *, is_active: bool
+    ) -> tuple[object, ...]:
+        metadata = artifact.metadata
+        scope = artifact.scope
+        state: dict[str, object] | None = (
+            None
+            if metadata.source_state is None
+            else {
+                "git_commit": metadata.source_state.git_commit,
+                "working_tree_fingerprint": metadata.source_state.working_tree_fingerprint,
+                "dirty": metadata.source_state.dirty,
+                "target_name": metadata.source_state.target_name,
+            }
+        )
+        return (
+            str(snapshot_id),
+            str(scope.owner_id),
+            scope.visibility.value,
+            _maybe(scope.workspace_id),
+            str(scope.project_id),
+            scope.level.value,
+            metadata.schema_version,
+            metadata.dbt_version,
+            metadata.project_name,
+            None if metadata.generated_at is None else metadata.generated_at.isoformat(),
+            metadata.ingested_at.isoformat(),
+            metadata.invocation_id,
+            metadata.content_digest,
+            metadata.normalized_graph_digest,
+            None if state is None else _json(state),
+            metadata.currentness.value,
+            metadata.source_identity,
+            len(artifact.nodes),
+            len(artifact.edges),
+            int(is_active),
+        )
+
+    @staticmethod
+    def _node_values(snapshot_id: DbtSnapshotId, node: DbtManifestNode) -> tuple[object, ...]:
+        return (
+            str(snapshot_id),
+            str(node.unique_id),
+            node.raw_resource_type,
+            node.package_name,
+            node.name,
+            node.alias,
+            node.database,
+            node.schema_name,
+            node.relation_name,
+            node.original_file_path,
+            int(node.enabled),
+            node.checksum,
+            _json({"tags": list(node.tags)}),
+            _json(node.evidence.to_dict()),
+        )
+
+    @staticmethod
+    def _edge_values(snapshot_id: DbtSnapshotId, edge: DbtLineageEdge) -> tuple[object, ...]:
+        return (
+            str(snapshot_id),
+            str(edge.parent_id),
+            str(edge.child_id),
+            edge.edge_type.value,
+            edge.artifact_digest,
+            _json(edge.evidence.to_dict()),
+        )
+
+    @staticmethod
+    def _snapshot_from_row(row: sqlite3.Row, scope: MemoryScope) -> DbtManifestSnapshot:
+        raw_state = (
+            None if row["source_state_json"] is None else json.loads(row["source_state_json"])
+        )
+        state = None if raw_state is None else SourceStateFingerprint(**raw_state)
+        return DbtManifestSnapshot(
+            snapshot_id=DbtSnapshotId.from_string(row["snapshot_id"]),
+            scope=scope,
+            metadata=DbtArtifactMetadata(
+                schema_version=row["manifest_schema_version"],
+                dbt_version=row["dbt_version"],
+                project_name=row["project_name"],
+                generated_at=None
+                if row["generated_at"] is None
+                else datetime.fromisoformat(row["generated_at"]),
+                invocation_id=row["invocation_id"],
+                content_digest=row["content_digest"],
+                normalized_graph_digest=row["normalized_graph_digest"],
+                source_identity=row["source_identity"],
+                ingested_at=datetime.fromisoformat(row["ingested_at"]),
+                source_state=state,
+                currentness=ArtifactCurrentness(row["currentness"]),
+            ),
+            node_count=int(row["node_count"]),
+            edge_count=int(row["edge_count"]),
+            is_active=bool(row["is_active"]),
+        )
+
+    @staticmethod
+    def _node_from_row(row: sqlite3.Row) -> DbtManifestNode:
+        evidence = EvidenceReference.from_dict(json.loads(row["evidence_json"]))
+        tags = tuple(json.loads(row["tags_json"])["tags"])
+        return DbtManifestNode(
+            unique_id=DbtNodeId(row["unique_id"]),
+            resource_type=(
+                DbtResourceType(row["resource_type"])
+                if row["resource_type"] in {item.value for item in DbtResourceType}
+                else DbtResourceType.OTHER
+            ),
+            raw_resource_type=row["resource_type"],
+            package_name=row["package_name"],
+            name=row["name"],
+            alias=row["alias"],
+            database=row["database_name"],
+            schema_name=row["schema_name"],
+            relation_name=row["relation_name"],
+            original_file_path=row["original_file_path"],
+            patch_path=None,
+            enabled=bool(row["enabled"]),
+            checksum=row["checksum"],
+            tags=tags,
+            description="",
+            dependency_ids=(),
+            evidence=evidence,
+        )
+
+    @staticmethod
+    def _edge_from_row(row: sqlite3.Row) -> DbtLineageEdge:
+        return DbtLineageEdge(
+            parent_id=DbtNodeId(row["parent_unique_id"]),
+            child_id=DbtNodeId(row["child_unique_id"]),
+            edge_type=LineageEdgeType(row["edge_type"]),
+            evidence=EvidenceReference.from_dict(json.loads(row["evidence_json"])),
+            artifact_digest=row["artifact_digest"],
+        )
 
     def _store_scope(self, connection: sqlite3.Connection, scope: MemoryScope) -> None:
         if scope.project_id is None or scope.session_id is None or scope.task_id is None:

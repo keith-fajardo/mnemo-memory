@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 from hashlib import sha256
 
+from .identifiers import DbtSnapshotId
 from .models import EvidenceReference, MemoryScope, _require_aware
 
 
@@ -266,3 +267,25 @@ class DbtManifestArtifact:
     @staticmethod
     def digest_normalized_json(value: str) -> str:
         return sha256(value.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class DbtManifestSnapshot:
+    """Immutable identity and activation state for one persisted structural projection."""
+
+    snapshot_id: DbtSnapshotId
+    scope: MemoryScope
+    metadata: DbtArtifactMetadata
+    node_count: int
+    edge_count: int
+    is_active: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.snapshot_id, DbtSnapshotId):
+            raise TypeError("snapshot_id must be a DbtSnapshotId")
+        if not isinstance(self.scope, MemoryScope) or not isinstance(
+            self.metadata, DbtArtifactMetadata
+        ):
+            raise TypeError("snapshot requires scope and artifact metadata")
+        if self.node_count < 0 or self.edge_count < 0:
+            raise ValueError("snapshot counts must be non-negative")

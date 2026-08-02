@@ -333,10 +333,26 @@ Results: focused parser and graph tests, existing resumption and cross-client ev
 complete repository verification gate passed. No dbt executable, warehouse, SQL/Jinja rendering,
 SQLite persistence, MCP/context retrieval, model call, or Issue 12B/C work was added.
 
-#### Issue 12B — Not started
+#### Issue 12B — In progress
+
+##### Issue 12B.1 — Complete
+
+Added migration v3 and storage-independent project-index repository contracts for immutable,
+project-scoped dbt manifest snapshots. The SQLite and reference adapters atomically persist
+metadata, bounded node/edge projections, and evidence; preserve historical snapshots; provide
+digest idempotency; and switch one active snapshot per project using expected-active conflict
+protection. Raw manifests, SQL, macro bodies, arbitrary metadata, credentials, absolute source
+paths, and descriptions are excluded. The shared contract covers retrieval, adjacency, ordering,
+scope non-disclosure, replacement, and rollback/integrity behavior.
+
+Results: SQLite migration, reference/SQLite contract, integrity, reopen, stale-writer, and private
+read-only temporary-database validation passed. The query service and context integration remain
+deferred.
+
+##### Issue 12B.2 — Not started
 
 #### Issue 12C — Not started
 
 ## Issue queue
 
-Issues 10 and 11 are complete. Issue 12 is in progress; only 12A is complete.
+Issues 10 and 11 are complete. Issue 12 is in progress; 12A and 12B.1 are complete.

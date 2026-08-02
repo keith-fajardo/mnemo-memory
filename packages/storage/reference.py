@@ -16,14 +16,28 @@ from packages.domain import (
     MemoryScope,
     ScopeLevel,
 )
+from packages.domain.dbt_manifest import (
+    DbtLineageEdge,
+    DbtManifestArtifact,
+    DbtManifestNode,
+    DbtManifestSnapshot,
+    DbtNodeId,
+)
+from packages.domain.identifiers import DbtSnapshotId
 
 from .contracts import (
+    ActiveSnapshotConflict,
     CheckpointNotFound,
     CheckpointPage,
     DuplicateCheckpoint,
     InvalidAbandonmentReason,
     InvalidCheckpointScope,
     InvalidLifecycleTransition,
+    InvalidManifestSnapshotScope,
+    ManifestNodeNotFound,
+    ManifestSnapshotNotFound,
+    ManifestSnapshotPage,
+    ManifestSnapshotStoreResult,
     RevisionConflict,
 )
 
@@ -282,3 +296,143 @@ class ReferenceCheckpointRepository:
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise InvalidCheckpointScope("checkpoint operations require explicit task scope")
+
+
+class ReferenceProjectIndexRepository:
+    """Behavior reference for immutable project-scoped dbt artifact snapshots."""
+
+    def __init__(self) -> None:
+        self._artifacts: dict[DbtSnapshotId, DbtManifestArtifact] = {}
+        self._snapshots: dict[DbtSnapshotId, DbtManifestSnapshot] = {}
+        self._active: dict[MemoryScope, DbtSnapshotId] = {}
+
+    def store_and_activate(
+        self,
+        artifact: DbtManifestArtifact,
+        snapshot_id: DbtSnapshotId,
+        *,
+        expected_active_snapshot_id: DbtSnapshotId | None = None,
+    ) -> ManifestSnapshotStoreResult:
+        self._require_scope(artifact.scope)
+        active = self._active.get(artifact.scope)
+        if expected_active_snapshot_id != active and not (
+            expected_active_snapshot_id is None and active is None
+        ):
+            raise ActiveSnapshotConflict("expected active snapshot is not current")
+        for existing_id, existing in self._artifacts.items():
+            if (
+                existing.scope == artifact.scope
+                and existing.metadata.content_digest == artifact.metadata.content_digest
+            ):
+                snapshot = self._snapshots[existing_id]
+                if active != existing_id:
+                    self._active[artifact.scope] = existing_id
+                    snapshot = replace(snapshot, is_active=True)
+                    self._snapshots[existing_id] = snapshot
+                    if active is not None:
+                        self._snapshots[active] = replace(self._snapshots[active], is_active=False)
+                return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=True)
+        if snapshot_id in self._snapshots:
+            raise ActiveSnapshotConflict("snapshot identity already exists")
+        snapshot = DbtManifestSnapshot(
+            snapshot_id=snapshot_id,
+            scope=artifact.scope,
+            metadata=artifact.metadata,
+            node_count=len(artifact.nodes),
+            edge_count=len(artifact.edges),
+            is_active=True,
+        )
+        previous = self._active.get(artifact.scope)
+        try:
+            self._artifacts[snapshot_id] = artifact
+            self._snapshots[snapshot_id] = snapshot
+            self._active[artifact.scope] = snapshot_id
+            if previous is not None:
+                self._snapshots[previous] = replace(self._snapshots[previous], is_active=False)
+        except BaseException:
+            self._artifacts.pop(snapshot_id, None)
+            self._snapshots.pop(snapshot_id, None)
+            if previous is None:
+                self._active.pop(artifact.scope, None)
+            else:
+                self._active[artifact.scope] = previous
+                self._snapshots[previous] = replace(self._snapshots[previous], is_active=True)
+            raise
+        return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=False)
+
+    def get_snapshot(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestSnapshot:
+        self._require_scope(scope)
+        snapshot = self._snapshots.get(snapshot_id)
+        if snapshot is None or snapshot.scope != scope:
+            raise ManifestSnapshotNotFound("manifest snapshot was not found")
+        return snapshot
+
+    def get_active_snapshot(self, scope: MemoryScope) -> DbtManifestSnapshot | None:
+        self._require_scope(scope)
+        snapshot_id = self._active.get(scope)
+        return None if snapshot_id is None else self._snapshots[snapshot_id]
+
+    def get_node(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> DbtManifestNode:
+        try:
+            artifact = self._artifact(scope, snapshot_id)
+        except ManifestSnapshotNotFound as error:
+            raise ManifestNodeNotFound("manifest node was not found") from error
+        for node in artifact.nodes:
+            if node.unique_id == unique_id:
+                return node
+        raise ManifestNodeNotFound("manifest node was not found")
+
+    def iter_nodes(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> tuple[DbtManifestNode, ...]:
+        return self._artifact(scope, snapshot_id).nodes
+
+    def iter_edges(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> tuple[DbtLineageEdge, ...]:
+        return self._artifact(scope, snapshot_id).edges
+
+    def direct_upstream(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> tuple[DbtLineageEdge, ...]:
+        self.get_node(scope, snapshot_id, unique_id)
+        return tuple(
+            edge for edge in self.iter_edges(scope, snapshot_id) if edge.child_id == unique_id
+        )
+
+    def direct_downstream(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
+    ) -> tuple[DbtLineageEdge, ...]:
+        self.get_node(scope, snapshot_id, unique_id)
+        return tuple(
+            edge for edge in self.iter_edges(scope, snapshot_id) if edge.parent_id == unique_id
+        )
+
+    def list_snapshots(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ManifestSnapshotPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("offset must be non-negative and limit must be positive")
+        snapshots = sorted(
+            (item for item in self._snapshots.values() if item.scope == scope),
+            key=lambda item: (item.metadata.ingested_at, str(item.snapshot_id)),
+            reverse=True,
+        )
+        return ManifestSnapshotPage(
+            items=tuple(snapshots[offset : offset + limit]),
+            next_offset=offset + limit if offset + limit < len(snapshots) else None,
+        )
+
+    def _artifact(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestArtifact:
+        self.get_snapshot(scope, snapshot_id)
+        return self._artifacts[snapshot_id]
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise InvalidManifestSnapshotScope(
+                "dbt snapshot operations require explicit project scope"
+            )

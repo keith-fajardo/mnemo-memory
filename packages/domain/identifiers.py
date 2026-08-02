@@ -68,6 +68,10 @@ class CheckpointRevisionId(Identifier):
     __slots__ = ()
 
 
+class DbtSnapshotId(Identifier):
+    __slots__ = ()
+
+
 class OwnerId(Identifier):
     __slots__ = ()
 
