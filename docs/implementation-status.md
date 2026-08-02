@@ -316,6 +316,27 @@ corrupt-profile failure without fallback, and missing-launcher failure. It invok
 authentication flow. `npm run eval:cross-client -- --json` and the complete 135-test gate passed.
 Issue 12 remains not started.
 
+### Issue 12 — In progress
+
+#### Issue 12A — Complete
+
+Added an offline, storage-independent dbt manifest v12 adapter and deterministic lineage graph.
+It validates `metadata.dbt_schema_version`, explicit scope, bounded JSON input, node/source
+identity, dependency references, authoritative `depends_on.nodes`, optional parent/child map
+consistency, cycles, and personal-mode resource limits. The parser records SHA-256 artifact and
+normalized-graph fingerprints, marks currentness unknown without external repository evidence,
+and keeps descriptions and metadata inert. The original synthetic fixture covers source, staging,
+intermediate, mart, test, package-boundary, branching, and converging lineage. Direct/transitive
+queries are iterative, bounded, deduplicated, depth-aware, stable, and evidenced.
+
+Results: focused parser and graph tests, existing resumption and cross-client evaluations, and the
+complete repository verification gate passed. No dbt executable, warehouse, SQL/Jinja rendering,
+SQLite persistence, MCP/context retrieval, model call, or Issue 12B/C work was added.
+
+#### Issue 12B — Not started
+
+#### Issue 12C — Not started
+
 ## Issue queue
 
-Issues 10 and 11 are complete. Issue 12 remains not started.
+Issues 10 and 11 are complete. Issue 12 is in progress; only 12A is complete.
