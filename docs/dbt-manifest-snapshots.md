@@ -41,4 +41,9 @@ currentness evidence. Cross-scope requests use the same not-found outcome as unk
 
 The local runtime composition includes the offline parser, snapshot repository, and application
 service over the same canonical Mnemo SQLite profile. MCP/context-packet integration remains
-deferred to 12C.
+available through the existing `get_context` tool in 12C.1. Use `mnemo dbt ingest MANIFEST` with
+explicit owner, workspace, and project IDs to validate and activate a local manifest; `--dry-run`
+performs no write. `mnemo dbt status` reports only safe aggregate active-snapshot information.
+No command executes dbt or contacts a warehouse. An optional structured `dbt_lineage` request to
+`get_context` selects direct/transitive upstream or downstream facts; the packet keeps structural
+facts within its 1,500-token section budget and labels every fact current, stale, or unknown.

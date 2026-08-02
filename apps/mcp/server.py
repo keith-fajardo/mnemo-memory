@@ -12,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from connectors.dbt.manifest import DbtManifestParser
 from packages.application import (
     LocalConfigurationError,
     LocalRuntimeError,
@@ -20,6 +21,7 @@ from packages.application import (
 )
 from packages.application.mcp_durable import DurableMcpContextPort
 from packages.application.mcp_port import McpContextPort
+from packages.application.unified_context import UnifiedContextService
 
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
@@ -44,6 +46,7 @@ def create_server(port: McpContextPort) -> FastMCP:
         checkpoint_id: Annotated[
             str | None, Field(default=None, min_length=36, max_length=36)
         ] = None,
+        dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
@@ -55,6 +58,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "session_id": session_id,
                 "task_id": task_id,
                 "checkpoint_id": checkpoint_id,
+                "dbt_lineage": dbt_lineage,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }
@@ -130,8 +134,16 @@ def create_server(port: McpContextPort) -> FastMCP:
 
 def main(data_directory: Path | None = None) -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
-        create_server(DurableMcpContextPort(runtime.checkpoint_service)).run(transport="stdio")
+    with build_checkpoint_runtime(
+        resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
+    ) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        create_server(
+            DurableMcpContextPort(
+                runtime.checkpoint_service,
+                UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+            )
+        ).run(transport="stdio")
 
 
 if __name__ == "__main__":

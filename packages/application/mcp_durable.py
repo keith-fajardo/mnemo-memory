@@ -22,11 +22,19 @@ from packages.application.checkpoints import (
     GetCheckpointContext,
     ReviseCheckpoint,
 )
+from packages.application.dbt import LineageDirection
+from packages.application.unified_context import (
+    ContextLineageQuery,
+    GetUnifiedContext,
+    UnifiedContextService,
+)
 from packages.domain import (
     CheckpointContent,
     CheckpointId,
     CheckpointRevisionId,
     ContextBudget,
+    DbtNodeId,
+    DbtSnapshotId,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -43,8 +51,13 @@ from packages.domain.identifiers import Identifier
 class DurableMcpContextPort:
     """Thin MCP translation layer; lifecycle and persistence remain in application services."""
 
-    def __init__(self, service: CheckpointApplicationService) -> None:
+    def __init__(
+        self,
+        service: CheckpointApplicationService,
+        context_service: UnifiedContextService | None = None,
+    ) -> None:
         self._service = service
+        self._context_service = context_service
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -54,6 +67,30 @@ class DurableMcpContextPort:
                 active_task_checkpoint=_integer(request.get("active_task_checkpoint_tokens", 600)),
                 total_limit=_integer(request.get("total_tokens", 5700)),
             )
+            lineage = request.get("dbt_lineage")
+            if lineage is not None:
+                if self._context_service is None:
+                    raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
+                if not isinstance(lineage, Mapping):
+                    raise ValueError("dbt_lineage must be an object")
+                direction = LineageDirection(_string(lineage, "direction"))
+                dbt_query = ContextLineageQuery(
+                    DbtNodeId(_string(lineage, "unique_id")),
+                    direction,
+                    bool(lineage.get("transitive", True)),
+                    lineage.get("maximum_depth"),
+                    int(lineage.get("maximum_nodes", 500)),
+                    int(lineage.get("maximum_edges", 1000)),
+                    _optional_id(lineage, "snapshot_id", DbtSnapshotId),
+                    lineage.get("current_content_digest")
+                    if isinstance(lineage.get("current_content_digest"), str)
+                    else None,
+                    None,
+                    bool(lineage.get("require_current", False)),
+                )
+                return self._context_service.get_context(
+                    GetUnifiedContext(scope, checkpoint, dbt_query, budget)
+                ).to_dict()
             return self._service.get_context(
                 GetCheckpointContext(scope, checkpoint, budget)
             ).to_dict()

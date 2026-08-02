@@ -364,9 +364,20 @@ context-packet integration was added.
 Immutable snapshots, atomic activation, and deterministic persisted lineage queries are complete.
 Context-packet/MCP integration remains deferred to 12C.
 
-#### Issue 12C — Not started
+#### Issue 12C — In progress
+
+##### Issue 12C.1 — Complete
+
+Added local `mnemo dbt ingest` and `mnemo dbt status` commands plus an application-level unified
+context assembler. Optional structured `dbt_lineage` input on the existing `get_context` tool
+returns bounded, provenance-bearing structural facts alongside the durable checkpoint without
+adding a third tool. Active dbt snapshots are explicitly labeled current, stale, or unknown from
+comparable evidence; `require_current` omits non-current structural facts. Structural output uses
+nearest-depth deterministic ordering and structured token/traversal omissions. No dbt execution,
+warehouse access, raw SQL storage, or model call was introduced.
+
+##### Issue 12C.2 — Not started
 
 ## Issue queue
 
-Issues 10 and 11 are complete. Issue 12 is in progress; 12A and 12B are complete and 12C has not
-started.
+Issues 10 and 11 are complete. Issue 12 is in progress; 12A, 12B, and 12C.1 are complete.
