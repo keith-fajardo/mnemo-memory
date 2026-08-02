@@ -31,15 +31,19 @@ from mnemo_memory.packages.domain import (
     WorkspaceId,
 )
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
-mcp_app = typer.Typer(no_args_is_help=True)
-app.add_typer(mcp_app, name="mcp")
-connect_app = typer.Typer(no_args_is_help=True)
-disconnect_app = typer.Typer(no_args_is_help=True)
-dbt_app = typer.Typer(no_args_is_help=True)
-app.add_typer(connect_app, name="connect")
-app.add_typer(disconnect_app, name="disconnect")
-app.add_typer(dbt_app, name="dbt")
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    help="Local-first durable task checkpoints and dbt lineage context.",
+)
+mcp_app = typer.Typer(no_args_is_help=True, help="Run the local MCP server.")
+app.add_typer(mcp_app, name="mcp", help="Run the local MCP server.")
+connect_app = typer.Typer(no_args_is_help=True, help="Register Mnemo with an AI coding client.")
+disconnect_app = typer.Typer(no_args_is_help=True, help="Remove a client registration.")
+dbt_app = typer.Typer(no_args_is_help=True, help="Ingest and inspect offline dbt manifests.")
+app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
+app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
+app.add_typer(dbt_app, name="dbt", help="Ingest and inspect offline dbt manifests.")
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
@@ -50,22 +54,22 @@ def _show(value: object) -> None:
     typer.echo(json.dumps(value, sort_keys=True))
 
 
-@app.command()
+@app.command(help="Initialize Mnemo's local data directory and SQLite database.")
 def init(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).initialize())
 
 
-@app.command()
+@app.command(help="Start the local Mnemo lifecycle service.")
 def start(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).start())
 
 
-@app.command()
+@app.command(help="Show local Mnemo lifecycle and storage status.")
 def status(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).status())
 
 
-@app.command()
+@app.command(help="Stop the local Mnemo lifecycle service.")
 def stop(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).stop())
 
@@ -80,7 +84,7 @@ def _project_scope(owner_id: str, workspace_id: str, project_id: str) -> MemoryS
     )
 
 
-@dbt_app.command("ingest")
+@dbt_app.command("ingest", help="Validate and activate a local manifest.json without running dbt.")
 def dbt_ingest(
     manifest: Path,
     owner_id: str = typer.Option(...),
@@ -131,7 +135,7 @@ def dbt_ingest(
         raise typer.BadParameter("MNEMO_DBT_INGEST_FAILED") from error
 
 
-@dbt_app.command("status")
+@dbt_app.command("status", help="Show the active local dbt manifest snapshot for a scope.")
 def dbt_status(
     owner_id: str = typer.Option(...),
     workspace_id: str = typer.Option(...),
@@ -161,7 +165,7 @@ def dbt_status(
     _show(result) if json_output else typer.echo(json.dumps(result, sort_keys=True))
 
 
-@mcp_app.command("serve")
+@mcp_app.command("serve", help="Serve exactly get_context and save_checkpoint over stdio.")
 def mcp_serve(
     stdio: bool = typer.Option(False, "--stdio"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -188,7 +192,7 @@ def _claude_manager() -> ClaudeMcpManager:
     return ClaudeMcpManager.discover(Path(launcher).resolve())
 
 
-@connect_app.command("codex")
+@connect_app.command("codex", help="Register the installed Mnemo MCP launcher with Codex.")
 def connect_codex(
     check: bool = typer.Option(False, "--check"),
     dry_run: bool = typer.Option(False, "--dry-run"),
@@ -205,7 +209,9 @@ def connect_codex(
     _show(result) if json_output else typer.echo(result["status"])
 
 
-@connect_app.command("claude-code")
+@connect_app.command(
+    "claude-code", help="Register the installed Mnemo MCP launcher with Claude Code."
+)
 def connect_claude_code(check: bool = False, dry_run: bool = False, yes: bool = False) -> None:
     manager = _claude_manager()
     if check:
@@ -216,7 +222,7 @@ def connect_claude_code(check: bool = False, dry_run: bool = False, yes: bool = 
     typer.echo(manager.connect(dry_run=dry_run)["status"])
 
 
-@disconnect_app.command("codex")
+@disconnect_app.command("codex", help="Remove the Mnemo MCP registration from Codex.")
 def disconnect_codex(
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes"),
@@ -227,7 +233,7 @@ def disconnect_codex(
     typer.echo(manager.disconnect(dry_run=dry_run)["status"])
 
 
-@disconnect_app.command("claude-code")
+@disconnect_app.command("claude-code", help="Remove the Mnemo MCP registration from Claude Code.")
 def disconnect_claude_code(dry_run: bool = False, yes: bool = False) -> None:
     manager = _claude_manager()
     if not yes and not dry_run and not typer.confirm("Disconnect Mnemo from Claude Code?"):

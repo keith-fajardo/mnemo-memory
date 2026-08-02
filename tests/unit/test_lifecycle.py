@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.routing import APIRoute
+from typer.testing import CliRunner
 
 from mnemo_memory.apps.api.app import create_app
+from mnemo_memory.apps.cli.main import app
 from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
 from mnemo_memory.packages.application.services import LifecycleService
 
@@ -70,3 +72,12 @@ def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None
     )
     assert status.returncode == 0, status.stderr
     assert json.loads(status.stdout)["initialized"] is True
+
+
+def test_cli_help_explains_top_level_commands() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Initialize Mnemo's local data directory and SQLite database." in result.output
+    assert "Register Mnemo with an AI coding client." in result.output
+    assert "Ingest and inspect offline dbt manifests." in result.output

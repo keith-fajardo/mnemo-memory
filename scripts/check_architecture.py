@@ -27,6 +27,7 @@ APP_COMPONENTS = {"apps/api", "apps/cli", "apps/mcp", "apps/web", "apps/worker"}
 CONNECTOR_COMPONENTS = {
     "connectors/claude_code",
     "connectors/codex",
+    "connectors/command_wrapper",
     "connectors/dbt",
     "connectors/filesystem",
     "connectors/git",

@@ -442,3 +442,22 @@ Published the exact checksum-bound TestPyPI-verified artifacts to production PyP
 manual `pypi` Trusted Publishing workflow. Production metadata, both artifact hashes, fresh-wheel
 installation, CLI initialization, and packaged migration/schema resources were independently
 verified after upload. No long-lived API token was used.
+
+### Issue 14 — In progress
+
+#### Issue 14A — In progress
+
+##### Issue 14A.1 — Complete
+
+Implemented the storage-independent generic command-wrapper kernel and its local argv-only
+subprocess adapter. The wrapper uses injected resolver, process, clock, and invocation-ID ports;
+provides distinct sanitized resolution, launch, recursion, working-directory, and strict-hook
+outcomes; and retains bounded structured hook results. Before hooks execute in registration order,
+after hooks unwind in reverse order, and strict mode changes only an otherwise successful child
+result. The local adapter inherits terminal streams, avoids shells, and performs bounded
+interrupt cleanup. Entry-point discovery, dbt hooks/bindings, CLI and shell integration remain
+out of scope.
+
+##### Issue 14A.2 — Not started
+
+#### Issue 14B — Not started
