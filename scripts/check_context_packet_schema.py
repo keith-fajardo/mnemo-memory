@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import sys
+from importlib import resources
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-SCHEMA_PATH = ROOT / "schemas/context-packet-v1.json"
 FIXTURE_PATH = ROOT / "tests/fixtures/context-packet-v1-minimal.json"
 sys.path.insert(0, str(ROOT))
 
-from packages.domain import (  # noqa: E402
+from mnemo_memory.packages.domain import (  # noqa: E402
     ContentRepresentation,
     ContextItemType,
     ContextPacket,
@@ -21,7 +21,11 @@ from packages.domain import (  # noqa: E402
 
 
 def main() -> int:
-    schema = json.loads(SCHEMA_PATH.read_text())
+    schema = json.loads(
+        resources.files("mnemo_memory")
+        .joinpath("resources", "schemas", "context-packet-v1.json")
+        .read_text(encoding="utf-8")
+    )
     fixture = json.loads(FIXTURE_PATH.read_text())
     packet = ContextPacket.from_dict(fixture)
     model_fields = set(packet.to_dict())

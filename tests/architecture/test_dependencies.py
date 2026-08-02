@@ -23,7 +23,7 @@ def test_repository_respects_architecture_boundaries() -> None:
 
 
 def test_domain_rejects_third_party_import(tmp_path: Path) -> None:
-    source = tmp_path / "packages/domain/example.py"
+    source = tmp_path / "src/mnemo_memory/packages/domain/example.py"
     source.parent.mkdir(parents=True)
     source.write_text("import fastapi\n")
 
@@ -34,9 +34,9 @@ def test_domain_rejects_third_party_import(tmp_path: Path) -> None:
 
 
 def test_package_rejects_reverse_dependency(tmp_path: Path) -> None:
-    source = tmp_path / "packages/storage/example.py"
+    source = tmp_path / "src/mnemo_memory/packages/storage/example.py"
     source.parent.mkdir(parents=True)
-    source.write_text("import mnemo_context_engine\n")
+    source.write_text("import mnemo_memory.packages.context_engine\n")
 
     result = run_checker(tmp_path)
 
@@ -45,9 +45,9 @@ def test_package_rejects_reverse_dependency(tmp_path: Path) -> None:
 
 
 def test_connector_rejects_connector_peer(tmp_path: Path) -> None:
-    source = tmp_path / "connectors/codex/example.py"
+    source = tmp_path / "src/mnemo_memory/connectors/codex/example.py"
     source.parent.mkdir(parents=True)
-    source.write_text("import mnemo_connector_dbt\n")
+    source.write_text("import mnemo_memory.connectors.dbt\n")
 
     result = run_checker(tmp_path)
 

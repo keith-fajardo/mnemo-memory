@@ -397,3 +397,19 @@ or network configuration is changed by Mnemo.
 ## Issue queue
 
 Issues 1–12 are complete. Later milestones listed in the implementation plan remain unimplemented.
+
+### Issue 13 — In progress
+
+#### Issue 13A — Complete
+
+The source tree is an installable `mnemo_memory` package with the separate `mnemo-memory` console
+command. Runtime migrations and schemas are wheel-safe resources loaded with
+`importlib.resources`; the production launcher uses the installed command rather than a source
+checkout module. The permanent distribution name and public project URL remain intentionally
+pending maintainer approval; no package has been uploaded.
+
+#### Issue 13B — In progress
+
+#### Issue 13C — Not started
+
+#### Issue 13D — Not started

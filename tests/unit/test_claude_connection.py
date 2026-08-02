@@ -12,8 +12,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from typer.testing import CliRunner
 
-from apps.cli import main as cli
-from connectors.claude_code.mcp_config import SERVER_NAME, ClaudeMcpManager
+from mnemo_memory.apps.cli import main as cli
+from mnemo_memory.connectors.claude_code.mcp_config import SERVER_NAME, ClaudeMcpManager
 
 
 def done(command: list[str], code: int = 0, output: str = "") -> subprocess.CompletedProcess[str]:
@@ -21,7 +21,7 @@ def done(command: list[str], code: int = 0, output: str = "") -> subprocess.Comp
 
 
 def test_claude_user_scope_registration_is_idempotent_and_conflict_safe(tmp_path: Path) -> None:
-    launcher = tmp_path / "launcher with spaces" / "mnemo"
+    launcher = tmp_path / "launcher with spaces" / "mnemo-memory"
     launcher.parent.mkdir()
     launcher.touch()
     state = ""
@@ -61,13 +61,13 @@ def test_claude_user_scope_registration_is_idempotent_and_conflict_safe(tmp_path
 @pytest.mark.skipif(shutil.which("claude") is None, reason="Claude Code CLI is unavailable")
 def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) -> None:
     home = tmp_path / "Claude Home With Spaces"
-    launcher = tmp_path / "Mnemo Launcher With Spaces" / "mnemo"
+    launcher = tmp_path / "Mnemo Launcher With Spaces" / "mnemo-memory"
     home.mkdir()
     launcher.parent.mkdir()
     launcher.write_text(
         f"#!{sys.executable}\n"
         "import os, sys\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'apps.cli.main', *sys.argv[1:]])\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'mnemo_memory.cli', *sys.argv[1:]])\n"
     )
     launcher.chmod(0o700)
     config = home / ".claude.json"
@@ -76,7 +76,7 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
         key: value for key, value in os.environ.items() if not key.startswith("ANTHROPIC_")
     }
     environment["HOME"] = str(home)
-    environment["MNEMO_DATA_DIR"] = str(tmp_path / "mnemo data")
+    environment["MNEMO_DATA_DIR"] = str(tmp_path / "mnemo-memory data")
     manager = ClaudeMcpManager(
         shutil.which("claude") or "claude", launcher, environment=environment
     )
@@ -214,7 +214,7 @@ def test_claude_cli_confirmation_matrix_is_bounded(
 
 
 def test_claude_manager_failure_cases_are_safe(tmp_path: Path) -> None:
-    launcher = tmp_path / "mnemo path with spaces"
+    launcher = tmp_path / "mnemo-memory path with spaces"
     launcher.touch()
     with pytest.raises(ValueError, match="MNEMO_LAUNCHER_NOT_ABSOLUTE"):
         ClaudeMcpManager.discover(Path("relative"))

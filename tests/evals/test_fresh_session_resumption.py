@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import cast
 
-from packages.domain import CheckpointContent, ContextPacket
+from mnemo_memory.packages.domain import CheckpointContent, ContextPacket
 from scripts import run_resumption_benchmark as benchmark
 
 

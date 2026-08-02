@@ -9,8 +9,12 @@ from typing import cast
 
 import pytest
 
-from connectors.dbt.manifest import DbtManifestLimits, DbtManifestParser, ManifestParseRequest
-from packages.domain import (
+from mnemo_memory.connectors.dbt.manifest import (
+    DbtManifestLimits,
+    DbtManifestParser,
+    ManifestParseRequest,
+)
+from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -19,7 +23,7 @@ from packages.domain import (
     TaskId,
     Visibility,
 )
-from packages.domain.dbt_manifest import (
+from mnemo_memory.packages.domain.dbt_manifest import (
     DbtNodeId,
     LineageNodeNotFound,
     ManifestConsistencyError,
@@ -29,7 +33,7 @@ from packages.domain.dbt_manifest import (
     SourceStateFingerprint,
     UnsupportedManifestSchema,
 )
-from packages.project_index import DbtLineageGraph
+from mnemo_memory.packages.project_index import DbtLineageGraph
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 

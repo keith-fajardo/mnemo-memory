@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
-from packages.domain import (
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
+from mnemo_memory.packages.domain import (
     DbtSnapshotId,
     MemoryScope,
     OwnerId,
@@ -18,8 +18,8 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from packages.domain.dbt_manifest import DbtManifestArtifact
-from packages.storage import ActiveSnapshotConflict, SQLiteCheckpointRepository
+from mnemo_memory.packages.domain.dbt_manifest import DbtManifestArtifact
+from mnemo_memory.packages.storage import ActiveSnapshotConflict, SQLiteCheckpointRepository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 

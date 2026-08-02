@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     BudgetOverride,
     ConflictNotice,
     ConflictState,

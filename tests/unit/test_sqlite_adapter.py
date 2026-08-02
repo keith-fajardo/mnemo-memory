@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.storage import SQLiteCheckpointRepository, SQLiteSchemaTooNewError
+from mnemo_memory.packages.storage import SQLiteCheckpointRepository, SQLiteSchemaTooNewError
 
 
 def test_newer_schema_is_rejected_and_foreign_keys_are_enforced(tmp_path: Path) -> None:

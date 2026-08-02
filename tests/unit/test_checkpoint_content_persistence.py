@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     Checkpoint,
     CheckpointContent,
     CheckpointId,
@@ -32,7 +33,7 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from packages.storage import SQLiteCheckpointRepository, SQLiteMigrationError
+from mnemo_memory.packages.storage import SQLiteCheckpointRepository, SQLiteMigrationError
 
 NOW = datetime(2026, 8, 2, 9, 0, tzinfo=UTC)
 HASH = "sha256:" + "d" * 64
@@ -93,7 +94,12 @@ def checkpoint(scope: MemoryScope, reference: EvidenceReference) -> Checkpoint:
 def legacy_repository(tmp_path: Path, name: str = "legacy.sqlite3") -> SQLiteCheckpointRepository:
     repository = SQLiteCheckpointRepository(tmp_path / name, base_directory=tmp_path)
     with sqlite3.connect(repository.path) as connection:
-        for statement in (ROOT / "migrations" / "0001_initial.sql").read_text().split(";"):
+        for statement in (
+            resources.files("mnemo_memory")
+            .joinpath("resources", "migrations", "0001_initial.sql")
+            .read_text(encoding="utf-8")
+            .split(";")
+        ):
             if statement.strip():
                 connection.execute(statement)
         connection.execute(

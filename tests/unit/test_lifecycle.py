@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from fastapi.routing import APIRoute
 
-from apps.api.app import create_app
-from packages.application import LocalConfig, build_lifecycle_service
-from packages.application.services import LifecycleService
+from mnemo_memory.apps.api.app import create_app
+from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
+from mnemo_memory.packages.application.services import LifecycleService
 
 
 def service(tmp_path: Path) -> LifecycleService:
-    config = LocalConfig.defaults(tmp_path / "mnemo")
+    config = LocalConfig.defaults(tmp_path / "mnemo-memory")
     return build_lifecycle_service(config)
 
 
@@ -55,7 +55,7 @@ def test_lifecycle_api_exposes_only_local_readiness_endpoints(tmp_path: Path) ->
 def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None:
     data_dir = tmp_path / "cli-state"
     init = subprocess.run(
-        [sys.executable, "-m", "apps.cli.main", "init", "--data-dir", str(data_dir)],
+        [sys.executable, "-m", "mnemo_memory.cli", "init", "--data-dir", str(data_dir)],
         check=False,
         capture_output=True,
         text=True,
@@ -63,7 +63,7 @@ def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None
     assert init.returncode == 0, init.stderr
     assert json.loads(init.stdout)["initialized"] is True
     status = subprocess.run(
-        [sys.executable, "-m", "apps.cli.main", "status", "--data-dir", str(data_dir)],
+        [sys.executable, "-m", "mnemo_memory.cli", "status", "--data-dir", str(data_dir)],
         check=False,
         capture_output=True,
         text=True,

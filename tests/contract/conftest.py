@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.storage import (
+from mnemo_memory.packages.storage import (
     CheckpointRepository,
     ProjectIndexRepository,
     ReferenceCheckpointRepository,

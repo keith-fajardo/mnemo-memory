@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 
-from packages.storage import CheckpointRepository
+from mnemo_memory.packages.storage import CheckpointRepository
 
 
 def test_canonical_checkpoint_port_excludes_legacy_replacement_chain_operations() -> None:

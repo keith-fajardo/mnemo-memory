@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
@@ -31,8 +31,8 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from packages.storage import CheckpointRepository
-from packages.storage.contracts import (
+from mnemo_memory.packages.storage import CheckpointRepository
+from mnemo_memory.packages.storage.contracts import (
     CheckpointNotFound,
     DuplicateCheckpoint,
     InvalidAbandonmentReason,

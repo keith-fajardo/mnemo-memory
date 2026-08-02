@@ -6,9 +6,9 @@ import argparse
 import json
 from pathlib import Path
 
-from connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
-from packages.domain import DbtNodeId
-from packages.project_index.dbt_lineage import DbtLineageGraph
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
+from mnemo_memory.packages.domain import DbtNodeId
+from mnemo_memory.packages.project_index.dbt_lineage import DbtLineageGraph
 from scripts.run_resumption_benchmark import (
     CharacterHeuristicEstimator,
     build_checkpoint_packet,

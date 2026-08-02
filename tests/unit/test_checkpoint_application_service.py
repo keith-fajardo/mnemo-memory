@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from packages.application import (
+from mnemo_memory.packages.application import (
     AbandonCheckpoint,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
@@ -26,7 +26,7 @@ from packages.application import (
     GetCheckpointContext,
     ReviseCheckpoint,
 )
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointId,
     CheckpointRevisionId,
@@ -49,8 +49,8 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from packages.storage import ReferenceCheckpointRepository
-from packages.storage.contracts import RepositoryStorageFailure
+from mnemo_memory.packages.storage import ReferenceCheckpointRepository
+from mnemo_memory.packages.storage.contracts import RepositoryStorageFailure
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 HASH = "sha256:" + "a" * 64
@@ -303,7 +303,7 @@ def test_context_total_limit_and_cross_scope_do_not_disclose_checkpoint() -> Non
 
 
 def test_application_boundary_has_no_adapter_or_client_imports() -> None:
-    text = Path("packages/application/checkpoints.py").read_text()
+    text = Path("src/mnemo_memory/packages/application/checkpoints.py").read_text()
     forbidden = ("sqlite", "mcp", "fastapi", "typer", "apps.", "connectors.")
     assert not any(term in text.lower() for term in forbidden)
 

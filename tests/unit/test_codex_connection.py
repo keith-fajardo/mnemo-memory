@@ -13,8 +13,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from typer.testing import CliRunner
 
-from apps.cli import main as cli
-from connectors.codex.mcp_config import SERVER_NAME, CodexMcpManager
+from mnemo_memory.apps.cli import main as cli
+from mnemo_memory.connectors.codex.mcp_config import SERVER_NAME, CodexMcpManager
 
 
 def completed(
@@ -26,7 +26,7 @@ def completed(
 def test_connect_registers_exact_argument_array_and_reads_it_back(tmp_path: Path) -> None:
     calls: list[list[str]] = []
     state: dict[str, object] = {}
-    launcher = tmp_path / "Mnemo With Spaces" / "mnemo"
+    launcher = tmp_path / "Mnemo With Spaces" / "mnemo-memory"
     launcher.parent.mkdir()
     launcher.touch()
 
@@ -55,7 +55,7 @@ def test_connect_registers_exact_argument_array_and_reads_it_back(tmp_path: Path
 
 
 def test_conflicting_or_unrecognized_entry_is_never_replaced_or_removed(tmp_path: Path) -> None:
-    launcher = tmp_path / "mnemo"
+    launcher = tmp_path / "mnemo-memory"
     launcher.touch()
     entry = {"command": "/other", "args": ["mcp", "serve", "--stdio"]}
     manager = CodexMcpManager(
@@ -68,7 +68,7 @@ def test_conflicting_or_unrecognized_entry_is_never_replaced_or_removed(tmp_path
 
 
 def test_owned_launcher_readback_normalizes_unicode_and_resolved_paths(tmp_path: Path) -> None:
-    launcher = tmp_path / "Mnemo Δ" / "mnemo"
+    launcher = tmp_path / "Mnemo Δ" / "mnemo-memory"
     launcher.parent.mkdir()
     launcher.touch()
     stored_path = unicodedata.normalize("NFD", str(launcher.resolve()))
@@ -81,18 +81,18 @@ def test_owned_launcher_readback_normalizes_unicode_and_resolved_paths(tmp_path:
 @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is unavailable")
 def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> None:
     codex_home = tmp_path / "isolated codex"
-    launcher = tmp_path / "Mnemo Launcher" / "mnemo"
+    launcher = tmp_path / "Mnemo Launcher" / "mnemo-memory"
     launcher.parent.mkdir()
     launcher.write_text(
         f"#!{sys.executable}\n"
         "import os, sys\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'apps.cli.main', *sys.argv[1:]])\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'mnemo_memory.cli', *sys.argv[1:]])\n"
     )
     launcher.chmod(0o700)
     environment = {
         **os.environ,
         "CODEX_HOME": str(codex_home),
-        "MNEMO_DATA_DIR": str(tmp_path / "mnemo data"),
+        "MNEMO_DATA_DIR": str(tmp_path / "mnemo-memory data"),
     }
     manager = CodexMcpManager(shutil.which("codex") or "codex", launcher, environment=environment)
     codex_home.mkdir()

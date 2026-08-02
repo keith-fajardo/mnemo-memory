@@ -1,15 +1,32 @@
 [project]
-name = "mnemo-workspace"
-version = "0.0.0"
-description = "Local-first unified context platform for coding agents"
+name = "mnemo-agent-context-placeholder"
+version = "0.1.0a1"
+description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Mnemo contributors" }]
+maintainers = [{ name = "Mnemo contributors" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
 dependencies = [
     "fastapi==0.139.2",
     "mcp==1.28.1",
     "typer==0.27.0",
     "uvicorn==0.47.0",
 ]
+
+[project.scripts]
+mnemo-memory = "mnemo_memory.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/example/mnemo-agent-context-placeholder"
+Source = "https://github.com/example/mnemo-agent-context-placeholder"
 
 [dependency-groups]
 dev = [
@@ -18,18 +35,26 @@ dev = [
     "ruff==0.14.14",
 ]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "mnemo_memory"
+namespace = true
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 explicit_package_bases = true
+namespace_packages = true
+mypy_path = ["src"]
+files = ["src/mnemo_memory", "tests", "scripts"]
 pretty = true
 show_error_codes = true
 warn_unreachable = true

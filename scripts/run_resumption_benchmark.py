@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointContent,
     ConflictState,
     ContentRepresentation,

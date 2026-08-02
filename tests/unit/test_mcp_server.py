@@ -10,11 +10,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import Tool
 
-from apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
-from packages.application import LocalConfig, build_checkpoint_runtime
-from packages.application.mcp_durable import DurableMcpContextPort
-from packages.application.mcp_fixture import FixtureMcpContextPort
-from packages.domain import ContextPacket
+from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
+from mnemo_memory.packages.application import LocalConfig, build_checkpoint_runtime
+from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
+from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
+from mnemo_memory.packages.domain import ContextPacket
 
 ROOT = Path(__file__).parents[2]
 IDS = {
@@ -158,7 +158,12 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
     async def exercise() -> None:
         parameters = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "apps.mcp.server", "--data-dir", str(tmp_path / "data with spaces")],
+            args=[
+                "-m",
+                "mnemo_memory.apps.mcp.server",
+                "--data-dir",
+                str(tmp_path / "data with spaces"),
+            ],
             cwd=ROOT,
         )
         async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
@@ -189,7 +194,7 @@ def test_invalid_data_directory_exits_with_a_sanitized_startup_error(tmp_path: P
     occupied = tmp_path / "occupied data directory"
     occupied.write_text("not a directory")
     result = subprocess.run(
-        [sys.executable, "-m", "apps.mcp.server", "--data-dir", str(occupied)],
+        [sys.executable, "-m", "mnemo_memory.apps.mcp.server", "--data-dir", str(occupied)],
         cwd=ROOT,
         capture_output=True,
         text=True,

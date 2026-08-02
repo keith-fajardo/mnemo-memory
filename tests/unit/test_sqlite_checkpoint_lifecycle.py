@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
@@ -33,8 +33,8 @@ from packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from packages.storage import SQLiteCheckpointRepository
-from packages.storage.contracts import (
+from mnemo_memory.packages.storage import SQLiteCheckpointRepository
+from mnemo_memory.packages.storage.contracts import (
     CheckpointNotFound,
     RepositoryStorageFailure,
     RevisionConflict,

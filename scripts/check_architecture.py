@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
-PRODUCT_ROOTS = ("apps", "packages", "connectors")
+SOURCE_ROOT = Path("src/mnemo_memory")
+PRODUCT_ROOTS = (SOURCE_ROOT,)
 
 PACKAGE_COMPONENTS = {
     "packages/application",
@@ -59,13 +60,11 @@ for app in APP_COMPONENTS:
 def component_prefixes(component: str) -> set[str]:
     group, name = component.split("/", maxsplit=1)
     if group == "packages":
-        return {f"mnemo_{name}", f"mnemo.{name}", f"packages.{name}"}
+        return {f"mnemo_memory.packages.{name}"}
     if group == "apps":
-        return {f"mnemo_{name}", f"mnemo.apps.{name}", f"apps.{name}"}
+        return {f"mnemo_memory.apps.{name}"}
     return {
-        f"mnemo_connector_{name}",
-        f"mnemo.connectors.{name}",
-        f"connectors.{name}",
+        f"mnemo_memory.connectors.{name}",
     }
 
 
@@ -92,9 +91,11 @@ class Violation:
 
 
 def component_for(path: Path, root: Path) -> str | None:
-    relative = path.relative_to(root)
-    if len(relative.parts) < 3 or relative.parts[0] not in PRODUCT_ROOTS:
-        return None
+    relative = path.relative_to(root / SOURCE_ROOT)
+    if len(relative.parts) < 2:
+        # Package metadata and the thin installed console entry point are composition
+        # boundaries, not product components.
+        return "package_root"
     component = "/".join(relative.parts[:2])
     return component if component in KNOWN_COMPONENTS else None
 
@@ -106,13 +107,7 @@ def imported_modules(tree: ast.AST) -> list[ImportedModule]:
             imports.extend(ImportedModule(alias.name, node.lineno) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module in PRODUCT_ROOTS:
-                imports.extend(
-                    ImportedModule(f"{module}.{alias.name}", node.lineno, node.level)
-                    for alias in node.names
-                )
-            else:
-                imports.append(ImportedModule(module, node.lineno, node.level))
+            imports.append(ImportedModule(module, node.lineno, node.level))
     return imports
 
 
@@ -134,6 +129,8 @@ def find_violations(root: Path) -> list[Violation]:
             component = component_for(path, root)
             if component is None:
                 violations.append(Violation(path, 1, "Python source is outside a known component"))
+                continue
+            if component == "package_root":
                 continue
 
             try:

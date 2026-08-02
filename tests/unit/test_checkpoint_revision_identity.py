@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointId,
     CheckpointRevisionId,

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.application import (
+from mnemo_memory.packages.application import (
     CheckpointApplicationNotFound,
     CreateCheckpoint,
     GetCheckpoint,
@@ -17,7 +17,7 @@ from packages.application import (
     build_checkpoint_runtime,
     resolve_local_config,
 )
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     CheckpointContent,
     EvidenceId,
     EvidenceLocation,

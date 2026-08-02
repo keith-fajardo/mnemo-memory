@@ -15,8 +15,8 @@ from pathlib import Path
 from threading import Barrier
 from typing import cast
 
-from packages.application import GetCheckpoint, LocalConfig, build_checkpoint_runtime
-from packages.domain import CheckpointId, ContextPacket, MemoryScope
+from mnemo_memory.packages.application import GetCheckpoint, LocalConfig, build_checkpoint_runtime
+from mnemo_memory.packages.domain import CheckpointId, ContextPacket, MemoryScope
 
 ROOT = Path(__file__).parents[2]
 SCOPE = {
@@ -34,7 +34,7 @@ class McpProcess:
     def __init__(self, data_directory: Path) -> None:
         self._next_id = 1
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "apps.cli.main", "mcp", "serve", "--stdio"],
+            [sys.executable, "-m", "mnemo_memory.cli", "mcp", "serve", "--stdio"],
             cwd=ROOT,
             env={**os.environ, "MNEMO_DATA_DIR": str(data_directory)},
             stdin=subprocess.PIPE,

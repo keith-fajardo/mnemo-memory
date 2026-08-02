@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from connectors.dbt.manifest import DbtManifestParser
-from packages.application.dbt import (
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.packages.application.dbt import (
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
     DbtApplicationNotFound,
@@ -18,11 +18,22 @@ from packages.application.dbt import (
     LineageDirection,
     QueryLineage,
 )
-from packages.domain import MemoryScope, OwnerId, ProjectId, ScopeLevel, Visibility, WorkspaceId
-from packages.domain.dbt_manifest import ArtifactCurrentness, DbtNodeId, SourceStateFingerprint
-from packages.domain.identifiers import DbtSnapshotId
-from packages.storage import ReferenceProjectIndexRepository
-from packages.storage.sqlite import SQLiteCheckpointRepository
+from mnemo_memory.packages.domain import (
+    MemoryScope,
+    OwnerId,
+    ProjectId,
+    ScopeLevel,
+    Visibility,
+    WorkspaceId,
+)
+from mnemo_memory.packages.domain.dbt_manifest import (
+    ArtifactCurrentness,
+    DbtNodeId,
+    SourceStateFingerprint,
+)
+from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
+from mnemo_memory.packages.storage import ReferenceProjectIndexRepository
+from mnemo_memory.packages.storage.sqlite import SQLiteCheckpointRepository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 STAMP = datetime(2026, 8, 2, tzinfo=UTC)

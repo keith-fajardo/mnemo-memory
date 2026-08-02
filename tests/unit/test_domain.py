@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from packages.domain import (
+from mnemo_memory.packages.domain import (
     AgentId,
     Checkpoint,
     CheckpointId,

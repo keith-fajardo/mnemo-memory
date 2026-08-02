@@ -18,8 +18,8 @@ from typing import Any, cast
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from connectors.codex.mcp_config import CodexMcpManager
-from packages.domain import ContextPacket
+from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
+from mnemo_memory.packages.domain import ContextPacket
 from scripts.run_resumption_benchmark import (
     build_checkpoint_packet,
     evaluate,
@@ -36,12 +36,12 @@ def _without_anthropic_environment(base: dict[str, str]) -> dict[str, str]:
 
 
 def _launcher(root: Path) -> Path:
-    launcher = root / "launcher with spaces Δ" / "mnemo"
+    launcher = root / "launcher with spaces Δ" / "mnemo-memory"
     launcher.parent.mkdir(parents=True)
     launcher.write_text(
         f"#!{sys.executable}\n"
         "import os, sys\n"
-        "os.execv(sys.executable, [sys.executable, '-m', 'apps.cli.main', *sys.argv[1:]])\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'mnemo_memory.cli', *sys.argv[1:]])\n"
     )
     launcher.chmod(0o700)
     return launcher
@@ -71,10 +71,10 @@ def _register(
             "PATH": f"{launcher.parent}{os.pathsep}{environment.get('PATH', '')}",
         }
     )
-    # Use Mnemo's actual connection command; its discovered `mnemo` is the launcher above.
+    # Use Mnemo's actual connection command; its discovered `mnemo-memory` is the launcher above.
     for client in ("codex", "claude-code"):
         result = subprocess.run(
-            [sys.executable, "-m", "apps.cli.main", "connect", client, "--yes"],
+            [sys.executable, "-m", "mnemo_memory.cli", "connect", client, "--yes"],
             cwd=ROOT,
             env=environment,
             check=False,
@@ -221,7 +221,7 @@ def run(root: Path | None = None) -> dict[str, object]:
     if shutil.which("codex") is None or shutil.which("claude") is None:
         raise RuntimeError("SKIPPED: codex or claude executable is unavailable")
     temporary = (
-        tempfile.TemporaryDirectory(prefix="mnemo cross client Δ ") if root is None else None
+        tempfile.TemporaryDirectory(prefix="mnemo-memory cross client Δ ") if root is None else None
     )
     base = Path(temporary.name) if temporary is not None else root
     assert base is not None
