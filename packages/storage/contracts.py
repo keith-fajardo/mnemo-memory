@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from packages.domain import (
     Checkpoint,
     CheckpointAggregate,
+    CheckpointContent,
     CheckpointId,
     CheckpointRevision,
+    CheckpointRevisionId,
     EvidenceId,
     EvidenceReference,
     MemoryScope,
@@ -37,6 +40,14 @@ class InvalidLifecycleTransition(CheckpointRepositoryError):
 
 
 class InvalidAbandonmentReason(CheckpointRepositoryError):
+    pass
+
+
+class InvalidCheckpointScope(CheckpointRepositoryError):
+    pass
+
+
+class RepositoryStorageFailure(CheckpointRepositoryError):
     pass
 
 
@@ -71,3 +82,58 @@ class CheckpointRepository(Protocol):
     def get_current_revision(
         self, scope: MemoryScope, checkpoint_id: CheckpointId
     ) -> CheckpointRevision: ...
+
+    def create_aggregate(
+        self, aggregate: CheckpointAggregate, revision: CheckpointRevision
+    ) -> None:
+        """Compatibility alias for create_checkpoint_aggregate; remove after 10A.3c."""
+
+    def create_checkpoint_aggregate(
+        self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
+    ) -> None: ...
+
+    def get_revision(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        *,
+        revision_number: int | None = None,
+        revision_id: CheckpointRevisionId | None = None,
+    ) -> CheckpointRevision: ...
+
+    def append_revision(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision: ...
+
+    def complete_checkpoint(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision: ...
+
+    def abandon_checkpoint(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        reason: str,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision: ...
+
+    def list_current_checkpoints(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> CheckpointPage: ...
+
+    def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None: ...

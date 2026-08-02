@@ -188,9 +188,24 @@ serialization, raw-payload, and reopening coverage passes as part of the complet
 
 #### Issue 10A.3 — In progress
 
-Repository lifecycle contracts and compare-and-swap mutations. The 10A.3a repository-port and
-reference-adapter work remains in progress and is unblocked by the canonical content correction;
-10A.3b SQLite compare-and-swap and 10A.3c compatibility cleanup/final gate have not started.
+Repository lifecycle contracts and compare-and-swap mutations.
+
+##### Issue 10A.3a — Complete
+
+Defined the storage-independent aggregate/revision lifecycle contract and typed expected outcomes.
+The reference adapter now creates active aggregate/revision pairs, appends immutable canonical
+revisions with expected-revision comparison, applies completion and abandonment transitions, keeps
+terminal retries idempotent, and lists only scoped active checkpoints with deterministic pagination.
+Its shared behavioral contract passed against the reference adapter as part of the complete
+100-test verification gate. Legacy storage methods remain compatibility-only until 10A.3c.
+
+##### Issue 10A.3b — Not started
+
+SQLite compare-and-swap lifecycle implementation and parity execution.
+
+##### Issue 10A.3c — Not started
+
+Compatibility cleanup and final 10A.3 gate.
 
 #### Issue 10B and 10C — Not started
 
