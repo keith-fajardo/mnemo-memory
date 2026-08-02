@@ -248,6 +248,49 @@ def evaluate(
     }
 
 
+def score_context_packet(
+    fixture: Mapping[str, object], transcript: str, packet: ContextPacket
+) -> dict[str, object]:
+    """Score a returned packet with the same exact-match gates as the Mnemo baseline."""
+    if packet.active_task_checkpoint is None:
+        raise ValueError("returned packet does not contain an active checkpoint")
+    content = CheckpointContent.from_dict(json.loads(packet.active_task_checkpoint.content))
+    quality = _quality(
+        fixture,
+        packet.to_json(),
+        "\n".join(content.decisions),
+        bool(packet.provenance),
+        use_markers=True,
+    )
+    baseline = evaluate(fixture, transcript)
+    tokens = cast(Mapping[str, object], baseline["token_accounting"])
+    gates = {
+        "checkpoint_within_600_tokens": content.token_estimate <= 600,
+        "packet_within_hard_budget": packet.declared_total_tokens <= packet.budget.total_limit,
+        "required_fact_recall": quality["required_fact_recall"] == 1.0,
+        "provenance_coverage": quality["provenance_coverage"] == 1.0,
+        "next_action_present": quality["expected_next_action_available"] is True,
+        "current_decision_present": quality["current_decision_available"] is True,
+        "verification_state_present": quality["verification_state_available"] is True,
+        "no_stale_decision_as_current": not quality["forbidden_stale_fact_ids_as_current"],
+    }
+    return {
+        "quality": quality,
+        "context_packet_tokens": packet.declared_total_tokens,
+        "full_transcript_tokens": tokens["full_transcript_tokens"],
+        "context_savings_percent": (
+            (cast(int, tokens["full_transcript_tokens"]) - packet.declared_total_tokens)
+            / cast(int, tokens["full_transcript_tokens"])
+            * 100
+        ),
+        "total_input_savings_percent": tokens[
+            "full_condition_to_mnemo_total_input_reduction_percent"
+        ],
+        "passed": all(gates.values()),
+        "gates": gates,
+    }
+
+
 def render_table(result: Mapping[str, object]) -> str:
     conditions = cast(Mapping[str, Mapping[str, object]], result["conditions"])
     rows = ["condition        context  total input  required recall  provenance"]

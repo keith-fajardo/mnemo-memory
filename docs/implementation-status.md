@@ -289,7 +289,7 @@ Issue 10 now provides canonical immutable checkpoint revisions, scoped SQLite pe
 storage-independent lifecycle services, durable stdio MCP tools, and restart/failure-isolation
 coverage.
 
-### Issue 11 — In progress
+### Issue 11 — Complete
 
 #### Issue 11A — Complete
 
@@ -300,9 +300,22 @@ explicit 311-token canonical checkpoint. The `npm run eval:resumption -- --json`
 fact availability/provenance without invoking a model. It passed every fixture gate: 100% required
 fact recall and provenance coverage, accepted current decision and next action, no stale decision
 presented as current, and 87.8% contextual-token savings over full transcript replay. The full
-verification gate passed with 132 tests. Issue 11B and Issue 12 remain not started.
+verification gate passed with 132 tests. Issue 11B was deferred to the next approved sub-issue;
+Issue 12 was not started.
+
+#### Issue 11B — Complete
+
+Added a real, isolated cross-client transport evaluator using Codex CLI 0.145.0 and Claude Code
+2.1.220. It registers each temporary `mnemo-memory` launcher through Mnemo's connection commands,
+reads back the exact client-owned command/argument arrays, and runs fresh stdio MCP processes over
+one temporary SQLite profile. Codex-to-Claude and Claude-to-Codex both retrieve the Issue 11A
+checkpoint with 100% required-fact and provenance coverage; an alternating Claude revision retains
+the stable checkpoint identity and advances to revision 2. The evaluator records no-memory 0%
+availability, scope non-disclosure, isolated configuration preservation, stale-tool recovery,
+corrupt-profile failure without fallback, and missing-launcher failure. It invokes no model or
+authentication flow. `npm run eval:cross-client -- --json` and the complete 135-test gate passed.
+Issue 12 remains not started.
 
 ## Issue queue
 
-Issue 10 is complete. Issue 11A is complete; Issue 11 remains in progress pending 11B. Issue 12
-remains not started.
+Issues 10 and 11 are complete. Issue 12 remains not started.

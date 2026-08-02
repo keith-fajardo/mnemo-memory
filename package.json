@@ -17,6 +17,7 @@
     "architecture:check": "uv run python scripts/check_architecture.py",
     "schema:check": "uv run python scripts/check_context_packet_schema.py",
     "eval:resumption": "uv run python -m scripts.run_resumption_benchmark",
+    "eval:cross-client": "uv run python -m scripts.run_cross_client_benchmark",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run schema:check && npm run dependencies:check && npm run architecture:check"
   }
 }

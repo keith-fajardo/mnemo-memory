@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -182,3 +183,19 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert still_valid.isError is False
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+
+
+def test_invalid_data_directory_exits_with_a_sanitized_startup_error(tmp_path: Path) -> None:
+    occupied = tmp_path / "occupied data directory"
+    occupied.write_text("not a directory")
+    result = subprocess.run(
+        [sys.executable, "-m", "apps.mcp.server", "--data-dir", str(occupied)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 2
+    assert "MNEMO_STORAGE_UNAVAILABLE" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""

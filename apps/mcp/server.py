@@ -12,7 +12,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from packages.application import LocalRuntimeError, build_checkpoint_runtime, resolve_local_config
+from packages.application import (
+    LocalConfigurationError,
+    LocalRuntimeError,
+    build_checkpoint_runtime,
+    resolve_local_config,
+)
 from packages.application.mcp_durable import DurableMcpContextPort
 from packages.application.mcp_port import McpContextPort
 
@@ -135,7 +140,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         main(None if args.data_dir is None else Path(args.data_dir))
-    except LocalRuntimeError as error:
+    except (LocalConfigurationError, LocalRuntimeError) as error:
         logging.basicConfig(
             level=logging.ERROR, stream=sys.stderr, format="%(levelname)s %(message)s"
         )

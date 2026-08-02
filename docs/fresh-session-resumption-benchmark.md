@@ -59,7 +59,33 @@ cost baselines remain future work; this fixture does not claim model behavior.
 
 ## Boundaries
 
-Issue 11B will run the cross-client launcher exercise. Issue 12 will add the dbt structural-memory
-comparison and finalize the broader no-memory/full-transcript/Mnemo quality and cost baseline.
+Issue 12 will add the dbt structural-memory comparison and finalize the broader
+no-memory/full-transcript/Mnemo quality and cost baseline.
 Mnemo currently relies on explicit checkpoint saves: it performs no automatic transcript ingestion,
 embedding, structural indexing, or LLM extraction.
+
+## Cross-client transport proof
+
+Issue 11B runs the same fixture through real isolated Codex CLI `0.145.0` and Claude Code `2.1.220`
+registrations. Reproduce it with:
+
+```sh
+npm run eval:cross-client -- --json
+```
+
+The command creates temporary `CODEX_HOME`, `HOME`, project, launcher, and Mnemo data directories
+(including spaces and Unicode), registers `mnemo-memory` through `mnemo connect codex --yes` and
+`mnemo connect claude-code --yes`, then reads each stored launcher back before starting it. It never
+uses a real client configuration, API key, login, interactive agent session, or model request.
+
+It proves Codex-to-Claude and Claude-to-Codex retrieval of the same durable, evidenced checkpoint,
+then alternates a revision from Claude back to Codex. The report normalizes runtime revision labels
+and exposes launcher digests rather than machine-specific paths. It also checks no-memory fact
+availability (0%) against returned Mnemo context (100% required-fact and provenance coverage),
+scope non-disclosure, stale revision conflict recovery, missing-launcher failure, and corrupt-profile
+failure without a database fallback. Existing restart tests cover abrupt MCP process termination;
+the registered launchers are always restarted as fresh processes in this proof.
+
+This is an MCP transport and information-retention proof, not a claim about a generated answer
+during a live client outage. Full model-quality, provider-cost, and dbt comparison baselines remain
+post-Issue-12, explicit opt-in work.

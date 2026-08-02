@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,7 +54,7 @@ class CodexMcpManager:
         if isinstance(transport, dict):
             entry = transport
         return (
-            entry.get("command") == str(self.mnemo_executable)
+            _same_launcher(entry.get("command"), self.mnemo_executable)
             and entry.get("args") == self.command[1:]
         )
 
@@ -106,3 +107,12 @@ class CodexMcpManager:
         if result.returncode != 0:
             raise ValueError("MNEMO_CODEX_DISCONNECT_FAILED")
         return {"status": "disconnected", "changed": True, "server": SERVER_NAME}
+
+
+def _same_launcher(value: object, expected: Path) -> bool:
+    if not isinstance(value, str):
+        return False
+    # macOS can round-trip user-created Unicode paths in a different normalization form.
+    return unicodedata.normalize("NFC", str(Path(value).resolve())) == unicodedata.normalize(
+        "NFC", str(expected.resolve())
+    )

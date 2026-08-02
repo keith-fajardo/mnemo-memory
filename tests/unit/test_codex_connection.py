@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 from datetime import timedelta
 from pathlib import Path
 
@@ -64,6 +65,17 @@ def test_conflicting_or_unrecognized_entry_is_never_replaced_or_removed(tmp_path
         manager.connect()
     with pytest.raises(ValueError, match="MNEMO_CODEX_UNRECOGNIZED_ENTRY"):
         manager.disconnect()
+
+
+def test_owned_launcher_readback_normalizes_unicode_and_resolved_paths(tmp_path: Path) -> None:
+    launcher = tmp_path / "Mnemo Δ" / "mnemo"
+    launcher.parent.mkdir()
+    launcher.touch()
+    stored_path = unicodedata.normalize("NFD", str(launcher.resolve()))
+    manager = CodexMcpManager("/fake/codex", launcher)
+    assert manager.is_owned(
+        {"transport": {"command": stored_path, "args": ["mcp", "serve", "--stdio"]}}
+    )
 
 
 @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is unavailable")
