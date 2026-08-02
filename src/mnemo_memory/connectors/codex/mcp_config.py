@@ -22,11 +22,11 @@ class CodexMcpManager:
 
     @classmethod
     def discover(cls, mnemo_executable: Path) -> CodexMcpManager:
+        if not mnemo_executable.is_absolute():
+            raise ValueError("MNEMO_LAUNCHER_NOT_ABSOLUTE")
         codex = shutil.which("codex")
         if codex is None:
             raise ValueError("MNEMO_CODEX_NOT_INSTALLED")
-        if not mnemo_executable.is_absolute():
-            raise ValueError("MNEMO_LAUNCHER_NOT_ABSOLUTE")
         return cls(codex, mnemo_executable)
 
     @property

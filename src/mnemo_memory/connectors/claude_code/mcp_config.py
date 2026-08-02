@@ -20,11 +20,11 @@ class ClaudeMcpManager:
 
     @classmethod
     def discover(cls, launcher: Path) -> ClaudeMcpManager:
+        if not launcher.is_absolute():
+            raise ValueError("MNEMO_LAUNCHER_NOT_ABSOLUTE")
         executable = shutil.which("claude")
         if executable is None:
             raise ValueError("MNEMO_CLAUDE_NOT_INSTALLED")
-        if not launcher.is_absolute():
-            raise ValueError("MNEMO_LAUNCHER_NOT_ABSOLUTE")
         return cls(executable, launcher)
 
     @property

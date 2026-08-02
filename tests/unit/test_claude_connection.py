@@ -213,6 +213,19 @@ def test_claude_cli_confirmation_matrix_is_bounded(
     assert manager.adds == adds and manager.removes == removes
 
 
+def test_claude_discovery_validates_launcher_before_external_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "mnemo_memory.connectors.claude_code.mcp_config.shutil.which", lambda _: None
+    )
+
+    with pytest.raises(ValueError, match="MNEMO_LAUNCHER_NOT_ABSOLUTE"):
+        ClaudeMcpManager.discover(Path("relative"))
+    with pytest.raises(ValueError, match="MNEMO_CLAUDE_NOT_INSTALLED"):
+        ClaudeMcpManager.discover(tmp_path / "mnemo-memory")
+
+
 def test_claude_manager_failure_cases_are_safe(tmp_path: Path) -> None:
     launcher = tmp_path / "mnemo-memory path with spaces"
     launcher.touch()

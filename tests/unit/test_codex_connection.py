@@ -234,3 +234,14 @@ def test_confirmation_flow_is_bounded_and_deterministic(
     assert result.exit_code == expected_exit
     assert manager.connect_calls == connect_calls
     assert manager.disconnect_calls == disconnect_calls
+
+
+def test_codex_discovery_validates_launcher_before_external_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("mnemo_memory.connectors.codex.mcp_config.shutil.which", lambda _: None)
+
+    with pytest.raises(ValueError, match="MNEMO_LAUNCHER_NOT_ABSOLUTE"):
+        CodexMcpManager.discover(Path("relative"))
+    with pytest.raises(ValueError, match="MNEMO_CODEX_NOT_INSTALLED"):
+        CodexMcpManager.discover(tmp_path / "mnemo-memory")
