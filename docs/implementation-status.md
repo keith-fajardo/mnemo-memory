@@ -378,6 +378,22 @@ warehouse access, raw SQL storage, or model call was introduced.
 
 ##### Issue 12C.2 — Not started
 
+##### Issue 12C.2 — Complete
+
+Added the deterministic, model-free unified checkpoint-plus-lineage benchmark. It compares
+no-memory, transcript, raw-manifest, and bounded Mnemo structural conditions using the existing
+synthetic task and manifest. The gate validates factual/lineage/provenance availability, section
+and total budgets, currentness labeling, and combined context reduction without claiming provider
+billing or model-answer quality. The initial local vertical slice is complete; later work remains
+limited to automatic capture, catalog/run-results artifacts, execution/warehouse access, general
+code indexing, embeddings, UI, team mode, and live model-quality evaluation.
+
+#### Issue 12 — Complete
+
+Issues 1–12 complete the initial local vertical slice: explicit durable checkpoints, dbt manifest
+lineage, scoped unified context, and native local client launchers. No model/provider, credential,
+or network configuration is changed by Mnemo.
+
 ## Issue queue
 
-Issues 10 and 11 are complete. Issue 12 is in progress; 12A, 12B, and 12C.1 are complete.
+Issues 1–12 are complete. Later milestones listed in the implementation plan remain unimplemented.
