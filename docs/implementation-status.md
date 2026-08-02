@@ -287,9 +287,22 @@ replacement-chain writer on the production path.
 
 Issue 10 now provides canonical immutable checkpoint revisions, scoped SQLite persistence,
 storage-independent lifecycle services, durable stdio MCP tools, and restart/failure-isolation
-coverage. Issue 11 remains not started.
+coverage.
+
+### Issue 11 — In progress
+
+#### Issue 11A — Complete
+
+Added an original, model-free coding-task handoff fixture with a 2,917-token deterministic prior
+transcript, golden required/current/stale/inference facts, exact synthetic evidence anchors, and an
+explicit 311-token canonical checkpoint. The `npm run eval:resumption -- --json` command builds a
+357-token canonical packet, compares no-memory, full-transcript, and Mnemo conditions, and scores
+fact availability/provenance without invoking a model. It passed every fixture gate: 100% required
+fact recall and provenance coverage, accepted current decision and next action, no stale decision
+presented as current, and 87.8% contextual-token savings over full transcript replay. The full
+verification gate passed with 132 tests. Issue 11B and Issue 12 remain not started.
 
 ## Issue queue
 
-Issue 10 is complete. Issue 11 (the cross-client fresh-session fixture) and Issue 12 remain not
-started; work must stop until explicit approval is given.
+Issue 10 is complete. Issue 11A is complete; Issue 11 remains in progress pending 11B. Issue 12
+remains not started.

@@ -1,0 +1,55 @@
+{
+  "fixture_version": "1.0",
+  "fixture_id": "durable-config-validation-resume",
+  "transcript_file": "fresh-session-resumption-transcript.md",
+  "task_prompt": "Finish the validation error rendering change for the local configuration command. Preserve the accepted error-code contract and add the missing regression test.",
+  "scope": {
+    "owner_id": "11111111-1111-4111-8111-111111111111",
+    "level": "task",
+    "visibility": "project",
+    "workspace_id": "22222222-2222-4222-8222-222222222222",
+    "project_id": "33333333-3333-4333-8333-333333333333",
+    "session_id": "44444444-4444-4444-8444-444444444444",
+    "task_id": "55555555-5555-4555-8555-555555555555",
+    "agent_id": null
+  },
+  "evidence": [
+    {
+      "evidence_id": "66666666-6666-4666-8666-666666666666",
+      "source_id": "77777777-7777-4777-8777-777777777777",
+      "source_type": "checkpoint",
+      "trust_class": "user_authored",
+      "immutable_source_ref": "fixture://fresh-session/transcript#E01-E16",
+      "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "location": {"uri": "fixture://fresh-session/transcript", "start_line": 1, "start_column": 0, "end_line": 200, "end_column": 0},
+      "observed_at": "2026-08-02T16:00:00+00:00",
+      "verification_status": "verified"
+    }
+  ],
+  "facts": [
+    {"id": "objective", "kind": "required", "text": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.", "mnemo_marker": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.", "evidence": ["E01"]},
+    {"id": "accepted-decision", "kind": "current_decision", "text": "Keep validation in LocalConfig and translate only at the CLI boundary.", "evidence": ["E07"]},
+    {"id": "decision-rationale", "kind": "required", "text": "Keeping validation in LocalConfig preserves one error contract for CLI, API, and MCP startup.", "evidence": ["E07"]},
+    {"id": "failed-approach", "kind": "required", "text": "Do not catch ValueError separately in each Typer command because that produced inconsistent messages.", "evidence": ["E05"]},
+    {"id": "files", "kind": "required", "text": "Relevant files are packages/application/config.py, apps/cli/main.py, and tests/unit/test_lifecycle.py.", "mnemo_marker": "packages/application/config.py", "evidence": ["E09"]},
+    {"id": "verification", "kind": "verified", "text": "The focused lifecycle tests passed after the shared CLI translator was added.", "evidence": ["E11"]},
+    {"id": "next-action", "kind": "required", "text": "Add a regression test for a malformed log level, then run npm run check.", "evidence": ["E13"]},
+    {"id": "status", "kind": "required", "text": "The task is stopped before the malformed log-level regression test is written.", "mnemo_marker": "Add a regression test for a malformed log level", "evidence": ["E15"]},
+    {"id": "isolated-test", "kind": "optional", "text": "Use an isolated temporary configuration for the regression test.", "evidence": ["E06"]},
+    {"id": "superseded-decision", "kind": "forbidden_stale", "text": "Move all configuration validation into the Typer CLI commands", "evidence": ["E04"]},
+    {"id": "unverified-inference", "kind": "unverified_inference", "text": "The API likely already formats malformed log-level errors correctly", "evidence": ["E12"]}
+  ],
+  "checkpoint": {
+    "task_objective": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.",
+    "completed_work": ["Added the shared CLI translation boundary."],
+    "current_state": "Validation remains in LocalConfig; the CLI translates expected validation failures.",
+    "remaining_work": ["Add a regression test for a malformed log level, then run npm run check."],
+    "decisions": ["Keep validation in LocalConfig and translate only at the CLI boundary.", "Keeping validation in LocalConfig preserves one error contract for CLI, API, and MCP startup."],
+    "failures": ["Do not catch ValueError separately in each Typer command because that produced inconsistent messages."],
+    "blockers": [],
+    "relevant_files": ["packages/application/config.py", "apps/cli/main.py", "tests/unit/test_lifecycle.py"],
+    "relevant_artifacts": [],
+    "verification_performed": ["The focused lifecycle tests passed after the shared CLI translator was added."],
+    "token_estimate": 0
+  }
+}

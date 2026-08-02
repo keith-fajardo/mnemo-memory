@@ -1,0 +1,65 @@
+# Deterministic fresh-session resumption benchmark
+
+Issue 11A provides a local, model-free proof that a compact checkpoint retains the information
+needed to resume one synthetic coding task more efficiently than replaying its whole prior
+transcript. The fixture is original to Mnemo and contains no user data, credentials, external
+repository content, or dbt artifacts.
+
+Run it from the repository root:
+
+```sh
+npm run eval:resumption -- --json
+```
+
+The command makes no network request, requires no API key, calls no model, and emits stable JSON.
+It exits nonzero if an acceptance gate fails. Without `--json`, it emits a concise comparison table
+followed by the same JSON report.
+
+## Conditions
+
+All conditions receive the same fresh-session task prompt.
+
+| Condition | Additional context |
+| --- | --- |
+| No memory | None. Historical resumption facts are expected to be unavailable. |
+| Full transcript | The complete synthetic prior-session transcript, including stale discussion and noise. |
+| Mnemo context | A canonical context packet with one explicit, evidenced checkpoint revision. |
+
+The fixture transcript includes the objective, inspected files, decision rationale, a failed
+approach, a superseded proposal, current accepted decision, verification state, remaining action,
+and unrelated discussion. The golden facts identify their transcript evidence sections. The
+checkpoint retains only the accepted task state and evidence; it never embeds the transcript or the
+superseded decision as current.
+
+## Token and quality accounting
+
+`mnemo-character-heuristic-v1` deterministically estimates cold input as `ceil(characters / 3)`.
+It is deliberately a reproducible fixture estimate, not a provider tokenizer or billed-token
+measurement. Cached tokens are excluded because every condition models a cold fresh session.
+
+The report separates common prompt, full transcript, checkpoint content, provenance, context-packet,
+and total contextual input estimates. It calculates:
+
+```text
+context savings % = (full transcript context - Mnemo context) / full transcript context × 100
+```
+
+It also reports total-input savings including the shared prompt. The current fixture gate requires:
+
+- checkpoint content at or below 600 tokens;
+- packet at or below the 5,700-token hard limit;
+- 100% required-fact recall and provenance coverage for Mnemo;
+- the current decision and expected next action present;
+- no forbidden superseded decision presented as current; and
+- at least 50% fewer contextual tokens than full transcript replay.
+
+The scorer uses exact, structured fixture markers and packet content. It measures information
+availability, not a model answer’s quality. Provider-specific quality, latency, cached-token, and
+cost baselines remain future work; this fixture does not claim model behavior.
+
+## Boundaries
+
+Issue 11B will run the cross-client launcher exercise. Issue 12 will add the dbt structural-memory
+comparison and finalize the broader no-memory/full-transcript/Mnemo quality and cost baseline.
+Mnemo currently relies on explicit checkpoint saves: it performs no automatic transcript ingestion,
+embedding, structural indexing, or LLM extraction.

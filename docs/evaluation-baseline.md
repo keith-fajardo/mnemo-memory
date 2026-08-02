@@ -7,6 +7,11 @@ with less context than transcript replay while retaining quality, scope isolatio
 Issue 2 defines the protocol and starter fixtures only; it does not implement retrieval, dbt
 parsing, checkpoints, MCP, or model calls.
 
+Issue 11A implements the deterministic fixture-only portion of this specification in
+[`fresh-session-resumption-benchmark.md`](fresh-session-resumption-benchmark.md). It reports
+information availability and deterministic token estimates only; it does not claim model quality
+or provider billing results.
+
 ## Controlled comparison
 
 Every evaluation run executes the same golden workflow under three conditions.
