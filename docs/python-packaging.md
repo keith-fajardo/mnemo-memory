@@ -32,7 +32,9 @@ and valid Trusted Publishing configuration (or an explicitly configured secure a
 Production PyPI requires a separate explicit user approval after TestPyPI verification.
 
 The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
-Its repository name is not a PyPI-name decision: the placeholder distribution remains local only.
+The approved distribution name is `mnemo-unified-context`; the import namespace remains
+`mnemo_memory` and the installed command remains `mnemo-memory`. Approval of this workflow does
+not publish to either registry.
 
 ## TestPyPI Trusted Publishing setup
 
@@ -46,9 +48,10 @@ Before manually invoking `.github/workflows/publish-testpypi.yml`, create the Gi
 - Environment: `testpypi`
 
 The workflow is manual-only and needs no API token. It uses three isolated jobs: an unprivileged
-build/test job transfers a flat `release/` directory containing the wheel, sdist, and checksum
-manifest by short-lived GitHub artifact; only the environment-approved publishing job obtains OIDC and uploads the two explicit
-artifact paths; then an unprivileged verification job downloads TestPyPI metadata and the uploaded
-wheel. A partial or duplicate upload must be investigated on TestPyPI; do not rerun it with the
-same version until the TestPyPI project files and hashes have been checked. Production PyPI is not
-part of this workflow.
+build/test job transfers one flat `release/` directory containing exactly the wheel, sdist, and
+`SHA256SUMS` manifest by a short-lived GitHub artifact; only the environment-approved publishing
+job obtains OIDC and uploads the two explicit artifact paths. The unprivileged verification job
+downloads TestPyPI metadata and the uploaded wheel, then installs that local downloaded wheel with
+dependencies resolved only from production PyPI. A partial or duplicate upload must be
+investigated on TestPyPI; do not rerun it with the same version until the TestPyPI project files and
+hashes have been checked. Production PyPI is not part of this workflow.

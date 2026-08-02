@@ -95,8 +95,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mnemo-unified-context-0.1.0a1
-          path: |
-            release/
+          path: release/
           if-no-files-found: error
           retention-days: 3
 
@@ -134,6 +133,9 @@ jobs:
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
           test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
           test "$(find release -type f | wc -l | tr -d ' ')" = 3
+          test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0
+          test -f release/SHA256SUMS
           (cd release && sha256sum --check SHA256SUMS)
           test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
           test -f release/mnemo_unified_context-0.1.0a1.tar.gz
@@ -174,6 +176,13 @@ jobs:
 
       - name: Verify TestPyPI metadata, hashes, and uploaded wheel
         run: |
+          test "$(find release -type f | wc -l | tr -d ' ')" = 3
+          test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0
+          test -f release/SHA256SUMS
+          test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          test -f release/mnemo_unified_context-0.1.0a1.tar.gz
+          (cd release && sha256sum --check SHA256SUMS)
           curl --fail --retry 5 --retry-delay 3 -o metadata.json https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a1/json
           python - <<'PY'
           import hashlib, json, urllib.request

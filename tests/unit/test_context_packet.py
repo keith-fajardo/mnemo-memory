@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -257,7 +258,11 @@ def test_all_omission_codes_and_unknown_fields_are_strict() -> None:
 
 
 def test_schema_contract_matches_model_and_fixture_shape() -> None:
-    schema = json.loads((ROOT / "schemas/context-packet-v1.json").read_text())
+    schema = json.loads(
+        resources.files("mnemo_memory")
+        .joinpath("resources/schemas/context-packet-v1.json")
+        .read_text()
+    )
     model_keys = set(packet().to_dict())
     assert set(schema["required"]) == model_keys == set(schema["properties"])
     assert schema["properties"]["schema_version"]["const"] == PacketSchemaVersion.V1.value
