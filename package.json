@@ -1,0 +1,21 @@
+{
+  "name": "mnemo-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.4.2",
+  "scripts": {
+    "format": "uv run ruff format .",
+    "format:check": "uv run ruff format --check .",
+    "lint": "uv run ruff check .",
+    "typecheck": "uv run mypy .",
+    "test": "uv run pytest",
+    "dependencies:check": "uv run python scripts/check_dependencies.py",
+    "architecture:check": "uv run python scripts/check_architecture.py",
+    "schema:check": "uv run python scripts/check_context_packet_schema.py",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run schema:check && npm run dependencies:check && npm run architecture:check"
+  }
+}

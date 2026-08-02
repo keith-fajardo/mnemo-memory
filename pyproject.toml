@@ -1,0 +1,46 @@
+[project]
+name = "mnemo-workspace"
+version = "0.0.0"
+description = "Local-first unified context platform for coding agents"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.139.2",
+    "mcp==1.28.1",
+    "typer==0.27.0",
+    "uvicorn==0.47.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy==1.20.2",
+    "pytest==8.4.2",
+    "ruff==0.14.14",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers", "-ra"]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+pretty = true
+show_error_codes = true
+warn_unreachable = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["docs/implementation-plan.md", "mnemo-unified-memory-codex-implementation-plan.md"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.format]
+docstring-code-format = true

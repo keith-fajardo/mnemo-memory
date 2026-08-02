@@ -1,0 +1,179 @@
+import asyncio
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import timedelta
+from pathlib import Path
+
+import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from typer.testing import CliRunner
+
+from apps.cli import main as cli
+from connectors.codex.mcp_config import SERVER_NAME, CodexMcpManager
+
+
+def completed(
+    command: list[str], code: int = 0, stdout: str = ""
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(command, code, stdout, "")
+
+
+def test_connect_registers_exact_argument_array_and_reads_it_back(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    state: dict[str, object] = {}
+    launcher = tmp_path / "Mnemo With Spaces" / "mnemo"
+    launcher.parent.mkdir()
+    launcher.touch()
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[2] == "get":
+            return completed(command, 0 if state else 1, json.dumps(state))
+        if command[2] == "add":
+            state.update({"command": command[5], "args": command[6:]})
+        return completed(command)
+
+    manager = CodexMcpManager("/fake/codex", launcher, run)
+    assert manager.connect() == {"status": "connected", "changed": True, "server": SERVER_NAME}
+    assert calls[1] == [
+        "/fake/codex",
+        "mcp",
+        "add",
+        SERVER_NAME,
+        "--",
+        str(launcher),
+        "mcp",
+        "serve",
+        "--stdio",
+    ]
+    assert manager.connect()["changed"] is False
+
+
+def test_conflicting_or_unrecognized_entry_is_never_replaced_or_removed(tmp_path: Path) -> None:
+    launcher = tmp_path / "mnemo"
+    launcher.touch()
+    entry = {"command": "/other", "args": ["mcp", "serve", "--stdio"]}
+    manager = CodexMcpManager(
+        "/fake/codex", launcher, lambda command, **_: completed(command, 0, json.dumps(entry))
+    )
+    with pytest.raises(ValueError, match="MNEMO_CODEX_CONFLICT"):
+        manager.connect()
+    with pytest.raises(ValueError, match="MNEMO_CODEX_UNRECOGNIZED_ENTRY"):
+        manager.disconnect()
+
+
+@pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is unavailable")
+def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> None:
+    codex_home = tmp_path / "isolated codex"
+    launcher = tmp_path / "Mnemo Launcher" / "mnemo"
+    launcher.parent.mkdir()
+    launcher.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "os.execv(sys.executable, [sys.executable, '-m', 'apps.cli.main', *sys.argv[1:]])\n"
+    )
+    launcher.chmod(0o700)
+    environment = {**os.environ, "CODEX_HOME": str(codex_home)}
+    manager = CodexMcpManager(shutil.which("codex") or "codex", launcher, environment=environment)
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text("[feedback]\nenabled = false\n")
+
+    assert manager.connect()["changed"] is True
+    stored = manager.inspect()
+    assert stored is not None and manager.is_owned(stored)
+    transport = stored["transport"]
+    assert isinstance(transport, dict)
+
+    async def smoke_test() -> None:
+        command = transport["command"]
+        arguments = transport["args"]
+        assert isinstance(command, str)
+        assert isinstance(arguments, list)
+        parameters = StdioServerParameters(command=command, args=arguments, env=environment)
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            initialized = await session.initialize()
+            assert initialized.serverInfo.name == "mnemo-local"
+            assert [tool.name for tool in (await session.list_tools()).tools] == [
+                "get_context",
+                "save_checkpoint",
+            ]
+            saved = await session.call_tool(
+                "save_checkpoint",
+                {
+                    "owner_id": "11111111-1111-4111-8111-111111111111",
+                    "evidence_references": ["fixture"],
+                },
+                read_timeout_seconds=timedelta(seconds=5),
+            )
+            assert saved.isError is False
+            context = await session.call_tool(
+                "get_context",
+                {"owner_id": "11111111-1111-4111-8111-111111111111", "query": "fixture"},
+                read_timeout_seconds=timedelta(seconds=5),
+            )
+            assert context.isError is False
+
+    asyncio.run(asyncio.wait_for(smoke_test(), timeout=10))
+    listed = subprocess.run(
+        [manager.codex_executable, "mcp", "list", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert SERVER_NAME in {item["name"] for item in json.loads(listed.stdout)}
+    assert (codex_home / "config.toml").read_text().startswith("[feedback]\nenabled = false")
+    assert manager.disconnect()["changed"] is True
+    assert manager.inspect() is None
+
+
+class FakeManager:
+    def __init__(self, existing: object | None = None) -> None:
+        self.existing = existing
+        self.connect_calls = 0
+        self.disconnect_calls = 0
+
+    def inspect(self) -> object | None:
+        return self.existing
+
+    def connect(self, dry_run: bool = False) -> dict[str, object]:
+        self.connect_calls += 1
+        return {"status": "dry-run" if dry_run else "connected", "changed": not dry_run}
+
+    def disconnect(self, dry_run: bool = False) -> dict[str, object]:
+        self.disconnect_calls += 1
+        return {"status": "dry-run" if dry_run else "disconnected", "changed": not dry_run}
+
+
+@pytest.mark.parametrize(
+    ("command", "input_value", "expected_exit", "connect_calls", "disconnect_calls"),
+    [
+        (["connect", "codex"], "y\n", 0, 1, 0),
+        (["connect", "codex"], "n\n", 1, 0, 0),
+        (["disconnect", "codex"], "y\n", 0, 0, 1),
+        (["disconnect", "codex"], "n\n", 1, 0, 0),
+        (["connect", "codex", "--yes"], "", 0, 1, 0),
+        (["disconnect", "codex", "--yes"], "", 0, 0, 1),
+        (["connect", "codex", "--dry-run"], "", 0, 1, 0),
+        (["connect", "codex", "--check"], "", 0, 0, 0),
+        (["connect", "codex"], "", 1, 0, 0),
+    ],
+)
+def test_confirmation_flow_is_bounded_and_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+    command: list[str],
+    input_value: str,
+    expected_exit: int,
+    connect_calls: int,
+    disconnect_calls: int,
+) -> None:
+    manager = FakeManager()
+    monkeypatch.setattr(cli, "_codex_manager", lambda: manager)
+    result = CliRunner().invoke(cli.app, command, input=input_value)
+    assert result.exit_code == expected_exit
+    assert manager.connect_calls == connect_calls
+    assert manager.disconnect_calls == disconnect_calls

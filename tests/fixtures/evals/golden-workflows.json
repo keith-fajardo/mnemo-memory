@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "specification-only",
+  "description": "Synthetic starter workflows for future no-memory, full-transcript, and Mnemo-context comparisons.",
+  "workflows": [
+    {
+      "id": "workflow-checkpoint-resume",
+      "title": "Resume an explicit coding checkpoint",
+      "category": "coding",
+      "task": "Continue a bounded refactor after a fresh agent session.",
+      "handoff": "The prior session selected a module, completed one edit, and recorded the next test.",
+      "fixture_inputs": ["repo:checkout-v1", "checkpoint:refactor-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"},
+      "completion_criteria": ["Continue from the recorded next step", "Do not repeat the completed edit", "Run the recorded test"],
+      "questions": [
+        {"id": "checkpoint-resume-01", "category": "episodic", "prompt": "What was the last completed step?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"}, "expected_sources": [{"source_id": "checkpoint:refactor-v1", "authority": "approved_checkpoint"}], "expected_result": "The helper extraction was completed.", "must_not_include": ["another project checkpoint"]},
+        {"id": "checkpoint-resume-02", "category": "episodic", "prompt": "What is the next actionable step?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"}, "expected_sources": [{"source_id": "checkpoint:refactor-v1", "authority": "approved_checkpoint"}], "expected_result": "Update the caller and run the focused test.", "must_not_include": ["full transcript"]},
+        {"id": "checkpoint-resume-03", "category": "project", "prompt": "Which current file contains the caller?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"}, "expected_sources": [{"source_id": "repo:checkout-v1", "authority": "current_structural_state"}], "expected_result": "Use the current repository path, not the remembered path.", "must_not_include": ["stale path presented as current"]},
+        {"id": "checkpoint-resume-04", "category": "procedural", "prompt": "Which verification procedure applies?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"}, "expected_sources": [{"source_id": "repo:checkout-v1:agents", "authority": "checked_in_rule"}], "expected_result": "Run the focused test followed by the repository gate.", "must_not_include": ["unrelated workflow"]},
+        {"id": "checkpoint-resume-05", "category": "knowledge", "prompt": "Why was this refactor chosen?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-checkout"}, "expected_sources": [{"source_id": "decision:checkout-helper", "authority": "user_authored"}], "expected_result": "The decision cites isolation and testability.", "must_not_include": ["assistant inference as fact"]}
+      ]
+    },
+    {
+      "id": "workflow-dbt-upstream",
+      "title": "Find upstream dbt dependencies",
+      "category": "dbt",
+      "task": "Identify authoritative upstream inputs for a model before editing it.",
+      "handoff": "The task targets orders_enriched in the dev target.",
+      "fixture_inputs": ["dbt:manifest-jaffle-v1", "repo:jaffle-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"},
+      "completion_criteria": ["List exact upstream nodes", "Cite manifest nodes", "Use no model inference for lineage"],
+      "questions": [
+        {"id": "dbt-upstream-01", "category": "project", "prompt": "What directly feeds orders_enriched?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v1:model.orders_enriched", "authority": "current_structural_state"}], "expected_result": "Return direct manifest parents.", "must_not_include": ["LLM-inferred edge"]},
+        {"id": "dbt-upstream-02", "category": "project", "prompt": "Which raw sources are upstream at any depth?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v1", "authority": "current_structural_state"}], "expected_result": "Traverse deterministic manifest edges to sources.", "must_not_include": ["unrelated package source"]},
+        {"id": "dbt-upstream-03", "category": "episodic", "prompt": "What edit was planned for orders_enriched?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "checkpoint:orders-enriched-v1", "authority": "approved_checkpoint"}], "expected_result": "Report the checkpoint plan separately from lineage.", "must_not_include": ["plan treated as current structure"]},
+        {"id": "dbt-upstream-04", "category": "knowledge", "prompt": "What business definition constrains the order status?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "decision:order-status-v1", "authority": "user_authored"}], "expected_result": "Cite the user-authored definition.", "must_not_include": ["uncited definition"]},
+        {"id": "dbt-upstream-05", "category": "procedural", "prompt": "How must lineage be computed?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "repo:jaffle-v1:agents", "authority": "checked_in_rule"}], "expected_result": "Use deterministic dbt artifacts and no LLM authority.", "must_not_include": ["model-generated lineage"]}
+      ]
+    },
+    {
+      "id": "workflow-dbt-downstream-impact",
+      "title": "Assess downstream dbt impact",
+      "category": "dbt",
+      "task": "Determine the impact of changing a staged customer key.",
+      "handoff": "The proposed edit changes stg_customers.customer_id semantics.",
+      "fixture_inputs": ["dbt:manifest-jaffle-v1", "dbt:catalog-jaffle-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"},
+      "completion_criteria": ["List deterministic descendants", "Identify affected tests and exposures", "Avoid unrelated nodes"],
+      "questions": [
+        {"id": "dbt-impact-01", "category": "project", "prompt": "Which models are direct descendants of stg_customers?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v1:model.stg_customers", "authority": "current_structural_state"}], "expected_result": "Return exact direct descendants.", "must_not_include": ["unrelated model"]},
+        {"id": "dbt-impact-02", "category": "project", "prompt": "Which tests cover affected descendants?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v1", "authority": "current_structural_state"}], "expected_result": "Return manifest-linked tests.", "must_not_include": ["invented test"]},
+        {"id": "dbt-impact-03", "category": "project", "prompt": "Which exposure can be impacted?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v1:exposure.revenue_dashboard", "authority": "current_structural_state"}], "expected_result": "Return the reachable exposure with its path.", "must_not_include": ["unreachable exposure"]},
+        {"id": "dbt-impact-04", "category": "episodic", "prompt": "Has a similar key change failed before?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "episode:customer-key-failure-v1", "authority": "approved_checkpoint"}], "expected_result": "Cite the prior verified failure without changing lineage.", "must_not_include": ["uncorroborated assistant claim"]},
+        {"id": "dbt-impact-05", "category": "procedural", "prompt": "What verification order applies to this impact change?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "repo:jaffle-v1:agents", "authority": "checked_in_rule"}], "expected_result": "Run affected dbt tests before the wider project gate.", "must_not_include": ["all repository files as context"]}
+      ]
+    },
+    {
+      "id": "workflow-dbt-test-failure",
+      "title": "Resume diagnosis of a dbt test failure",
+      "category": "dbt-coding",
+      "task": "Continue a unique-test diagnosis from an explicit checkpoint.",
+      "handoff": "A duplicate order key was isolated but not fixed.",
+      "fixture_inputs": ["checkpoint:unique-order-failure-v1", "dbt:run-results-jaffle-v1", "dbt:manifest-jaffle-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"},
+      "completion_criteria": ["Resume at the isolated cause", "Use current test metadata", "Do not claim the task is already fixed"],
+      "questions": [
+        {"id": "test-failure-01", "category": "episodic", "prompt": "What failure was observed?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "checkpoint:unique-order-failure-v1", "authority": "approved_checkpoint"}], "expected_result": "Report the isolated duplicate key evidence.", "must_not_include": ["fabricated stack trace"]},
+        {"id": "test-failure-02", "category": "project", "prompt": "Which manifest test node failed?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:run-results-jaffle-v1:test.unique_orders_order_id", "authority": "verified_tool_result"}], "expected_result": "Identify the exact failing node.", "must_not_include": ["passing test"]},
+        {"id": "test-failure-03", "category": "episodic", "prompt": "What investigation step is next?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "checkpoint:unique-order-failure-v1", "authority": "approved_checkpoint"}], "expected_result": "Continue with the recorded query or edit.", "must_not_include": ["repeat completed isolation"]},
+        {"id": "test-failure-04", "category": "knowledge", "prompt": "What uniqueness rule is intended?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "decision:order-grain-v1", "authority": "user_authored"}], "expected_result": "Cite the order-grain decision.", "must_not_include": ["assistant preference"]},
+        {"id": "test-failure-05", "category": "procedural", "prompt": "Which focused command verifies the fix?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "repo:jaffle-v1:agents", "authority": "checked_in_rule"}], "expected_result": "Use the checked-in focused dbt test command.", "must_not_include": ["unapproved mutation"]}
+      ]
+    },
+    {
+      "id": "workflow-stale-dbt-state",
+      "title": "Detect stale structural state",
+      "category": "dbt-security",
+      "task": "Answer an impact question after the manifest and Git worktree changed.",
+      "handoff": "The stored projection references an older manifest digest and clean worktree.",
+      "fixture_inputs": ["dbt:manifest-jaffle-v1", "dbt:manifest-jaffle-v2", "git:jaffle-dirty-v2"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"},
+      "completion_criteria": ["Label old projection stale", "Prefer current artifacts", "Expose observed fingerprint"],
+      "questions": [
+        {"id": "stale-state-01", "category": "project", "prompt": "Is the stored lineage current?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "dbt:manifest-jaffle-v2", "authority": "current_structural_state"}, {"source_id": "dbt:manifest-jaffle-v1", "authority": "stale_structural_state"}], "expected_result": "Label v1 stale because its digest differs.", "must_not_include": ["v1 presented as current"]},
+        {"id": "stale-state-02", "category": "project", "prompt": "Which Git state qualifies the answer?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "git:jaffle-dirty-v2", "authority": "current_structural_state"}], "expected_result": "Report the dirty worktree fingerprint.", "must_not_include": ["clean state claim"]},
+        {"id": "stale-state-03", "category": "episodic", "prompt": "What did the old checkpoint assume?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "checkpoint:manifest-v1-assumption", "authority": "approved_checkpoint"}], "expected_result": "Report the assumption as historical, not current.", "must_not_include": ["checkpoint outranking manifest"]},
+        {"id": "stale-state-04", "category": "procedural", "prompt": "What must happen before impact analysis?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "repo:jaffle-v2:agents", "authority": "checked_in_rule"}], "expected_result": "Refresh or explicitly qualify the structural index.", "must_not_include": ["silent stale use"]},
+        {"id": "stale-state-05", "category": "knowledge", "prompt": "Which target was intended by the user?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-jaffle"}, "expected_sources": [{"source_id": "statement:target-dev-v1", "authority": "user_authored"}], "expected_result": "Use the dev target while separately validating current artifacts.", "must_not_include": ["target inferred from memory"]}
+      ]
+    },
+    {
+      "id": "workflow-cross-project-isolation",
+      "title": "Prevent cross-project disclosure",
+      "category": "security",
+      "task": "Retrieve a checkpoint where another project contains identical terms.",
+      "handoff": "Projects alpha and beta both contain a model named orders.",
+      "fixture_inputs": ["checkpoint:alpha-orders", "checkpoint:beta-orders", "dbt:manifest-alpha", "dbt:manifest-beta"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"},
+      "completion_criteria": ["Return alpha evidence only", "Leak no beta identifiers or counts", "Fail closed on missing scope"],
+      "questions": [
+        {"id": "scope-isolation-01", "category": "episodic", "prompt": "What is the active orders checkpoint?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"}, "expected_sources": [{"source_id": "checkpoint:alpha-orders", "authority": "approved_checkpoint"}], "expected_result": "Return only alpha's checkpoint.", "must_not_include": ["checkpoint:beta-orders", "project-beta"]},
+        {"id": "scope-isolation-02", "category": "project", "prompt": "What feeds orders in this project?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"}, "expected_sources": [{"source_id": "dbt:manifest-alpha:model.orders", "authority": "current_structural_state"}], "expected_result": "Return only alpha lineage.", "must_not_include": ["dbt:manifest-beta", "beta source count"]},
+        {"id": "scope-isolation-03", "category": "knowledge", "prompt": "What decision defines order grain here?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"}, "expected_sources": [{"source_id": "decision:alpha-order-grain", "authority": "user_authored"}], "expected_result": "Return alpha's decision only.", "must_not_include": ["decision:beta-order-grain"]},
+        {"id": "scope-isolation-04", "category": "procedural", "prompt": "Which project instructions apply?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"}, "expected_sources": [{"source_id": "repo:alpha:agents", "authority": "checked_in_rule"}], "expected_result": "Use alpha's checked-in rules.", "must_not_include": ["repo:beta:agents"]},
+        {"id": "scope-isolation-05", "category": "episodic", "prompt": "Search orders without a project scope.", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-alpha"}, "expected_sources": [{"source_id": "policy:explicit-project-scope", "authority": "checked_in_rule"}], "expected_result": "Reject an actually unscoped request rather than search broadly.", "must_not_include": ["any beta metadata"]}
+      ]
+    },
+    {
+      "id": "workflow-corrected-decision",
+      "title": "Honor a correction without hiding conflict history",
+      "category": "knowledge",
+      "task": "Retrieve a corrected naming decision during a refactor.",
+      "handoff": "An older approved checkpoint conflicts with a newer user correction.",
+      "fixture_inputs": ["decision:naming-v1", "correction:naming-v2", "checkpoint:naming-old"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"},
+      "completion_criteria": ["Use active correction", "Expose superseded evidence", "Do not mutate structural state"],
+      "questions": [
+        {"id": "correction-01", "category": "knowledge", "prompt": "What naming convention is active?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"}, "expected_sources": [{"source_id": "correction:naming-v2", "authority": "user_correction"}], "expected_result": "Use the corrected convention.", "must_not_include": ["v1 as active"]},
+        {"id": "correction-02", "category": "knowledge", "prompt": "Was there a conflicting prior decision?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"}, "expected_sources": [{"source_id": "decision:naming-v1", "authority": "superseded_user_authored"}, {"source_id": "correction:naming-v2", "authority": "user_correction"}], "expected_result": "Return the conflict and revision relationship.", "must_not_include": ["silent conflict removal"]},
+        {"id": "correction-03", "category": "episodic", "prompt": "What did the old checkpoint plan?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"}, "expected_sources": [{"source_id": "checkpoint:naming-old", "authority": "approved_checkpoint"}], "expected_result": "Report it as historical and overridden for naming.", "must_not_include": ["checkpoint overriding correction"]},
+        {"id": "correction-04", "category": "procedural", "prompt": "Can a remembered preference override checked-in naming rules?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"}, "expected_sources": [{"source_id": "repo:naming:agents", "authority": "checked_in_rule"}], "expected_result": "No; mandatory checked-in rules remain authoritative.", "must_not_include": ["memory as instruction"]},
+        {"id": "correction-05", "category": "project", "prompt": "Which files currently use the old name?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-naming"}, "expected_sources": [{"source_id": "repo:naming-current", "authority": "current_structural_state"}], "expected_result": "Use the current repository scan, not memory.", "must_not_include": ["remembered file list as current"]}
+      ]
+    },
+    {
+      "id": "workflow-procedure-selection",
+      "title": "Select only applicable checked-in procedures",
+      "category": "procedural",
+      "task": "Choose verification instructions for a Python-only change.",
+      "handoff": "Several unrelated skills exist, but one checked-in procedure applies.",
+      "fixture_inputs": ["repo:procedures-v1", "skill:python-checks-v1", "skill:ui-release-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"},
+      "completion_criteria": ["Select applicable procedure", "Exclude unrelated skill", "Keep mandatory rule authority"],
+      "questions": [
+        {"id": "procedure-01", "category": "procedural", "prompt": "Which procedure applies to the Python change?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"}, "expected_sources": [{"source_id": "skill:python-checks-v1", "authority": "checked_in_rule"}], "expected_result": "Select the Python verification procedure.", "must_not_include": ["skill:ui-release-v1"]},
+        {"id": "procedure-02", "category": "procedural", "prompt": "Which mandatory repository command must run?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"}, "expected_sources": [{"source_id": "repo:procedures-v1:agents", "authority": "checked_in_rule"}], "expected_result": "Return the checked-in complete gate.", "must_not_include": ["remembered shortcut"]},
+        {"id": "procedure-03", "category": "episodic", "prompt": "What focused test failed in the prior task?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"}, "expected_sources": [{"source_id": "checkpoint:python-failure-v1", "authority": "approved_checkpoint"}], "expected_result": "Cite the checkpoint failure as evidence.", "must_not_include": ["failure treated as procedure"]},
+        {"id": "procedure-04", "category": "knowledge", "prompt": "Why does the project require strict typing?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"}, "expected_sources": [{"source_id": "decision:strict-typing-v1", "authority": "user_authored"}], "expected_result": "Cite the architecture decision rationale.", "must_not_include": ["invented rationale"]},
+        {"id": "procedure-05", "category": "project", "prompt": "Is a frontend workspace currently initialized?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-procedures"}, "expected_sources": [{"source_id": "repo:procedures-v1", "authority": "current_structural_state"}], "expected_result": "Answer from current files and exclude UI commands when absent.", "must_not_include": ["planned UI presented as implemented"]}
+      ]
+    },
+    {
+      "id": "workflow-deletion-propagation",
+      "title": "Respect deletion and prevent resurrection",
+      "category": "privacy",
+      "task": "Answer after a synthetic memory source was deleted.",
+      "handoff": "A decision and its derived index entry have a deletion tombstone.",
+      "fixture_inputs": ["tombstone:decision-delete-v1", "projection:decision-stale-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"},
+      "completion_criteria": ["Return no deleted payload", "Honor tombstone", "Expose deletion state without sensitive content"],
+      "questions": [
+        {"id": "deletion-01", "category": "knowledge", "prompt": "What was the deleted decision text?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"}, "expected_sources": [{"source_id": "tombstone:decision-delete-v1", "authority": "deletion_tombstone"}], "expected_result": "Report that it is deleted without returning payload.", "must_not_include": ["deleted decision payload"]},
+        {"id": "deletion-02", "category": "project", "prompt": "May the stale projection supply the deleted claim?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"}, "expected_sources": [{"source_id": "tombstone:decision-delete-v1", "authority": "deletion_tombstone"}], "expected_result": "No; invalidate the projection.", "must_not_include": ["projection:decision-stale-v1 payload"]},
+        {"id": "deletion-03", "category": "episodic", "prompt": "Can a checkpoint resurrect the deleted decision?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"}, "expected_sources": [{"source_id": "tombstone:decision-delete-v1", "authority": "deletion_tombstone"}], "expected_result": "No; dependent evidence is retracted or omitted.", "must_not_include": ["checkpoint copy of deleted payload"]},
+        {"id": "deletion-04", "category": "procedural", "prompt": "What should re-ingestion do?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"}, "expected_sources": [{"source_id": "policy:deletion-propagation", "authority": "checked_in_rule"}], "expected_result": "Honor tombstone and current consent before any re-creation.", "must_not_include": ["automatic resurrection"]},
+        {"id": "deletion-05", "category": "knowledge", "prompt": "What deletion evidence may remain?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-delete"}, "expected_sources": [{"source_id": "tombstone:decision-delete-v1", "authority": "deletion_tombstone"}], "expected_result": "Only minimal non-sensitive tombstone metadata.", "must_not_include": ["deleted content digest reversible to payload"]}
+      ]
+    },
+    {
+      "id": "workflow-connector-degradation",
+      "title": "Degrade safely when native integration fails",
+      "category": "integration-security",
+      "task": "Continue ordinary agent work while the Mnemo connector is unavailable.",
+      "handoff": "The local MCP connection times out and the client model endpoint is preconfigured.",
+      "fixture_inputs": ["client:codex-config-v1", "failure:mcp-timeout-v1", "checkpoint:connector-task-v1"],
+      "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"},
+      "completion_criteria": ["Agent remains usable", "Model endpoint is unchanged", "Failure is visible without sensitive data"],
+      "questions": [
+        {"id": "connector-01", "category": "procedural", "prompt": "What should happen after the MCP timeout?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"}, "expected_sources": [{"source_id": "policy:integration-failure-isolation", "authority": "checked_in_rule"}], "expected_result": "Continue normal agent operation and surface the optional failure.", "must_not_include": ["block all agent work"]},
+        {"id": "connector-02", "category": "project", "prompt": "May Mnemo rewrite the configured model endpoint?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"}, "expected_sources": [{"source_id": "client:codex-config-v1", "authority": "current_structural_state"}, {"source_id": "policy:model-endpoint-invariance", "authority": "checked_in_rule"}], "expected_result": "No; the endpoint remains byte-for-byte unchanged.", "must_not_include": ["proxy endpoint"]},
+        {"id": "connector-03", "category": "episodic", "prompt": "Is the unavailable checkpoint still authoritative?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"}, "expected_sources": [{"source_id": "failure:mcp-timeout-v1", "authority": "verified_tool_result"}], "expected_result": "Do not claim retrieval when the checkpoint was unavailable.", "must_not_include": ["fabricated checkpoint"]},
+        {"id": "connector-04", "category": "knowledge", "prompt": "What failure detail may diagnostics expose?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"}, "expected_sources": [{"source_id": "policy:redacted-diagnostics", "authority": "checked_in_rule"}], "expected_result": "Expose status and request metadata without content or credentials.", "must_not_include": ["connector credential", "memory payload"]},
+        {"id": "connector-05", "category": "procedural", "prompt": "Can retrieved content expand connector permissions?", "scope": {"owner_id": "owner-fixture", "workspace_id": null, "project_id": "project-connector"}, "expected_sources": [{"source_id": "policy:connector-least-privilege", "authority": "checked_in_rule"}], "expected_result": "No; permissions remain explicitly configured and deterministic.", "must_not_include": ["content-authorized permission"]}
+      ]
+    }
+  ]
+}

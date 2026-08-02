@@ -1,0 +1,745 @@
+schema_version = 1
+scope = "All current Mnemo toolchain components, locked packages, and CI actions"
+last_reviewed = "2026-08-02"
+approval_authority = "Mnemo maintainers under docs/product-ownership-policy.md"
+approved_licenses = [
+    "Apache-2.0",
+    "Apache-2.0 OR BSD-3-Clause",
+    "Apache-2.0 OR BSD-2-Clause",
+    "Apache-2.0 OR MIT",
+    "Artistic-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "PSF-2.0",
+]
+
+[[dependencies]]
+ecosystem = "toolchain"
+name = "CPython"
+version = "3.12.11"
+license = "PSF-2.0"
+source_url = "https://www.python.org/downloads/release/python-31211/"
+author = "Python Software Foundation"
+owner = "Mnemo maintainers"
+purpose = "Issue 1 runtime for tooling and tests"
+replacement_boundary = "Python runtime boundary; another supported 3.12 patch may replace it after lockfile and CI verification"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "toolchain"
+name = "uv"
+version = "0.9.7"
+license = "Apache-2.0 OR MIT"
+source_url = "https://github.com/astral-sh/uv/releases/tag/0.9.7"
+author = "Astral Software Inc. and uv contributors"
+owner = "Mnemo maintainers"
+purpose = "Python dependency resolution, locking, and isolated command execution"
+replacement_boundary = "Python packaging boundary; replaceable by another PEP-compliant locked installer"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "toolchain"
+name = "Node.js"
+version = "24.4.1"
+license = "MIT"
+source_url = "https://nodejs.org/download/release/v24.4.1/"
+author = "OpenJS Foundation and Node.js contributors"
+owner = "Mnemo maintainers"
+purpose = "Portable root command runner; frontend runtime is deferred"
+replacement_boundary = "Repository command-runner boundary; product code does not depend on Node.js yet"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "toolchain"
+name = "npm"
+version = "11.4.2"
+license = "Artistic-2.0"
+source_url = "https://github.com/npm/cli/releases/tag/v11.4.2"
+author = "npm, Inc. and npm CLI contributors"
+owner = "Mnemo maintainers"
+purpose = "Root verification command orchestration and lockfile validation"
+replacement_boundary = "Root script runner boundary; replaceable without changing product code"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "mypy"
+version = "1.20.2"
+license = "MIT"
+source_url = "https://pypi.org/project/mypy/1.20.2/"
+author = "Jukka Lehtosalo and mypy contributors"
+owner = "Mnemo maintainers"
+purpose = "Strict Python static type checking"
+replacement_boundary = "Static-analysis boundary configured in pyproject.toml"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pytest"
+version = "8.4.2"
+license = "MIT"
+source_url = "https://pypi.org/project/pytest/8.4.2/"
+author = "pytest contributors"
+owner = "Mnemo maintainers"
+purpose = "Python test runner"
+replacement_boundary = "Test-runner boundary; tests use plain assertions where practical"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "ruff"
+version = "0.14.14"
+license = "MIT"
+source_url = "https://pypi.org/project/ruff/0.14.14/"
+author = "Astral Software Inc. and Ruff contributors"
+owner = "Mnemo maintainers"
+purpose = "Python formatting and linting"
+replacement_boundary = "Formatting and linting boundary configured in pyproject.toml"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "fastapi"
+version = "0.139.2"
+license = "MIT"
+source_url = "https://pypi.org/project/fastapi/0.139.2/"
+author = "Sebastián Ramírez and FastAPI contributors"
+owner = "Mnemo maintainers"
+purpose = "Issue 6 local loopback lifecycle API"
+replacement_boundary = "HTTP adapter boundary; application services remain framework-independent"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "mcp"
+version = "1.28.1"
+license = "MIT"
+source_url = "https://pypi.org/project/mcp/1.28.1/"
+author = "Anthropic, PBC and Model Context Protocol contributors"
+owner = "Mnemo maintainers"
+purpose = "Issue 7 official local stdio MCP protocol adapter"
+replacement_boundary = "MCP transport adapter; application port and domain contracts remain Mnemo-owned"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "typer"
+version = "0.27.0"
+license = "MIT"
+source_url = "https://pypi.org/project/typer/0.27.0/"
+author = "Sebastián Ramírez and Typer contributors"
+owner = "Mnemo maintainers"
+purpose = "Issue 6 local lifecycle CLI adapter"
+replacement_boundary = "CLI adapter boundary; application services remain command-framework-independent"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "uvicorn"
+version = "0.47.0"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/uvicorn/0.47.0/"
+author = "Tom Christie and Uvicorn contributors"
+owner = "Mnemo maintainers"
+purpose = "Issue 6 local ASGI lifecycle server"
+replacement_boundary = "ASGI server boundary; no application service depends on Uvicorn"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "annotated-doc"
+version = "0.0.5"
+license = "MIT"
+source_url = "https://pypi.org/project/annotated-doc/0.0.5/"
+author = "Pydantic contributors"
+owner = "fastapi"
+purpose = "FastAPI parameter documentation metadata"
+replacement_boundary = "Transitive FastAPI dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "attrs"
+version = "26.1.0"
+license = "MIT"
+source_url = "https://pypi.org/project/attrs/26.1.0/"
+author = "attrs contributors"
+owner = "mcp"
+purpose = "MCP data structures"
+replacement_boundary = "Transitive MCP dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "certifi"
+version = "2026.7.22"
+license = "MPL-2.0"
+source_url = "https://pypi.org/project/certifi/2026.7.22/"
+author = "certifi contributors"
+owner = "httpx"
+purpose = "CA bundle"
+replacement_boundary = "Transitive MCP dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem="pypi"
+name="cffi"
+version="2.1.0"
+license="MIT"
+source_url="https://pypi.org/project/cffi/2.1.0/"
+author="CFFI contributors"
+owner="cryptography"
+purpose="C foreign-function support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="cryptography"
+version="50.0.0"
+license="Apache-2.0 OR BSD-3-Clause"
+source_url="https://pypi.org/project/cryptography/50.0.0/"
+author="PyCA contributors"
+owner="mcp"
+purpose="MCP authentication primitives"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="httpcore"
+version="1.0.9"
+license="BSD-3-Clause"
+source_url="https://pypi.org/project/httpcore/1.0.9/"
+author="Encode contributors"
+owner="httpx"
+purpose="HTTP core"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="httpx"
+version="0.28.1"
+license="BSD-3-Clause"
+source_url="https://pypi.org/project/httpx/0.28.1/"
+author="Encode contributors"
+owner="mcp"
+purpose="MCP HTTP-capable SDK support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="httpx-sse"
+version="0.4.3"
+license="MIT"
+source_url="https://pypi.org/project/httpx-sse/0.4.3/"
+author="httpx-sse contributors"
+owner="mcp"
+purpose="MCP SDK SSE support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="jsonschema"
+version="4.26.0"
+license="MIT"
+source_url="https://pypi.org/project/jsonschema/4.26.0/"
+author="Julian Berman and contributors"
+owner="mcp"
+purpose="MCP schema validation"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="jsonschema-specifications"
+version="2025.9.1"
+license="MIT"
+source_url="https://pypi.org/project/jsonschema-specifications/2025.9.1/"
+author="Python JSONSchema contributors"
+owner="jsonschema"
+purpose="JSON Schema specifications"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="pycparser"
+version="3.0"
+license="BSD-3-Clause"
+source_url="https://pypi.org/project/pycparser/3.0/"
+author="Eli Bendersky"
+owner="cffi"
+purpose="C parser"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="pydantic-settings"
+version="2.14.2"
+license="MIT"
+source_url="https://pypi.org/project/pydantic-settings/2.14.2/"
+author="Pydantic contributors"
+owner="mcp"
+purpose="MCP SDK settings"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="pyjwt"
+version="2.13.0"
+license="MIT"
+source_url="https://pypi.org/project/pyjwt/2.13.0/"
+author="PyJWT contributors"
+owner="mcp"
+purpose="MCP authentication support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="python-dotenv"
+version="1.2.2"
+license="BSD-3-Clause"
+source_url="https://pypi.org/project/python-dotenv/1.2.2/"
+author="python-dotenv contributors"
+owner="pydantic-settings"
+purpose="Environment parsing"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="python-multipart"
+version="0.0.32"
+license="Apache-2.0"
+source_url="https://pypi.org/project/python-multipart/0.0.32/"
+author="Kludex and contributors"
+owner="mcp"
+purpose="MCP SDK multipart support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="pywin32"
+version="312"
+license="PSF-2.0"
+source_url="https://pypi.org/project/pywin32/312/"
+author="Mark Hammond and pywin32 contributors"
+owner="mcp"
+purpose="Conditional Windows platform support"
+replacement_boundary="Transitive MCP dependency; not installed on this platform"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="referencing"
+version="0.37.0"
+license="MIT"
+source_url="https://pypi.org/project/referencing/0.37.0/"
+author="Python JSONSchema contributors"
+owner="jsonschema"
+purpose="JSON reference resolution"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="rpds-py"
+version="2026.6.3"
+license="MIT"
+source_url="https://pypi.org/project/rpds-py/2026.6.3/"
+author="Julian Berman and contributors"
+owner="referencing"
+purpose="Persistent data structures"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem="pypi"
+name="sse-starlette"
+version="3.4.6"
+license="BSD-3-Clause"
+source_url="https://pypi.org/project/sse-starlette/3.4.6/"
+author="sse-starlette contributors"
+owner="mcp"
+purpose="MCP SDK SSE support"
+replacement_boundary="Transitive MCP dependency"
+direct=false
+approved=true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "annotated-types"
+version = "0.8.0"
+license = "MIT"
+source_url = "https://pypi.org/project/annotated-types/0.8.0/"
+author = "Pydantic contributors"
+owner = "pydantic"
+purpose = "Pydantic type annotations"
+replacement_boundary = "Transitive Pydantic dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "anyio"
+version = "4.14.2"
+license = "MIT"
+source_url = "https://pypi.org/project/anyio/4.14.2/"
+author = "AnyIO contributors"
+owner = "starlette"
+purpose = "ASGI concurrency primitives"
+replacement_boundary = "Transitive Starlette dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "click"
+version = "8.4.2"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/click/8.4.2/"
+author = "Pallets contributors"
+owner = "typer"
+purpose = "CLI parsing"
+replacement_boundary = "Transitive Typer dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "h11"
+version = "0.16.0"
+license = "MIT"
+source_url = "https://pypi.org/project/h11/0.16.0/"
+author = "Nathaniel J. Smith and contributors"
+owner = "uvicorn"
+purpose = "HTTP protocol implementation"
+replacement_boundary = "Transitive Uvicorn dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "idna"
+version = "3.18"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/idna/3.18/"
+author = "Kim Davies and contributors"
+owner = "anyio"
+purpose = "Internationalized domain handling"
+replacement_boundary = "Transitive AnyIO dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "markdown-it-py"
+version = "4.2.0"
+license = "MIT"
+source_url = "https://pypi.org/project/markdown-it-py/4.2.0/"
+author = "Executable Book Project contributors"
+owner = "rich"
+purpose = "Rich Markdown rendering"
+replacement_boundary = "Transitive Typer/Rich dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "mdurl"
+version = "0.1.2"
+license = "MIT"
+source_url = "https://pypi.org/project/mdurl/0.1.2/"
+author = "markdown-it-py contributors"
+owner = "markdown-it-py"
+purpose = "Markdown URL parsing"
+replacement_boundary = "Transitive markdown-it-py dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pydantic"
+version = "2.13.4"
+license = "MIT"
+source_url = "https://pypi.org/project/pydantic/2.13.4/"
+author = "Pydantic contributors"
+owner = "fastapi"
+purpose = "FastAPI request and response validation"
+replacement_boundary = "Transitive FastAPI dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pydantic-core"
+version = "2.46.4"
+license = "MIT"
+source_url = "https://pypi.org/project/pydantic-core/2.46.4/"
+author = "Pydantic contributors"
+owner = "pydantic"
+purpose = "Pydantic validation runtime"
+replacement_boundary = "Transitive Pydantic dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "rich"
+version = "15.0.0"
+license = "MIT"
+source_url = "https://pypi.org/project/rich/15.0.0/"
+author = "Textualize contributors"
+owner = "typer"
+purpose = "CLI presentation"
+replacement_boundary = "Transitive Typer dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "shellingham"
+version = "1.5.4"
+license = "ISC"
+source_url = "https://pypi.org/project/shellingham/1.5.4/"
+author = "Shellingham contributors"
+owner = "typer"
+purpose = "CLI shell detection"
+replacement_boundary = "Transitive Typer dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "starlette"
+version = "1.3.1"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/starlette/1.3.1/"
+author = "Tom Christie and Starlette contributors"
+owner = "fastapi"
+purpose = "ASGI web foundation"
+replacement_boundary = "Transitive FastAPI dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "typing-inspection"
+version = "0.4.2"
+license = "MIT"
+source_url = "https://pypi.org/project/typing-inspection/0.4.2/"
+author = "Pydantic contributors"
+owner = "pydantic"
+purpose = "Runtime typing inspection"
+replacement_boundary = "Transitive Pydantic dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "colorama"
+version = "0.4.6"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/colorama/0.4.6/"
+author = "Jonathan Hartley and Colorama contributors"
+owner = "pytest"
+purpose = "Conditional Windows terminal support required by pytest"
+replacement_boundary = "Transitive pytest dependency; removed or replaced with pytest's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "iniconfig"
+version = "2.3.0"
+license = "MIT"
+source_url = "https://pypi.org/project/iniconfig/2.3.0/"
+author = "iniconfig contributors"
+owner = "pytest"
+purpose = "Configuration parsing required by pytest"
+replacement_boundary = "Transitive pytest dependency; removed or replaced with pytest's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "librt"
+version = "0.13.0"
+license = "MIT"
+source_url = "https://pypi.org/project/librt/0.13.0/"
+author = "mypyc contributors"
+owner = "mypy"
+purpose = "Compiled runtime support required by mypy on CPython"
+replacement_boundary = "Transitive mypy dependency; removed or replaced with mypy's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "mypy-extensions"
+version = "1.1.0"
+license = "MIT"
+source_url = "https://pypi.org/project/mypy-extensions/1.1.0/"
+author = "Python and mypy contributors"
+owner = "mypy"
+purpose = "Typing helpers required by mypy"
+replacement_boundary = "Transitive mypy dependency; removed or replaced with mypy's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "packaging"
+version = "26.2"
+license = "Apache-2.0 OR BSD-2-Clause"
+source_url = "https://pypi.org/project/packaging/26.2/"
+author = "Python Packaging Authority"
+owner = "pytest"
+purpose = "Version and marker handling required by pytest"
+replacement_boundary = "Transitive pytest dependency; removed or replaced with pytest's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pathspec"
+version = "1.1.1"
+license = "MPL-2.0"
+source_url = "https://pypi.org/project/pathspec/1.1.1/"
+author = "Chris B. and pathspec contributors"
+owner = "mypy"
+purpose = "Path matching required by mypy"
+replacement_boundary = "Transitive mypy dependency; removed or replaced with mypy's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pluggy"
+version = "1.6.0"
+license = "MIT"
+source_url = "https://pypi.org/project/pluggy/1.6.0/"
+author = "pytest-dev contributors"
+owner = "pytest"
+purpose = "Plugin system required by pytest"
+replacement_boundary = "Transitive pytest dependency; removed or replaced with pytest's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pygments"
+version = "2.20.0"
+license = "BSD-2-Clause"
+source_url = "https://pypi.org/project/Pygments/2.20.0/"
+author = "Pygments contributors"
+owner = "pytest"
+purpose = "Traceback syntax highlighting required by pytest"
+replacement_boundary = "Transitive pytest dependency; removed or replaced with pytest's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "typing-extensions"
+version = "4.16.0"
+license = "PSF-2.0"
+source_url = "https://pypi.org/project/typing-extensions/4.16.0/"
+author = "Python typing contributors"
+owner = "mypy"
+purpose = "Typing compatibility helpers required by mypy"
+replacement_boundary = "Transitive mypy dependency; removed or replaced with mypy's dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "github-action"
+name = "actions/checkout"
+version = "v6.0.2"
+license = "MIT"
+source_url = "https://github.com/actions/checkout/tree/v6.0.2"
+author = "GitHub"
+owner = "Mnemo CI"
+purpose = "Checks out repository content in CI"
+replacement_boundary = "CI source-checkout step"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "github-action"
+name = "actions/setup-python"
+version = "v6.2.0"
+license = "MIT"
+source_url = "https://github.com/actions/setup-python/tree/v6.2.0"
+author = "GitHub"
+owner = "Mnemo CI"
+purpose = "Installs the pinned Python runtime in CI"
+replacement_boundary = "CI Python provisioning step"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "github-action"
+name = "astral-sh/setup-uv"
+version = "v8.1.0"
+license = "MIT"
+source_url = "https://github.com/astral-sh/setup-uv/tree/v8.1.0"
+author = "Astral Software Inc. and setup-uv contributors"
+owner = "Mnemo CI"
+purpose = "Installs the pinned uv executable and manages its CI cache"
+replacement_boundary = "CI uv provisioning step"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "github-action"
+name = "actions/setup-node"
+version = "v6.3.0"
+license = "MIT"
+source_url = "https://github.com/actions/setup-node/tree/v6.3.0"
+author = "GitHub"
+owner = "Mnemo CI"
+purpose = "Installs the pinned Node.js runtime in CI"
+replacement_boundary = "CI Node.js provisioning step"
+direct = true
+approved = true

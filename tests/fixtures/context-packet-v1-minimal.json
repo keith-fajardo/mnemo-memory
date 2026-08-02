@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "request_id": "00000000-0000-4000-8000-000000000001",
+  "owner_scope": {"owner_id": "00000000-0000-4000-8000-000000000002", "level": "personal", "visibility": "owner", "workspace_id": null, "project_id": null, "session_id": null, "task_id": null, "agent_id": null},
+  "query_id": "resume task",
+  "task_id": null,
+  "created_at": "2026-08-02T09:00:00+00:00",
+  "expires_at": null,
+  "declared_total_tokens": 0,
+  "budget": {"active_task_checkpoint": 600, "episodic_memories": 800, "knowledge": 1200, "structural": 1500, "skills_and_procedures": 1200, "provenance_and_conflicts": 400, "total_limit": 5700, "override": null},
+  "producer_version": "mnemo-test/1",
+  "active_task_checkpoint": null,
+  "episodic_memories": [],
+  "knowledge_items": [],
+  "structural_items": [],
+  "skills_and_procedures": [],
+  "provenance": [],
+  "conflicts": [],
+  "omissions": []
+}

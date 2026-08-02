@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemo.local/schemas/context-packet-v1.json",
+  "title": "Mnemo Context Packet v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_id", "owner_scope", "query_id", "task_id", "created_at", "expires_at", "declared_total_tokens", "budget", "producer_version", "active_task_checkpoint", "episodic_memories", "knowledge_items", "structural_items", "skills_and_procedures", "provenance", "conflicts", "omissions"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "owner_scope": {"$ref": "#/$defs/scope"},
+    "query_id": {"type": ["string", "null"], "minLength": 1},
+    "task_id": {"type": ["string", "null"], "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "declared_total_tokens": {"type": "integer", "minimum": 0},
+    "budget": {"$ref": "#/$defs/budget"},
+    "producer_version": {"type": "string", "minLength": 1},
+    "active_task_checkpoint": {"anyOf": [{"$ref": "#/$defs/item"}, {"type": "null"}]},
+    "episodic_memories": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "knowledge_items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "structural_items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "skills_and_procedures": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "provenance": {"type": "array", "items": {"$ref": "#/$defs/provenance"}},
+    "conflicts": {"type": "array", "items": {"$ref": "#/$defs/conflict"}},
+    "omissions": {"type": "array", "items": {"$ref": "#/$defs/omission"}}
+  },
+  "$defs": {
+    "scope": {"type": "object", "additionalProperties": false, "required": ["owner_id", "level", "visibility", "workspace_id", "project_id", "session_id", "task_id", "agent_id"], "properties": {"owner_id": {"type": "string", "format": "uuid"}, "level": {"enum": ["personal", "workspace", "project", "session", "task", "agent"]}, "visibility": {"enum": ["owner", "workspace", "project"]}, "workspace_id": {"type": ["string", "null"], "format": "uuid"}, "project_id": {"type": ["string", "null"], "format": "uuid"}, "session_id": {"type": ["string", "null"], "format": "uuid"}, "task_id": {"type": ["string", "null"], "format": "uuid"}, "agent_id": {"type": ["string", "null"], "format": "uuid"}}},
+    "evidence": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "source_id", "source_type", "trust_class", "immutable_source_ref", "content_hash", "location", "observed_at", "verification_status"], "properties": {"evidence_id": {"type": "string", "format": "uuid"}, "source_id": {"type": "string", "format": "uuid"}, "source_type": {"enum": ["user_document", "user_correction", "repository", "dbt_artifact", "tool_result", "agent_event", "checkpoint", "external_document", "assistant_inference"]}, "trust_class": {"enum": ["current_structural", "user_correction", "user_authored", "approved_checkpoint", "verified_tool_result", "external", "assistant_inference"]}, "immutable_source_ref": {"type": "string", "minLength": 1}, "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "location": {"$ref": "#/$defs/location"}, "observed_at": {"type": "string", "format": "date-time"}, "verification_status": {"enum": ["unverified", "verified", "rejected"]}}},
+    "item": {"type": "object", "additionalProperties": false, "required": ["item_id", "item_type", "source_scope", "content", "content_representation", "token_estimate", "evidence_references", "source_trust", "sensitivity", "validity", "ranking", "conflict_state", "observed_at"], "properties": {"item_id": {"type": "string", "minLength": 1}, "item_type": {"enum": ["active_task_checkpoint", "episodic_memory", "knowledge", "structural_fact", "code_excerpt", "skill", "mandatory_procedure"]}, "source_scope": {"$ref": "#/$defs/scope"}, "content": {"type": "string", "minLength": 1}, "content_representation": {"const": "untrusted_evidence"}, "token_estimate": {"type": "integer", "minimum": 0}, "evidence_references": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}, "source_trust": {"$ref": "#/$defs/evidence/properties/trust_class"}, "sensitivity": {"enum": ["normal", "personal", "confidential", "restricted", "prohibited"]}, "validity": {"enum": ["current", "stale", "expired", "superseded"]}, "ranking": {"anyOf": [{"$ref": "#/$defs/ranking"}, {"type": "null"}]}, "conflict_state": {"enum": ["none", "unresolved", "resolved"]}, "observed_at": {"type": "string", "format": "date-time"}}},
+    "budget": {"type": "object", "additionalProperties": false, "required": ["active_task_checkpoint", "episodic_memories", "knowledge", "structural", "skills_and_procedures", "provenance_and_conflicts", "total_limit", "override"], "properties": {"active_task_checkpoint": {"type": "integer", "minimum": 0}, "episodic_memories": {"type": "integer", "minimum": 0}, "knowledge": {"type": "integer", "minimum": 0}, "structural": {"type": "integer", "minimum": 0}, "skills_and_procedures": {"type": "integer", "minimum": 0}, "provenance_and_conflicts": {"type": "integer", "minimum": 0}, "total_limit": {"type": "integer", "minimum": 0}, "override": {"anyOf": [{"$ref": "#/$defs/override"}, {"type": "null"}]}}},
+    "location": {"type": "object", "additionalProperties": false, "required": ["uri", "start_line", "start_column", "end_line", "end_column"], "properties": {"uri": {"type": "string", "minLength": 1}, "start_line": {"type": ["integer", "null"], "minimum": 1}, "start_column": {"type": ["integer", "null"], "minimum": 0}, "end_line": {"type": ["integer", "null"], "minimum": 1}, "end_column": {"type": ["integer", "null"], "minimum": 0}}},
+    "ranking": {"type": "object", "additionalProperties": false, "required": ["rank", "score", "retrieval_method"], "properties": {"rank": {"type": ["integer", "null"], "minimum": 1}, "score": {"type": ["number", "null"]}, "retrieval_method": {"type": ["string", "null"], "minLength": 1}}},
+    "override": {"type": "object", "additionalProperties": false, "required": ["requester_type", "requested_by", "reason", "requested_at"], "properties": {"requester_type": {"enum": ["owner", "agent", "system"]}, "requested_by": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}, "requested_at": {"type": "string", "format": "date-time"}}},
+    "provenance": {"type": "object", "additionalProperties": false, "required": ["provenance_id", "item_id", "source_reference", "source_digest", "evidence_references", "token_estimate"], "properties": {"provenance_id": {"type": "string", "minLength": 1}, "item_id": {"type": "string", "minLength": 1}, "source_reference": {"type": "string", "minLength": 1}, "source_digest": {"type": "string", "minLength": 1}, "evidence_references": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}, "token_estimate": {"type": "integer", "minimum": 0}}},
+    "conflict": {"type": "object", "additionalProperties": false, "required": ["conflict_id", "item_ids", "evidence_references", "state", "token_estimate"], "properties": {"conflict_id": {"type": "string", "minLength": 1}, "item_ids": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 1}}, "evidence_references": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}, "state": {"enum": ["none", "unresolved", "resolved"]}, "token_estimate": {"type": "integer", "minimum": 0}}},
+    "omission": {"type": "object", "additionalProperties": false, "required": ["item_id", "reason", "detail"], "properties": {"item_id": {"type": "string", "minLength": 1}, "reason": {"enum": ["token_budget", "unauthorized_scope", "prohibited_sensitivity", "expired", "superseded", "stale", "duplicate", "lower_rank", "invalid_evidence"]}, "detail": {"type": ["string", "null"]}}}
+  }
+}
