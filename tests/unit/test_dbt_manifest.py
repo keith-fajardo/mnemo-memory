@@ -216,6 +216,27 @@ def test_normalized_graph_is_byte_stable_and_source_state_is_retained() -> None:
     assert first.metadata.source_state == request.source_state
 
 
+def test_schema_compatible_empty_checksum_is_preserved() -> None:
+    value = payload()
+    value["nodes"]["model.mnemo_analytics.stg_customers"]["checksum"] = {"checksum": ""}  # type: ignore[index]
+    artifact = parse(payload=value)
+    node = next(node for node in artifact.nodes if str(node.unique_id).endswith("stg_customers"))
+    assert node.checksum == ""
+
+
+def test_maps_may_safely_include_deferred_resource_entries() -> None:
+    value = payload()
+    value["parent_map"]["exposure.mnemo_analytics.order_dashboard"] = [  # type: ignore[index]
+        "model.mnemo_analytics.mart_customer_value"
+    ]
+    value["child_map"]["exposure.mnemo_analytics.order_dashboard"] = []  # type: ignore[index]
+    value["child_map"]["model.mnemo_analytics.mart_customer_value"].append(  # type: ignore[index]
+        "exposure.mnemo_analytics.order_dashboard"
+    )
+    artifact = parse(payload=value)
+    assert len(artifact.nodes) == 10
+
+
 def test_graph_traversal_limit_and_disabled_policy() -> None:
     graph = DbtLineageGraph(parse(), max_visited_nodes=2)
     result = graph.transitive_upstream(DbtNodeId("model.mnemo_analytics.mart_customer_value"))

@@ -12,7 +12,9 @@ Mnemo 12A supports exactly manifest schema v12, identified solely by
 `metadata.dbt_schema_version == https://schemas.getdbt.com/dbt/manifest/v12.json`. It consumes
 metadata, `nodes`, `sources`, each resource's `depends_on.nodes`, and (when supplied) `parent_map`
 and `child_map`. Each `depends_on.nodes` entry is the canonical edge authority; both maps are
-consistency checks and a disagreement rejects the artifact.
+consistency checks for the parsed node/source subgraph and a disagreement rejects the artifact.
+Map-only entries, and deferred children of a parsed node, remain unimplemented artifact structure
+rather than being assigned invented lineage semantics.
 
 The graph is a rebuildable, scoped projection. A dbt `unique_id` is its node identity, not a
 Mnemo UUID. Nodes and edges each retain deterministic evidence references to the digest-addressed

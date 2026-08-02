@@ -269,15 +269,16 @@ class DbtManifestParser:
                 continue
             supplied = _object_map(payload[name], name)
             for node_id, dependencies in supplied.items():
-                if (
-                    node_id not in known
-                    or not isinstance(dependencies, list)
-                    or not all(isinstance(item, str) for item in dependencies)
+                if not isinstance(dependencies, list) or not all(
+                    isinstance(item, str) for item in dependencies
                 ):
                     raise ManifestConsistencyError(f"{name} contains invalid lineage data")
-                if set(cast(list[str], dependencies)) != expected[node_id]:
+                # dbt maps may include deferred resources such as exposures. Their semantics are
+                # intentionally not implemented in 12A, so only parsed nodes/sources are checked.
+                parsed_dependencies = set(cast(list[str], dependencies)) & known
+                if node_id in known and parsed_dependencies != expected[node_id]:
                     raise ManifestConsistencyError(f"{name} disagrees with depends_on.nodes")
-            if set(supplied) != known:
+            if not known.issubset(supplied):
                 raise ManifestConsistencyError(f"{name} must cover every parsed node when supplied")
 
     @staticmethod
@@ -377,7 +378,12 @@ def _checksum(value: object) -> str | None:
     if not isinstance(value, Mapping):
         raise ManifestValidationError("dbt manifest checksum must be an object")
     raw = value.get("checksum")
-    return _optional_string(raw, "checksum")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ManifestValidationError("dbt manifest checksum must be a string when present")
+    # dbt's FileHash permits an empty checksum for resources without a file hash.
+    return raw
 
 
 def _tags(value: object) -> tuple[str, ...]:
