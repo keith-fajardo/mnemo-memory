@@ -37,12 +37,14 @@ def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencie
     assert "uv publish dist/*" not in value
     assert "uv publish release/*.whl" not in value
     assert "uv publish release/*.tar.gz" not in value
-    assert "uv publish release/mnemo_unified_context-0.1.0a1-py3-none-any.whl" in value
+    assert "uv publish \\" in value
+    assert "release/mnemo_unified_context-0.1.0a1-py3-none-any.whl" in value
     assert "release/mnemo_unified_context-0.1.0a1.tar.gz" in value
     assert "uv publish build-output" not in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "test.pypi.org/simple" not in value
     assert "--index-url https://pypi.org/simple/" in value
+    assert "downloaded-release/mnemo_unified_context-0.1.0a1-py3-none-any.whl" in value
     assert 'python -m pip install "uv==' not in value
     assert "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b" in value
     assert "\n          ! rg " not in value
@@ -56,9 +58,29 @@ def test_testpypi_workflow_isolates_oidc_to_the_publish_job() -> None:
     assert "if: github.ref == 'refs/heads/main'" in value
     assert value.count("id-token: write") == 1
     assert value.count("environment: testpypi") == 1
-    assert "UV_PUBLISH_URL: https://test.pypi.org/legacy/" in value
-    assert "UV_PUBLISH_TRUSTED_PUBLISHING: always" in value
+    assert "--trusted-publishing always" in value
+    assert "--publish-url https://test.pypi.org/legacy/" in value
+    assert "UV_PUBLISH_" not in value
+    assert "--username" not in value
+    assert "--password" not in value
+    assert "--token" not in value
+    assert "PYPI_TOKEN" not in value
+    assert "TWINE_USERNAME" not in value
+    assert "TWINE_PASSWORD" not in value
+    assert "https://upload.pypi.org/legacy/" not in value
+    assert "ACTIONS_ID_TOKEN_REQUEST_URL" in value
+    assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" in value
     assert "--forbidden-text mnemo-agent-context-placeholder" in value
     assert "--text-path pyproject.toml" in value
     assert "--text-path README.md" in value
     assert "--text-path docs" in value
+
+
+def test_testpypi_workflow_uses_bounded_standard_library_post_upload_verification() -> None:
+    value = workflow()
+
+    assert "scripts/verify_testpypi_release.py" in value
+    assert "--request-timeout-seconds 10" in value
+    assert "--deadline-seconds 120" in value
+    assert "--retry-interval-seconds 3" in value
+    assert "curl --fail --retry" not in value

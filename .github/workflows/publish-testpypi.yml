@@ -162,11 +162,11 @@ jobs:
           test -f release/mnemo_unified_context-0.1.0a1.tar.gz
 
       - name: Publish only exact verified artifacts through TestPyPI OIDC
-        env:
-          UV_PUBLISH_URL: https://test.pypi.org/legacy/
-          UV_PUBLISH_TRUSTED_PUBLISHING: always
         run: |
-          uv publish release/mnemo_unified_context-0.1.0a1-py3-none-any.whl \
+          uv publish \
+            --trusted-publishing always \
+            --publish-url https://test.pypi.org/legacy/ \
+            release/mnemo_unified_context-0.1.0a1-py3-none-any.whl \
             release/mnemo_unified_context-0.1.0a1.tar.gz
 
   verify-testpypi:
@@ -197,6 +197,7 @@ jobs:
 
       - name: Verify TestPyPI metadata, hashes, and uploaded wheel
         run: |
+          set -euxo pipefail
           test "$(find release -type f | wc -l | tr -d ' ')" = 3
           test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
           test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0
@@ -204,23 +205,16 @@ jobs:
           test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
           test -f release/mnemo_unified_context-0.1.0a1.tar.gz
           (cd release && sha256sum --check SHA256SUMS)
-          curl --fail --retry 5 --retry-delay 3 -o metadata.json https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a1/json
-          python - <<'PY'
-          import hashlib, json, urllib.request
-          from pathlib import Path
-          data = json.load(open("metadata.json"))
-          expected = dict(line.strip().split(maxsplit=1)[::-1] for line in Path("release/SHA256SUMS").read_text().splitlines())
-          uploaded = {item["filename"]: item for item in data["urls"]}
-          assert set(uploaded) == set(expected)
-          for filename, digest in expected.items():
-              item = uploaded[filename]
-              assert item["digests"]["sha256"] == digest
-              Path(filename).write_bytes(urllib.request.urlopen(item["url"]).read())
-              assert hashlib.sha256(Path(filename).read_bytes()).hexdigest() == digest
-          PY
+          python scripts/verify_testpypi_release.py \
+            --release-dir release \
+            --download-dir downloaded-release \
+            --request-timeout-seconds 10 \
+            --deadline-seconds 120 \
+            --retry-interval-seconds 3
           work="$(mktemp -d)"
           uv venv "$work/venv" --python 3.12
-          uv pip install --python "$work/venv/bin/python" --index-url https://pypi.org/simple/ ./mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          uv pip install --python "$work/venv/bin/python" --index-url https://pypi.org/simple/ \
+            downloaded-release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
           (cd "$work" && "$work/venv/bin/mnemo-memory" --help)
           (cd "$work" && "$work/venv/bin/mnemo-memory" init --data-dir "$work/Mnemo Data Δ")
           "$work/venv/bin/python" - <<'PY'
