@@ -29,7 +29,9 @@ modify real client configuration or `/opt/homebrew/bin/mnemo`.
 
 Publishing is intentionally a separate gate. TestPyPI requires a user-approved permanent name
 and valid Trusted Publishing configuration (or an explicitly configured secure alternative).
-Production PyPI requires a separate explicit user approval after TestPyPI verification.
+Production PyPI requires a separate explicit user approval after TestPyPI verification. The
+manual `.github/workflows/publish-pypi.yml` workflow transfers the exact checksum-bound bundle
+from the successful TestPyPI build run; it does not rebuild artifacts.
 
 The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
 The approved distribution name is `mnemo-unified-context`; the import namespace remains
@@ -55,3 +57,18 @@ downloads TestPyPI metadata and the uploaded wheel, then installs that local dow
 dependencies resolved only from production PyPI. A partial or duplicate upload must be
 investigated on TestPyPI; do not rerun it with the same version until the TestPyPI project files and
 hashes have been checked. Production PyPI is not part of this workflow.
+
+## Production PyPI Trusted Publishing setup
+
+Before manually invoking `.github/workflows/publish-pypi.yml`, configure a production PyPI
+Trusted Publisher with these exact values:
+
+- Project: `mnemo-unified-context`
+- Owner: `keith-fajardo`
+- Repository: `mnemo-memory`
+- Workflow: `publish-pypi.yml`
+- Environment: `pypi`
+
+The production workflow is manual-only, accepts the successful TestPyPI build run ID, verifies its
+flat release bundle and checksums, then publishes only its explicit wheel and source distribution
+through PyPI OIDC. It does not accept tokens or rebuild release artifacts.
