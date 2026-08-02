@@ -45,6 +45,12 @@ domain, reverse-package, and connector-peer imports.
 
 No domain or runtime implementation was started in Issue 2.
 
+### Repository hygiene — Completed (2026-08-02)
+
+The standalone Mnemo root now has its own Git repository on `main`. The baseline tracks only
+project files; local runtime data, SQLite files, caches, secrets, and editor artifacts are ignored.
+No parent or sibling path was staged, committed, or modified.
+
 ## Current issue
 
 ### Issue 3 — Completed (2026-08-02)
