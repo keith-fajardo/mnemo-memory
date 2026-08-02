@@ -32,3 +32,23 @@ CREATE TABLE checkpoint_revision_evidence (
 );
 CREATE INDEX checkpoint_aggregate_scope_current_idx ON checkpoint_aggregates(owner_id, project_id, session_id, task_id, updated_at DESC);
 CREATE INDEX checkpoint_revision_current_idx ON checkpoint_revision_records(checkpoint_id, revision_number DESC);
+CREATE TRIGGER checkpoint_current_revision_matches_aggregate
+AFTER INSERT ON checkpoint_revision_records
+WHEN EXISTS (
+    SELECT 1 FROM checkpoint_aggregates
+    WHERE current_revision_id = NEW.checkpoint_revision_id
+      AND checkpoint_id != NEW.checkpoint_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'checkpoint current revision belongs to another aggregate');
+END;
+CREATE TRIGGER checkpoint_current_revision_update_matches_aggregate
+BEFORE UPDATE OF current_revision_id ON checkpoint_aggregates
+WHEN NOT EXISTS (
+    SELECT 1 FROM checkpoint_revision_records
+    WHERE checkpoint_revision_id = NEW.current_revision_id
+      AND checkpoint_id = NEW.checkpoint_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'checkpoint current revision must belong to aggregate');
+END;

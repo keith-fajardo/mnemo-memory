@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -19,13 +18,13 @@ def repository_factory(
 ) -> Callable[[], CheckpointRepository]:
     """Run the same behavior contract against every supported repository adapter."""
     if request.param == "reference":
-        return cast(Callable[[], CheckpointRepository], ReferenceCheckpointRepository)
+        return ReferenceCheckpointRepository
 
     def sqlite_factory() -> CheckpointRepository:
         repository = SQLiteCheckpointRepository(
             tmp_path / "contract.sqlite3", base_directory=tmp_path
         )
         repository.migrate()
-        return cast(CheckpointRepository, repository)
+        return repository
 
     return sqlite_factory

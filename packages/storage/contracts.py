@@ -7,13 +7,11 @@ from datetime import datetime
 from typing import Protocol
 
 from packages.domain import (
-    Checkpoint,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
     CheckpointRevision,
     CheckpointRevisionId,
-    EvidenceId,
     EvidenceReference,
     MemoryScope,
 )
@@ -58,23 +56,6 @@ class CheckpointPage:
 
 
 class CheckpointRepository(Protocol):
-    # Legacy methods remain until 10A.3c migrates current consumers.
-    def create_evidence(self, evidence: EvidenceReference) -> None: ...
-
-    def get_evidence(self, evidence_id: EvidenceId) -> EvidenceReference | None: ...
-
-    def create_checkpoint(self, checkpoint: Checkpoint) -> None: ...
-
-    def get_checkpoint(
-        self, checkpoint_id: CheckpointId, scope: MemoryScope
-    ) -> Checkpoint | None: ...
-
-    def get_current_checkpoint(self, scope: MemoryScope) -> Checkpoint | None: ...
-
-    def list_checkpoint_history(
-        self, checkpoint_id: CheckpointId, scope: MemoryScope
-    ) -> tuple[Checkpoint, ...]: ...
-
     def get_aggregate(
         self, scope: MemoryScope, checkpoint_id: CheckpointId
     ) -> CheckpointAggregate: ...
@@ -82,11 +63,6 @@ class CheckpointRepository(Protocol):
     def get_current_revision(
         self, scope: MemoryScope, checkpoint_id: CheckpointId
     ) -> CheckpointRevision: ...
-
-    def create_aggregate(
-        self, aggregate: CheckpointAggregate, revision: CheckpointRevision
-    ) -> None:
-        """Compatibility alias for create_checkpoint_aggregate; remove after 10A.3c."""
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision

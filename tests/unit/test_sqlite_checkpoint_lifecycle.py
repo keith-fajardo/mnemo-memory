@@ -190,6 +190,20 @@ def test_sqlite_terminal_state_and_scope_remain_after_reopen(tmp_path: Path) -> 
         )
 
 
+def test_sqlite_rejects_current_pointer_to_a_revision_from_another_aggregate(
+    tmp_path: Path,
+) -> None:
+    result, scope_value, first, first_revision = stored(tmp_path)
+    second, second_revision = initial(scope_value)
+    result.create_checkpoint_aggregate(second, second_revision)
+    with sqlite3.connect(result.path) as connection, pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "UPDATE checkpoint_aggregates SET current_revision_id = ? WHERE checkpoint_id = ?",
+            (str(second_revision.revision_id), str(first.checkpoint_id)),
+        )
+    assert result.get_current_revision(scope_value, first.checkpoint_id) == first_revision
+
+
 class FailingRevisionInsertRepository(SQLiteCheckpointRepository):
     def _insert_canonical_revision(
         self, connection: sqlite3.Connection, revision: CheckpointRevision

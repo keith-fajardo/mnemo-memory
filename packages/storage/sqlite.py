@@ -21,7 +21,6 @@ from packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
-    EvidenceId,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -120,9 +119,7 @@ class SQLiteCheckpointRepository:
             if version > LATEST_SCHEMA_VERSION:
                 raise SQLiteSchemaTooNewError("database schema is newer than this application")
             if version < 1:
-                for statement in migration_path.read_text().split(";"):
-                    if statement.strip():
-                        connection.execute(statement)
+                _execute_sql_script(connection, migration_path.read_text())
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)",
                     (_timestamp(),),
@@ -132,9 +129,7 @@ class SQLiteCheckpointRepository:
                 version = 1
             if version < 2:
                 migration_path = _root() / "migrations" / "0002_checkpoint_aggregate_revisions.sql"
-                for statement in migration_path.read_text().split(";"):
-                    if statement.strip():
-                        connection.execute(statement)
+                _execute_sql_script(connection, migration_path.read_text())
                 self._map_legacy_checkpoints(connection)
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
@@ -260,26 +255,6 @@ class SQLiteCheckpointRepository:
                 "foreign_keys": int(connection.execute("PRAGMA foreign_keys").fetchone()[0]),
                 "busy_timeout": int(connection.execute("PRAGMA busy_timeout").fetchone()[0]),
             }
-
-    def create_evidence(self, evidence: EvidenceReference) -> None:
-        with self._transaction() as connection:
-            connection.execute(
-                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) VALUES (?, ?, ?)",  # noqa: E501
-                (str(evidence.evidence_id), str(evidence.source_id), _json(evidence.to_dict())),
-            )
-
-    def get_evidence(self, evidence_id: EvidenceId) -> EvidenceReference | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload_json FROM evidence WHERE evidence_id = ?", (str(evidence_id),)
-            ).fetchone()
-        return None if row is None else EvidenceReference.from_dict(json.loads(row["payload_json"]))
-
-    def create_aggregate(
-        self, aggregate: CheckpointAggregate, revision: CheckpointRevision
-    ) -> None:
-        """Compatibility alias for the canonical aggregate creation operation."""
-        self.create_checkpoint_aggregate(aggregate, revision)
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
@@ -485,7 +460,9 @@ class SQLiteCheckpointRepository:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
 
-    def create_checkpoint(self, checkpoint: Checkpoint) -> None:
+    # Legacy replacement-chain methods are migration-fixture support only. They are not part of
+    # CheckpointRepository and must be removed once 10B no longer needs legacy fixture input.
+    def create_legacy_checkpoint(self, checkpoint: Checkpoint) -> None:
         with self._transaction() as connection:
             self._store_checkpoint(connection, checkpoint)
 
@@ -802,67 +779,21 @@ class SQLiteCheckpointRepository:
             and (reason is None or reason in current.content.failures)
         )
 
-    def get_checkpoint(self, checkpoint_id: CheckpointId, scope: MemoryScope) -> Checkpoint | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT revision.payload_json FROM checkpoint_revisions AS revision JOIN checkpoints AS checkpoint ON checkpoint.checkpoint_id = revision.checkpoint_id WHERE revision.checkpoint_id = ? AND checkpoint.owner_id = ? AND checkpoint.project_id = ? AND checkpoint.session_id = ? AND checkpoint.task_id = ?",  # noqa: E501
-                (
-                    str(checkpoint_id),
-                    str(scope.owner_id),
-                    str(scope.project_id),
-                    str(scope.session_id),
-                    str(scope.task_id),
-                ),
-            ).fetchone()
-        return None if row is None else Checkpoint.from_dict(json.loads(row["payload_json"]))
-
-    def get_current_checkpoint(self, scope: MemoryScope) -> Checkpoint | None:
-        if scope.project_id is None or scope.session_id is None or scope.task_id is None:
-            raise ValueError("current checkpoint requires explicit task scope")
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT revision.payload_json FROM checkpoint_revisions AS revision JOIN checkpoints AS checkpoint ON checkpoint.checkpoint_id = revision.checkpoint_id WHERE checkpoint.owner_id = ? AND checkpoint.project_id = ? AND checkpoint.session_id = ? AND checkpoint.task_id = ? AND NOT EXISTS (SELECT 1 FROM checkpoint_revisions AS replacement WHERE replacement.supersedes_checkpoint_id = checkpoint.checkpoint_id) ORDER BY revision.created_at DESC LIMIT 1",  # noqa: E501
-                (
-                    str(scope.owner_id),
-                    str(scope.project_id),
-                    str(scope.session_id),
-                    str(scope.task_id),
-                ),
-            ).fetchone()
-        return None if row is None else Checkpoint.from_dict(json.loads(row["payload_json"]))
-
-    def list_checkpoint_history(
-        self, checkpoint_id: CheckpointId, scope: MemoryScope
-    ) -> tuple[Checkpoint, ...]:
-        if scope.project_id is None or scope.session_id is None or scope.task_id is None:
-            raise ValueError("checkpoint history requires explicit task scope")
-        with self._connect() as connection:
-            rows = connection.execute(
-                "WITH RECURSIVE history(checkpoint_id) AS (SELECT ? UNION ALL SELECT revision.checkpoint_id FROM checkpoint_revisions AS revision JOIN history ON revision.supersedes_checkpoint_id = history.checkpoint_id) SELECT revision.payload_json FROM history JOIN checkpoint_revisions AS revision ON revision.checkpoint_id = history.checkpoint_id JOIN checkpoints AS checkpoint ON checkpoint.checkpoint_id = revision.checkpoint_id WHERE checkpoint.owner_id = ? AND checkpoint.project_id = ? AND checkpoint.session_id = ? AND checkpoint.task_id = ? ORDER BY revision.created_at",  # noqa: E501
-                (
-                    str(checkpoint_id),
-                    str(scope.owner_id),
-                    str(scope.project_id),
-                    str(scope.session_id),
-                    str(scope.task_id),
-                ),
-            ).fetchall()
-        return tuple(Checkpoint.from_dict(json.loads(row["payload_json"])) for row in rows)
-
-    def supersede(self, checkpoint: Checkpoint, replacement: Checkpoint) -> None:
-        if (
-            replacement.revision != checkpoint.revision + 1
-            or replacement.supersedes_checkpoint_id != checkpoint.checkpoint_id
-        ):
-            raise ValueError(
-                "replacement must identify the immediately replaced checkpoint revision"
-            )
-        with self._transaction() as connection:
-            self._store_checkpoint(connection, replacement)
-
 
 def _json(value: dict[str, object]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _execute_sql_script(connection: sqlite3.Connection, script: str) -> None:
+    """Execute complete SQLite statements without breaking trigger bodies on semicolons."""
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise SQLiteMigrationError("migration contains an incomplete SQL statement")
 
 
 def _maybe(value: object | None) -> str | None:

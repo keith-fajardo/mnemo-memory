@@ -50,6 +50,27 @@ Implementation found that the legacy `Checkpoint` DTO encodes replacement-checkp
 revision numbers above one require a different `checkpoint_id` and `supersedes_checkpoint_id`.
 Embedding it in a canonical `CheckpointRevision` therefore contradicts this ADR. Canonical revisions
 now contain identity-free `CheckpointContent`; aggregate and revision IDs stay in their own fields,
-and predecessor links use `CheckpointRevisionId`. Legacy `Checkpoint` remains an explicit
-compatibility and migration-input DTO until 10A.3c removes old consumers. Conversion is through
+and predecessor links use `CheckpointRevisionId`. Conversion is through
 `CheckpointContent.from_legacy`, never implicit aliasing.
+
+## Final 10A repository boundary review
+
+The production `CheckpointRepository` exposes only aggregate/revision lifecycle operations:
+scoped aggregate, current, and historical reads; aggregate creation; expected-revision append;
+completion; abandonment; and active selection. Each mutation inserts a new immutable revision and
+uses a scope-first compare-and-swap update of the aggregate current pointer. Identical terminal
+retries return the existing revision; conflicting retries fail without another write.
+
+Replacement-chain behavior is classified as legacy migration input only. The legacy `Checkpoint`
+DTO and the explicitly named `SQLiteCheckpointRepository.create_legacy_checkpoint` fixture helper
+remain solely to seed real v1 databases for forward-migration tests. The v2 migration mapper is the
+only durable path that interprets `supersedes_checkpoint_id`. Legacy repository reads, chain
+selection, and replacement writes were removed because no product caller uses them. The remaining
+fixture helper will be removed during 10B when durable checkpoint consumers replace the fixture
+boundary; it is not part of the canonical repository port and immediately serializes only the
+legacy v1 representation for migration input.
+
+V2 persists scope visibility alongside owner/workspace/project/session/task identifiers so exact
+scope round trips are possible. SQLite triggers additionally reject a current pointer that does not
+belong to its aggregate. Migration remains forward-only: back up the local SQLite profile before an
+upgrade; failed upgrades roll back transactionally. MCP remains fixture-backed until 10B.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -190,9 +190,13 @@ def test_append_is_immutable_and_compare_and_swap_safe(
     assert revised.revision_number == 2
     assert revised.predecessor_revision_id == initial.revision_id
     assert revised.content == content(suffix="two")
+    attribute_name = "current_state"
+    with pytest.raises(FrozenInstanceError):
+        setattr(revised.content, attribute_name, "mutated")
     assert (
         repository.get_revision(scope_value, aggregate.checkpoint_id, revision_number=1) == initial
     )
+    assert not hasattr(repository, "aggregates")
     with pytest.raises(RevisionConflict):
         repository.append_revision(
             scope_value,

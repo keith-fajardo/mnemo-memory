@@ -199,7 +199,7 @@ The reference adapter now creates active aggregate/revision pairs, appends immut
 revisions with expected-revision comparison, applies completion and abandonment transitions, keeps
 terminal retries idempotent, and lists only scoped active checkpoints with deterministic pagination.
 Its shared behavioral contract passed against the reference adapter as part of the complete
-100-test verification gate. Legacy storage methods remain compatibility-only until 10A.3c.
+100-test verification gate. The legacy compatibility cleanup was completed in 10A.3c.
 
 ##### Issue 10A.3b — Complete
 
@@ -210,12 +210,27 @@ transitions, deterministic listing, pagination, restart persistence, and referen
 The complete 115-test verification gate, injected rollback coverage, and bounded two-connection
 concurrency coverage passed.
 
-##### Issue 10A.3c — Not started
+##### Issue 10A.3c — Complete
 
-Compatibility cleanup and final 10A.3 gate.
+Removed legacy replacement-chain operations from the canonical repository port and deleted the
+obsolete legacy repository-behavior contract. The only retained legacy helper is explicitly named
+and limited to seeding real v1 migration fixtures. Final compatibility, identity, immutability,
+scope, CAS, migration, integrity, and two-adapter contract review passed in the complete 114-test
+verification gate.
+
+#### Issue 10A.3 — Complete
+
+Canonical checkpoint repository contracts, reference behavior, SQLite CAS parity, and final
+compatibility cleanup are complete.
+
+#### Issue 10A — Complete
+
+ADR, canonical aggregate/revision representation, forward migration, repository lifecycle
+contracts, SQLite CAS, and final architecture review are complete.
 
 #### Issue 10B and 10C — Not started
 
 ## Issue queue
 
-Issues 10–12 are not started. Work must stop after Issue 9 until explicit approval is given.
+Issue 10 remains in progress. Work must stop after its approved sub-issue boundary until explicit
+approval is given.

@@ -35,12 +35,6 @@ class ReferenceCheckpointRepository:
         self._aggregates: dict[CheckpointId, CheckpointAggregate] = {}
         self._revisions: dict[CheckpointId, tuple[CheckpointRevision, ...]] = {}
 
-    def create_aggregate(
-        self, aggregate: CheckpointAggregate, revision: CheckpointRevision
-    ) -> None:
-        """Compatibility alias for callers migrating to create_checkpoint_aggregate in 10A.3c."""
-        self.create_checkpoint_aggregate(aggregate, revision)
-
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
     ) -> None:
