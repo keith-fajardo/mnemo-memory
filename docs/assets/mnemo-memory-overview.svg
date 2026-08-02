@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title description">
+  <title id="title">How Mnemo Memory preserves explicit task context</title>
+  <desc id="description">A coding client explicitly saves checkpoints and optional dbt manifest structure to a local Mnemo SQLite store. A fresh coding client retrieves a bounded provenance-bearing context packet from the same scoped store.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#091526"/>
+      <stop offset="1" stop-color="#122844"/>
+    </linearGradient>
+    <linearGradient id="mnemo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b6f83"/>
+      <stop offset="1" stop-color="#2853a5"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020712" flood-opacity=".32"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L10,6 L0,12 Z" fill="#83d7e5"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="620" rx="28" fill="url(#background)"/>
+  <text x="70" y="76" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="35" font-weight="700">Mnemo Memory: explicit context that survives a fresh session</text>
+  <text x="70" y="111" fill="#b7c9dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">Local-first durable handoffs — not automatic chat capture, not a model, not a cloud service</text>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="174" width="276" height="253" rx="20" fill="#152b47" stroke="#3b648a" stroke-width="2"/>
+    <rect x="97" y="202" width="52" height="52" rx="15" fill="#2d607d"/>
+    <path d="M113 229h20M123 219v20" stroke="#bdf4fa" stroke-width="3" stroke-linecap="round"/>
+    <text x="165" y="224" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="22" font-weight="700">Working session</text>
+    <text x="97" y="291" fill="#d8e7f4" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">Codex or Claude Code</text>
+    <text x="97" y="324" fill="#a9c1d7" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">Agent explicitly saves:</text>
+    <text x="97" y="355" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• progress and decisions</text>
+    <text x="97" y="382" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• failed approach and tests</text>
+    <text x="97" y="409" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• evidence and next action</text>
+  </g>
+
+  <path d="M347 300h115" stroke="#83d7e5" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="360" y="276" fill="#83d7e5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="600">save_checkpoint</text>
+
+  <g filter="url(#shadow)">
+    <rect x="463" y="151" width="308" height="323" rx="24" fill="url(#mnemo)" stroke="#83d7e5" stroke-width="2"/>
+    <circle cx="509" cy="204" r="25" fill="#c7f5f7" opacity=".96"/>
+    <path d="M496 204c0-8 6-14 13-14s13 6 13 14-6 14-13 14-13-6-13-14Zm0 0h26" fill="none" stroke="#14526c" stroke-width="3" stroke-linecap="round"/>
+    <text x="550" y="211" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="26" font-weight="700">Mnemo Memory</text>
+    <text x="496" y="259" fill="#dbf8fb" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">Your local SQLite store</text>
+    <line x1="496" y1="284" x2="738" y2="284" stroke="#9edee7" stroke-opacity=".55"/>
+    <text x="496" y="321" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18" font-weight="650">Immutable task checkpoint revisions</text>
+    <text x="496" y="351" fill="#dbf8fb" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">Stable task identity • exact provenance</text>
+    <text x="496" y="390" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18" font-weight="650">Optional dbt manifest snapshots</text>
+    <text x="496" y="420" fill="#dbf8fb" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">Deterministic lineage • current/stale/unknown</text>
+    <text x="496" y="451" fill="#d6faf6" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14">Scoped so one project cannot read another</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="463" y="500" width="308" height="56" rx="16" fill="#173452" stroke="#3b648a" stroke-width="1.5"/>
+    <text x="489" y="535" fill="#c9dae9" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15">Optional: ingest a dbt manifest you generated</text>
+  </g>
+  <path d="M617 500v-22" stroke="#83d7e5" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <path d="M772 300h115" stroke="#83d7e5" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="784" y="276" fill="#83d7e5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="600">get_context</text>
+
+  <g filter="url(#shadow)">
+    <rect x="888" y="174" width="244" height="253" rx="20" fill="#152b47" stroke="#3b648a" stroke-width="2"/>
+    <rect x="915" y="202" width="52" height="52" rx="15" fill="#5a4e9d"/>
+    <path d="M931 218h20v22h-20zM935 214h12" fill="none" stroke="#e9ddff" stroke-width="3" stroke-linejoin="round"/>
+    <text x="981" y="224" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="21" font-weight="700">Fresh session</text>
+    <text x="915" y="292" fill="#d8e7f4" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18">Gets one bounded packet</text>
+    <text x="915" y="326" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• exact current revision</text>
+    <text x="915" y="353" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• provenance and evidence</text>
+    <text x="915" y="380" fill="#f6fbff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16">• optional dbt impact facts</text>
+    <text x="915" y="407" fill="#a9c1d7" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15">No transcript replay required</text>
+  </g>
+
+  <line x1="70" y1="584" x2="1130" y2="584" stroke="#2f506f" stroke-width="1"/>
+  <text x="70" y="609" fill="#91a9c1" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14">Explicit saves • local durability • scope isolation • bounded context • no model or warehouse call</text>
+</svg>

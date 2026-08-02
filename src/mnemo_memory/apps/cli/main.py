@@ -54,6 +54,98 @@ def _show(value: object) -> None:
     typer.echo(json.dumps(value, sort_keys=True))
 
 
+def _guide_client_commands(choice: str) -> tuple[str, ...]:
+    commands = {
+        "codex": ("mnemo-memory connect codex",),
+        "claude-code": ("mnemo-memory connect claude-code",),
+        "both": ("mnemo-memory connect codex", "mnemo-memory connect claude-code"),
+        "later": (),
+    }
+    try:
+        return commands[choice]
+    except KeyError as error:
+        raise typer.BadParameter("choose codex, claude-code, both, or later") from error
+
+
+def _run_setup_guide(data_dir: Path | None, *, initialize: bool, non_interactive: bool) -> None:
+    """Explain explicit checkpoint memory and offer only confirmed setup actions."""
+    try:
+        config = resolve_local_config(data_dir)
+    except ValueError as error:
+        raise typer.BadParameter("MNEMO_GUIDE_STORAGE_UNAVAILABLE") from error
+
+    initialized = config.config_path.exists()
+    typer.echo("Mnemo Memory setup guide")
+    typer.echo(
+        "Mnemo stores explicit task checkpoints, not an automatic chat or directory history."
+    )
+    typer.echo(
+        "A later client retrieves a saved checkpoint only from this same local store and scope."
+    )
+    typer.echo(f"Local store: {config.data_directory}")
+    typer.echo("Store status: initialized" if initialized else "Store status: not initialized")
+
+    should_initialize = initialize
+    if not initialized and not initialize and not non_interactive:
+        should_initialize = typer.confirm("Initialize this local store now?", default=True)
+    if should_initialize:
+        _show(_service(data_dir).initialize())
+    elif not initialized:
+        typer.echo(
+            "Next step: run mnemo-memory init (or rerun this guide and confirm initialization)."
+        )
+
+    typer.echo("\nTo make the two MCP tools available, register one or both clients:")
+    if non_interactive:
+        choice = "both"
+    else:
+        choice = typer.prompt(
+            "Choose a client (codex, claude-code, both, later)", default="later"
+        ).strip()
+    commands = _guide_client_commands(choice)
+    if commands:
+        typer.echo(
+            "Run the following command(s) when you are ready; each asks before changing "
+            "client configuration:"
+        )
+        for command in commands:
+            typer.echo(f"  {command}")
+    else:
+        typer.echo("Client registration deferred. You can return with mnemo-memory guide.")
+    typer.echo(
+        "\nBefore ending work, ask the connected agent to save a Mnemo checkpoint. "
+        "In a fresh session, ask it to retrieve Mnemo context before continuing."
+    )
+    typer.echo(
+        "Optional dbt lineage: run mnemo-memory dbt ingest target/manifest.json with your "
+        "scope IDs."
+    )
+
+
+@app.command("agent", help="Run a deterministic interactive Mnemo setup guide.")
+def agent(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    initialize: bool = typer.Option(False, "--initialize", help="Initialize the selected store."),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", help="Print the setup plan without prompts or changes."
+    ),
+) -> None:
+    """Start the local no-model onboarding guide."""
+    _run_setup_guide(data_dir, initialize=initialize, non_interactive=non_interactive)
+
+
+@app.command("guide", help="Alias for the interactive Mnemo setup agent.")
+def guide(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    initialize: bool = typer.Option(False, "--initialize", help="Initialize the selected store."),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", help="Print the setup plan without prompts or changes."
+    ),
+) -> None:
+    """Run the onboarding guide using the shorter descriptive command name."""
+    _run_setup_guide(data_dir, initialize=initialize, non_interactive=non_interactive)
+
+
 @app.command(help="Initialize Mnemo's local data directory and SQLite database.")
 def init(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).initialize())

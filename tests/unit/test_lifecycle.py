@@ -81,3 +81,48 @@ def test_cli_help_explains_top_level_commands() -> None:
     assert "Initialize Mnemo's local data directory and SQLite database." in result.output
     assert "Register Mnemo with an AI coding client." in result.output
     assert "Ingest and inspect offline dbt manifests." in result.output
+
+
+def test_interactive_guide_explains_explicit_memory_and_requires_confirmation(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "guide store"
+    result = CliRunner().invoke(app, ["guide", "--data-dir", str(data_dir)], input="n\nboth\n")
+
+    assert result.exit_code == 0
+    assert "explicit task checkpoints, not an automatic chat or directory history" in result.output
+    assert "Store status: not initialized" in result.output
+    assert "mnemo-memory connect codex" in result.output
+    assert "mnemo-memory connect claude-code" in result.output
+    assert not data_dir.exists()
+
+
+def test_non_interactive_guide_never_initializes_or_registers_clients(tmp_path: Path) -> None:
+    data_dir = tmp_path / "guide store"
+    result = CliRunner().invoke(app, ["guide", "--data-dir", str(data_dir), "--non-interactive"])
+
+    assert result.exit_code == 0
+    assert "mnemo-memory connect codex" in result.output
+    assert "mnemo-memory connect claude-code" in result.output
+    assert not data_dir.exists()
+
+
+def test_agent_is_an_interactive_guide_alias(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["agent", "--data-dir", str(tmp_path / "agent store"), "--non-interactive"]
+    )
+
+    assert result.exit_code == 0
+    assert "Mnemo Memory setup guide" in result.output
+
+
+def test_guide_initializes_only_when_explicitly_requested(tmp_path: Path) -> None:
+    data_dir = tmp_path / "guide store"
+    result = CliRunner().invoke(
+        app, ["guide", "--data-dir", str(data_dir), "--initialize", "--non-interactive"]
+    )
+
+    assert result.exit_code == 0
+    initialization = next(line for line in result.output.splitlines() if line.startswith("{"))
+    assert json.loads(initialization)["initialized"] is True
+    assert (data_dir / "config.json").exists()

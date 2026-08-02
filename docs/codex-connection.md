@@ -1,16 +1,16 @@
 # Connect Codex (Issue 8)
 
-Prerequisites: install Mnemo as an executable named `mnemo`, and install a Codex CLI that supports
+Prerequisites: install Mnemo as an executable named `mnemo-memory`, and install a Codex CLI that supports
 `codex mcp add`, `get --json`, `list --json`, and `remove`.
 
-Run `mnemo connect codex` and confirm the prompt, or use `mnemo connect codex --yes` for an
+Run `mnemo-memory connect codex` and confirm the prompt, or use `mnemo-memory connect codex --yes` for an
 explicit non-interactive registration. `--dry-run` shows the exact argument-array launcher without
 changing Codex. `--check` reports whether the named entry exists without changing it.
 
 Mnemo registers one stdio server named `mnemo-memory` with the absolute launcher array:
-`["/absolute/path/to/mnemo", "mcp", "serve", "--stdio"]`. Inspect it with
+`["/absolute/path/to/mnemo-memory", "mcp", "serve", "--stdio"]`. Inspect it with
 `codex mcp get mnemo-memory --json` or `codex mcp list --json`. Use
-`mnemo disconnect codex` to remove only an entry whose command and arguments match Mnemo's owned
+`mnemo-memory disconnect codex` to remove only an entry whose command and arguments match Mnemo's owned
 identity. If Mnemo moves or is upgraded at a different absolute path, disconnect and reconnect.
 
 This changes no Codex model, provider, authentication, sandbox, approval, or network setting and

@@ -1,7 +1,57 @@
 # Mnemo Memory
 
-Mnemo Memory is a small local database that a coding agent can use to **save a task summary now
-and retrieve it in a later, fresh session**.
+## The problem
+
+Coding agents start fresh sessions with no reliable knowledge of what happened before: what changed,
+which decision won, which approach failed, which test passed, and what should happen next. Replaying
+an entire transcript is expensive and noisy. Asking the agent to re-read a dbt project or a raw
+manifest to understand impact is slow and can still surface stale or irrelevant information.
+
+## The practical answer
+
+Mnemo Memory is a small local database that lets a coding agent **save a compact task handoff now
+and retrieve it in a later, fresh session**. It combines that handoff with optional, verified dbt
+lineage facts in one bounded context packet.
+
+The intended workflow is simple:
+
+```text
+Work with an agent → explicitly save a checkpoint → end the session
+                                            ↓
+Start a fresh Codex/Claude session → retrieve Mnemo context → continue with the exact next action
+```
+
+The saved handoff contains the useful parts of prior work—not a replay of everything:
+
+- objective, current progress, accepted decisions, and why they were made;
+- failed approaches, blockers, tests/verification, evidence, and the next action; and
+- optional dbt upstream/downstream impact facts from a manifest you choose to ingest.
+
+![Diagram of Mnemo's explicit save, local store, and fresh-session retrieval flow](https://raw.githubusercontent.com/keith-fajardo/mnemo-memory/main/docs/assets/mnemo-memory-overview.svg)
+
+## What the deterministic evidence shows
+
+Mnemo includes model-free, reproducible synthetic benchmarks. They compare what is available to a
+new session; they do **not** claim provider-billed savings or prove a model will produce a better
+answer.
+
+| Synthetic fixture comparison | Context tokens | Result |
+| --- | ---: | --- |
+| Full prior transcript | 2,917 | Baseline historical context. |
+| Mnemo checkpoint packet | 357 | 87.8% fewer transcript-context tokens; all required handoff facts and provenance available. |
+| Full dbt manifest | 2,600 | Baseline structural context. |
+| Mnemo structural facts | 686 | 73.6% fewer structural-context tokens; expected lineage facts and provenance available. |
+| Transcript + manifest | 5,517 | Combined baseline. |
+| Unified Mnemo packet | 1,043 | 81.1% fewer combined-context tokens; checkpoint, lineage, currentness, and provenance gates pass. |
+
+All numbers are deterministic estimates from Mnemo’s local estimator in cold fresh-session
+fixtures—no model request, API key, provider cache, or output tokens are involved. The fixture
+requires 100% required checkpoint facts, lineage precision/recall, and provenance coverage; it
+rejects stale decisions presented as current. See the
+[fresh-session benchmark](docs/fresh-session-resumption-benchmark.md) and
+[unified-context benchmark](docs/unified-context-benchmark.md) for methodology and limits.
+
+## What Mnemo remembers—and what it does not
 
 It is not a general memory of everything you type. Mnemo does not watch your terminal, read your
 repository automatically, capture chats, or call a model. It remembers only information an MCP
@@ -120,7 +170,8 @@ mnemo-memory disconnect claude-code
 
 In a compatible client session, ask the agent to save a Mnemo checkpoint before stopping. In the
 next fresh session, ask it to retrieve Mnemo context before continuing. The agent uses the two MCP
-tools; there is no separate “remember this directory” command.
+tools; there is no separate “remember this directory” command. For a local terminal walkthrough,
+run `mnemo-memory agent` (or its `mnemo-memory guide` alias).
 
 For the memory to be available later, the new session must use the same Mnemo data directory and
 the same task/project scope. This is intentional: a checkpoint from one project is not disclosed
@@ -236,6 +287,7 @@ with structured omissions when needed.
 | `mnemo-memory status` | Show whether that local store is initialized and usable. |
 | `mnemo-memory connect codex` | Make Mnemo’s two MCP tools available to Codex. |
 | `mnemo-memory connect claude-code` | Make the same two MCP tools available to Claude Code. |
+| `mnemo-memory agent` | Run a deterministic interactive setup guide; it does not use a model or change a client registration. |
 | `mnemo-memory dbt ingest ...` | Read a manifest you already generated and save a safe lineage snapshot. |
 | `mnemo-memory dbt status ...` | Show the active saved dbt snapshot for a project scope. |
 | `mnemo-memory mcp serve --stdio` | Start the MCP server directly; client registration normally starts it for you. |
@@ -271,8 +323,12 @@ sanitized and do not include SQL, stack traces, unrelated scope data, or private
 ## More detail
 
 - [Local MCP guide](docs/local-mcp.md) — tool lifecycle, revision conflicts, and recovery.
+- [Codex and Claude Code MCP guide](docs/codex-claude-mcp-guide.md) — complete client setup,
+  cross-client sharing, prompts to use during work, and troubleshooting.
 - [dbt manifest guide](docs/dbt-manifest-intelligence.md) — schema support, deterministic lineage,
   evidence, and parser safety.
+- [Command wrapper hooks](docs/command-wrapper.md) — the generic safe wrapper kernel and the
+  dbt-specific behavior that is deliberately not enabled yet.
 - [Implementation status](docs/implementation-status.md) — completed vertical slice and deferred
   milestones.
 

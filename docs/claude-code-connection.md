@@ -1,12 +1,12 @@
 # Connect Claude Code (Issue 9)
 
 Tested with Claude Code `2.1.220`. Install Mnemo and Claude Code, then run
-`mnemo connect claude-code`; use `--yes` for non-interactive confirmation, `--dry-run` to preview,
+`mnemo-memory connect claude-code`; use `--yes` for non-interactive confirmation, `--dry-run` to preview,
 and `--check` to inspect without mutation. Mnemo registers `mnemo-memory` in Claude Code's `user`
 scope through `claude mcp add --scope user`, never a project `.mcp.json` file.
 
 Inspect with `claude mcp list` or `claude mcp get mnemo-memory`; remove only the Mnemo-owned entry
-with `mnemo disconnect claude-code`. If Mnemo moves, disconnect and reconnect. Conflicting entries
+with `mnemo-memory disconnect claude-code`. If Mnemo moves, disconnect and reconnect. Conflicting entries
 are preserved. Use `/mcp` inside Claude Code to inspect status.
 
 Mnemo changes no Claude model, endpoint, provider, authentication, permissions, sandbox, approval,
