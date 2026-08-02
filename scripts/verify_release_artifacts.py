@@ -13,7 +13,7 @@ from email.policy import default
 from pathlib import Path, PurePosixPath
 
 DISTRIBUTION_NAME = "mnemo-unified-context"
-DISTRIBUTION_VERSION = "0.1.0a1"
+DISTRIBUTION_VERSION = "0.1.0a2"
 REQUIRED_MIGRATIONS = (
     "0001_initial.sql",
     "0002_checkpoint_aggregate_revisions.sql",

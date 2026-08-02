@@ -79,12 +79,14 @@ the same logical checkpoint identity and preserve earlier evidence.
 
 Running `mnemo-memory init` **does not** make the current directory memorable. It only creates or
 opens the local Mnemo store. The current alpha requires explicit checkpoint saves through MCP; it
-does not yet have automatic lifecycle hooks or transcript capture.
+does not automatically capture transcripts or conversations. An optional dbt command wrapper can
+refresh a configured project's manifest snapshot after a successful dbt command; it is described
+in the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.
 
-> Status: `0.1.0a1` is an early alpha. It is useful for the documented local workflow, but the
+> Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
 > project intentionally does not yet provide automatic capture, catalog/run-results ingestion,
 > general source-code graphs, embeddings, a UI, or team workspaces.
 
@@ -94,14 +96,14 @@ The PyPI distribution is `mnemo-unified-context`. The import package remains `mn
 the command is deliberately `mnemo-memory`.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a1
+uv tool install mnemo-unified-context==0.1.0a2
 mnemo-memory --help
 ```
 
 `mnemo-memory` is a separate executable. It neither replaces nor shadows an existing `mnemo`
 command on your machine.
 
-For a local wheel, use `uv tool install /path/to/mnemo_unified_context-0.1.0a1-py3-none-any.whl`.
+For a local wheel, use `uv tool install /path/to/mnemo_unified_context-0.1.0a2-py3-none-any.whl`.
 For development in this checkout:
 
 ```bash
@@ -329,8 +331,8 @@ sanitized and do not include SQL, stack traces, unrelated scope data, or private
   evidence, and parser safety.
 - [dbt command wrapper guide](docs/dbt-command-wrapper.md) — one-time binding, automatic
   post-run manifest activation, shell setup, and failure behavior.
-- [Command wrapper hooks](docs/command-wrapper.md) — the generic safe wrapper kernel and the
-  dbt-specific behavior that is deliberately not enabled yet.
+- [Command wrapper hooks](docs/command-wrapper.md) — the generic safe wrapper kernel, trust
+  boundary, and failure semantics behind the optional dbt integration.
 - [Implementation status](docs/implementation-status.md) — completed vertical slice and deferred
   milestones.
 

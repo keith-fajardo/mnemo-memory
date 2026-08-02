@@ -473,5 +473,6 @@ Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-
 The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
 strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-tool MCP contract.
 No dbt-core dependency, warehouse call, automatic shell-profile modification, or publication was
-introduced. The remaining release-preparation, full failure/concurrency matrix, and wrapper
-overhead benchmark work are not yet complete.
+introduced. Version `0.1.0a2` is being prepared as a separate pre-alpha package release; the
+remaining full failure/concurrency matrix and wrapper-overhead benchmark work remain tracked
+follow-up work.

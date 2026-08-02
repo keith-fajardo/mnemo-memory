@@ -4,21 +4,20 @@ REPOSITORY_ROOT = Path(__file__).parents[2]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/publish-pypi.yml"
 
 
-def test_pypi_workflow_transfers_the_exact_testpypi_verified_bundle() -> None:
+def test_pypi_workflow_builds_once_then_transfers_an_exact_release_bundle() -> None:
     value = WORKFLOW.read_text()
 
     assert "workflow_dispatch:" in value
     assert "if: github.ref == 'refs/heads/main'" in value
-    assert "source-run-id:" in value
-    assert 'default: "30761127604"' in value
-    assert "repository: keith-fajardo/mnemo-memory" in value
-    assert "run-id: ${{ inputs.source-run-id }}" in value
-    assert "actions: read" in value
+    assert "uv build --no-sources --out-dir build-output" in value
+    assert 'cp "build-output/$wheel" "build-output/$sdist" release/' in value
+    assert "path: release/" in value
+    assert "name: mnemo-unified-context-0.1.0a2" in value
     assert "sha256sum --check SHA256SUMS" in value
-    assert "uv build" not in value
+    assert "source-run-id:" not in value
 
 
-def test_pypi_workflow_isolated_oidc_publication_uses_explicit_artifacts() -> None:
+def test_pypi_workflow_isolates_oidc_publication_and_uses_explicit_artifacts() -> None:
     value = WORKFLOW.read_text()
 
     assert value.count("id-token: write") == 1
@@ -30,5 +29,15 @@ def test_pypi_workflow_isolated_oidc_publication_uses_explicit_artifacts() -> No
     assert "--password" not in value
     assert "--token" not in value
     assert "uv publish dist/*" not in value
-    assert "release/mnemo_unified_context-0.1.0a1-py3-none-any.whl" in value
-    assert "release/mnemo_unified_context-0.1.0a1.tar.gz" in value
+    assert "release/mnemo_unified_context-0.1.0a2-py3-none-any.whl" in value
+    assert "release/mnemo_unified_context-0.1.0a2.tar.gz" in value
+    assert "https://test.pypi.org/legacy/" not in value
+
+
+def test_pypi_post_upload_verification_is_unprivileged_and_hash_bound() -> None:
+    value = WORKFLOW.read_text()
+
+    assert "verify-pypi:" in value
+    assert "--registry-name PyPI" in value
+    assert "https://pypi.org/pypi/mnemo-unified-context/0.1.0a2/json" in value
+    assert "downloaded-release/mnemo_unified_context-0.1.0a2-py3-none-any.whl" in value

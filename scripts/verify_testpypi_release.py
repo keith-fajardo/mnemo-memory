@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Protocol, cast
 
 DISTRIBUTION_NAME = "mnemo-unified-context"
-DISTRIBUTION_VERSION = "0.1.0a1"
-WHEEL_FILENAME = "mnemo_unified_context-0.1.0a1-py3-none-any.whl"
-SDIST_FILENAME = "mnemo_unified_context-0.1.0a1.tar.gz"
+DISTRIBUTION_VERSION = "0.1.0a2"
+WHEEL_FILENAME = "mnemo_unified_context-0.1.0a2-py3-none-any.whl"
+SDIST_FILENAME = "mnemo_unified_context-0.1.0a2.tar.gz"
 EXPECTED_FILENAMES = frozenset({WHEEL_FILENAME, SDIST_FILENAME})
 
 
@@ -71,33 +71,38 @@ def expected_hashes(release_dir: Path) -> dict[str, str]:
     return hashes
 
 
-def _metadata_from_bytes(payload: bytes) -> Mapping[str, object]:
+def _metadata_from_bytes(payload: bytes, registry_name: str) -> Mapping[str, object]:
     try:
         metadata = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise VerificationError("TestPyPI returned invalid version metadata JSON") from error
+        raise VerificationError(
+            f"{registry_name} returned invalid version metadata JSON"
+        ) from error
     if not isinstance(metadata, dict):
-        raise VerificationError("TestPyPI version metadata must be a JSON object")
+        raise VerificationError(f"{registry_name} version metadata must be a JSON object")
     return metadata
 
 
 def fetch_metadata_once(
-    metadata_url: str, timeout_seconds: float, opener: UrlOpen = _urlopen
+    metadata_url: str,
+    timeout_seconds: float,
+    registry_name: str,
+    opener: UrlOpen = _urlopen,
 ) -> Mapping[str, object]:
     try:
         with opener(metadata_url, timeout_seconds) as response:
-            return _metadata_from_bytes(response.read())
+            return _metadata_from_bytes(response.read(), registry_name)
     except urllib.error.HTTPError as error:
         if error.code == 404 or 500 <= error.code <= 599:
             raise MetadataUnavailable(
-                f"TestPyPI metadata is temporarily unavailable (HTTP {error.code})"
+                f"{registry_name} metadata is temporarily unavailable (HTTP {error.code})"
             ) from error
         raise VerificationError(
-            f"TestPyPI metadata request failed with HTTP {error.code}"
+            f"{registry_name} metadata request failed with HTTP {error.code}"
         ) from error
     except urllib.error.URLError as error:
         raise MetadataUnavailable(
-            "TestPyPI metadata request had a transient network failure"
+            f"{registry_name} metadata request had a transient network failure"
         ) from error
 
 
@@ -107,6 +112,7 @@ def poll_metadata(
     deadline_seconds: float,
     retry_interval_seconds: float,
     *,
+    registry_name: str = "TestPyPI",
     opener: UrlOpen = _urlopen,
     clock: Clock = time.monotonic,
     sleep: Sleep = time.sleep,
@@ -117,7 +123,7 @@ def poll_metadata(
     while True:
         attempts += 1
         try:
-            return fetch_metadata_once(metadata_url, timeout_seconds, opener)
+            return fetch_metadata_once(metadata_url, timeout_seconds, registry_name, opener)
         except MetadataUnavailable as error:
             last_error = error
             remaining = deadline - clock()
@@ -125,7 +131,7 @@ def poll_metadata(
                 break
             sleep(min(retry_interval_seconds, remaining))
     raise VerificationError(
-        "TestPyPI metadata did not become available before the propagation deadline "
+        f"{registry_name} metadata did not become available before the propagation deadline "
         f"after {attempts} attempts: {last_error}"
     )
 
@@ -138,45 +144,51 @@ class UploadedArtifact:
 
 
 def validate_metadata(
-    metadata: Mapping[str, object], hashes: Mapping[str, str]
+    metadata: Mapping[str, object], hashes: Mapping[str, str], registry_name: str = "TestPyPI"
 ) -> tuple[UploadedArtifact, ...]:
     info = metadata.get("info")
     if not isinstance(info, dict):
-        raise VerificationError("TestPyPI metadata is missing its info object")
+        raise VerificationError(f"{registry_name} metadata is missing its info object")
     if info.get("name") != DISTRIBUTION_NAME:
-        raise VerificationError("TestPyPI metadata distribution name does not match the release")
+        raise VerificationError(
+            f"{registry_name} metadata distribution name does not match the release"
+        )
     if info.get("version") != DISTRIBUTION_VERSION:
-        raise VerificationError("TestPyPI metadata version does not match the release")
+        raise VerificationError(f"{registry_name} metadata version does not match the release")
 
     urls = metadata.get("urls")
     if not isinstance(urls, list):
-        raise VerificationError("TestPyPI metadata is missing its artifact URL list")
+        raise VerificationError(f"{registry_name} metadata is missing its artifact URL list")
     uploaded: dict[str, UploadedArtifact] = {}
     for item in urls:
         if not isinstance(item, dict):
-            raise VerificationError("TestPyPI metadata contains an invalid artifact record")
+            raise VerificationError(f"{registry_name} metadata contains an invalid artifact record")
         filename, url, digests = item.get("filename"), item.get("url"), item.get("digests")
         if (
             not isinstance(filename, str)
             or not isinstance(url, str)
             or not isinstance(digests, dict)
         ):
-            raise VerificationError("TestPyPI metadata artifact record is incomplete")
+            raise VerificationError(f"{registry_name} metadata artifact record is incomplete")
         digest = digests.get("sha256")
         if not isinstance(digest, str):
-            raise VerificationError(f"TestPyPI metadata lacks a SHA-256 digest for {filename!r}")
+            raise VerificationError(
+                f"{registry_name} metadata lacks a SHA-256 digest for {filename!r}"
+            )
         if filename in uploaded:
-            raise VerificationError(f"TestPyPI metadata contains duplicate artifact {filename!r}")
+            raise VerificationError(
+                f"{registry_name} metadata contains duplicate artifact {filename!r}"
+            )
         uploaded[filename] = UploadedArtifact(filename, digest, url)
 
     if set(uploaded) != set(hashes):
         raise VerificationError(
-            "TestPyPI artifact filenames do not match the expected release: "
+            f"{registry_name} artifact filenames do not match the expected release: "
             f"expected {sorted(hashes)}, got {sorted(uploaded)}"
         )
     for filename, digest in hashes.items():
         if uploaded[filename].sha256 != digest:
-            raise VerificationError(f"TestPyPI SHA-256 mismatch for {filename}")
+            raise VerificationError(f"{registry_name} SHA-256 mismatch for {filename}")
     return tuple(uploaded[filename] for filename in sorted(uploaded))
 
 
@@ -193,12 +205,10 @@ def download_verified_artifacts(
                 payload = response.read()
         except urllib.error.HTTPError as error:
             raise VerificationError(
-                f"TestPyPI artifact download failed for {artifact.filename} with HTTP {error.code}"
+                f"artifact download failed for {artifact.filename} with HTTP {error.code}"
             ) from error
         except urllib.error.URLError as error:
-            raise VerificationError(
-                f"TestPyPI artifact download failed for {artifact.filename}"
-            ) from error
+            raise VerificationError(f"artifact download failed for {artifact.filename}") from error
         actual = hashlib.sha256(payload).hexdigest()
         if actual != artifact.sha256:
             raise VerificationError(f"downloaded SHA-256 mismatch for {artifact.filename}")
@@ -211,8 +221,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--download-dir", type=Path, required=True)
     parser.add_argument(
         "--metadata-url",
-        default="https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a1/json",
+        default="https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a2/json",
     )
+    parser.add_argument("--registry-name", default="TestPyPI")
     parser.add_argument("--request-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--deadline-seconds", type=float, default=120.0)
     parser.add_argument("--retry-interval-seconds", type=float, default=3.0)
@@ -235,14 +246,15 @@ def main() -> None:
             args.request_timeout_seconds,
             args.deadline_seconds,
             args.retry_interval_seconds,
+            registry_name=args.registry_name,
         )
-        artifacts = validate_metadata(metadata, hashes)
+        artifacts = validate_metadata(metadata, hashes, args.registry_name)
         shutil.rmtree(args.download_dir, ignore_errors=True)
         download_verified_artifacts(artifacts, args.download_dir, args.request_timeout_seconds)
     except VerificationError as error:
-        raise SystemExit(f"TESTPYPI_RELEASE_VERIFICATION_FAILED: {error}") from error
+        raise SystemExit(f"REGISTRY_RELEASE_VERIFICATION_FAILED: {error}") from error
     print(
-        "TestPyPI release verification passed: "
+        f"{args.registry_name} release verification passed: "
         f"distribution={DISTRIBUTION_NAME} version={DISTRIBUTION_VERSION} "
         f"artifacts={', '.join(artifact.filename for artifact in artifacts)}"
     )

@@ -17,7 +17,7 @@ that database, capture every conversation, or call a model on its own.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a1
+uv tool install mnemo-unified-context==0.1.0a2
 mnemo-memory --help
 mnemo-memory init
 ```
