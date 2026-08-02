@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+from packages.application import (
+    AbandonCheckpoint,
+    CheckpointApplicationBudgetExceeded,
+    CheckpointApplicationDuplicate,
+    CheckpointApplicationInvalidContent,
+    CheckpointApplicationInvalidLifecycle,
+    CheckpointApplicationInvalidScope,
+    CheckpointApplicationMissingProvenance,
+    CheckpointApplicationNotFound,
+    CheckpointApplicationRevisionConflict,
+    CheckpointApplicationService,
+    CheckpointApplicationStorageFailure,
+    CheckpointView,
+    CompleteCheckpoint,
+    CreateCheckpoint,
+    GetCheckpoint,
+    GetCheckpointContext,
+    ReviseCheckpoint,
+)
+from packages.domain import (
+    CheckpointContent,
+    CheckpointId,
+    CheckpointRevisionId,
+    CheckpointStatus,
+    ContextBudget,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
+    MemoryScope,
+    OwnerId,
+    ProjectId,
+    RequestId,
+    ScopeLevel,
+    SessionId,
+    SourceId,
+    SourceTrustClass,
+    TaskId,
+    VerificationStatus,
+    Visibility,
+    WorkspaceId,
+)
+from packages.storage import ReferenceCheckpointRepository
+from packages.storage.contracts import RepositoryStorageFailure
+
+NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+HASH = "sha256:" + "a" * 64
+
+
+def scope() -> MemoryScope:
+    return MemoryScope(
+        owner_id=OwnerId.new(),
+        level=ScopeLevel.TASK,
+        visibility=Visibility.PROJECT,
+        workspace_id=WorkspaceId.new(),
+        project_id=ProjectId.new(),
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+
+
+def evidence() -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "synthetic://application-service",
+        HASH,
+        EvidenceLocation("fixture://application-service"),
+        NOW,
+        VerificationStatus.VERIFIED,
+    )
+
+
+def content(*, tokens: int = 100, complete: bool = False, suffix: str = "one") -> CheckpointContent:
+    return CheckpointContent(
+        task_objective="Resume the approved task",
+        completed_work=(f"completed {suffix}",),
+        current_state="complete" if complete else "active",
+        remaining_work=() if complete else (f"next {suffix}",),
+        decisions=(f"decision {suffix}",),
+        failures=(),
+        blockers=(),
+        relevant_files=("packages/application/checkpoints.py",),
+        relevant_artifacts=(),
+        verification_performed=("pytest",),
+        token_estimate=tokens,
+    )
+
+
+def service(
+    repository: ReferenceCheckpointRepository | None = None,
+) -> CheckpointApplicationService:
+    ticks = iter(NOW + timedelta(minutes=number) for number in range(50))
+    ids = iter(UUID(int=number + 1) for number in range(50))
+    revisions = iter(UUID(int=number + 101) for number in range(50))
+    requests = iter(UUID(int=number + 201) for number in range(50))
+    return CheckpointApplicationService(
+        repository or ReferenceCheckpointRepository(),
+        clock=lambda: next(ticks),
+        checkpoint_id_factory=lambda: CheckpointId(next(ids)),
+        revision_id_factory=lambda: CheckpointRevisionId(next(revisions)),
+        request_id_factory=lambda: RequestId(next(requests)),
+    )
+
+
+def create(target: CheckpointApplicationService, scope_value: MemoryScope) -> CheckpointView:
+    return target.create(CreateCheckpoint(scope_value, content(), (evidence(),)))
+
+
+def test_create_revise_get_and_stale_revision_are_typed() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    assert initial.revision.revision_number == 1
+    revised = target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(suffix="two"),
+            (evidence(),),
+        )
+    )
+    assert revised.revision.revision_number == 2
+    assert revised.revision.predecessor_revision_id == initial.revision.revision_id
+    historical = target.get(
+        GetCheckpoint(scope_value, initial.aggregate.checkpoint_id, revision_number=1)
+    )
+    assert historical.revision.content == initial.revision.content
+    with pytest.raises(CheckpointApplicationRevisionConflict):
+        target.revise(
+            ReviseCheckpoint(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                initial.revision.revision_id,
+                content(suffix="stale"),
+                (evidence(),),
+            )
+        )
+
+
+def test_terminal_lifecycle_and_idempotent_retry() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    terminal = CompleteCheckpoint(
+        scope_value,
+        initial.aggregate.checkpoint_id,
+        initial.revision.revision_id,
+        content(complete=True, suffix="done"),
+        (evidence(),),
+    )
+    completed = target.complete(terminal)
+    assert completed.aggregate.lifecycle_status is CheckpointStatus.COMPLETED
+    assert target.complete(terminal).revision == completed.revision
+    with pytest.raises(CheckpointApplicationInvalidLifecycle):
+        target.abandon(
+            AbandonCheckpoint(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                completed.revision.revision_id,
+                "different terminal operation",
+                content(suffix="abandoned"),
+                (evidence(),),
+            )
+        )
+
+
+def test_abandonment_requires_reason_and_blocks_future_revisions() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    with pytest.raises(CheckpointApplicationInvalidContent):
+        target.abandon(
+            AbandonCheckpoint(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                initial.revision.revision_id,
+                " ",
+                content(),
+                (evidence(),),
+            )
+        )
+    abandoned = target.abandon(
+        AbandonCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            "waiting for a decision",
+            content(suffix="abandoned"),
+            (evidence(),),
+        )
+    )
+    assert abandoned.revision.status is CheckpointStatus.ABANDONED
+    with pytest.raises(CheckpointApplicationInvalidLifecycle):
+        target.revise(
+            ReviseCheckpoint(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                abandoned.revision.revision_id,
+                content(suffix="late"),
+                (evidence(),),
+            )
+        )
+
+
+def test_write_validation_and_repository_error_translation() -> None:
+    target = service()
+    scope_value = scope()
+    with pytest.raises(CheckpointApplicationMissingProvenance):
+        target.create(CreateCheckpoint(scope_value, content(), ()))
+    with pytest.raises(CheckpointApplicationBudgetExceeded):
+        target.create(CreateCheckpoint(scope_value, content(tokens=601), (evidence(),)))
+    with pytest.raises(CheckpointApplicationInvalidScope):
+        target.create(
+            CreateCheckpoint(
+                MemoryScope(OwnerId.new(), ScopeLevel.PERSONAL, Visibility.OWNER),
+                content(),
+                (evidence(),),
+            )
+        )
+    initial = create(target, scope_value)
+    with pytest.raises(CheckpointApplicationDuplicate):
+        target.create(
+            CreateCheckpoint(scope_value, content(), (evidence(),), initial.aggregate.checkpoint_id)
+        )
+    with pytest.raises(CheckpointApplicationNotFound):
+        target.get(GetCheckpoint(scope_value, CheckpointId.new()))
+
+
+def test_context_uses_exact_current_revision_and_is_stable() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    revised = target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(tokens=600, suffix="two"),
+            (evidence(),),
+        )
+    )
+    packet = target.get_context(GetCheckpointContext(scope_value))
+    assert packet.active_task_checkpoint is not None
+    assert str(revised.revision.revision_id) in packet.active_task_checkpoint.item_id
+    assert packet.active_task_checkpoint.token_estimate == 600
+    assert packet.provenance[0].source_reference.endswith(str(revised.revision.revision_id))
+    assert json.loads(packet.active_task_checkpoint.content) == revised.revision.content.to_dict()
+    assert packet.to_json() == packet.to_json()
+
+
+def test_context_empty_omits_terminal_and_over_budget_content() -> None:
+    target = service()
+    scope_value = scope()
+    assert target.get_context(GetCheckpointContext(scope_value)).active_task_checkpoint is None
+    initial = create(target, scope_value)
+    packet = target.get_context(
+        GetCheckpointContext(
+            scope_value, initial.aggregate.checkpoint_id, ContextBudget(active_task_checkpoint=99)
+        )
+    )
+    assert packet.active_task_checkpoint is None
+    assert packet.omissions[0].reason.value == "token_budget"
+    target.complete(
+        CompleteCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(complete=True),
+            (evidence(),),
+        )
+    )
+    assert target.get_context(GetCheckpointContext(scope_value)).active_task_checkpoint is None
+
+
+def test_context_total_limit_and_cross_scope_do_not_disclose_checkpoint() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    packet = target.get_context(
+        GetCheckpointContext(
+            scope_value, initial.aggregate.checkpoint_id, ContextBudget(total_limit=99)
+        )
+    )
+    assert packet.active_task_checkpoint is None
+    with pytest.raises(CheckpointApplicationNotFound) as cross_scope:
+        target.get(GetCheckpoint(scope(), initial.aggregate.checkpoint_id))
+    with pytest.raises(CheckpointApplicationNotFound) as unknown:
+        target.get(GetCheckpoint(scope_value, CheckpointId.new()))
+    assert str(cross_scope.value) == str(unknown.value)
+
+
+def test_application_boundary_has_no_adapter_or_client_imports() -> None:
+    text = Path("packages/application/checkpoints.py").read_text()
+    forbidden = ("sqlite", "mcp", "fastapi", "typer", "apps.", "connectors.")
+    assert not any(term in text.lower() for term in forbidden)
+
+
+class FailingRepository(ReferenceCheckpointRepository):
+    def create_checkpoint_aggregate(self, *args: object) -> None:
+        raise RepositoryStorageFailure("private database detail")
+
+
+def test_storage_failure_is_safe_and_keeps_cause() -> None:
+    target = service(FailingRepository())
+    with pytest.raises(CheckpointApplicationStorageFailure) as raised:
+        target.create(CreateCheckpoint(scope(), content(), (evidence(),)))
+    assert "database" not in str(raised.value)
+    assert isinstance(raised.value.__cause__, RepositoryStorageFailure)

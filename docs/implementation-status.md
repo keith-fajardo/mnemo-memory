@@ -168,7 +168,7 @@ the complete verification gate passed with 79 tests. Issue 10 has not been start
 
 ### Issue 10 — In progress
 
-#### Issue 10A — In progress
+#### Issue 10A — Complete
 
 #### Issue 10A.1 — Complete
 
@@ -228,7 +228,25 @@ compatibility cleanup are complete.
 ADR, canonical aggregate/revision representation, forward migration, repository lifecycle
 contracts, SQLite CAS, and final architecture review are complete.
 
-#### Issue 10B and 10C — Not started
+#### Issue 10B — In progress
+
+##### Issue 10B.1 — Complete
+
+Added the storage-independent checkpoint application service. Its typed commands coordinate
+canonical aggregate/revision creation, revision, completion, abandonment, and scoped retrieval
+through the repository port while translating expected storage outcomes into safe application
+errors. Context queries select only scoped active checkpoints, construct a versioned packet with
+exact revision provenance, enforce the 600-token active-checkpoint budget and the packet total,
+and report deterministic token-budget omissions. The fixture MCP adapter remains unchanged.
+
+The focused application suite and complete verification gate passed with 123 tests: formatting,
+linting, strict type checking, context-schema validation, dependency/provenance validation, and
+architecture validation all passed. No SQLite runtime composition, MCP wiring, connector, or
+Issue 11 work was started.
+
+##### Issue 10B.2 — Not started
+
+#### Issue 10C — Not started
 
 ## Issue queue
 
