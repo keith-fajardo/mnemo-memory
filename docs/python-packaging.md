@@ -33,3 +33,20 @@ Production PyPI requires a separate explicit user approval after TestPyPI verifi
 
 The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
 Its repository name is not a PyPI-name decision: the placeholder distribution remains local only.
+
+## TestPyPI Trusted Publishing setup
+
+Before manually invoking `.github/workflows/publish-testpypi.yml`, create the GitHub environment
+`testpypi` and configure a TestPyPI Trusted Publisher with these exact values:
+
+- Project: `mnemo-unified-context`
+- Owner: `keith-fajardo`
+- Repository: `mnemo-memory`
+- Workflow: `publish-testpypi.yml`
+- Environment: `testpypi`
+
+The workflow is manual-only and needs no API token. It builds and tests one artifact set, requires
+OIDC explicitly, then uploads only those exact files to `https://test.pypi.org/legacy/`. A partial
+or duplicate upload must be investigated on TestPyPI; do not rerun it with the same version until
+the TestPyPI project files and hashes have been checked. Production PyPI is not part of this
+workflow.
