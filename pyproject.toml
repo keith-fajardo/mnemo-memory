@@ -1,5 +1,5 @@
 [project]
-name = "mnemo-agent-context-placeholder"
+name = "mnemo-unified-context"
 version = "0.1.0a1"
 description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"

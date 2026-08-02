@@ -424,4 +424,14 @@ manifest was used, and no external upload occurred.
 
 #### Issue 13C — Not started
 
+##### Issue 13C.1 — Complete
+
+Read-only PyPI/TestPyPI name research selected the approved permanent distribution name
+`mnemo-unified-context`; the Python namespace and installed executable remain unchanged.
+
+##### Issue 13C.2 — In progress
+
+Renamed local package metadata and rebuilding artifacts for the separate TestPyPI publication
+gate. Production PyPI publication remains explicitly out of scope.
+
 #### Issue 13D — Not started

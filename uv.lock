@@ -307,7 +307,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mnemo-agent-context-placeholder"
+name = "mnemo-unified-context"
 version = "0.1.0a1"
 source = { editable = "." }
 dependencies = [

@@ -4,9 +4,8 @@ Mnemo Memory is built as a Python 3.12 package with the `uv_build` backend. The 
 is `mnemo_memory`; the installed command is `mnemo-memory`. The latter intentionally avoids the
 existing, unrelated `mnemo` executable.
 
-Until the maintainer approves a unique permanent PyPI distribution name, local artifacts use the
-non-publishable placeholder `mnemo-agent-context-placeholder`. No package is uploaded under that
-placeholder.
+The permanent distribution name is `mnemo-unified-context`. Its import namespace remains
+`mnemo_memory` and its installed executable remains `mnemo-memory`.
 
 Build source-independent artifacts with:
 
