@@ -244,7 +244,19 @@ linting, strict type checking, context-schema validation, dependency/provenance 
 architecture validation all passed. No SQLite runtime composition, MCP wiring, connector, or
 Issue 11 work was started.
 
-##### Issue 10B.2 — Not started
+##### Issue 10B.2 — In progress
+
+###### Issue 10B.2a — Complete
+
+Consolidated local personal-profile resolution with the precedence explicit path, `MNEMO_DATA_DIR`,
+persisted platform-default configuration, then a platform default that never depends on the working
+directory. The closeable runtime composition opens the configured SQLite profile, migrates it to
+schema v2, and provides the canonical checkpoint application service without a global connection.
+Focused resolver, corruption/newer-schema, lifecycle, close/reopen, and same-directory persistence
+tests passed; a different directory has no access to the stored checkpoint. The complete 128-test
+verification gate passed. MCP remains fixture-backed; 10B.2b and 10C are not started.
+
+###### Issue 10B.2b — Not started
 
 #### Issue 10C — Not started
 

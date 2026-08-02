@@ -12,7 +12,7 @@ import typer
 
 from connectors.claude_code.mcp_config import ClaudeMcpManager
 from connectors.codex.mcp_config import CodexMcpManager
-from packages.application import LocalConfig, build_lifecycle_service
+from packages.application import build_lifecycle_service, resolve_local_config
 from packages.application.services import LifecycleService
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -25,10 +25,7 @@ app.add_typer(disconnect_app, name="disconnect")
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
-    config = LocalConfig.from_environment(data_dir or Path.cwd() / ".mnemo")
-    if config.config_path.exists():
-        config = LocalConfig.load(config.config_path)
-    return build_lifecycle_service(config)
+    return build_lifecycle_service(resolve_local_config(data_dir))
 
 
 def _show(value: object) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,12 +20,29 @@ CONFIG_FIELDS = {
 ENV_PREFIX = "MNEMO_"
 
 
+class LocalConfigurationError(ValueError):
+    """A safe error resolving the one local personal-profile location."""
+
+
 def _safe_path(value: str, base: Path) -> Path:
     path = Path(value)
     resolved = (base / path).resolve() if not path.is_absolute() else path.resolve()
     if base.resolve() not in resolved.parents and resolved != base.resolve():
         raise ValueError("configured path escapes the Mnemo data directory")
     return resolved
+
+
+def default_data_directory(home: Path | None = None) -> Path:
+    """Return the platform data location without consulting the working directory."""
+    home_directory = (home or Path.home()).expanduser().resolve()
+    operating_system = platform.system()
+    if operating_system == "Darwin":
+        return home_directory / "Library" / "Application Support" / "Mnemo"
+    if operating_system == "Windows":
+        root = Path(os.environ.get("LOCALAPPDATA", home_directory / "AppData" / "Local"))
+        return root / "Mnemo"
+    root = Path(os.environ.get("XDG_DATA_HOME", home_directory / ".local" / "share"))
+    return root / "mnemo"
 
 
 def _loopback(host: str) -> None:
@@ -76,11 +94,15 @@ class LocalConfig:
 
     @classmethod
     def load(cls, config_path: Path) -> LocalConfig:
-        data = json.loads(config_path.read_text())
+        resolved_config_path = config_path.expanduser().resolve()
+        data = json.loads(resolved_config_path.read_text())
         if not isinstance(data, dict) or set(data) != CONFIG_FIELDS:
-            raise ValueError("local configuration has unknown or missing fields")
+            raise LocalConfigurationError("local configuration has unknown or missing fields")
+        raw_directory = Path(str(data["data_directory"]))
+        if not raw_directory.is_absolute():
+            raw_directory = resolved_config_path.parent / raw_directory
         return cls(
-            data_directory=Path(str(data["data_directory"])),
+            data_directory=raw_directory,
             database_path=Path(str(data["database_path"])),
             host=str(data["host"]),
             port=int(data["port"]),
@@ -91,5 +113,42 @@ class LocalConfig:
 
     @classmethod
     def from_environment(cls, default_directory: Path) -> LocalConfig:
-        directory = Path(os.environ.get(f"{ENV_PREFIX}DATA_DIR", default_directory))
-        return cls.defaults(directory)
+        return resolve_local_config(default_directory=default_directory)
+
+
+def resolve_local_config(
+    explicit_data_directory: Path | None = None,
+    *,
+    environment: dict[str, str] | None = None,
+    default_directory: Path | None = None,
+) -> LocalConfig:
+    """Resolve the personal profile location with explicit, deterministic precedence.
+
+    Relative configured paths are resolved only against their checked-in configuration directory;
+    direct and environment paths must be absolute so a client working directory cannot select a
+    different durable database.
+    """
+    env = os.environ if environment is None else environment
+    default = (default_directory or default_data_directory()).expanduser().resolve()
+    raw = explicit_data_directory
+    if raw is None and (environment_value := env.get(f"{ENV_PREFIX}DATA_DIR")):
+        raw = Path(environment_value)
+    if raw is not None:
+        if not raw.is_absolute():
+            raise LocalConfigurationError("explicit Mnemo data directory must be absolute")
+        directory = raw.expanduser().resolve()
+        if directory.exists() and not directory.is_dir():
+            raise LocalConfigurationError("Mnemo data directory is occupied by a file")
+        config_path = directory / "config.json"
+        if config_path.exists():
+            config = LocalConfig.load(config_path)
+            if config.data_directory != directory:
+                raise LocalConfigurationError(
+                    "configured data directory does not match the requested Mnemo directory"
+                )
+            return config
+        return LocalConfig.defaults(directory)
+    if default.exists() and not default.is_dir():
+        raise LocalConfigurationError("Mnemo data directory is occupied by a file")
+    config_path = default / "config.json"
+    return LocalConfig.load(config_path) if config_path.exists() else LocalConfig.defaults(default)

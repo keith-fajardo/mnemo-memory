@@ -8,15 +8,14 @@ from pathlib import Path
 import uvicorn
 
 from apps.api.app import create_app
-from packages.application import LocalConfig, build_lifecycle_service
+from packages.application import build_lifecycle_service, resolve_local_config
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True)
     args = parser.parse_args()
-    config_path = Path(args.data_dir) / "config.json"
-    config = LocalConfig.load(config_path)
+    config = resolve_local_config(Path(args.data_dir))
     service = build_lifecycle_service(config)
     service.initialize()
     uvicorn.run(

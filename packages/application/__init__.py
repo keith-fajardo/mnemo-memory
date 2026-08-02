@@ -1,6 +1,11 @@
 """Application services for local Mnemo lifecycle operations."""
 
-from .bootstrap import build_lifecycle_service
+from .bootstrap import (
+    CheckpointRuntime,
+    LocalRuntimeError,
+    build_checkpoint_runtime,
+    build_lifecycle_service,
+)
 from .checkpoints import (
     AbandonCheckpoint,
     CheckpointApplicationBudgetExceeded,
@@ -21,7 +26,12 @@ from .checkpoints import (
     GetCheckpointContext,
     ReviseCheckpoint,
 )
-from .config import LocalConfig
+from .config import (
+    LocalConfig,
+    LocalConfigurationError,
+    default_data_directory,
+    resolve_local_config,
+)
 from .services import LifecycleService
 
 __all__ = [
@@ -37,6 +47,7 @@ __all__ = [
     "CheckpointApplicationRevisionConflict",
     "CheckpointApplicationService",
     "CheckpointApplicationStorageFailure",
+    "CheckpointRuntime",
     "CheckpointView",
     "CompleteCheckpoint",
     "CreateCheckpoint",
@@ -44,6 +55,11 @@ __all__ = [
     "GetCheckpointContext",
     "LifecycleService",
     "LocalConfig",
+    "LocalConfigurationError",
+    "LocalRuntimeError",
     "ReviseCheckpoint",
+    "build_checkpoint_runtime",
     "build_lifecycle_service",
+    "default_data_directory",
+    "resolve_local_config",
 ]
