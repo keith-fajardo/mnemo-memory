@@ -31,7 +31,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned uv
-        run: python -m pip install --disable-pip-version-check "uv==0.9.7"
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.9.7"
 
       - name: Verify ref and release metadata
         run: |
@@ -60,19 +63,19 @@ jobs:
 
       - name: Build and inspect source-independent artifacts
         run: |
-          mkdir artifacts checksums
-          uv build --no-sources --out-dir artifacts
-          test -f artifacts/mnemo_unified_context-0.1.0a1-py3-none-any.whl
-          test -f artifacts/mnemo_unified_context-0.1.0a1.tar.gz
-          test "$(find artifacts -maxdepth 1 -type f | wc -l | tr -d ' ')" = 2
-          unzip -l artifacts/*.whl | rg 'mnemo_memory/(py.typed|resources/migrations/0003_dbt_manifest_snapshots.sql|resources/schemas/context-packet-v1.json)'
-          tar -tzf artifacts/*.tar.gz | rg 'src/mnemo_memory/resources/(migrations/0003_dbt_manifest_snapshots.sql|schemas/context-packet-v1.json)'
-          ! unzip -l artifacts/*.whl | rg '\.(sqlite|db|env|pem|key)$|manifest\.json'
-          (cd artifacts && sha256sum * > ../checksums/SHA256SUMS)
+          mkdir release
+          uv build --no-sources --out-dir release
+          test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          test -f release/mnemo_unified_context-0.1.0a1.tar.gz
+          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" = 2
+          unzip -l release/*.whl | rg 'mnemo_memory/(py.typed|resources/migrations/0003_dbt_manifest_snapshots.sql|resources/schemas/context-packet-v1.json)'
+          tar -tzf release/*.tar.gz | rg 'src/mnemo_memory/resources/(migrations/0003_dbt_manifest_snapshots.sql|schemas/context-packet-v1.json)'
+          ! unzip -l release/*.whl | rg '\.(sqlite|db|env|pem|key)$|manifest\.json'
+          (cd release && sha256sum mnemo_unified_context-0.1.0a1-py3-none-any.whl mnemo_unified_context-0.1.0a1.tar.gz > SHA256SUMS)
 
       - name: Smoke-test exact wheel and source distribution
         run: |
-          for artifact in artifacts/*.whl artifacts/*.tar.gz; do
+          for artifact in release/*.whl release/*.tar.gz; do
             work="$(mktemp -d)"
             uv venv "$work/venv" --python 3.12
             uv pip install --python "$work/venv/bin/python" "$artifact"
@@ -93,9 +96,7 @@ jobs:
         with:
           name: mnemo-unified-context-0.1.0a1
           path: |
-            artifacts/mnemo_unified_context-0.1.0a1-py3-none-any.whl
-            artifacts/mnemo_unified_context-0.1.0a1.tar.gz
-            checksums/SHA256SUMS
+            release/
           if-no-files-found: error
           retention-days: 3
 
@@ -116,7 +117,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned uv
-        run: python -m pip install --disable-pip-version-check "uv==0.9.7"
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.9.7"
 
       - name: Download exact release bundle
         # actions/download-artifact v4.3.0
@@ -156,7 +160,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned uv
-        run: python -m pip install --disable-pip-version-check "uv==0.9.7"
+        # astral-sh/setup-uv v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.9.7"
 
       - name: Download checksum bundle
         # actions/download-artifact v4.3.0
@@ -183,7 +190,7 @@ jobs:
           PY
           work="$(mktemp -d)"
           uv venv "$work/venv" --python 3.12
-          uv pip install --python "$work/venv/bin/python" --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple ./mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          uv pip install --python "$work/venv/bin/python" --index-url https://pypi.org/simple/ ./mnemo_unified_context-0.1.0a1-py3-none-any.whl
           (cd "$work" && "$work/venv/bin/mnemo-memory" --help)
           (cd "$work" && "$work/venv/bin/mnemo-memory" init --data-dir "$work/Mnemo Data Δ")
           "$work/venv/bin/python" - <<'PY'
