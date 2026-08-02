@@ -108,13 +108,20 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
             saved = await session.call_tool(
                 "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)
             )
-            assert saved.isError is False
+            assert saved.isError is False and isinstance(saved.structuredContent, dict)
+            checkpoint_id = saved.structuredContent["checkpoint_id"]
+
+        # Re-open the exact read-back launcher in an independent stdio process.
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            initialized = await session.initialize()
+            assert initialized.serverInfo.name == "mnemo-local"
             context = await session.call_tool(
                 "get_context",
                 _durable_scope(),
                 read_timeout_seconds=timedelta(seconds=5),
             )
-            assert context.isError is False
+            assert context.isError is False and isinstance(context.structuredContent, dict)
+            assert checkpoint_id in json.dumps(context.structuredContent)
 
     asyncio.run(asyncio.wait_for(smoke_test(), timeout=10))
     listed = subprocess.run(

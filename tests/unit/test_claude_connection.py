@@ -101,12 +101,20 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
             saved = await session.call_tool(
                 "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)
             )
+            assert saved.isError is False and isinstance(saved.structuredContent, dict)
+            checkpoint_id = saved.structuredContent["checkpoint_id"]
+
+        # Use the exact user-scope launcher stored by Claude Code after a restart.
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            initialized = await session.initialize()
+            assert initialized.serverInfo.name == "mnemo-local"
             context = await session.call_tool(
                 "get_context",
                 _durable_scope(),
                 read_timeout_seconds=timedelta(seconds=5),
             )
-            assert saved.isError is False and context.isError is False
+            assert context.isError is False and isinstance(context.structuredContent, dict)
+            assert checkpoint_id in json.dumps(context.structuredContent)
 
     asyncio.run(asyncio.wait_for(smoke(), timeout=10))
     assert manager.connect()["changed"] is False

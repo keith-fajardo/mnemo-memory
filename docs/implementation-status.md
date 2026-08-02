@@ -271,9 +271,25 @@ the complete 125-test verification gate.
 Checkpoint application services, deterministic local runtime composition, and durable MCP wiring
 are complete. Issue 10 remains in progress for 10C hardening only.
 
-#### Issue 10C — Not started
+#### Issue 10C — Complete
+
+Reconciled the 128-to-125 test change: the old seven fixture MCP tests became four durable MCP
+tests after four fixture-invalid-input parameter cases were consolidated into strict durable schema
+and sanitized-error coverage, for a net decrease of three without loss of runtime, migration,
+fixture-isolation, or connector behavior. Added three independent-process integration tests, bringing
+the suite back to 128 meaningful tests. They prove restart after create/revise/complete, abandonment
+history and reason preservation, abrupt-stop durability after an acknowledged save, bounded
+two-process revision conflict handling, integrity/foreign-key checks, scope/provenance continuity,
+and 600-token packet behavior. The final verification gate passed with no fixture or legacy
+replacement-chain writer on the production path.
+
+### Issue 10 — Complete
+
+Issue 10 now provides canonical immutable checkpoint revisions, scoped SQLite persistence,
+storage-independent lifecycle services, durable stdio MCP tools, and restart/failure-isolation
+coverage. Issue 11 remains not started.
 
 ## Issue queue
 
-Issue 10 remains in progress. Work must stop after its approved sub-issue boundary until explicit
-approval is given.
+Issue 10 is complete. Issue 11 (the cross-client fresh-session fixture) and Issue 12 remain not
+started; work must stop until explicit approval is given.

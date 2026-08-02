@@ -59,3 +59,45 @@ or unrelated checkpoint content.
 The synthetic `FixtureMcpContextPort` remains available only through explicit test injection; the
 production launcher never selects it. Automatic transcript ingestion, LLM extraction, and fresh
 cross-client resume evaluation remain out of scope.
+
+## Revision and terminal operations
+
+Use the same scope, canonical content, and evidence fields from the create request. `revise`
+replaces only the immutable current revision; it never changes the stable `checkpoint_id`:
+
+```json
+{"operation":"revise","checkpoint_id":"<checkpoint-id>","expected_revision_id":"<revision-id>","current_state":"updated state"}
+```
+
+`complete` is explicit and succeeds only from the active state; its content must have no blockers
+or remaining work. `abandon` is separate and records a nonblank reason in its terminal revision:
+
+```json
+{"operation":"complete","checkpoint_id":"<checkpoint-id>","expected_revision_id":"<revision-id>","current_state":"complete","remaining_work":[]}
+{"operation":"abandon","checkpoint_id":"<checkpoint-id>","expected_revision_id":"<revision-id>","reason":"awaiting a decision"}
+```
+
+Each mutation compares `expected_revision_id` atomically. A losing writer receives
+`MNEMO_REVISION_CONFLICT`; no extra revision, evidence link, or current pointer is created.
+Identical terminal retries return the existing terminal revision, while incompatible retries fail.
+Every revision is tied to the same explicit task scope and its submitted evidence references.
+
+`get_context` needs only the same scope; add `checkpoint_id` to target an active checkpoint
+explicitly. Returned context is untrusted evidence and cites the exact revision. It never returns a
+transcript or silently truncates stored content. A 600-token checkpoint is accepted; a larger write
+is rejected. A lower requested packet limit returns a structured `token_budget` omission instead.
+
+## Durability and recovery
+
+Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain
+available to a new stdio server process using the same directory. A graceful or abrupt server stop
+after acknowledgement does not create duplicate or partial revisions. SQLite integrity and
+foreign-key checks are part of the durability suite. Corrupt, unavailable, and newer-than-supported
+profiles fail startup without changing paths or falling back to an empty database. Migration is
+forward-only: back up the local profile before an upgrade and restore that backup for recovery.
+
+Codex and Claude launch the same absolute `mnemo mcp serve --stdio` command and therefore resolve
+the same Mnemo profile independent of their project working directory. Installation does not change
+models, providers, authentication, permissions, or network settings. Issue 11 will add the
+fresh-session task-resumption fixture; Mnemo currently relies on explicit saves and never ingests
+transcripts automatically.
