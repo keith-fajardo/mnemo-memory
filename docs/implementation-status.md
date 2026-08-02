@@ -472,7 +472,7 @@ missing, invalid, or stale competing updates retain the prior snapshot.
 Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-hook generation.
 The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
 strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-tool MCP contract.
-No dbt-core dependency, warehouse call, automatic shell-profile modification, or publication was
-introduced. Version `0.1.0a2` is being prepared as a separate pre-alpha package release; the
-remaining full failure/concurrency matrix and wrapper-overhead benchmark work remain tracked
-follow-up work.
+No dbt-core dependency, warehouse call, or automatic shell-profile modification was introduced.
+Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
+Publishing workflow after source-independent artifact verification. The remaining full
+failure/concurrency matrix and wrapper-overhead benchmark work remain tracked follow-up work.
