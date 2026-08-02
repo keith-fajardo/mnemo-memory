@@ -1,6 +1,7 @@
 CREATE TABLE checkpoint_aggregates (
     checkpoint_id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES principals(owner_id) ON DELETE RESTRICT,
+    visibility TEXT NOT NULL CHECK (visibility IN ('owner','workspace','project')),
     workspace_id TEXT NULL REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
     project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE RESTRICT,
     session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,

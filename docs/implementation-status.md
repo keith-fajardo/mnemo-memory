@@ -185,6 +185,8 @@ and ordered immutable revision records while preserving payload, scope, timestam
 state, and evidence links. Invalid ambiguous, forked, cyclic, cross-scope, broken, or
 provenance-less chains fail the migration and roll back. The 10A.2 focused migration, canonical
 serialization, raw-payload, and reopening coverage passes as part of the complete 92-test gate.
+The unreleased v2 migration also stores scope visibility structurally, correcting the concrete
+scope-round-trip defect that would otherwise prevent exact canonical aggregate reconstruction.
 
 #### Issue 10A.3 — In progress
 
@@ -199,9 +201,14 @@ terminal retries idempotent, and lists only scoped active checkpoints with deter
 Its shared behavioral contract passed against the reference adapter as part of the complete
 100-test verification gate. Legacy storage methods remain compatibility-only until 10A.3c.
 
-##### Issue 10A.3b — Not started
+##### Issue 10A.3b — Complete
 
-SQLite compare-and-swap lifecycle implementation and parity execution.
+Implemented the canonical checkpoint lifecycle port in the existing SQLite adapter. Scoped SQL
+creates aggregates and initial revisions transactionally, retrieves current and historical
+revisions, performs guarded current-pointer compare-and-swap updates, and supports terminal
+transitions, deterministic listing, pagination, restart persistence, and reference-contract parity.
+The complete 115-test verification gate, injected rollback coverage, and bounded two-connection
+concurrency coverage passed.
 
 ##### Issue 10A.3c — Not started
 

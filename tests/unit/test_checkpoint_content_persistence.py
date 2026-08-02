@@ -181,6 +181,7 @@ def test_singleton_legacy_checkpoint_migrates_to_canonical_payload(tmp_path: Pat
     aggregate, revisions = read_v2_rows(repository.path)
 
     assert aggregate["checkpoint_id"] == str(legacy.checkpoint_id)
+    assert aggregate["visibility"] == legacy.scope.visibility.value
     assert aggregate["current_revision_number"] == 1
     assert aggregate["lifecycle_status"] == legacy.status.value
     assert aggregate["created_at"] == legacy.created_at.isoformat()
@@ -232,6 +233,7 @@ def test_empty_and_independent_legacy_chains_preserve_each_scope(tmp_path: Path)
         row for row in aggregates if row["checkpoint_id"] == str(second.checkpoint_id)
     )
     assert first_header["owner_id"] == str(first.scope.owner_id)
+    assert first_header["visibility"] == first.scope.visibility.value
     assert first_header["workspace_id"] == str(first.scope.workspace_id)
     assert first_header["project_id"] == str(first.scope.project_id)
     assert first_header["created_at"] == first.created_at.isoformat()
