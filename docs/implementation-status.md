@@ -256,7 +256,20 @@ Focused resolver, corruption/newer-schema, lifecycle, close/reopen, and same-dir
 tests passed; a different directory has no access to the stored checkpoint. The complete 128-test
 verification gate passed. MCP remains fixture-backed; 10B.2b and 10C are not started.
 
-###### Issue 10B.2b — Not started
+###### Issue 10B.2b — Complete
+
+The production stdio server now composes the canonical local runtime for its full lifetime and
+translates its two fixed MCP tools through `CheckpointApplicationService`. `save_checkpoint`
+supports explicit create, revise, complete, and abandon operations; `get_context` returns only the
+scoped active durable revision in the canonical packet. Test-only fixture injection remains explicit
+and the production SQLite adapter no longer offers a legacy-chain write helper. Durable lifecycle,
+terminal selection, sanitized errors, real stdio, Codex, and Claude launcher regressions passed in
+the complete 125-test verification gate.
+
+#### Issue 10B — Complete
+
+Checkpoint application services, deterministic local runtime composition, and durable MCP wiring
+are complete. Issue 10 remains in progress for 10C hardening only.
 
 #### Issue 10C — Not started
 

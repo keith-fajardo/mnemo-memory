@@ -77,7 +77,11 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
         "os.execv(sys.executable, [sys.executable, '-m', 'apps.cli.main', *sys.argv[1:]])\n"
     )
     launcher.chmod(0o700)
-    environment = {**os.environ, "CODEX_HOME": str(codex_home)}
+    environment = {
+        **os.environ,
+        "CODEX_HOME": str(codex_home),
+        "MNEMO_DATA_DIR": str(tmp_path / "mnemo data"),
+    }
     manager = CodexMcpManager(shutil.which("codex") or "codex", launcher, environment=environment)
     codex_home.mkdir()
     (codex_home / "config.toml").write_text("[feedback]\nenabled = false\n")
@@ -102,17 +106,12 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
                 "save_checkpoint",
             ]
             saved = await session.call_tool(
-                "save_checkpoint",
-                {
-                    "owner_id": "11111111-1111-4111-8111-111111111111",
-                    "evidence_references": ["fixture"],
-                },
-                read_timeout_seconds=timedelta(seconds=5),
+                "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)
             )
             assert saved.isError is False
             context = await session.call_tool(
                 "get_context",
-                {"owner_id": "11111111-1111-4111-8111-111111111111", "query": "fixture"},
+                _durable_scope(),
                 read_timeout_seconds=timedelta(seconds=5),
             )
             assert context.isError is False
@@ -129,6 +128,45 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
     assert (codex_home / "config.toml").read_text().startswith("[feedback]\nenabled = false")
     assert manager.disconnect()["changed"] is True
     assert manager.inspect() is None
+
+
+def _durable_scope() -> dict[str, object]:
+    return {
+        "owner_id": "11111111-1111-4111-8111-111111111111",
+        "workspace_id": "22222222-2222-4222-8222-222222222222",
+        "project_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+    }
+
+
+def _durable_payload() -> dict[str, object]:
+    return {
+        **_durable_scope(),
+        "operation": "create",
+        "task_objective": "Connector smoke fixture",
+        "current_state": "active",
+        "evidence_references": [
+            {
+                "evidence_id": "66666666-6666-4666-8666-666666666666",
+                "source_id": "77777777-7777-4777-8777-777777777777",
+                "source_type": "checkpoint",
+                "trust_class": "user_authored",
+                "immutable_source_ref": "synthetic://connector",
+                "content_hash": "sha256:" + "a" * 64,
+                "location": {
+                    "uri": "fixture://connector",
+                    "start_line": None,
+                    "start_column": None,
+                    "end_line": None,
+                    "end_column": None,
+                },
+                "observed_at": "2026-08-02T14:00:00+00:00",
+                "verification_status": "verified",
+            }
+        ],
+        "token_estimate": 10,
+    }
 
 
 class FakeManager:

@@ -460,51 +460,6 @@ class SQLiteCheckpointRepository:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
 
-    # Legacy replacement-chain methods are migration-fixture support only. They are not part of
-    # CheckpointRepository and must be removed once 10B no longer needs legacy fixture input.
-    def create_legacy_checkpoint(self, checkpoint: Checkpoint) -> None:
-        with self._transaction() as connection:
-            self._store_checkpoint(connection, checkpoint)
-
-    def _store_checkpoint(self, connection: sqlite3.Connection, checkpoint: Checkpoint) -> None:
-        self._store_scope(connection, checkpoint.scope)
-        for evidence in checkpoint.evidence_references:
-            connection.execute(
-                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) VALUES (?, ?, ?)",  # noqa: E501
-                (str(evidence.evidence_id), str(evidence.source_id), _json(evidence.to_dict())),
-            )
-        scope = checkpoint.scope
-        connection.execute(
-            "INSERT INTO checkpoints(checkpoint_id, owner_id, workspace_id, project_id, session_id, task_id, current_revision) VALUES (?, ?, ?, ?, ?, ?, ?)",  # noqa: E501
-            (
-                str(checkpoint.checkpoint_id),
-                str(scope.owner_id),
-                _maybe(scope.workspace_id),
-                str(scope.project_id),
-                str(scope.session_id),
-                str(scope.task_id),
-                checkpoint.revision,
-            ),
-        )
-        connection.execute(
-            "INSERT INTO checkpoint_revisions(checkpoint_id, revision, status, supersedes_checkpoint_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",  # noqa: E501
-            (
-                str(checkpoint.checkpoint_id),
-                checkpoint.revision,
-                checkpoint.status.value,
-                _maybe(checkpoint.supersedes_checkpoint_id),
-                _json(checkpoint.to_dict()),
-                checkpoint.created_at.isoformat(),
-            ),
-        )
-        connection.executemany(
-            "INSERT INTO checkpoint_evidence(checkpoint_id, revision, evidence_id) VALUES (?, ?, ?)",  # noqa: E501
-            [
-                (str(checkpoint.checkpoint_id), checkpoint.revision, str(evidence.evidence_id))
-                for evidence in checkpoint.evidence_references
-            ],
-        )
-
     def _store_scope(self, connection: sqlite3.Connection, scope: MemoryScope) -> None:
         if scope.project_id is None or scope.session_id is None or scope.task_id is None:
             raise ValueError(

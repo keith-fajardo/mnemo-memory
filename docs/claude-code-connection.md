@@ -10,8 +10,8 @@ with `mnemo disconnect claude-code`. If Mnemo moves, disconnect and reconnect. C
 are preserved. Use `/mcp` inside Claude Code to inspect status.
 
 Mnemo changes no Claude model, endpoint, provider, authentication, permissions, sandbox, approval,
-or network settings and does not require a subscription or API request to install. The tools are
-fixture-backed; durable checkpoints begin in Issue 10.
+or network settings and does not require a subscription or API request to install. The tools use
+Mnemo's local durable checkpoint profile; integration tests use an isolated `MNEMO_DATA_DIR`.
 
 Integration tests isolate Claude Code by setting `HOME` to a temporary directory (including paths
 with spaces) and remove Anthropic environment variables. Claude Code 2.1.220 has no JSON MCP

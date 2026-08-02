@@ -76,6 +76,7 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
         key: value for key, value in os.environ.items() if not key.startswith("ANTHROPIC_")
     }
     environment["HOME"] = str(home)
+    environment["MNEMO_DATA_DIR"] = str(tmp_path / "mnemo data")
     manager = ClaudeMcpManager(
         shutil.which("claude") or "claude", launcher, environment=environment
     )
@@ -98,16 +99,11 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
                 "save_checkpoint",
             ]
             saved = await session.call_tool(
-                "save_checkpoint",
-                {
-                    "owner_id": "11111111-1111-4111-8111-111111111111",
-                    "evidence_references": ["fixture"],
-                },
-                read_timeout_seconds=timedelta(seconds=5),
+                "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)
             )
             context = await session.call_tool(
                 "get_context",
-                {"owner_id": "11111111-1111-4111-8111-111111111111", "query": "fixture"},
+                _durable_scope(),
                 read_timeout_seconds=timedelta(seconds=5),
             )
             assert saved.isError is False and context.isError is False
@@ -118,6 +114,45 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
     remaining = json.loads(config.read_text())
     assert SERVER_NAME not in remaining["mcpServers"]
     assert remaining["unrelated"] is True and "other" in remaining["mcpServers"]
+
+
+def _durable_scope() -> dict[str, object]:
+    return {
+        "owner_id": "11111111-1111-4111-8111-111111111111",
+        "workspace_id": "22222222-2222-4222-8222-222222222222",
+        "project_id": "33333333-3333-4333-8333-333333333333",
+        "session_id": "44444444-4444-4444-8444-444444444444",
+        "task_id": "55555555-5555-4555-8555-555555555555",
+    }
+
+
+def _durable_payload() -> dict[str, object]:
+    return {
+        **_durable_scope(),
+        "operation": "create",
+        "task_objective": "Connector smoke fixture",
+        "current_state": "active",
+        "evidence_references": [
+            {
+                "evidence_id": "66666666-6666-4666-8666-666666666666",
+                "source_id": "77777777-7777-4777-8777-777777777777",
+                "source_type": "checkpoint",
+                "trust_class": "user_authored",
+                "immutable_source_ref": "synthetic://connector",
+                "content_hash": "sha256:" + "a" * 64,
+                "location": {
+                    "uri": "fixture://connector",
+                    "start_line": None,
+                    "start_column": None,
+                    "end_line": None,
+                    "end_column": None,
+                },
+                "observed_at": "2026-08-02T14:00:00+00:00",
+                "verification_status": "verified",
+            }
+        ],
+        "token_estimate": 10,
+    }
 
 
 class FakeClaudeManager:

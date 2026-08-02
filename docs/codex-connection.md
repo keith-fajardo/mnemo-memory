@@ -14,5 +14,5 @@ Mnemo registers one stdio server named `mnemo-memory` with the absolute launcher
 identity. If Mnemo moves or is upgraded at a different absolute path, disconnect and reconnect.
 
 This changes no Codex model, provider, authentication, sandbox, approval, or network setting and
-does not proxy model traffic. The two exposed tools remain fixture-backed; durable checkpoint
-persistence begins in Issue 10. Claude Code integration is deferred to Issue 9.
+does not proxy model traffic. The two exposed tools use Mnemo's local durable checkpoint profile;
+tests set an isolated `MNEMO_DATA_DIR`. No automatic transcript capture or model call is performed.

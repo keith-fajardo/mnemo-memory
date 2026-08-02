@@ -103,6 +103,72 @@ def legacy_repository(tmp_path: Path, name: str = "legacy.sqlite3") -> SQLiteChe
     return repository
 
 
+def seed_legacy_checkpoint(repository: SQLiteCheckpointRepository, value: Checkpoint) -> None:
+    """Test-only v1 fixture seeding; production code never writes replacement chains."""
+    scope = value.scope
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO principals(owner_id) VALUES (?)", (str(scope.owner_id),)
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO workspaces(workspace_id, owner_id) VALUES (?, ?)",
+            (str(scope.workspace_id), str(scope.owner_id)),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO projects(project_id, workspace_id, owner_id) VALUES (?, ?, ?)",
+            (str(scope.project_id), str(scope.workspace_id), str(scope.owner_id)),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO sessions(session_id, project_id) VALUES (?, ?)",
+            (str(scope.session_id), str(scope.project_id)),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO tasks(task_id, session_id) VALUES (?, ?)",
+            (str(scope.task_id), str(scope.session_id)),
+        )
+        for item in value.evidence_references:
+            connection.execute(
+                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) VALUES (?, ?, ?)",  # noqa: E501
+                (
+                    str(item.evidence_id),
+                    str(item.source_id),
+                    json.dumps(item.to_dict(), sort_keys=True),
+                ),
+            )
+        connection.execute(
+            "INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(value.checkpoint_id),
+                str(scope.owner_id),
+                str(scope.workspace_id),
+                str(scope.project_id),
+                str(scope.session_id),
+                str(scope.task_id),
+                value.revision,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO checkpoint_revisions VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(value.checkpoint_id),
+                value.revision,
+                value.status.value,
+                None
+                if value.supersedes_checkpoint_id is None
+                else str(value.supersedes_checkpoint_id),
+                json.dumps(value.to_dict(), sort_keys=True),
+                value.created_at.isoformat(),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO checkpoint_evidence VALUES (?, ?, ?)",
+            [
+                (str(value.checkpoint_id), value.revision, str(item.evidence_id))
+                for item in value.evidence_references
+            ],
+        )
+
+
 def read_v2_rows(path: Path) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
@@ -175,7 +241,7 @@ def test_canonical_revision_round_trip_keeps_ids_distinct() -> None:
 def test_singleton_legacy_checkpoint_migrates_to_canonical_payload(tmp_path: Path) -> None:
     repository = legacy_repository(tmp_path)
     legacy = checkpoint(task_scope(), evidence())
-    repository.create_legacy_checkpoint(legacy)
+    seed_legacy_checkpoint(repository, legacy)
 
     repository.migrate()
     aggregate, revisions = read_v2_rows(repository.path)
@@ -211,7 +277,7 @@ def test_empty_and_independent_legacy_chains_preserve_each_scope(tmp_path: Path)
     second = checkpoint(task_scope(), evidence())
     superseded, replacement = first.revise(CheckpointId.new(), NOW + timedelta(minutes=1))
     for legacy in (superseded, replacement, second):
-        repository.create_legacy_checkpoint(legacy)
+        seed_legacy_checkpoint(repository, legacy)
 
     repository.migrate()
     with sqlite3.connect(repository.path) as connection:
@@ -250,8 +316,8 @@ def test_legacy_replacement_chain_preserves_canonical_content_and_history(tmp_pa
     repository = legacy_repository(tmp_path)
     original = checkpoint(task_scope(), evidence())
     superseded, replacement = original.revise(CheckpointId.new(), NOW + timedelta(minutes=1))
-    repository.create_legacy_checkpoint(superseded)
-    repository.create_legacy_checkpoint(replacement)
+    seed_legacy_checkpoint(repository, superseded)
+    seed_legacy_checkpoint(repository, replacement)
 
     repository.migrate()
     aggregate, revisions = read_v2_rows(repository.path)
@@ -281,7 +347,7 @@ def test_legacy_replacement_chain_preserves_canonical_content_and_history(tmp_pa
 def test_v2_constraints_preserve_reference_integrity(tmp_path: Path) -> None:
     repository = legacy_repository(tmp_path)
     legacy = checkpoint(task_scope(), evidence())
-    repository.create_legacy_checkpoint(legacy)
+    seed_legacy_checkpoint(repository, legacy)
     repository.migrate()
     aggregate, revisions = read_v2_rows(repository.path)
 
@@ -321,12 +387,12 @@ def test_invalid_legacy_chains_rollback_entire_v2_upgrade(tmp_path: Path, failur
     repository = legacy_repository(tmp_path, f"{failure}.sqlite3")
     original = checkpoint(task_scope(), evidence())
     superseded, replacement = original.revise(CheckpointId.new(), NOW + timedelta(minutes=1))
-    repository.create_legacy_checkpoint(superseded)
-    repository.create_legacy_checkpoint(replacement)
+    seed_legacy_checkpoint(repository, superseded)
+    seed_legacy_checkpoint(repository, replacement)
 
     if failure == "fork":
         _, fork = original.revise(CheckpointId.new(), NOW + timedelta(minutes=2))
-        repository.create_legacy_checkpoint(fork)
+        seed_legacy_checkpoint(repository, fork)
     elif failure == "broken_predecessor":
         with sqlite3.connect(repository.path) as connection:
             connection.execute(
@@ -373,7 +439,7 @@ def test_invalid_legacy_chains_rollback_entire_v2_upgrade(tmp_path: Path, failur
 def test_injected_v2_migration_failure_keeps_legacy_data_and_schema(tmp_path: Path) -> None:
     repository = legacy_repository(tmp_path)
     legacy = checkpoint(task_scope(), evidence())
-    repository.create_legacy_checkpoint(legacy)
+    seed_legacy_checkpoint(repository, legacy)
 
     with pytest.raises(SQLiteMigrationError, match="injected"):
         repository.migrate(fail_after_version=2)

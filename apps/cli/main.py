@@ -53,10 +53,16 @@ def stop(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # n
 
 
 @mcp_app.command("serve")
-def mcp_serve(stdio: bool = typer.Option(False, "--stdio")) -> None:
+def mcp_serve(
+    stdio: bool = typer.Option(False, "--stdio"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
     if not stdio:
         raise typer.BadParameter("Issue 7 supports only --stdio")
-    os.execv(sys.executable, [sys.executable, "-m", "apps.mcp.server"])
+    arguments = [sys.executable, "-m", "apps.mcp.server"]
+    if data_dir is not None:
+        arguments.extend(["--data-dir", str(data_dir)])
+    os.execv(sys.executable, arguments)
 
 
 def _codex_manager() -> CodexMcpManager:
