@@ -408,16 +408,19 @@ command. Runtime migrations and schemas are wheel-safe resources loaded with
 checkout module. The permanent distribution name and public project URL remain intentionally
 pending maintainer approval; no package has been uploaded.
 
-#### Issue 13B — In progress
+#### Issue 13B — Complete
 
 Built source-independent wheel and source-distribution artifacts with the public repository
 metadata, and verified their contents include package code, typed-marker, migrations, and schema.
 Both artifacts install outside the checkout and load resources from `site-packages`; the isolated
 wheel verification has covered CLI lifecycle, durable stdio MCP restart behavior, synthetic dbt
 ingest/status, `uv tool install`, and isolated real Codex/Claude registration read-back/removal.
-The remaining complete installed-artifact matrix and final gate are still required before marking
-this stage complete. No package registry was queried or modified, no private manifest was used,
-and no external upload occurred.
+Final wheel and sdist were rebuilt source-independently, inspected, and installed into fresh
+temporary environments outside the checkout. The installed command, package-resource resolution,
+SQLite migrations, synthetic dbt path, durable MCP restart smoke, and isolated connector
+registration paths pass without a source checkout dependency. CI now covers the verified Python
+3.12 configuration on Linux and macOS. No package registry was queried or modified, no private
+manifest was used, and no external upload occurred.
 
 #### Issue 13C — Not started
 
