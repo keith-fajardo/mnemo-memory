@@ -63,15 +63,39 @@ jobs:
 
       - name: Build and inspect source-independent artifacts
         run: |
-          mkdir release
-          uv build --no-sources --out-dir release
-          test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
-          test -f release/mnemo_unified_context-0.1.0a1.tar.gz
-          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" = 2
-          unzip -l release/*.whl | rg 'mnemo_memory/(py.typed|resources/migrations/0003_dbt_manifest_snapshots.sql|resources/schemas/context-packet-v1.json)'
-          tar -tzf release/*.tar.gz | rg 'src/mnemo_memory/resources/(migrations/0003_dbt_manifest_snapshots.sql|schemas/context-packet-v1.json)'
-          ! unzip -l release/*.whl | rg '\.(sqlite|db|env|pem|key)$|manifest\.json'
-          (cd release && sha256sum mnemo_unified_context-0.1.0a1-py3-none-any.whl mnemo_unified_context-0.1.0a1.tar.gz > SHA256SUMS)
+          set -euxo pipefail
+          wheel="mnemo_unified_context-0.1.0a1-py3-none-any.whl"
+          sdist="mnemo_unified_context-0.1.0a1.tar.gz"
+          fail() { echo "::error::$1"; exit 1; }
+          require_file() { test -f "$1" || fail "required file is missing: $1"; }
+          require_wheel_member() { unzip -l "$1" | rg -q "$2" || fail "wheel is missing: $2"; }
+          require_sdist_member() { tar -tzf "$1" | rg -q "$2" || fail "sdist is missing: $2"; }
+
+          mkdir build-output release
+          uv build --no-sources --out-dir build-output
+          require_file "build-output/$wheel"
+          require_file "build-output/$sdist"
+          cp "build-output/$wheel" "build-output/$sdist" release/
+
+          require_wheel_member "build-output/$wheel" 'mnemo_memory/py\.typed$'
+          require_wheel_member "build-output/$wheel" 'mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\.sql$'
+          require_wheel_member "build-output/$wheel" 'mnemo_memory/resources/schemas/context-packet-v1\.json$'
+          require_sdist_member "build-output/$sdist" 'src/mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\.sql$'
+          require_sdist_member "build-output/$sdist" 'src/mnemo_memory/resources/schemas/context-packet-v1\.json$'
+          if unzip -l "build-output/$wheel" | rg -q '\.(sqlite|db|env|pem|key)$|manifest\.json'; then
+            fail "wheel contains a prohibited runtime artifact"
+          fi
+
+          (cd release && sha256sum "$wheel" "$sdist" > SHA256SUMS)
+          test "$(find release -type f | wc -l | tr -d ' ')" = 3 || fail "release must contain exactly three regular files"
+          test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3 || fail "release files must use a flat layout"
+          test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0 || fail "release must not contain subdirectories"
+          require_file "release/$wheel"
+          require_file "release/$sdist"
+          require_file release/SHA256SUMS
+          test ! -e release/.gitignore || fail "uv build metadata must not enter release"
+          printf '%s\n' "Final staged release files:"
+          find release -maxdepth 1 -type f -print | sort
 
       - name: Smoke-test exact wheel and source distribution
         run: |

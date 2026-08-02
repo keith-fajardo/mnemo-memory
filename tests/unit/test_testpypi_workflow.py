@@ -16,10 +16,25 @@ def workflow() -> str:
 def test_testpypi_workflow_transfers_only_a_flat_three_file_release_bundle() -> None:
     value = workflow()
 
+    assert "uv build --no-sources --out-dir build-output" in value
+    assert 'cp "build-output/$wheel" "build-output/$sdist" release/' in value
     assert "path: release/" in value
     assert "find release -type f | wc -l | tr -d ' ')\" = 3" in value
     assert "find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')\" = 3" in value
     assert "find release -mindepth 1 -type d | wc -l | tr -d ' ')\" = 0" in value
+    assert "release/.gitignore" in value
+    assert "Final staged release files:" in value
+    for resource in (
+        "mnemo_memory/py\\.typed$",
+        "mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\\.sql$",
+        "mnemo_memory/resources/schemas/context-packet-v1\\.json$",
+    ):
+        assert f"require_wheel_member \"build-output/$wheel\" '{resource}'" in value
+    for resource in (
+        "src/mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\\.sql$",
+        "src/mnemo_memory/resources/schemas/context-packet-v1\\.json$",
+    ):
+        assert f"require_sdist_member \"build-output/$sdist\" '{resource}'" in value
     for filename in RELEASE_FILES:
         assert f"release/{filename}" in value
 
@@ -32,6 +47,7 @@ def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencie
     assert "uv publish release/*.tar.gz" not in value
     assert "uv publish release/mnemo_unified_context-0.1.0a1-py3-none-any.whl" in value
     assert "release/mnemo_unified_context-0.1.0a1.tar.gz" in value
+    assert "uv publish build-output" not in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "test.pypi.org/simple" not in value
     assert "--index-url https://pypi.org/simple/" in value
