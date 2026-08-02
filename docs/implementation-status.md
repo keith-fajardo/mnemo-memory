@@ -460,4 +460,17 @@ out of scope.
 
 ##### Issue 14A.2 — Not started
 
-#### Issue 14B — Not started
+#### Issue 14B — Complete
+
+Added local, explicit dbt-project bindings and the dbt pre/post-hook functions. The pre-hook
+resolves a configured project and captures the prior manifest/active snapshot; the post-hook
+activates only a changed, valid manifest after a successful non-interrupted command. Failed,
+missing, invalid, or stale competing updates retain the prior snapshot.
+
+#### Issue 14C — Complete
+
+Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-hook generation.
+The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
+strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-tool MCP contract.
+No dbt-core dependency, warehouse call, automatic shell-profile modification, or publication was
+introduced.

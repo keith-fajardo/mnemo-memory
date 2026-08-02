@@ -378,6 +378,17 @@ class CommandWrapper:
                     )
             outcomes.append(RegisteredHookOutcome(registration.name, outcome))
             warnings.extend(outcome.warnings)
+            if (
+                strict_memory
+                and outcome.status is HookStatus.FAILED
+                and final_result.started
+                and final_result.exit_code == 0
+            ):
+                final_result = replace(
+                    final_result,
+                    exit_code=STRICT_HOOK_FAILURE_EXIT_CODE,
+                    failure_code=CommandFailureCode.STRICT_HOOK_FAILURE,
+                )
         return CommandWrapperResult(final_result, tuple(outcomes), tuple(warnings))
 
 

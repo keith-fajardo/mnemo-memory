@@ -327,6 +327,8 @@ sanitized and do not include SQL, stack traces, unrelated scope data, or private
   cross-client sharing, prompts to use during work, and troubleshooting.
 - [dbt manifest guide](docs/dbt-manifest-intelligence.md) — schema support, deterministic lineage,
   evidence, and parser safety.
+- [dbt command wrapper guide](docs/dbt-command-wrapper.md) — one-time binding, automatic
+  post-run manifest activation, shell setup, and failure behavior.
 - [Command wrapper hooks](docs/command-wrapper.md) — the generic safe wrapper kernel and the
   dbt-specific behavior that is deliberately not enabled yet.
 - [Implementation status](docs/implementation-status.md) — completed vertical slice and deferred

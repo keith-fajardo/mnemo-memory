@@ -116,6 +116,87 @@ def test_agent_is_an_interactive_guide_alias(tmp_path: Path) -> None:
     assert "Mnemo Memory setup guide" in result.output
 
 
+def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> None:
+    project = tmp_path / "dbt project Δ"
+    target = project / "target"
+    target.mkdir(parents=True)
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    data_dir = tmp_path / "mnemo data"
+    runner = CliRunner()
+    identifiers = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    ]
+    configured = runner.invoke(
+        app,
+        [
+            "dbt",
+            "configure",
+            "--project-dir",
+            str(project),
+            "--owner-id",
+            identifiers[0],
+            "--workspace-id",
+            identifiers[1],
+            "--project-id",
+            identifiers[2],
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+    assert configured.exit_code == 0, configured.output
+    assert (
+        "command mnemo-memory dbt exec" in runner.invoke(app, ["dbt", "shell-hook", "zsh"]).output
+    )
+
+    fixture = Path("tests/fixtures/dbt/manifest-v12.json").resolve()
+    fake = tmp_path / "fake dbt.py"
+    fake.write_text(
+        "from pathlib import Path\nimport shutil, sys\n"
+        f"source = {str(fixture)!r}\n"
+        "target = Path(sys.argv[sys.argv.index('--target-path') + 1]) / 'manifest.json'\n"
+        "shutil.copyfile(source, target)\n"
+    )
+    executed = runner.invoke(
+        app,
+        [
+            "dbt",
+            "exec",
+            "--data-dir",
+            str(data_dir),
+            "--dbt-executable",
+            str(Path(sys.executable).resolve()),
+            "--json-summary",
+            "--",
+            str(fake),
+            "run",
+            "--project-dir",
+            str(project),
+            "--target-path",
+            str(target),
+        ],
+    )
+    assert executed.exit_code == 0, executed.output
+    assert "MNEMO_DBT_MANIFEST_ACTIVATED" in executed.output
+    status = runner.invoke(
+        app,
+        [
+            "dbt",
+            "status",
+            "--owner-id",
+            identifiers[0],
+            "--workspace-id",
+            identifiers[1],
+            "--project-id",
+            identifiers[2],
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+    assert json.loads(status.output)["active"] is True
+
+
 def test_guide_initializes_only_when_explicitly_requested(tmp_path: Path) -> None:
     data_dir = tmp_path / "guide store"
     result = CliRunner().invoke(

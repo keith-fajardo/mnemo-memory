@@ -8,18 +8,35 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import typer
 
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
+from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
+    LocalExecutableResolver,
+    SubprocessExecutor,
+)
+from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBinding,
+    DbtProjectBindingError,
+    LocalDbtProjectBindingStore,
+    find_dbt_project_root,
+)
 from mnemo_memory.packages.application import (
     GetActiveManifestStatus,
     IngestManifest,
     build_checkpoint_runtime,
     build_lifecycle_service,
     resolve_local_config,
+)
+from mnemo_memory.packages.application.command_wrapper import (
+    CommandInvocation,
+    CommandWrapper,
+    HookRegistration,
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import (
@@ -176,6 +193,71 @@ def _project_scope(owner_id: str, workspace_id: str, project_id: str) -> MemoryS
     )
 
 
+def _binding_store(data_dir: Path | None) -> LocalDbtProjectBindingStore:
+    return LocalDbtProjectBindingStore(resolve_local_config(data_dir).data_directory)
+
+
+@dbt_app.command(
+    "configure", help="Bind one local dbt project directory to an explicit Mnemo scope."
+)
+def dbt_configure(
+    project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
+    owner_id: str = typer.Option(...),
+    workspace_id: str = typer.Option(...),
+    project_id: str = typer.Option(...),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        root = find_dbt_project_root(project_dir)
+        _binding_store(data_dir).set(
+            DbtProjectBinding(root, _project_scope(owner_id, workspace_id, project_id))
+        )
+        _show(
+            {
+                "configured": True,
+                "project_root": str(root),
+                "scope": _project_scope(owner_id, workspace_id, project_id).to_dict(),
+            }
+        )
+    except (DbtProjectBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_DBT_CONFIGURATION_INVALID") from error
+
+
+@dbt_app.command("configuration", help="Show the local Mnemo scope binding for a dbt project.")
+def dbt_configuration(
+    project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    check: bool = typer.Option(False, "--check"),
+) -> None:
+    try:
+        binding = _binding_store(data_dir).get(project_dir)
+    except DbtProjectBindingError as error:
+        raise typer.BadParameter("MNEMO_DBT_CONFIGURATION_INVALID") from error
+    if binding is None:
+        _show({"configured": False})
+        if check:
+            raise typer.Exit(1)
+        return
+    _show(
+        {
+            "configured": True,
+            "project_root": str(binding.project_root),
+            "scope": binding.scope.to_dict(),
+        }
+    )
+
+
+@dbt_app.command("unconfigure", help="Remove only the local Mnemo binding for a dbt project.")
+def dbt_unconfigure(
+    project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        _show({"removed": _binding_store(data_dir).remove(project_dir)})
+    except DbtProjectBindingError as error:
+        raise typer.BadParameter("MNEMO_DBT_CONFIGURATION_INVALID") from error
+
+
 @dbt_app.command("ingest", help="Validate and activate a local manifest.json without running dbt.")
 def dbt_ingest(
     manifest: Path,
@@ -255,6 +337,90 @@ def dbt_status(
             }
         )
     _show(result) if json_output else typer.echo(json.dumps(result, sort_keys=True))
+
+
+def _dbt_executable(explicit: Path | None) -> str | Path:
+    if explicit is not None:
+        if not explicit.is_absolute():
+            raise typer.BadParameter("MNEMO_DBT_EXECUTABLE_NOT_ABSOLUTE")
+        return explicit
+    configured = os.environ.get("MNEMO_DBT_EXECUTABLE")
+    if configured is not None:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            raise typer.BadParameter("MNEMO_DBT_EXECUTABLE_NOT_ABSOLUTE")
+        return candidate
+    return "dbt"
+
+
+@dbt_app.command(
+    "exec",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    help="Run exact dbt arguments with safe Mnemo pre/post manifest hooks.",
+)
+def dbt_exec(
+    context: typer.Context,
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    strict_memory: bool = typer.Option(False, "--strict-memory"),
+    json_summary: bool = typer.Option(False, "--json-summary"),
+    dbt_executable: Path | None = typer.Option(None, "--dbt-executable"),  # noqa: B008
+) -> None:
+    arguments = tuple(context.args)
+    if not arguments:
+        raise typer.BadParameter("MNEMO_DBT_ARGUMENTS_REQUIRED")
+    config = resolve_local_config(data_dir)
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        hooks = DbtManifestHooks(
+            LocalDbtProjectBindingStore(config.data_directory),
+            runtime.dbt_manifest_service,
+            lambda: datetime.now(UTC),
+        )
+        launcher = shutil.which("mnemo-memory")
+        wrapper_path = Path(launcher).resolve() if launcher is not None else None
+        wrapped = CommandWrapper(
+            LocalExecutableResolver(),
+            SubprocessExecutor(),
+            lambda: datetime.now(UTC),
+            lambda: str(uuid4()),
+            (HookRegistration("dbt-manifest", "dbt", hooks.before_dbt, hooks.after_dbt),),
+        ).run(
+            CommandInvocation(
+                _dbt_executable(dbt_executable), arguments, Path.cwd().resolve(), "dbt"
+            ),
+            strict_memory=strict_memory,
+            wrapper_executable=wrapper_path,
+        )
+    summary = {
+        "exit_code": wrapped.result.exit_code,
+        "started": wrapped.result.started,
+        "interrupted": wrapped.result.interrupted,
+        "outcomes": [
+            {
+                "hook": value.registration,
+                "status": value.outcome.status.value,
+                "code": value.outcome.code,
+            }
+            for value in wrapped.outcomes
+        ],
+        "warnings": [warning.code for warning in wrapped.warnings],
+    }
+    if json_summary:
+        _show(summary)
+    elif wrapped.outcomes or wrapped.warnings:
+        typer.echo(json.dumps(summary, sort_keys=True), err=True)
+    raise typer.Exit(wrapped.result.exit_code)
+
+
+@dbt_app.command("shell-hook", help="Print opt-in shell code that routes dbt through Mnemo.")
+def dbt_shell_hook(shell: str = typer.Argument(...)) -> None:
+    if shell in {"zsh", "bash"}:
+        typer.echo('dbt() { command mnemo-memory dbt exec -- "$@"; }')
+        return
+    if shell == "fish":
+        typer.echo("function dbt\n    command mnemo-memory dbt exec -- $argv\nend")
+        return
+    raise typer.BadParameter("supported shells: zsh, bash, fish")
 
 
 @mcp_app.command("serve", help="Serve exactly get_context and save_checkpoint over stdio.")
