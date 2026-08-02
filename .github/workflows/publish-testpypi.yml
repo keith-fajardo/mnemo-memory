@@ -10,14 +10,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, verify, and publish exact artifacts
+  build-and-verify:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: testpypi
     timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Check out the triggering commit
@@ -35,8 +33,9 @@ jobs:
       - name: Install pinned uv
         run: python -m pip install --disable-pip-version-check "uv==0.9.7"
 
-      - name: Verify release metadata and clean checkout
+      - name: Verify ref and release metadata
         run: |
+          test "${{ github.ref }}" = refs/heads/main
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           test -z "$(git status --porcelain)"
           uv run python - <<'PY'
@@ -52,31 +51,28 @@ jobs:
           uv sync --locked
           npm ci --ignore-scripts
 
-      - name: Run complete repository gate
-        run: npm run check
-
-      - name: Run deterministic evaluations
+      - name: Run repository verification and deterministic evaluations
         run: |
+          npm run check
           npm run eval:resumption -- --json
           npm run eval:cross-client -- --json
           npm run eval:unified-context -- --json
 
-      - name: Build source-independent artifacts once
-        run: uv build --no-sources --out-dir dist
-
-      - name: Inspect and validate artifact set
+      - name: Build and inspect source-independent artifacts
         run: |
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = 2
-          test -f dist/mnemo_unified_context-0.1.0a1-py3-none-any.whl
-          test -f dist/mnemo_unified_context-0.1.0a1.tar.gz
-          unzip -l dist/*.whl | rg 'mnemo_memory/(py.typed|resources/migrations/0003_dbt_manifest_snapshots.sql|resources/schemas/context-packet-v1.json)'
-          tar -tzf dist/*.tar.gz | rg 'src/mnemo_memory/resources/(migrations/0003_dbt_manifest_snapshots.sql|schemas/context-packet-v1.json)'
-          ! unzip -l dist/*.whl | rg '\.(sqlite|db|env|pem|key)$|manifest\.json'
-          sha256sum dist/* | tee dist/SHA256SUMS
+          mkdir artifacts checksums
+          uv build --no-sources --out-dir artifacts
+          test -f artifacts/mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          test -f artifacts/mnemo_unified_context-0.1.0a1.tar.gz
+          test "$(find artifacts -maxdepth 1 -type f | wc -l | tr -d ' ')" = 2
+          unzip -l artifacts/*.whl | rg 'mnemo_memory/(py.typed|resources/migrations/0003_dbt_manifest_snapshots.sql|resources/schemas/context-packet-v1.json)'
+          tar -tzf artifacts/*.tar.gz | rg 'src/mnemo_memory/resources/(migrations/0003_dbt_manifest_snapshots.sql|schemas/context-packet-v1.json)'
+          ! unzip -l artifacts/*.whl | rg '\.(sqlite|db|env|pem|key)$|manifest\.json'
+          (cd artifacts && sha256sum * > ../checksums/SHA256SUMS)
 
       - name: Smoke-test exact wheel and source distribution
         run: |
-          for artifact in dist/*.whl dist/*.tar.gz; do
+          for artifact in artifacts/*.whl artifacts/*.tar.gz; do
             work="$(mktemp -d)"
             uv venv "$work/venv" --python 3.12
             uv pip install --python "$work/venv/bin/python" "$artifact"
@@ -91,30 +87,107 @@ jobs:
           PY
           done
 
-      - name: Require OIDC before TestPyPI publication
+      - name: Upload immutable release bundle
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mnemo-unified-context-0.1.0a1
+          path: |
+            artifacts/mnemo_unified_context-0.1.0a1-py3-none-any.whl
+            artifacts/mnemo_unified_context-0.1.0a1.tar.gz
+            checksums/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-testpypi:
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    environment: testpypi
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Install Python 3.12
+        # actions/setup-python v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned uv
+        run: python -m pip install --disable-pip-version-check "uv==0.9.7"
+
+      - name: Download exact release bundle
+        # actions/download-artifact v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: mnemo-unified-context-0.1.0a1
+          path: release
+
+      - name: Verify bundle and OIDC availability
         run: |
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
           test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          test "$(find release -type f | wc -l | tr -d ' ')" = 3
+          (cd release && sha256sum --check SHA256SUMS)
+          test -f release/mnemo_unified_context-0.1.0a1-py3-none-any.whl
+          test -f release/mnemo_unified_context-0.1.0a1.tar.gz
 
-      - name: Publish exact verified artifacts to TestPyPI with OIDC
+      - name: Publish only exact verified artifacts through TestPyPI OIDC
         env:
           UV_PUBLISH_URL: https://test.pypi.org/legacy/
           UV_PUBLISH_TRUSTED_PUBLISHING: always
-        run: uv publish dist/*
+        run: |
+          uv publish release/mnemo_unified_context-0.1.0a1-py3-none-any.whl \
+            release/mnemo_unified_context-0.1.0a1.tar.gz
 
-      - name: Verify TestPyPI upload and install uploaded wheel
+  verify-testpypi:
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+
+    steps:
+      - name: Install Python 3.12
+        # actions/setup-python v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned uv
+        run: python -m pip install --disable-pip-version-check "uv==0.9.7"
+
+      - name: Download checksum bundle
+        # actions/download-artifact v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: mnemo-unified-context-0.1.0a1
+          path: release
+
+      - name: Verify TestPyPI metadata, hashes, and uploaded wheel
         run: |
           curl --fail --retry 5 --retry-delay 3 -o metadata.json https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a1/json
-          uv run python - <<'PY'
-          import hashlib, json
+          python - <<'PY'
+          import hashlib, json, urllib.request
           from pathlib import Path
           data = json.load(open("metadata.json"))
-          expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in Path("dist").iterdir() if path.name != "SHA256SUMS"}
-          uploaded = {item["filename"]: item["digests"]["sha256"] for item in data["urls"]}
-          assert uploaded == expected, (uploaded, expected)
+          expected = dict(line.strip().split(maxsplit=1)[::-1] for line in Path("release/SHA256SUMS").read_text().splitlines())
+          uploaded = {item["filename"]: item for item in data["urls"]}
+          assert set(uploaded) == set(expected)
+          for filename, digest in expected.items():
+              item = uploaded[filename]
+              assert item["digests"]["sha256"] == digest
+              Path(filename).write_bytes(urllib.request.urlopen(item["url"]).read())
+              assert hashlib.sha256(Path(filename).read_bytes()).hexdigest() == digest
           PY
           work="$(mktemp -d)"
           uv venv "$work/venv" --python 3.12
-          uv pip install --python "$work/venv/bin/python" --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ mnemo-unified-context==0.1.0a1
+          uv pip install --python "$work/venv/bin/python" --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple ./mnemo_unified_context-0.1.0a1-py3-none-any.whl
           (cd "$work" && "$work/venv/bin/mnemo-memory" --help)
           (cd "$work" && "$work/venv/bin/mnemo-memory" init --data-dir "$work/Mnemo Data Δ")
+          "$work/venv/bin/python" - <<'PY'
+          from importlib import resources
+          assert resources.files("mnemo_memory").joinpath("resources/migrations/0003_dbt_manifest_snapshots.sql").is_file()
+          assert resources.files("mnemo_memory").joinpath("resources/schemas/context-packet-v1.json").is_file()
+          PY

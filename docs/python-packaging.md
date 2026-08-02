@@ -45,8 +45,10 @@ Before manually invoking `.github/workflows/publish-testpypi.yml`, create the Gi
 - Workflow: `publish-testpypi.yml`
 - Environment: `testpypi`
 
-The workflow is manual-only and needs no API token. It builds and tests one artifact set, requires
-OIDC explicitly, then uploads only those exact files to `https://test.pypi.org/legacy/`. A partial
-or duplicate upload must be investigated on TestPyPI; do not rerun it with the same version until
-the TestPyPI project files and hashes have been checked. Production PyPI is not part of this
-workflow.
+The workflow is manual-only and needs no API token. It uses three isolated jobs: an unprivileged
+build/test job transfers the wheel, sdist, and an external checksum manifest by short-lived GitHub
+artifact; only the environment-approved publishing job obtains OIDC and uploads the two explicit
+artifact paths; then an unprivileged verification job downloads TestPyPI metadata and the uploaded
+wheel. A partial or duplicate upload must be investigated on TestPyPI; do not rerun it with the
+same version until the TestPyPI project files and hashes have been checked. Production PyPI is not
+part of this workflow.
