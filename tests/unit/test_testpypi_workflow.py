@@ -24,17 +24,9 @@ def test_testpypi_workflow_transfers_only_a_flat_three_file_release_bundle() -> 
     assert "find release -mindepth 1 -type d | wc -l | tr -d ' ')\" = 0" in value
     assert "release/.gitignore" in value
     assert "Final staged release files:" in value
-    for resource in (
-        "mnemo_memory/py\\.typed$",
-        "mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\\.sql$",
-        "mnemo_memory/resources/schemas/context-packet-v1\\.json$",
-    ):
-        assert f"require_wheel_member \"build-output/$wheel\" '{resource}'" in value
-    for resource in (
-        "src/mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\\.sql$",
-        "src/mnemo_memory/resources/schemas/context-packet-v1\\.json$",
-    ):
-        assert f"require_sdist_member \"build-output/$sdist\" '{resource}'" in value
+    assert "scripts/verify_release_artifacts.py" in value
+    assert '--wheel "build-output/$wheel"' in value
+    assert '--sdist "build-output/$sdist"' in value
     for filename in RELEASE_FILES:
         assert f"release/{filename}" in value
 
@@ -53,6 +45,8 @@ def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencie
     assert "--index-url https://pypi.org/simple/" in value
     assert 'python -m pip install "uv==' not in value
     assert "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b" in value
+    assert "\n          ! rg " not in value
+    assert "\n          rg " not in value
 
 
 def test_testpypi_workflow_isolates_oidc_to_the_publish_job() -> None:
@@ -64,3 +58,7 @@ def test_testpypi_workflow_isolates_oidc_to_the_publish_job() -> None:
     assert value.count("environment: testpypi") == 1
     assert "UV_PUBLISH_URL: https://test.pypi.org/legacy/" in value
     assert "UV_PUBLISH_TRUSTED_PUBLISHING: always" in value
+    assert "--forbidden-text mnemo-agent-context-placeholder" in value
+    assert "--text-path pyproject.toml" in value
+    assert "--text-path README.md" in value
+    assert "--text-path docs" in value

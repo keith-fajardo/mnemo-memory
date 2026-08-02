@@ -47,7 +47,12 @@ jobs:
           assert project["name"] == "mnemo-unified-context"
           assert project["version"] == "0.1.0a1"
           PY
-          ! rg -n "mnemo-agent-context-placeholder" pyproject.toml docs README.md
+          uv run python scripts/verify_release_artifacts.py \
+            --source-root . \
+            --text-path pyproject.toml \
+            --text-path README.md \
+            --text-path docs \
+            --forbidden-text mnemo-agent-context-placeholder
 
       - name: Install verification dependencies
         run: |
@@ -68,23 +73,15 @@ jobs:
           sdist="mnemo_unified_context-0.1.0a1.tar.gz"
           fail() { echo "::error::$1"; exit 1; }
           require_file() { test -f "$1" || fail "required file is missing: $1"; }
-          require_wheel_member() { unzip -l "$1" | rg -q "$2" || fail "wheel is missing: $2"; }
-          require_sdist_member() { tar -tzf "$1" | rg -q "$2" || fail "sdist is missing: $2"; }
 
           mkdir build-output release
           uv build --no-sources --out-dir build-output
           require_file "build-output/$wheel"
           require_file "build-output/$sdist"
           cp "build-output/$wheel" "build-output/$sdist" release/
-
-          require_wheel_member "build-output/$wheel" 'mnemo_memory/py\.typed$'
-          require_wheel_member "build-output/$wheel" 'mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\.sql$'
-          require_wheel_member "build-output/$wheel" 'mnemo_memory/resources/schemas/context-packet-v1\.json$'
-          require_sdist_member "build-output/$sdist" 'src/mnemo_memory/resources/migrations/0003_dbt_manifest_snapshots\.sql$'
-          require_sdist_member "build-output/$sdist" 'src/mnemo_memory/resources/schemas/context-packet-v1\.json$'
-          if unzip -l "build-output/$wheel" | rg -q '\.(sqlite|db|env|pem|key)$|manifest\.json'; then
-            fail "wheel contains a prohibited runtime artifact"
-          fi
+          python scripts/verify_release_artifacts.py \
+            --wheel "build-output/$wheel" \
+            --sdist "build-output/$sdist"
 
           (cd release && sha256sum "$wheel" "$sdist" > SHA256SUMS)
           test "$(find release -type f | wc -l | tr -d ' ')" = 3 || fail "release must contain exactly three regular files"

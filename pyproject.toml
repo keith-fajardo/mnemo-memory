@@ -4,7 +4,8 @@ version = "0.1.0a1"
 description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Mnemo contributors" }]
 maintainers = [{ name = "Mnemo contributors" }]
 classifiers = [
