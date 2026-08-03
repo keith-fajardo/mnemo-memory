@@ -12,9 +12,11 @@ from mnemo_memory.packages.application import (
     CheckpointApplicationNotFound,
     CreateCheckpoint,
     GetCheckpoint,
+    GetCheckpointContext,
     LocalConfig,
     LocalConfigurationError,
     LocalRuntimeError,
+    ReviseCheckpoint,
     build_checkpoint_runtime,
     resolve_local_config,
 )
@@ -171,6 +173,36 @@ def test_runtime_preserves_reasoning_lesson_across_reopen(tmp_path: Path) -> Non
             GetCheckpoint(scope_value, created.aggregate.checkpoint_id)
         )
     assert restored.revision.content.lessons == (lesson,)
+
+
+def test_runtime_returns_a_prior_lesson_when_a_newer_revision_omits_it(tmp_path: Path) -> None:
+    configuration = LocalConfig.defaults(tmp_path / "historical lesson runtime")
+    scope_value = scope()
+    reference = evidence()
+    lesson = CheckpointLesson(
+        "A test contradicted the timestamp-join reconciliation result.",
+        "The join was assumed to preserve the Finance business-date grain.",
+        "Use the documented business-date comparison grain.",
+        "Check input grain before changing a reconciliation join.",
+        (reference.evidence_id,),
+    )
+    with build_checkpoint_runtime(configuration) as runtime:
+        initial = runtime.checkpoint_service.create(
+            CreateCheckpoint(scope_value, replace(content(), lessons=(lesson,)), (reference,))
+        )
+        runtime.checkpoint_service.revise(
+            ReviseCheckpoint(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                initial.revision.revision_id,
+                content(),
+                (evidence(),),
+            )
+        )
+    with build_checkpoint_runtime(configuration) as runtime:
+        packet = runtime.checkpoint_service.get_context(GetCheckpointContext(scope_value))
+    assert len(packet.episodic_memories) == 1
+    assert lesson.prevention in packet.episodic_memories[0].content
 
 
 def test_runtime_rejects_corrupt_and_newer_databases_without_fallback(tmp_path: Path) -> None:

@@ -83,7 +83,9 @@ replaces only the immutable current revision; it never changes the stable `check
 ```
 
 Each revision is a complete current handoff. Include any still-applicable lesson again when you
-revise it; the automatic Mnemo reminder tells a connected agent to do this. Earlier revisions
+revise it; the automatic Mnemo reminder tells a connected agent to do this. As a safeguard, if a
+later active revision omits a prior lesson, `get_context` also returns that bounded lesson as
+historical episodic evidence with its original revision and evidence references. Earlier revisions
 remain immutable and retrievable with their original evidence.
 
 `complete` is explicit and succeeds only from the active state; its content must have no blockers

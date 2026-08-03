@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -29,6 +30,7 @@ from mnemo_memory.packages.application import (
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointId,
+    CheckpointLesson,
     CheckpointRevisionId,
     CheckpointStatus,
     ContextBudget,
@@ -259,6 +261,76 @@ def test_context_uses_exact_current_revision_and_is_stable() -> None:
     assert packet.provenance[0].source_reference.endswith(str(revised.revision.revision_id))
     assert json.loads(packet.active_task_checkpoint.content) == revised.revision.content.to_dict()
     assert packet.to_json() == packet.to_json()
+
+
+def test_context_retains_a_prior_evidence_backed_lesson_after_revision() -> None:
+    target = service()
+    scope_value = scope()
+    first_evidence = evidence()
+    lesson = CheckpointLesson(
+        "The reconciliation test diverged after the timestamp join.",
+        "The source values were assumed to use the same date grain.",
+        "Use the documented business-date grain for the comparison.",
+        "Verify grain and null behavior before proposing a join change.",
+        (first_evidence.evidence_id,),
+    )
+    initial = target.create(
+        CreateCheckpoint(scope_value, replace(content(), lessons=(lesson,)), (first_evidence,))
+    )
+    revised = target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(suffix="next"),
+            (evidence(),),
+        )
+    )
+    assert revised.revision.content.lessons == ()
+
+    packet = target.get_context(GetCheckpointContext(scope_value))
+    assert len(packet.episodic_memories) == 1
+    item = packet.episodic_memories[0]
+    remembered = json.loads(item.content)
+    assert remembered["lesson"] == lesson.to_dict()
+    assert remembered["revision_id"] == str(initial.revision.revision_id)
+    assert item.evidence_references == (first_evidence,)
+    assert item.validity.value == "unknown"
+    assert packet.provenance[1].source_reference.endswith(str(initial.revision.revision_id))
+    assert packet.declared_total_tokens == packet.computed_total_tokens
+
+
+def test_context_omits_historical_lesson_when_episodic_budget_is_exhausted() -> None:
+    target = service()
+    scope_value = scope()
+    first_evidence = evidence()
+    lesson = CheckpointLesson(
+        "A test contradicted the selected reconciliation join.",
+        "The two values were assumed to share a date grain.",
+        "Use the documented business-date grain.",
+        "Verify input grain before changing a reconciliation join.",
+        (first_evidence.evidence_id,),
+    )
+    initial = target.create(
+        CreateCheckpoint(scope_value, replace(content(), lessons=(lesson,)), (first_evidence,))
+    )
+    target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(suffix="next"),
+            (evidence(),),
+        )
+    )
+
+    packet = target.get_context(
+        GetCheckpointContext(scope_value, budget=ContextBudget(episodic_memories=1))
+    )
+    assert packet.active_task_checkpoint is not None
+    assert packet.episodic_memories == ()
+    assert packet.omissions[0].item_id == "checkpoint-lesson-history"
+    assert packet.omissions[0].reason.value == "token_budget"
 
 
 def test_context_empty_omits_terminal_and_over_budget_content() -> None:

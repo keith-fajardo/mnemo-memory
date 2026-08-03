@@ -518,8 +518,11 @@ reasoning or transcript capture.
 Checkpoint content now has a bounded, immutable, evidence-backed lesson type for corrected
 reasoning or analysis mistakes. A lesson records the trigger, mistaken assumption, correction,
 prevention, and exact revision evidence IDs. It is returned with the checkpoint in a later bounded
-context packet. Mnemo does not infer private reasoning from edits, test failures, or transcripts:
-the agent must explicitly record the lesson, which keeps a later prevention cue honest and scoped.
+context packet. If a newer active handoff omits a prior lesson, the context service walks a bounded
+revision history and returns the lesson as historical episodic evidence with its original revision
+and citations; token-budget pressure produces a structured omission. Mnemo does not infer private
+reasoning from edits, test failures, or transcripts: the agent must explicitly record the lesson,
+which keeps a later prevention cue honest and scoped.
 
 ### Source-structure memory — In progress
 

@@ -75,7 +75,9 @@ and what was verified. When it corrects a reasoning mistake, it should also save
 **lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to
 avoid it next time. A later agent receives that lesson with the task handoff. Mnemo does not guess
 private reasoning from a diff or a failed test; it preserves a correction only when the agent
-records it explicitly.
+records it explicitly. If a later revision focuses on fresh progress and omits an older lesson,
+Mnemo still returns the bounded lesson as historical episodic evidence, with the exact original
+revision and evidence references.
 
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.

@@ -48,6 +48,8 @@ from mnemo_memory.packages.storage.contracts import (
 
 _ACTIVE_CHECKPOINT_PRODUCER = "mnemo-application/0.1.0"
 _Result = TypeVar("_Result")
+_MAX_HISTORICAL_LESSON_REVISIONS = 16
+_MAX_HISTORICAL_LESSONS = 16
 
 
 class CheckpointApplicationError(Exception):
@@ -305,15 +307,21 @@ class CheckpointApplicationService:
                 ),
             )
         item = self._context_item(revision)
-        notice = ProvenanceNotice(
-            provenance_id=f"provenance:{item.item_id}",
-            item_id=item.item_id,
-            source_reference=(
-                f"mnemo:checkpoint/{revision.checkpoint_id}/revision/{revision.revision_id}"
-            ),
-            source_digest=hashlib.sha256(item.content.encode()).hexdigest(),
-            evidence_references=revision.evidence_references,
+        notices = [
+            ProvenanceNotice(
+                provenance_id=f"provenance:{item.item_id}",
+                item_id=item.item_id,
+                source_reference=(
+                    f"mnemo:checkpoint/{revision.checkpoint_id}/revision/{revision.revision_id}"
+                ),
+                source_digest=hashlib.sha256(item.content.encode()).hexdigest(),
+                evidence_references=revision.evidence_references,
+            )
+        ]
+        historical_lessons, lesson_notices, lesson_omissions = self._historical_lesson_items(
+            query.scope, revision, query.budget, initial_tokens=item.token_estimate
         )
+        notices.extend(lesson_notices)
         return ContextPacket(
             PacketSchemaVersion.V1,
             self._request_id_factory(),
@@ -322,11 +330,13 @@ class CheckpointApplicationService:
             query.scope.task_id,
             self._now(),
             None,
-            item.token_estimate,
+            item.token_estimate + sum(lesson.token_estimate for lesson in historical_lessons),
             query.budget,
             _ACTIVE_CHECKPOINT_PRODUCER,
             active_task_checkpoint=item,
-            provenance=(notice,),
+            episodic_memories=historical_lessons,
+            provenance=tuple(notices),
+            omissions=lesson_omissions,
         )
 
     def _empty_packet(
@@ -366,6 +376,108 @@ class CheckpointApplicationService:
             conflict_state=ConflictState.NONE,
             observed_at=revision.created_at,
         )
+
+    def _historical_lesson_items(
+        self,
+        scope: MemoryScope,
+        current: CheckpointRevision,
+        budget: ContextBudget,
+        *,
+        initial_tokens: int,
+    ) -> tuple[tuple[ContextItem, ...], tuple[ProvenanceNotice, ...], tuple[OmissionNotice, ...]]:
+        """Surface prior correction lessons even when a later handoff omits them.
+
+        Checkpoint revisions are immutable snapshots.  A later revision may focus on new work and
+        omit a previously recorded lesson; this bounded walk retains the evidence-backed caution
+        without mutating either revision or pretending that a historical lesson is current
+        repository structure.
+        """
+        remaining = min(
+            budget.episodic_memories,
+            max(0, budget.total_limit - initial_tokens),
+        )
+        seen_lessons = set(current.content.lessons)
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = []
+        predecessor = current.predecessor_revision_id
+        revisions_seen = 0
+        omitted = False
+
+        while (
+            predecessor is not None
+            and revisions_seen < _MAX_HISTORICAL_LESSON_REVISIONS
+            and len(seen_lessons) < _MAX_HISTORICAL_LESSONS
+        ):
+            revision = self.get(
+                GetCheckpoint(scope, current.checkpoint_id, revision_id=predecessor)
+            ).revision
+            revisions_seen += 1
+            predecessor = revision.predecessor_revision_id
+            evidence_by_id = {item.evidence_id: item for item in revision.evidence_references}
+            for lesson in revision.content.lessons:
+                if lesson in seen_lessons:
+                    continue
+                evidence = tuple(evidence_by_id[item] for item in lesson.evidence_ids)
+                content = json.dumps(
+                    {
+                        "checkpoint_id": str(revision.checkpoint_id),
+                        "lesson": lesson.to_dict(),
+                        "revision_id": str(revision.revision_id),
+                        "revision_number": revision.revision_number,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                tokens = (len(content) + 3) // 4
+                if tokens > remaining:
+                    omitted = True
+                    continue
+                item = ContextItem(
+                    item_id=(
+                        f"checkpoint-lesson:{revision.checkpoint_id}:"
+                        f"revision:{revision.revision_id}:index:{len(items)}"
+                    ),
+                    item_type=ContextItemType.EPISODIC_MEMORY,
+                    source_scope=scope,
+                    content=content,
+                    content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+                    token_estimate=tokens,
+                    evidence_references=evidence,
+                    source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+                    sensitivity=Sensitivity.NORMAL,
+                    validity=ValidityState.UNKNOWN,
+                    ranking=None,
+                    conflict_state=ConflictState.NONE,
+                    observed_at=revision.created_at,
+                )
+                items.append(item)
+                notices.append(
+                    ProvenanceNotice(
+                        provenance_id=f"provenance:{item.item_id}",
+                        item_id=item.item_id,
+                        source_reference=(
+                            f"mnemo:checkpoint/{revision.checkpoint_id}/"
+                            f"revision/{revision.revision_id}"
+                        ),
+                        source_digest=hashlib.sha256(content.encode()).hexdigest(),
+                        evidence_references=evidence,
+                    )
+                )
+                seen_lessons.add(lesson)
+                remaining -= tokens
+
+        omissions = (
+            ()
+            if not omitted
+            else (
+                OmissionNotice(
+                    "checkpoint-lesson-history",
+                    OmissionReason.TOKEN_BUDGET,
+                    "historical correction lessons exceed the remaining context budget",
+                ),
+            )
+        )
+        return tuple(items), tuple(notices), omissions
 
     def _validate_write(
         self,

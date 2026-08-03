@@ -91,6 +91,11 @@ later session then receives the lesson—not merely a vague “test failed” no
 same bad line of analysis. Mnemo does not claim to infer a model's private reasoning from an edit
 or test output; the agent records a lesson explicitly with its checkpoint.
 
+If a later checkpoint revision concentrates on new progress and leaves out an older lesson,
+Mnemo still brings that bounded lesson back as historical, evidence-cited context. It is presented
+as historical task evidence—not as a claim about the current repository—so the agent can apply the
+prevention step while checking current structure separately.
+
 Running `mnemo-memory init` **does not** make the current directory memorable. It only creates or
 opens the local Mnemo store. From the repository you want remembered, run one connection command
 with `--auto-memory`; it creates a private project binding, records the first supported-language
