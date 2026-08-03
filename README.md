@@ -251,8 +251,9 @@ matches; “active” alone is never treated as proof that files have not change
 facts, with provenance. If no checkpoint was saved, it receives no hidden history.
 
 **Does changing directories create a different memory?** No. The data directory selects the
-database. Scope selects which project/task within it can be read. Automatic per-directory binding
-is not implemented yet.
+database and scope selects which project/task can be read. `--auto-memory` creates an explicit
+machine-local binding for the repository you enabled; another directory stays unbound until you
+choose to enable it. Mnemo never guesses that two filesystem paths are the same project.
 
 ## Optional: keep dbt lineage current automatically
 

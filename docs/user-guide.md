@@ -120,6 +120,17 @@ The first request saves an immutable checkpoint revision. The second retrieves t
 revision with its evidence. If no one saved a checkpoint, Mnemo does not pretend that it remembers
 the earlier chat.
 
+### Example: a reconciliation investigation
+
+Suppose an agent is investigating why a dbt reconciliation model does not match Finance seed
+values. Its checkpoint records the important *reasoning*, not just a filename: the comparison key
+chosen, why it was chosen, a failed timestamp-based join, the validation already run, the models or
+seeds involved, and the precise next check. In a later fresh session, the same connected agent gets
+that handoff first. If dbt lineage is enabled, it can then request verified upstream Finance inputs
+and downstream impact for the named dbt model. Mnemo therefore carries forward both **why the work
+changed** and **which saved structural facts the agent should trust**. It never invents either from
+an old transcript.
+
 ## Optional dbt help: keep lineage current without changing your dbt workflow
 
 This part is only for dbt projects. It gives a later agent verified answers to questions such as
