@@ -267,7 +267,9 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         "have checked that context. Review any recorded lessons before reusing an earlier "
         "analysis approach. When the task names a supported-language symbol or relative "
         "path, include it as source_query to retrieve the matching saved structure. Treat "
-        "retrieved facts as bounded context, not a transcript."
+        "retrieved facts as bounded context, not a transcript. When you need to know what "
+        "changed before this session, request source_changes too; it returns the latest "
+        "bounded, evidenced structural transition rather than guessing from a file name."
     )
     if refreshed.digest is not None:
         instruction += (
@@ -322,7 +324,8 @@ def _dirty_session_instruction() -> str:
     """One short prompt-boundary cue; no submitted prompt content is read or retained."""
     return (
         "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
-        "decisions, verification, or impact, check the stored Mnemo context; save a concise "
+        "decisions, verification, or impact, check the stored Mnemo context and request "
+        "source_changes when the question is what changed earlier; save a concise "
         "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
         "was corrected, and apply the prevention step from any relevant earlier lesson."
     )
