@@ -23,6 +23,7 @@ from mnemo_memory.packages.project_index import (
 )
 from mnemo_memory.packages.storage import (
     ReferenceSourceStructureRepository,
+    SQLiteMigrationError,
     SQLiteSourceStructureRepository,
 )
 from mnemo_memory.packages.storage.contracts import SourceSnapshotNotFound
@@ -89,6 +90,44 @@ def test_sqlite_source_snapshot_survives_reopen(tmp_path: Path) -> None:
     reopened = SQLiteSourceStructureRepository(database)
     assert reopened.get_active_snapshot(scope()) == parsed.snapshot
     assert reopened.iter_symbols(scope(), parsed.snapshot.snapshot_id) == parsed.symbols
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_back(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "source"
+    parsed = artifact(root, scope())
+    database = tmp_path / "data" / "mnemo.sqlite3"
+    repository = SQLiteSourceStructureRepository(database)
+    repository.migrate()
+    repository.store_and_activate(parsed)
+
+    # Recreate the durable state immediately before migration 0005 without
+    # fabricating source history. A v4 profile knows the current snapshot only.
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER source_snapshot_activation_scope_match")
+        connection.execute("DROP TABLE source_snapshot_activations")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        repository.migrate(fail_after_version=5)
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_snapshot_activations'"
+            ).fetchone()
+            is None
+        )
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (4,)
+
+    repository.migrate()
+    assert repository.latest_transition(scope()) is None
+    assert repository.list_activation_history(scope()) == (parsed.snapshot,)
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
