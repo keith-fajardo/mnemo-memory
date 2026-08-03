@@ -840,6 +840,44 @@ def memory_changes(
     )
 
 
+@memory_app.command(
+    "refresh", help="Rebuild the enabled project's static source-structure snapshot."
+)
+def memory_refresh(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Refresh from local source syntax only; no source text is retained."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
+        repository.migrate()
+        previous = repository.get_active_snapshot(binding.scope)
+        stored = repository.store_and_activate(
+            SourceStructureParser().parse(
+                SourceStructureParseRequest(binding.scope, binding.project_root)
+            )
+        )
+    except (AutomaticMemoryBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SOURCE_REFRESH_UNAVAILABLE") from error
+    _show(
+        {
+            "snapshot_id": str(stored.snapshot.snapshot_id),
+            "previous_snapshot_id": None if previous is None else str(previous.snapshot_id),
+            "idempotent": stored.idempotent,
+            "files": stored.snapshot.file_count,
+            "symbols": stored.snapshot.symbol_count,
+            "relationships": stored.snapshot.edge_count,
+            "currentness": "unknown_after_refresh",
+        }
+    )
+
+
 @app.command("automatic-memory-hook", hidden=True)
 def automatic_memory_hook(
     client: str = typer.Option(..., "--client"),

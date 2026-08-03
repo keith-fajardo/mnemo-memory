@@ -49,12 +49,16 @@ mnemo-memory memory impact package.module_name
 mnemo-memory memory impact package.module_name --direction dependencies
 mnemo-memory memory impact package.module_name --direct
 mnemo-memory memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
+mnemo-memory memory refresh
 ```
 
 The result lists only saved internal relationships that Mnemo can prove from syntax, along with
 depth, snapshot identity, and a clear `unknown` currentness label when no fresh source-state proof
 was supplied. It is a useful change-planning aid, not a promise that every runtime effect was found.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
+Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. It
+rebuilds the bounded structural snapshot from current local syntax and preserves the previous
+snapshot for comparison.
 
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.

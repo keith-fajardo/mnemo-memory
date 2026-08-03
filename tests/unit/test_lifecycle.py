@@ -222,6 +222,35 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
     assert value["removed_symbols"] == []
 
 
+def test_memory_refresh_creates_new_snapshot_then_is_idempotent(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    runner = CliRunner()
+
+    first = runner.invoke(
+        app,
+        ["memory", "refresh", "--project-dir", str(project), "--data-dir", str(data_dir)],
+    )
+    second = runner.invoke(
+        app,
+        ["memory", "refresh", "--project-dir", str(project), "--data-dir", str(data_dir)],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    first_value = json.loads(first.output)
+    second_value = json.loads(second.output)
+    assert first_value["idempotent"] is False
+    assert second_value["idempotent"] is True
+    assert second_value["previous_snapshot_id"] == first_value["snapshot_id"]
+    assert first_value["currentness"] == "unknown_after_refresh"
+
+
 def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> None:
     project = tmp_path / "dbt project Δ"
     target = project / "target"
