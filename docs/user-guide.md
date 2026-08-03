@@ -108,7 +108,8 @@ change a client registration without your confirmation, or inspect your source c
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo injects a private session-start instruction:
 the agent must check bounded Mnemo context before it claims knowledge of earlier decisions, edits,
-verification, or impact. It also tells the agent how to ask for relevant saved structure. This is a
+verification, or impact, and review any recorded lesson before it repeats an earlier analysis
+approach. It also tells the agent how to ask for relevant saved structure. This is a
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
 

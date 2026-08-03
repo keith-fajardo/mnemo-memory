@@ -264,7 +264,8 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         "Mnemo automatic task memory is enabled. Before continuing, call get_context using this "
         f"stored task scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
         "Do not claim that you know prior changes, decisions, verification, or impact until you "
-        "have checked that context. When the task names a supported-language symbol or relative "
+        "have checked that context. Review any recorded lessons before reusing an earlier "
+        "analysis approach. When the task names a supported-language symbol or relative "
         "path, include it as source_query to retrieve the matching saved structure. Treat "
         "retrieved facts as bounded context, not a transcript."
     )
@@ -320,5 +321,5 @@ def _dirty_session_instruction() -> str:
         "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
         "decisions, verification, or impact, check the stored Mnemo context; save a concise "
         "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
-        "was corrected."
+        "was corrected, and apply the prevention step from any relevant earlier lesson."
     )
