@@ -272,6 +272,11 @@ stable identities, binds this one repository locally, and ingests `target/manife
 valid one already exists. You do not need to generate, copy, or remember UUIDs. Mnemo does not
 write `dbt_project.yml`, `profiles.yml`, warehouse credentials, or any shell profile.
 
+If you have already enabled automatic task memory for this same repository, dbt enablement reuses
+that project identity. A later `get_context` request can therefore put the task handoff (the
+**why**) beside dbt lineage (the verified **what is affected**) without you having to pass IDs or
+match scopes yourself.
+
 To make normal `dbt` commands use the wrapper, opt your interactive shell in **once per machine**:
 
 ```bash

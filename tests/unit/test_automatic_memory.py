@@ -15,6 +15,10 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     enable_client_hooks,
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBinding,
+    LocalDbtProjectBindingStore,
+)
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
@@ -390,3 +394,39 @@ def test_cli_memory_enable_creates_binding_without_exposing_scope_ids(
     assert "owner_id" not in result.output
     assert (tmp_path / "codex-home" / "hooks.json").is_file()
     assert (data / "mnemo.sqlite3").is_file()
+
+
+def test_automatic_enable_reuses_an_existing_dbt_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "dbt project"
+    project.mkdir()
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    data = tmp_path / "data"
+    dbt_store = LocalDbtProjectBindingStore(data)
+    expected = LocalMemoryProjectBindingStore(data).personal_profile().scope()
+    dbt_store.set(DbtProjectBinding(project.resolve(), expected))
+    launcher = tmp_path / "bin" / "mnemo-memory"
+    launcher.parent.mkdir()
+    launcher.touch()
+    monkeypatch.setattr("mnemo_memory.apps.cli.main.shutil.which", lambda _: str(launcher))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "memory",
+            "enable",
+            "codex",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    automatic = LocalMemoryProjectBindingStore(data).get(project)
+    assert automatic is not None
+    assert automatic.scope == expected

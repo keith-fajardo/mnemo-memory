@@ -499,6 +499,11 @@ client events cannot discard another session's marker. A deterministic synthetic
 evaluation now separately accounts for pre-hook, child dbt, and post-hook parse/activation work
 without making a machine-performance claim.
 
+Automatic task memory and dbt enablement now reuse the same local project scope when they are
+enabled for the same canonical repository. Unified context deliberately translates a task request
+to that project scope only for structural lookups, so a checkpoint handoff and authoritative dbt
+lineage can appear together without weakening cross-project isolation.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

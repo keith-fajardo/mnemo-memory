@@ -181,16 +181,26 @@ class LocalMemoryProjectBindingStore:
         self._profile_path = self._directory / self._profile_name
         self._bindings_path = self._directory / self._bindings_name
 
-    def enable(self, project_dir: Path) -> MemoryProjectBinding:
+    def enable(
+        self, project_dir: Path, *, project_scope: MemoryScope | None = None
+    ) -> MemoryProjectBinding:
+        """Enable one local repository, optionally reusing an established project scope.
+
+        A dbt binding may supply the scope so checkpoint and manifest facts can share one
+        explicit project boundary.  Paths still only locate the local binding; they never
+        produce an identity.
+        """
         root = find_memory_project_root(project_dir)
         with exclusive_local_file_lock(self._directory, self._lock_name):
             existing = self._get(root)
             if existing is not None:
+                if project_scope is not None and project_scope != existing.scope:
+                    raise AutomaticMemoryBindingError("MNEMO_MEMORY_PROJECT_SCOPE_CONFLICT")
                 return existing
-            project_scope = self._personal_profile().scope()
-            binding = MemoryProjectBinding(
-                root, project_scope, PersonalMemoryProfile.task_scope(project_scope)
-            )
+            scope = project_scope or self._personal_profile().scope()
+            if scope.level is not ScopeLevel.PROJECT:
+                raise AutomaticMemoryBindingError("MNEMO_MEMORY_SCOPE_INVALID")
+            binding = MemoryProjectBinding(root, scope, PersonalMemoryProfile.task_scope(scope))
             values = self._read_bindings()
             values[str(root)] = binding.to_dict()
             self._write(self._bindings_path, values)

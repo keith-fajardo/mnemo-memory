@@ -390,6 +390,23 @@ def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manif
     assert json.loads(disabled_status.output)["instruction"] == "mnemo-memory dbt enable"
 
 
+def test_dbt_enable_reuses_automatic_memory_project_scope_for_unified_context(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "dbt reconciliation project"
+    project.mkdir()
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    data_dir = tmp_path / "Mnemo data"
+    automatic = LocalMemoryProjectBindingStore(data_dir).enable(project)
+
+    result = CliRunner().invoke(
+        app, ["dbt", "enable", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _binding(data_dir, project).scope == automatic.scope
+
+
 def _binding(data_dir: Path, project: Path) -> DbtProjectBinding:
     binding = LocalDbtProjectBindingStore(data_dir).get(project)
     assert binding is not None

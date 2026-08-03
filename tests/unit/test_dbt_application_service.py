@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
@@ -18,11 +19,18 @@ from mnemo_memory.packages.application.dbt import (
     LineageDirection,
     QueryLineage,
 )
+from mnemo_memory.packages.application.unified_context import (
+    ContextLineageQuery,
+    GetUnifiedContext,
+    UnifiedContextService,
+)
 from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ProjectId,
     ScopeLevel,
+    SessionId,
+    TaskId,
     Visibility,
     WorkspaceId,
 )
@@ -32,7 +40,10 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     SourceStateFingerprint,
 )
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
-from mnemo_memory.packages.storage import ReferenceProjectIndexRepository
+from mnemo_memory.packages.storage import (
+    ReferenceCheckpointRepository,
+    ReferenceProjectIndexRepository,
+)
 from mnemo_memory.packages.storage.sqlite import SQLiteCheckpointRepository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
@@ -115,6 +126,40 @@ def test_queries_are_bounded_deterministic_and_scope_safe() -> None:
         item.query(
             QueryLineage(scope(2), start, LineageDirection.UPSTREAM, snapshot_id=stored.snapshot_id)
         )
+
+
+def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
+    """One task request can combine task memory with project-scoped structural evidence."""
+    item, project_scope = service(), scope()
+    item.ingest(command(project_scope))
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 2, tzinfo=UTC)
+        ),
+        item,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+                LineageDirection.UPSTREAM,
+            ),
+        )
+    )
+
+    assert packet.structural_items
+    assert all(
+        structural_item.source_scope == task_scope for structural_item in packet.structural_items
+    )
 
 
 def test_currentness_uses_exact_digest_or_comparable_source_state() -> None:

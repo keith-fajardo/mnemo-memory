@@ -138,7 +138,7 @@ class UnifiedContextService:
             return self._with_source_facts(result_packet, request)
         result = self._dbt.query(
             QueryLineage(
-                request.scope,
+                _project_scope(request.scope),
                 query.unique_id,
                 query.direction,
                 query.transitive,
@@ -250,13 +250,7 @@ class UnifiedContextService:
             return _with_omission(
                 packet, "source-structure", OmissionReason.LOWER_RANK, "no source query"
             )
-        project_scope = MemoryScope(
-            request.scope.owner_id,
-            ScopeLevel.PROJECT,
-            request.scope.visibility,
-            request.scope.workspace_id,
-            request.scope.project_id,
-        )
+        project_scope = _project_scope(request.scope)
         snapshot = self._source.get_active_snapshot(project_scope)
         if snapshot is None:
             return _with_omission(
@@ -304,13 +298,7 @@ class UnifiedContextService:
             return _with_omission(
                 packet, "source-impact", OmissionReason.LOWER_RANK, "no source snapshot"
             )
-        scope = MemoryScope(
-            request.scope.owner_id,
-            ScopeLevel.PROJECT,
-            request.scope.visibility,
-            request.scope.workspace_id,
-            request.scope.project_id,
-        )
+        scope = _project_scope(request.scope)
         snapshot = (
             self._source.get_snapshot(scope, query.snapshot_id)
             if query.snapshot_id is not None
@@ -446,6 +434,17 @@ def _with_omission(
         provenance=packet.provenance,
         omissions=(*packet.omissions, OmissionNotice(item_id, reason, detail)),
         conflicts=packet.conflicts,
+    )
+
+
+def _project_scope(scope: MemoryScope) -> MemoryScope:
+    """Structural snapshots are project-scoped even when a task requests context."""
+    return MemoryScope(
+        scope.owner_id,
+        ScopeLevel.PROJECT,
+        scope.visibility,
+        scope.workspace_id,
+        scope.project_id,
     )
 
 

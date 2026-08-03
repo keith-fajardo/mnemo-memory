@@ -147,6 +147,11 @@ You do not need to provide owner, workspace, or project IDs. Mnemo creates priva
 identities and keeps the project binding locally. It never derives an identity from your path or
 manifest, and it does not edit `dbt_project.yml`, `profiles.yml`, or credentials.
 
+If automatic task memory is already enabled for this repository, Mnemo reuses its private project
+identity. That is what lets one later `get_context` request safely combine the checkpoint's
+explanation of **why** a reconciliation changed with dbt's verified evidence of **what** is
+upstream or downstream—without asking you to manage scopes or UUIDs.
+
 To use ordinary `dbt` commands with Mnemo’s local pre/post handling, choose one one-time shell
 setup. For zsh, add this line to your own `~/.zshrc`:
 

@@ -49,6 +49,7 @@ from mnemo_memory.packages.application import (
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
+    find_memory_project_root,
 )
 from mnemo_memory.packages.application.command_wrapper import (
     CommandInvocation,
@@ -299,13 +300,21 @@ def dbt_enable(
         root = find_dbt_project_root(project_dir)
         binding = store.get(root)
         scope_override = _advanced_scope(owner_id, workspace_id, project_id)
+        automatic_binding = LocalMemoryProjectBindingStore(data_directory).get(root)
+        automatic_scope = (
+            automatic_binding.scope
+            if automatic_binding is not None and automatic_binding.project_root == root
+            else None
+        )
         if binding is None:
             binding = DbtProjectBinding(
-                root, scope_override or store.personal_profile().project_scope()
+                root, scope_override or automatic_scope or store.personal_profile().project_scope()
             )
             store.set(binding)
         elif scope_override is not None and scope_override != binding.scope:
             raise typer.BadParameter("MNEMO_DBT_PROJECT_ALREADY_ENABLED")
+        elif automatic_scope is not None and automatic_scope != binding.scope:
+            raise typer.BadParameter("MNEMO_DBT_PROJECT_SCOPE_CONFLICT")
 
         manifest_status, ingested = (
             _ingest_existing_manifest(data_directory, binding)
@@ -650,7 +659,19 @@ def _enable_automatic_task_memory(
     try:
         config = resolve_local_config(data_dir)
         _service(data_dir).initialize()
-        binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project_dir)
+        dbt_scope: MemoryScope | None = None
+        try:
+            dbt_binding = LocalDbtProjectBindingStore(config.data_directory).get(project_dir)
+            if dbt_binding is not None and dbt_binding.project_root == find_memory_project_root(
+                project_dir
+            ):
+                dbt_scope = dbt_binding.scope
+        except DbtProjectBindingError:
+            # Non-dbt repositories have no dbt binding to align with.
+            pass
+        binding = LocalMemoryProjectBindingStore(config.data_directory).enable(
+            project_dir, project_scope=dbt_scope
+        )
         source_repository = SQLiteSourceStructureRepository(
             config.database_path, base_directory=config.data_directory
         )
