@@ -51,6 +51,13 @@ packet. It never infers a lesson from a transcript, source diff, or model output
     "location": {"uri": "fixture://example", "start_line": null, "start_column": null, "end_line": null, "end_column": null},
     "observed_at": "2026-08-02T14:00:00+00:00", "verification_status": "verified"
   }],
+  "lessons": [{
+    "trigger": "A reconciliation test disagreed with the Finance seed.",
+    "mistaken_assumption": "The timestamp join represented the same business-day grain.",
+    "correction": "Compare both inputs at the documented business-date grain.",
+    "prevention": "Verify input grain and null behavior before changing a reconciliation join.",
+    "evidence_ids": ["66666666-6666-4666-8666-666666666666"]
+  }],
   "token_estimate": 120
 }
 ```
@@ -74,6 +81,10 @@ replaces only the immutable current revision; it never changes the stable `check
 ```json
 {"operation":"revise","checkpoint_id":"<checkpoint-id>","expected_revision_id":"<revision-id>","current_state":"updated state"}
 ```
+
+Each revision is a complete current handoff. Include any still-applicable lesson again when you
+revise it; the automatic Mnemo reminder tells a connected agent to do this. Earlier revisions
+remain immutable and retrievable with their original evidence.
 
 `complete` is explicit and succeeds only from the active state; its content must have no blockers
 or remaining work. `abandon` is separate and records a nonblank reason in its terminal revision:

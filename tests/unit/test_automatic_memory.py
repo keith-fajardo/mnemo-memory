@@ -125,6 +125,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     stop = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
     assert stop["decision"] == "block"
     assert "save_checkpoint" in str(stop)
+    assert "still-applicable lessons" in str(stop)
     assert "full transcript" in str(stop)
 
     assert (
