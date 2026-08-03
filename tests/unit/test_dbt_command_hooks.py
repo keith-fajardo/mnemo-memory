@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
@@ -15,6 +17,7 @@ from mnemo_memory.packages.application.command_wrapper import (
     HookStatus,
 )
 from mnemo_memory.packages.application.dbt import (
+    DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
     IngestManifest,
@@ -165,6 +168,35 @@ def test_dbt_hook_honors_equals_project_and_target_path_forms(tmp_path: Path) ->
     assert before.manifest_path == manifest
 
 
+def test_dbt_hook_storage_failure_keeps_the_prior_active_snapshot(tmp_path: Path) -> None:
+    project, manifest, _, service, context = _configured_hook(tmp_path)
+    initial = service.ingest(IngestManifest(scope(), FIXTURE.read_bytes(), "manifest.json", NOW))
+    manifest.write_bytes(FIXTURE.read_bytes())
+
+    class FailingAfterService:
+        def get_active_status(self, command: GetActiveManifestStatus) -> object:
+            return service.get_active_status(command)
+
+        def ingest(self, _: IngestManifest) -> object:
+            raise DbtApplicationStorageFailure("private database failure")
+
+    bindings = LocalDbtProjectBindingStore(tmp_path / "memory")
+    hooks = DbtManifestHooks(
+        bindings,
+        lambda: cast(DbtManifestApplicationService, FailingAfterService()),
+        lambda: NOW,
+    )
+    before = hooks.before_dbt(context)
+    manifest.write_bytes(_changed_manifest())
+    outcome = hooks.after_dbt(context, before, _success())
+
+    assert outcome.status is HookStatus.FAILED
+    assert outcome.code == "MNEMO_DBT_MANIFEST_ACTIVATION_FAILED"
+    assert service.get_active_status(GetActiveManifestStatus(scope())).snapshot == initial.snapshot
+    assert str(project) not in outcome.code
+    assert "private" not in outcome.code
+
+
 def _configured_hook(
     tmp_path: Path,
 ) -> tuple[Path, Path, DbtManifestHooks, DbtManifestApplicationService, CommandContext]:
@@ -203,3 +235,22 @@ def test_binding_store_is_project_specific_and_atomic(tmp_path: Path) -> None:
     assert store.get(project) is not None
     assert store.remove(project) is True
     assert store.get(project) is None
+
+
+def test_binding_store_canonicalizes_a_project_symlink_without_second_identity(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project Δ"
+    project.mkdir()
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    alias = tmp_path / "project alias"
+    alias.symlink_to(project, target_is_directory=True)
+    store = LocalDbtProjectBindingStore(tmp_path / "memory")
+    binding = DbtProjectBinding(project.resolve(), scope())
+
+    store.set(binding)
+
+    assert store.get(alias) == binding
+    stored = json.loads((tmp_path / "memory" / "dbt-project-bindings.json").read_text())
+    assert list(stored) == [str(project.resolve())]
+    assert str(alias) not in stored
