@@ -165,6 +165,11 @@ the caller supplies no comparable current digest, the facts are explicitly `unkn
 `require_current: true`, unknown or stale facts are omitted. A small structural or total packet
 budget likewise produces a structured omission rather than truncating an identifier.
 
+For an older audit, provide **both** `before_snapshot_id` and `after_snapshot_id` inside
+`source_changes`. Get their IDs from `mnemo-memory memory history`. Mnemo requires both IDs to be
+in the same explicit project scope and returns the selected immutable difference; one ID alone or
+an ID from another project is rejected without disclosing whether it exists.
+
 ## Durability and recovery
 
 Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain

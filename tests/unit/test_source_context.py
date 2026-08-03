@@ -259,6 +259,68 @@ def test_recent_source_changes_require_current_and_respect_the_structural_budget
     assert budgeted.omissions[-1].reason.value == "token_budget"
 
 
+def test_source_changes_can_select_a_scoped_historical_snapshot_pair(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "service.py"
+    source = ReferenceSourceStructureRepository()
+    path.write_text("def first():\n    return 1\n")
+    first = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(first)
+    path.write_text("def second():\n    return 2\n")
+    second = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(second)
+    path.write_text("def third():\n    return 3\n")
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    packet = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_changes=ContextSourceChangeQuery(
+                before_snapshot_id=first.snapshot.snapshot_id,
+                after_snapshot_id=second.snapshot.snapshot_id,
+            ),
+        )
+    )
+
+    assert len(packet.structural_items) == 1
+    assert (
+        '"before_snapshot_id":"' + str(first.snapshot.snapshot_id)
+        in packet.structural_items[0].content
+    )
+    assert (
+        '"after_snapshot_id":"' + str(second.snapshot.snapshot_id)
+        in packet.structural_items[0].content
+    )
+    assert "second" in packet.structural_items[0].content
+    assert "third" not in packet.structural_items[0].content
+
+
 def test_source_query_does_not_disclose_another_projects_snapshot(tmp_path: Path) -> None:
     project_scope = MemoryScope(
         OwnerId.from_string("11111111-1111-4111-8111-111111111111"),

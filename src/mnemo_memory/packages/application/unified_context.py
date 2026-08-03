@@ -106,6 +106,8 @@ class ContextSourceChangeQuery:
     maximum_relationships: int = 24
     current_source_digest: str | None = None
     require_current: bool = False
+    before_snapshot_id: CodeSnapshotId | None = None
+    after_snapshot_id: CodeSnapshotId | None = None
 
     def __post_init__(self) -> None:
         if self.maximum_declarations < 1 or self.maximum_relationships < 1:
@@ -117,6 +119,13 @@ class ContextSourceChangeQuery:
             or len(self.current_source_digest) != 71
         ):
             raise ValueError("source change digest must be a sha256 digest")
+        if (self.before_snapshot_id is None) != (self.after_snapshot_id is None):
+            raise ValueError("source changes require both historical snapshot IDs")
+        if (
+            self.before_snapshot_id is not None
+            and self.before_snapshot_id == self.after_snapshot_id
+        ):
+            raise ValueError("source changes require distinct historical snapshot IDs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,15 +467,19 @@ class UnifiedContextService:
                 packet, "source-changes", OmissionReason.LOWER_RANK, "no source snapshot"
             )
         scope = _project_scope(request.scope)
-        transition = self._source.latest_transition(scope)
-        if transition is None:
-            return _with_omission(
-                packet,
-                "source-changes",
-                OmissionReason.LOWER_RANK,
-                "no prior source transition",
-            )
-        before, after = transition
+        if query.before_snapshot_id is not None and query.after_snapshot_id is not None:
+            before = self._source.get_snapshot(scope, query.before_snapshot_id)
+            after = self._source.get_snapshot(scope, query.after_snapshot_id)
+        else:
+            transition = self._source.latest_transition(scope)
+            if transition is None:
+                return _with_omission(
+                    packet,
+                    "source-changes",
+                    OmissionReason.LOWER_RANK,
+                    "no prior source transition",
+                )
+            before, after = transition
         currentness = _source_currentness(after, query.current_source_digest)
         if query.require_current and currentness is not ValidityState.CURRENT:
             return _with_omission(

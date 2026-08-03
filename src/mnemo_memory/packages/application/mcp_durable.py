@@ -109,6 +109,8 @@ class DurableMcpContextPort:
                     if isinstance(source_changes.get("current_source_digest"), str)
                     else None,
                     bool(source_changes.get("require_current", False)),
+                    _optional_id(source_changes, "before_snapshot_id", CodeSnapshotId),
+                    _optional_id(source_changes, "after_snapshot_id", CodeSnapshotId),
                 )
             )
             if (
