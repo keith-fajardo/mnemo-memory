@@ -125,9 +125,12 @@ From an enabled repository, you can also inspect a bounded static impact candida
 
 ```bash
 mnemo-memory memory impact package.module_name
-mnemo-memory memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
+mnemo-memory memory changes
 mnemo-memory memory refresh
 ```
+
+`memory changes` uses the latest two recorded structural refreshes. The explicit
+`--from SNAPSHOT_ID --to SNAPSHOT_ID` form remains available for an advanced historical audit.
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.

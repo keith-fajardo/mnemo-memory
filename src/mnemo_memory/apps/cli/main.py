@@ -807,11 +807,18 @@ def memory_impact(
 
 
 @memory_app.command(
-    "changes", help="Compare two saved source-structure snapshots for this project."
+    "changes", help="Show the latest recorded structural change, or compare two snapshots."
 )
 def memory_changes(
-    before_snapshot_id: str = typer.Option(..., "--from", help="Earlier source snapshot UUID."),
-    after_snapshot_id: str = typer.Option(..., "--to", help="Later source snapshot UUID."),
+    before_snapshot_id: str | None = typer.Option(
+        None, "--from", help="Earlier source snapshot UUID (advanced)."
+    ),
+    after_snapshot_id: str | None = typer.Option(
+        None, "--to", help="Later source snapshot UUID (advanced)."
+    ),
+    latest: bool = typer.Option(
+        False, "--latest", help="Use the two most recent recorded snapshot activations."
+    ),
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
@@ -824,10 +831,23 @@ def memory_changes(
         repository = SQLiteSourceStructureRepository(
             config.database_path, base_directory=config.data_directory
         )
+        if latest and (before_snapshot_id is not None or after_snapshot_id is not None):
+            raise typer.BadParameter("MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID")
+        use_latest = latest or (before_snapshot_id is None and after_snapshot_id is None)
+        if use_latest:
+            transition = repository.latest_transition(binding.scope)
+            if transition is None:
+                raise typer.BadParameter("MNEMO_SOURCE_DIFF_NO_PRIOR_TRANSITION")
+            before_id, after_id = transition[0].snapshot_id, transition[1].snapshot_id
+        elif before_snapshot_id is None or after_snapshot_id is None:
+            raise typer.BadParameter("MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID")
+        else:
+            before_id = CodeSnapshotId.from_string(before_snapshot_id)
+            after_id = CodeSnapshotId.from_string(after_snapshot_id)
         diff = SourceImpactService(repository).diff(
             binding.scope,
-            CodeSnapshotId.from_string(before_snapshot_id),
-            CodeSnapshotId.from_string(after_snapshot_id),
+            before_id,
+            after_id,
         )
     except (AutomaticMemoryBindingError, ValueError) as error:
         raise typer.BadParameter("MNEMO_SOURCE_DIFF_UNAVAILABLE") from error

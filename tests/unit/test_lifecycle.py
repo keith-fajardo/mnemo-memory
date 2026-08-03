@@ -221,6 +221,62 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
     assert [item["symbol"] for item in value["added_symbols"]] == ["worker", "worker.work"]
     assert value["removed_symbols"] == []
 
+    latest = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "changes",
+            "--latest",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+    assert latest.exit_code == 0, latest.output
+    assert json.loads(latest.output) == value
+
+
+def test_memory_changes_defaults_to_latest_and_requires_a_real_transition(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+
+    missing = CliRunner().invoke(
+        app,
+        ["memory", "changes", "--project-dir", str(project), "--data-dir", str(data_dir)],
+    )
+    conflicting = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "changes",
+            "--latest",
+            "--from",
+            "00000000-0000-4000-8000-000000000000",
+            "--to",
+            "00000000-0000-4000-8000-000000000000",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert missing.exit_code != 0
+    assert "MNEMO_SOURCE_DIFF_NO_PRIOR_TRANSITION" in missing.output
+    assert conflicting.exit_code != 0
+    assert "MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID" in conflicting.output
+
 
 def test_memory_refresh_creates_new_snapshot_then_is_idempotent(tmp_path: Path) -> None:
     project = tmp_path / "project"
