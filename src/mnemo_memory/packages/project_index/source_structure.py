@@ -281,6 +281,7 @@ class SourceStructureParser:
         digest = sha256()
         pending: list[_PendingSymbol] = []
         imports: list[tuple[str, str]] = []
+        bindings: list[tuple[str, str, str]] = []
         calls: list[tuple[str, str, str]] = []
         total_bytes = 0
         for path in paths:
@@ -296,7 +297,7 @@ class SourceStructureParser:
             module = self._module_name(relative, language)
             pending.append(_PendingSymbol(relative, module, CodeSymbolKind.MODULE, 1))
             if language == "python":
-                self._parse_python(raw, relative, module, pending, imports, calls)
+                self._parse_python(raw, relative, module, pending, imports, bindings, calls)
             else:
                 self._parse_tree_sitter(language, raw, relative, module, pending, imports, calls)
         if len(pending) > request.limits.max_symbols:
@@ -364,6 +365,7 @@ class SourceStructureParser:
                                 modules,
                                 symbols_by_name,
                                 imports,
+                                bindings,
                             ),
                         )
                         for path, qualified_name, target in sorted(set(calls))
@@ -506,6 +508,7 @@ class SourceStructureParser:
         modules_by_path: dict[str, CodeSymbol],
         symbols_by_name: dict[str, CodeSymbol],
         imports: list[tuple[str, str]],
+        bindings: list[tuple[str, str, str]],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -529,6 +532,14 @@ class SourceStructureParser:
                 imported = symbols_by_name.get(imported_target)
                 if imported is not None:
                     candidates.append(imported)
+        binding_name, separator, remainder = target.partition(".")
+        for _, _binding, imported_target in (
+            item for item in bindings if item[0] == source_path and item[1] == binding_name
+        ):
+            candidate_name = imported_target if not separator else f"{imported_target}.{remainder}"
+            imported = symbols_by_name.get(candidate_name)
+            if imported is not None:
+                candidates.append(imported)
         unique = {item.symbol_id: item for item in candidates}
         return next(iter(unique)) if len(unique) == 1 else None
 
@@ -540,13 +551,14 @@ class SourceStructureParser:
         module: str,
         symbols: list[_PendingSymbol],
         imports: list[tuple[str, str]],
+        bindings: list[tuple[str, str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
         try:
             tree = ast.parse(raw.decode("utf-8"), filename=relative)
         except (SyntaxError, UnicodeDecodeError) as error:
             raise SourceStructureError("MNEMO_SOURCE_PYTHON_INVALID") from error
-        cls._collect_python(tree.body, relative, module, symbols, imports, calls)
+        cls._collect_python(tree.body, relative, module, symbols, imports, bindings, calls)
 
     @classmethod
     def _collect_python(
@@ -556,6 +568,7 @@ class SourceStructureParser:
         parent: str,
         symbols: list[_PendingSymbol],
         imports: list[tuple[str, str]],
+        bindings: list[tuple[str, str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
         for node in body:
@@ -574,15 +587,24 @@ class SourceStructureParser:
                 calls.extend(
                     (relative, name, target) for target in cls._python_direct_calls(node.body)
                 )
-                cls._collect_python(node.body, relative, name, symbols, imports, calls)
+                cls._collect_python(node.body, relative, name, symbols, imports, bindings, calls)
             elif isinstance(node, ast.Import):
-                imports.extend((relative, alias.name) for alias in node.names)
+                for alias in node.names:
+                    imports.append((relative, alias.name))
+                    if parent == SourceStructureParser._module_name(relative, "python"):
+                        bindings.append(
+                            (relative, alias.asname or alias.name.split(".")[0], alias.name)
+                        )
             elif isinstance(node, ast.ImportFrom):
                 prefix = "." * node.level
                 origin = prefix + (node.module or "")
-                imports.extend(
-                    (relative, f"{origin}.{alias.name}".rstrip(".")) for alias in node.names
-                )
+                for alias in node.names:
+                    imported = f"{origin}.{alias.name}".rstrip(".")
+                    imports.append((relative, imported))
+                    if alias.name != "*" and parent == SourceStructureParser._module_name(
+                        relative, "python"
+                    ):
+                        bindings.append((relative, alias.asname or alias.name, imported))
 
     @staticmethod
     def _python_direct_calls(body: list[ast.stmt]) -> tuple[str, ...]:
