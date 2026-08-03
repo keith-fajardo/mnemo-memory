@@ -533,6 +533,17 @@ class ReferenceSourceStructureRepository:
             self._artifacts[activations[-1]].snapshot,
         )
 
+    def list_activation_history(
+        self, scope: MemoryScope, *, limit: int = 20
+    ) -> tuple[CodeSnapshot, ...]:
+        self._require_scope(scope)
+        if limit < 1 or limit > 100:
+            raise ValueError("source snapshot history limit must be between 1 and 100")
+        return tuple(
+            self._artifacts[snapshot_id].snapshot
+            for snapshot_id in reversed(self._activations.get(scope, ()))
+        )[:limit]
+
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]:

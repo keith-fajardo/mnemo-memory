@@ -745,6 +745,43 @@ def memory_disable(
     )
 
 
+@memory_app.command("history", help="List recent saved structural refreshes for this project.")
+def memory_history(
+    limit: int = typer.Option(20, "--limit", min=1, max=100),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """List activation order without exposing source bodies or absolute project paths."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
+        active = repository.get_active_snapshot(binding.scope)
+        snapshots = repository.list_activation_history(binding.scope, limit=limit)
+    except (AutomaticMemoryBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SOURCE_HISTORY_UNAVAILABLE") from error
+    _show(
+        {
+            "active_snapshot_id": None if active is None else str(active.snapshot_id),
+            "snapshots": [
+                {
+                    "snapshot_id": str(snapshot.snapshot_id),
+                    "source_digest": snapshot.source_digest,
+                    "file_count": snapshot.file_count,
+                    "symbol_count": snapshot.symbol_count,
+                    "relationship_count": snapshot.edge_count,
+                    "active": active is not None and snapshot.snapshot_id == active.snapshot_id,
+                }
+                for snapshot in snapshots
+            ],
+        }
+    )
+
+
 @memory_app.command(
     "impact", help="Show proven static dependencies or dependents for this project."
 )

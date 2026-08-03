@@ -253,6 +253,12 @@ class SourceStructureRepository(Protocol):
         """
         ...
 
+    def list_activation_history(
+        self, scope: MemoryScope, *, limit: int = 20
+    ) -> tuple[CodeSnapshot, ...]:
+        """List most-recent-first scoped activations, retaining immutable snapshots."""
+        ...
+
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]: ...

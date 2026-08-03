@@ -236,6 +236,28 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
     assert latest.exit_code == 0, latest.output
     assert json.loads(latest.output) == value
 
+    history = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "history",
+            "--limit",
+            "2",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+    assert history.exit_code == 0, history.output
+    history_value = json.loads(history.output)
+    assert history_value["active_snapshot_id"] == str(after.snapshot_id)
+    assert [item["snapshot_id"] for item in history_value["snapshots"]] == [
+        str(after.snapshot_id),
+        str(before.snapshot_id),
+    ]
+    assert all("path" not in item for item in history_value["snapshots"])
+
 
 def test_memory_changes_defaults_to_latest_and_requires_a_real_transition(tmp_path: Path) -> None:
     project = tmp_path / "project"

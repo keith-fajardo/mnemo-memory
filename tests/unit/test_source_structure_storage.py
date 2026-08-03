@@ -128,6 +128,18 @@ def test_source_snapshot_activation_history_is_scoped_and_uses_explicit_order(
     restored = repository.store_and_activate(first)
     assert restored.idempotent is True
     assert repository.latest_transition(item_scope) == (second.snapshot, first.snapshot)
+    assert repository.list_activation_history(item_scope) == (
+        first.snapshot,
+        second.snapshot,
+        first.snapshot,
+    )
+    assert repository.list_activation_history(item_scope, limit=2) == (
+        first.snapshot,
+        second.snapshot,
+    )
+    with pytest.raises(ValueError, match="history limit"):
+        repository.list_activation_history(item_scope, limit=0)
+    assert repository.list_activation_history(scope("44444444-4444-4444-8444-444444444444")) == ()
     assert repository.iter_symbols(item_scope, second.snapshot.snapshot_id) == second.symbols
 
 

@@ -924,6 +924,32 @@ class SQLiteCheckpointRepository:
             self._source_snapshot_from_row(rows[0], scope),
         )
 
+    def list_source_activation_history(
+        self, scope: MemoryScope, *, limit: int = 20
+    ) -> tuple[CodeSnapshot, ...]:
+        self._require_project_scope(scope)
+        if limit < 1 or limit > 100:
+            raise ValueError("source snapshot history limit must be between 1 and 100")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT snapshot.* FROM source_snapshot_activations AS activation "
+                    "JOIN source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = activation.snapshot_id "
+                    "WHERE activation.owner_id = ? AND activation.workspace_id IS ? "
+                    "AND activation.project_id = ? "
+                    "ORDER BY activation.activation_id DESC LIMIT ?",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        limit,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(self._source_snapshot_from_row(row, scope) for row in rows)
+
     @staticmethod
     def _source_snapshot_from_row(row: sqlite3.Row, scope: MemoryScope) -> CodeSnapshot:
         return CodeSnapshot(
@@ -1555,6 +1581,11 @@ class SQLiteSourceStructureRepository:
 
     def latest_transition(self, scope: MemoryScope) -> tuple[CodeSnapshot, CodeSnapshot] | None:
         return self._backend.latest_source_transition(scope)
+
+    def list_activation_history(
+        self, scope: MemoryScope, *, limit: int = 20
+    ) -> tuple[CodeSnapshot, ...]:
+        return self._backend.list_source_activation_history(scope, limit=limit)
 
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
