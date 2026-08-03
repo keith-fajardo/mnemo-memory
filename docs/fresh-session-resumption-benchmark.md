@@ -58,6 +58,10 @@ The scorer uses exact, structured fixture markers and packet content. It measure
 availability, not a model answer’s quality. Provider-specific quality, latency, cached-token, and
 cost baselines remain future work; this fixture does not claim model behavior.
 
+The 499-token Mnemo number is not a continuous background charge. It is the estimated cold input
+size when a client asks for this fixture's checkpoint context. A normal turn that does not request
+Mnemo context adds none of those tokens, and every real packet has its own bounded estimate.
+
 ## Boundaries
 
 Issue 12 will add the dbt structural-memory comparison and finalize the broader

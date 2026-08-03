@@ -53,6 +53,12 @@ rejects stale decisions presented as current. See the
 [fresh-session benchmark](docs/fresh-session-resumption-benchmark.md) and
 [unified-context benchmark](docs/unified-context-benchmark.md) for methodology and limits.
 
+**Does “499 tokens” mean Mnemo uses 499 tokens all the time?** No. It is the estimated size of
+one compact context packet in this synthetic fixture. Those tokens are added only when a client
+actually asks Mnemo for that checkpoint context—for example at the beginning of a fresh task
+session. Mnemo has no continuous token use while you work, and a different checkpoint or selected
+structure map will have a different bounded size.
+
 ## What Mnemo remembers—and what it does not
 
 It is not a general memory of everything you type. Mnemo does not capture chats, terminal output,
