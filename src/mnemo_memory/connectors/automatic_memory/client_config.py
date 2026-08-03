@@ -107,10 +107,23 @@ def _command(launcher: Path, client: ClientName, data_directory: Path) -> str:
 
 def _hook_events(client: ClientName) -> tuple[tuple[str, str | None], ...]:
     # The broad PostToolUse matcher is required to notice edits and the Mnemo MCP save call.
-    # Stop/PreCompact are the client lifecycle boundaries that must receive the reminder.
+    # UserPromptSubmit does not inspect prompt text; it only gives a short post-edit reminder.
+    # Stop/PreCompact are the client lifecycle boundaries that must receive the checkpoint reminder.
     if client == "codex":
-        return (("SessionStart", None), ("PostToolUse", ".*"), ("Stop", None), ("PreCompact", ".*"))
-    return (("SessionStart", None), ("PostToolUse", ".*"), ("Stop", None), ("PreCompact", None))
+        return (
+            ("SessionStart", None),
+            ("UserPromptSubmit", None),
+            ("PostToolUse", ".*"),
+            ("Stop", None),
+            ("PreCompact", ".*"),
+        )
+    return (
+        ("SessionStart", None),
+        ("UserPromptSubmit", None),
+        ("PostToolUse", ".*"),
+        ("Stop", None),
+        ("PreCompact", None),
+    )
 
 
 def _contains(groups: list[object], command: str) -> bool:

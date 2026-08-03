@@ -108,6 +108,12 @@ verification, or impact. It also tells the agent how to ask for relevant saved s
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
 
+There is one additional timely cue: when the agent has edited a project file, Mnemo adds a short
+memory reminder before the next user turn. It does **not** inspect that user prompt. The reminder
+only says that project work changed and that history/impact claims should use Mnemo evidence; it
+stops once the agent saves its checkpoint. This makes memory use a normal part of supported
+Codex/Claude Code work without making you maintain a parallel instruction file.
+
 The short manual equivalent is:
 
 ```bash

@@ -143,6 +143,64 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "transcript" not in state.lower()
 
 
+@pytest.mark.parametrize("client", ["codex", "claude-code"])
+def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
+    tmp_path: Path, client: str
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, client)  # type: ignore[arg-type]
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "private user question and secret-looking value",
+        }
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    assert output["hookEventName"] == "UserPromptSubmit"
+    context = str(output["additionalContext"])
+    assert "Mnemo observed a project mutation" in context
+    assert "private user question" not in context
+    state = (data / "automatic-memory-session-state.json").read_text()
+    assert "private user question" not in state
+
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+        }
+    )
+    assert (
+        hook.handle(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s1",
+                "cwd": str(project),
+                "prompt": "another private user question",
+            }
+        )
+        == {}
+    )
+
+
 def test_concurrent_lifecycle_events_keep_each_session_marker(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -385,6 +443,23 @@ def test_client_hook_configuration_is_reversible_and_preserves_other_entries(
     assert disable_client_hooks("codex", launcher, codex_home, data_directory) is True
     disabled = json.loads(hooks_path.read_text())
     assert disabled["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": "other"}]}]
+
+
+def test_client_configuration_registers_prompt_boundary_without_prompt_matcher(
+    tmp_path: Path,
+) -> None:
+    launcher = tmp_path / "mnemo-memory"
+    launcher.touch()
+    data = tmp_path / "mnemo data"
+    for client, home in (("codex", tmp_path / "codex"), ("claude-code", tmp_path / "claude")):
+        assert enable_client_hooks(client, launcher, home, data) is True  # type: ignore[arg-type]
+        config_path = (
+            home / "hooks.json" if client == "codex" else home / ".claude" / "settings.json"
+        )
+        value = json.loads(config_path.read_text())
+        prompt_groups = value["hooks"]["UserPromptSubmit"]
+        assert len(prompt_groups) == 1
+        assert "matcher" not in prompt_groups[0]
 
 
 def test_claude_hook_configuration_uses_only_its_settings_file(tmp_path: Path) -> None:

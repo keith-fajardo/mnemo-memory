@@ -509,6 +509,12 @@ metadata-only added/removed declaration and relationship summary to the connecte
 start and in its checkpoint reminder. It stores no source bodies or transcript; intent remains
 explicit checkpoint evidence rather than an inference from a diff.
 
+Supported Codex and Claude Code integrations also now use their prompt-boundary lifecycle event
+without inspecting submitted prompt text. After a tracked project mutation, the next user turn
+receives one bounded reminder to consult Mnemo before making historical or impact claims; saving a
+checkpoint clears that reminder. This is a client-integrated cue, not a replacement for model
+reasoning or transcript capture.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

@@ -255,8 +255,9 @@ the checkpoint it saves.
 **Must I teach every agent to use Mnemo?** Not for the supported `--auto-memory` setup. Mnemo
 injects a session-start instruction telling Codex or Claude Code to check context before claiming
 knowledge of earlier work or impact, and how to request saved structure for a named symbol/file.
-It does not read every subsequent prompt or a model's private reasoning, so this is a transparent
-fresh-session reminder—not surveillance or a hidden automatic transcript recorder.
+After the agent changes a project file, Mnemo also adds one short reminder before the next user
+turn. It does not read the submitted prompt or a model's private reasoning, so this is transparent
+timely guidance—not surveillance or a hidden automatic transcript recorder.
 
 **How does a new agent get it?** The new agent connects to the same Mnemo store and calls
 `get_context` for the same scope. It receives the latest active checkpoint and any requested dbt

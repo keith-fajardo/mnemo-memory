@@ -78,6 +78,9 @@ class AutomaticMemoryHook:
             return self._context_output(
                 _resume_instruction(binding.checkpoint_scope.to_dict(), refreshed)
             )
+        if event_name == "UserPromptSubmit" and state.dirty and not state.saved:
+            # Do not inspect ``prompt``. The cue is driven only by trusted lifecycle state.
+            return self._context_output(_dirty_session_instruction(), event_name="UserPromptSubmit")
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
@@ -87,17 +90,19 @@ class AutomaticMemoryHook:
             )
         return {}
 
-    def _context_output(self, instruction: str) -> dict[str, object]:
+    def _context_output(
+        self, instruction: str, *, event_name: str = "SessionStart"
+    ) -> dict[str, object]:
         if self.client == "codex":
             return {
                 "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
+                    "hookEventName": event_name,
                     "additionalContext": instruction,
                 }
             }
         return {
             "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
+                "hookEventName": event_name,
                 "additionalContext": instruction,
             }
         }
@@ -306,3 +311,12 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
     if changes.removed_symbols:
         instruction += f" Removed declarations: {', '.join(changes.removed_symbols)}."
     return instruction
+
+
+def _dirty_session_instruction() -> str:
+    """One short prompt-boundary cue; no submitted prompt content is read or retained."""
+    return (
+        "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
+        "decisions, verification, or impact, check the stored Mnemo context; save a concise "
+        "checkpoint before the task ends."
+    )
