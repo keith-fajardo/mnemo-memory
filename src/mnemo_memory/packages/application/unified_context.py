@@ -21,6 +21,7 @@ from mnemo_memory.packages.domain import (
     CodeEdgeKind,
     CodeSnapshot,
     CodeSymbol,
+    CodeSymbolId,
     ConflictState,
     ContentRepresentation,
     ContextBudget,
@@ -63,12 +64,35 @@ class ContextLineageQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextSourceImpactQuery:
+    """A bounded static impact request; dynamic behavior is intentionally excluded."""
+
+    symbol: str
+    direction: str = "dependents"
+    transitive: bool = True
+    maximum_depth: int | None = None
+    maximum_symbols: int = 100
+    maximum_edges: int = 200
+
+    def __post_init__(self) -> None:
+        if not self.symbol.strip() or len(self.symbol) > 512:
+            raise ValueError("source impact requires a bounded symbol or relative path")
+        if self.direction not in {"dependents", "dependencies"}:
+            raise ValueError("source impact direction must be dependents or dependencies")
+        if self.maximum_depth is not None and self.maximum_depth < 0:
+            raise ValueError("source impact depth must be non-negative")
+        if self.maximum_symbols < 1 or self.maximum_edges < 1:
+            raise ValueError("source impact limits must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
     checkpoint_id: object | None = None
     lineage: ContextLineageQuery | None = None
     source_query: str | None = None
     budget: ContextBudget = field(default_factory=ContextBudget)
+    source_impact: ContextSourceImpactQuery | None = None
 
 
 class UnifiedContextService:
@@ -88,7 +112,11 @@ class UnifiedContextService:
         packet = self._checkpoints.get_context(
             GetCheckpointContext(request.scope, request.checkpoint_id, request.budget)  # type: ignore[arg-type]
         )
-        if request.lineage is None and request.source_query is None:
+        if (
+            request.lineage is None
+            and request.source_query is None
+            and request.source_impact is None
+        ):
             return packet
         if request.lineage is None:
             return self._with_source_facts(packet, request)
@@ -207,6 +235,8 @@ class UnifiedContextService:
     def _with_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
     ) -> ContextPacket:
+        if request.source_impact is not None:
+            return self._with_source_impact_facts(packet, request, request.source_impact)
         if self._source is None or not request.source_query or not request.source_query.strip():
             return _with_omission(
                 packet, "source-structure", OmissionReason.LOWER_RANK, "no source query"
@@ -255,6 +285,122 @@ class UnifiedContextService:
             packet, request.scope, snapshot, selected_symbols, edges, module_symbols
         )
 
+    def _with_source_impact_facts(
+        self,
+        packet: ContextPacket,
+        request: GetUnifiedContext,
+        query: ContextSourceImpactQuery,
+    ) -> ContextPacket:
+        if self._source is None:
+            return _with_omission(
+                packet, "source-impact", OmissionReason.LOWER_RANK, "no source snapshot"
+            )
+        scope = MemoryScope(
+            request.scope.owner_id,
+            ScopeLevel.PROJECT,
+            request.scope.visibility,
+            request.scope.workspace_id,
+            request.scope.project_id,
+        )
+        snapshot = self._source.get_active_snapshot(scope)
+        if snapshot is None:
+            return _with_omission(
+                packet, "source-impact", OmissionReason.LOWER_RANK, "no source snapshot"
+            )
+        candidates = self._source.find_symbols(scope, snapshot.snapshot_id, query.symbol, limit=64)
+        starts = (
+            tuple(
+                item
+                for item in candidates
+                if item.qualified_name == query.symbol or item.relative_path == query.symbol
+            )
+            or candidates
+        )
+        if not starts:
+            return _with_omission(
+                packet, "source-impact", OmissionReason.LOWER_RANK, "source symbol was not found"
+            )
+        visited = {item.symbol_id for item in starts}
+        selected = {item.symbol_id: item for item in starts}
+        depths = {item.symbol_id: 0 for item in starts}
+        frontier = tuple(visited)
+        edges: list[CodeEdge] = []
+        depth = 0
+        truncated: str | None = None
+        while frontier and (query.transitive or depth == 0):
+            depth += 1
+            if query.maximum_depth is not None and depth > query.maximum_depth:
+                truncated = "maximum depth reached"
+                break
+            boundary = (
+                self._source.edges_to_symbols(scope, snapshot.snapshot_id, frontier)
+                if query.direction == "dependents"
+                else tuple(
+                    edge
+                    for edge in self._source.edges_from_symbols(
+                        scope, snapshot.snapshot_id, frontier
+                    )
+                    if edge.target_symbol_id is not None
+                )
+            )
+            if len(edges) + len(boundary) > query.maximum_edges:
+                truncated = "maximum edge count reached"
+                break
+            edges.extend(boundary)
+            if query.direction == "dependents":
+                next_ids = tuple(
+                    sorted(
+                        {
+                            edge.source_symbol_id
+                            for edge in boundary
+                            if edge.source_symbol_id not in visited
+                        },
+                        key=str,
+                    )
+                )
+            else:
+                next_ids = tuple(
+                    sorted(
+                        {
+                            edge.target_symbol_id
+                            for edge in boundary
+                            if edge.target_symbol_id is not None
+                            and edge.target_symbol_id not in visited
+                        },
+                        key=str,
+                    )
+                )
+            if len(selected) + len(next_ids) > query.maximum_symbols:
+                truncated = "maximum symbol count reached"
+                break
+            resolved = self._source.symbols_by_ids(scope, snapshot.snapshot_id, next_ids)
+            for item in resolved:
+                visited.add(item.symbol_id)
+                selected[item.symbol_id] = item
+                depths[item.symbol_id] = depth
+            frontier = tuple(item.symbol_id for item in resolved)
+        ordered = tuple(
+            sorted(
+                selected.values(),
+                key=lambda item: (depths[item.symbol_id], item.relative_path, item.qualified_name),
+            )
+        )
+        result = _append_source_items(
+            packet,
+            request.scope,
+            snapshot,
+            ordered,
+            tuple(dict.fromkeys(edges)),
+            {},
+            impact_direction=query.direction,
+            impact_depths=depths,
+        )
+        return (
+            result
+            if truncated is None
+            else _with_omission(result, "source-impact", OmissionReason.LOWER_RANK, truncated)
+        )
+
 
 def _with_omission(
     packet: ContextPacket, item_id: str, reason: OmissionReason, detail: str
@@ -291,6 +437,9 @@ def _append_source_items(
     symbols: tuple[CodeSymbol, ...],
     edges: tuple[CodeEdge, ...],
     module_symbols: dict[str, CodeSymbol],
+    *,
+    impact_direction: str | None = None,
+    impact_depths: dict[CodeSymbolId, int] | None = None,
 ) -> ContextPacket:
     facts: list[ContextItem] = []
     remaining = min(
@@ -306,6 +455,14 @@ def _append_source_items(
                 "symbol": symbol.qualified_name,
                 "kind": symbol.kind.value,
                 "line": symbol.line,
+                **(
+                    {
+                        "impact_direction": impact_direction,
+                        "impact_depth": impact_depths[symbol.symbol_id],
+                    }
+                    if impact_direction is not None and impact_depths is not None
+                    else {}
+                ),
             },
             sort_keys=True,
             separators=(",", ":"),

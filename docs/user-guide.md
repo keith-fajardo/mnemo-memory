@@ -28,8 +28,11 @@ Mnemo remembers both the **work on a codebase**—implementation state, decision
 tests, evidence, and the next action—and the available static structure for an enabled repository.
 Mnemo currently parses Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and
 PHP. It also records an internal file/module link when an explicit import resolves unambiguously
-inside the saved snapshot. More adapters and safely resolvable call edges use the same graph
-contract; no unproven runtime relationship is presented as fact.
+inside the saved snapshot, and follows those proven links to show a bounded list of code that
+statically depends on a selected file or symbol. It can also resolve a small safe subset of direct
+calls (same-module, fully-qualified, or unambiguous imported members). More adapters and safely
+resolvable call edges use the same graph contract; no unproven runtime relationship is presented
+as fact.
 
 When an agent needs orientation, it can request a symbol or relative-path match through Mnemo's
 existing `get_context` tool. Mnemo returns matching modules/classes/functions, declared module

@@ -65,7 +65,8 @@ Mnemo's MCP tool.
   and the next action; and
 - an optional **source-structure snapshot**: relative module paths, imports, declarations, and
   syntactically explicit calls for an enabled Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C,
-  C++, C#, Java, or PHP project—never a copy of source text; and
+  C++, C#, Java, or PHP project—plus bounded “what statically depends on this?” impact candidates,
+  never a copy of source text; and
 - optionally, a **dbt manifest snapshot**: verified upstream/downstream model relationships from
   a `manifest.json` Mnemo can ingest after you enable that dbt project once.
 
@@ -95,7 +96,8 @@ in the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
 
 Mnemo stores no source-text copy and makes no network or model call. Its current local parsers cover
 Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. They record explicit
-syntactic calls separately from imports, but do not guess runtime dispatch or claim a complete call
+syntactic calls separately from imports and can follow only **proven** internal links to show a
+bounded dependency/impact candidate. It does not guess runtime dispatch or claim a complete call
 graph. The storage and
 context contracts are language-neutral, so more language adapters and semantic resolution can be
 added without changing saved memory. The

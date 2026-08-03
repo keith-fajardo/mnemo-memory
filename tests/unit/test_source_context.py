@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.unified_context import (
+    ContextSourceImpactQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
@@ -225,4 +226,52 @@ def test_source_query_returns_typescript_static_import_and_call_facts(tmp_path: 
         '"resolved_target":{"path":"payments.ts","symbol":"payments"}' in item.content
         for item in packet.structural_items
     )
+    assert len(packet.provenance) == len(packet.structural_items)
+
+
+def test_source_impact_context_returns_bounded_dependents_with_provenance(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "core.py").write_text("def calculate():\n    return 1\n")
+    (root / "service.py").write_text("import core\n\ndef serve():\n    return core.calculate()\n")
+    (root / "app.py").write_text("import service\n\ndef run():\n    return service.serve()\n")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_impact=ContextSourceImpactQuery("core", maximum_depth=1),
+        )
+    )
+
+    assert any('"symbol":"core"' in item.content for item in packet.structural_items)
+    assert any('"symbol":"service"' in item.content for item in packet.structural_items)
+    assert all('"currentness":"unknown"' in item.content for item in packet.structural_items)
+    assert any('"impact_depth":1' in item.content for item in packet.structural_items)
+    assert packet.omissions[-1].detail == "maximum depth reached"
     assert len(packet.provenance) == len(packet.structural_items)

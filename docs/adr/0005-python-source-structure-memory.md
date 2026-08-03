@@ -22,20 +22,22 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   values, runs a build, fetches a grammar, or calls a model.
 - The projection includes safe relative file identity, module/class/function declarations, import
   declarations, and syntactically explicit calls. An import gains an internal target-symbol link
-  only when it unambiguously resolves to a module in the same snapshot. It excludes source text,
+  only when it unambiguously resolves to a module in the same snapshot. A call gains a target link
+  only for an unambiguous same-module, fully-qualified, or imported-member declaration. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.
 - Snapshots are immutable and rebuildable. A later parser/storage service may select the current
   snapshot only with explicit source-state evidence; an active snapshot is not automatically
   current.
-- Context retrieval will return only a bounded, relevant subset with provenance and omission
-  notices. It will not replay a checkout or claim a complete call graph.
+- Context retrieval can return only a bounded, relevant subset with provenance and omission
+  notices. It supports deterministic dependency/dependent impact candidates through resolved
+  internal links, but will not replay a checkout or claim a complete runtime call graph.
 
 ## Consequences
 
 This establishes useful static structure without overstating what a syntax tree can prove. Dynamic
-imports, runtime dispatch, generated code, unresolved cross-file targets, and a complete call graph
-remain unsupported until they have explicit, tested contracts. No source is uploaded, and no model
+imports, aliases that cannot be proven, runtime dispatch, generated code, unresolved cross-file
+targets, and a complete call graph remain unsupported until they have explicit, tested contracts. No source is uploaded, and no model
 participates in authoritative structural facts. New languages join through a Mnemo-owned adapter;
 we do not download or execute arbitrary grammar code from a user's repository.

@@ -50,6 +50,7 @@ def create_server(port: McpContextPort) -> FastMCP:
         source_query: Annotated[
             str | None, Field(default=None, min_length=1, max_length=512)
         ] = None,
+        source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
@@ -63,6 +64,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "checkpoint_id": checkpoint_id,
                 "dbt_lineage": dbt_lineage,
                 "source_query": source_query,
+                "source_impact": source_impact,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }

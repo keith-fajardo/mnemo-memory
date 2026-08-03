@@ -132,3 +132,29 @@ def test_cross_scope_source_impact_does_not_disclose_snapshot(tmp_path: Path) ->
         SourceImpactService(repository).query(
             SourceImpactQuery(scope("44444444-4444-4444-8444-444444444444"), "core")
         )
+
+
+def test_unambiguous_static_calls_participate_in_impact_but_dynamic_calls_do_not(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.py").write_text("def validate():\n    return True\n")
+    (root / "service.py").write_text(
+        "from helpers import validate\n\n"
+        "def process():\n    return validate()\n\n"
+        "def dynamic(fn):\n    return fn()\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, "helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.process"]
+    assert any(edge.target == "validate" and edge.target_symbol_id is not None for edge in calls)
+    assert any(edge.target == "fn" and edge.target_symbol_id is None for edge in calls)

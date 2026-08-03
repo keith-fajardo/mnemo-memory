@@ -25,6 +25,7 @@ from mnemo_memory.packages.application.checkpoints import (
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
     ContextLineageQuery,
+    ContextSourceImpactQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
@@ -69,16 +70,31 @@ class DurableMcpContextPort:
             )
             lineage = request.get("dbt_lineage")
             source_query = request.get("source_query")
+            source_impact = request.get("source_impact")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
-            if lineage is not None or source_query is not None:
+            if source_impact is not None and not isinstance(source_impact, Mapping):
+                raise ValueError("source_impact must be an object")
+            impact = (
+                None
+                if source_impact is None
+                else ContextSourceImpactQuery(
+                    _string(source_impact, "symbol"),
+                    str(source_impact.get("direction", "dependents")),
+                    bool(source_impact.get("transitive", True)),
+                    source_impact.get("maximum_depth"),
+                    int(source_impact.get("maximum_symbols", 100)),
+                    int(source_impact.get("maximum_edges", 200)),
+                )
+            )
+            if lineage is not None or source_query is not None or impact is not None:
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
                 if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
                 if lineage is None:
                     return self._context_service.get_context(
-                        GetUnifiedContext(scope, checkpoint, None, source_query, budget)
+                        GetUnifiedContext(scope, checkpoint, None, source_query, budget, impact)
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
                 dbt_query = ContextLineageQuery(
@@ -96,7 +112,7 @@ class DurableMcpContextPort:
                     bool(lineage.get("require_current", False)),
                 )
                 return self._context_service.get_context(
-                    GetUnifiedContext(scope, checkpoint, dbt_query, source_query, budget)
+                    GetUnifiedContext(scope, checkpoint, dbt_query, source_query, budget, impact)
                 ).to_dict()
             return self._service.get_context(
                 GetCheckpointContext(scope, checkpoint, budget)

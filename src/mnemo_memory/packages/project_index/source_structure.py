@@ -338,6 +338,7 @@ class SourceStructureParser:
         symbols_by_location = {
             (symbol.relative_path, symbol.qualified_name): symbol for symbol in symbols
         }
+        symbols_by_name = {symbol.qualified_name: symbol for symbol in symbols}
         edges = tuple(
             sorted(
                 (
@@ -357,6 +358,13 @@ class SourceStructureParser:
                             symbols_by_location[(path, qualified_name)].symbol_id,
                             target,
                             CodeEdgeKind.CALLS,
+                            self._resolve_call_target(
+                                path,
+                                target,
+                                modules,
+                                symbols_by_name,
+                                imports,
+                            ),
                         )
                         for path, qualified_name, target in sorted(set(calls))
                     ),
@@ -490,6 +498,39 @@ class SourceStructureParser:
             else:
                 parts.append(part)
         return "/".join(parts) or None
+
+    @staticmethod
+    def _resolve_call_target(
+        source_path: str,
+        target: str,
+        modules_by_path: dict[str, CodeSymbol],
+        symbols_by_name: dict[str, CodeSymbol],
+        imports: list[tuple[str, str]],
+    ) -> CodeSymbolId | None:
+        """Resolve only an unambiguous static call target within this snapshot.
+
+        This intentionally handles a narrow, evidence-preserving subset: a
+        same-module declaration, an already-qualified internal declaration, or
+        an imported member whose exact qualified name is present. Alias mapping,
+        overload resolution, dispatch, reflection, and generated behavior stay
+        unresolved rather than being guessed.
+        """
+        module = modules_by_path.get(source_path)
+        candidates: list[CodeSymbol] = []
+        if module is not None:
+            same_module = symbols_by_name.get(f"{module.qualified_name}.{target}")
+            if same_module is not None:
+                candidates.append(same_module)
+        direct = symbols_by_name.get(target)
+        if direct is not None:
+            candidates.append(direct)
+        for _, imported_target in (item for item in imports if item[0] == source_path):
+            if imported_target.endswith(f".{target}"):
+                imported = symbols_by_name.get(imported_target)
+                if imported is not None:
+                    candidates.append(imported)
+        unique = {item.symbol_id: item for item in candidates}
+        return next(iter(unique)) if len(unique) == 1 else None
 
     @classmethod
     def _parse_python(

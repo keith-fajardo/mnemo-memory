@@ -496,7 +496,9 @@ failure/concurrency matrix and wrapper-overhead benchmark work remain tracked fo
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,
 Rust, C, C++, C#, Java, and PHP repositories as well as dbt projects. It has deterministic,
 no-execution parser adapters for modules, imports, declarations, and direct syntactically explicit
-calls; immutable scoped SQLite snapshots; unambiguous in-snapshot import links; bounded
+calls; immutable scoped SQLite snapshots; unambiguous in-snapshot import and limited static-call
+links; deterministic direct/transitive dependency and dependent impact candidates; immutable
+snapshot diffs; bounded
 provenance-bearing `get_context` facts; and
 opt-in lifecycle refresh at session start and after changed work stops. Parsing is offline and
 stores no source text. Multi-language semantic resolution, safely resolved cross-file calls, a
