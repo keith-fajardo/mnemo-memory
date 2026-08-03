@@ -162,7 +162,10 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "transcript" not in state.lower()
 
 
-def test_record_event_does_not_replace_a_required_checkpoint_handoff(tmp_path: Path) -> None:
+@pytest.mark.parametrize("operation", ("record_event", "record_lesson"))
+def test_incremental_checkpoint_operations_do_not_replace_a_required_handoff(
+    tmp_path: Path, operation: str
+) -> None:
     project = tmp_path / "repo"
     project.mkdir()
     data = tmp_path / "data"
@@ -186,7 +189,7 @@ def test_record_event_does_not_replace_a_required_checkpoint_handoff(tmp_path: P
                 "cwd": str(project),
                 "tool_name": "mcp__mnemo-memory__save_checkpoint",
                 "tool_input": {
-                    "operation": "record_event",
+                    "operation": operation,
                     "event_summary": "private detail that must never enter hook state",
                 },
             }

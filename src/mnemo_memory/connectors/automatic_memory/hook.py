@@ -38,6 +38,7 @@ _SAVE_TOOL_NAMES = {
     "mcp__mnemo_memory__save_checkpoint",
 }
 _MUTATING_TOOLS = {"Bash", "apply_patch", "Edit", "Write"}
+_INCREMENTAL_CHECKPOINT_OPERATIONS = frozenset({"record_event", "record_lesson"})
 _MAX_CHANGE_SYMBOLS = 12
 _MAX_CHANGE_SYMBOL_LABEL_LENGTH = 256
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
@@ -387,11 +388,14 @@ def _is_durable_checkpoint_save(event: Mapping[str, object], tool_name: str) -> 
     """Return whether a save-tool call is a complete handoff lifecycle boundary.
 
     The hook deliberately inspects only the public operation tag, never a tool body, evidence,
-    prompt, or result. ``record_event`` is a separate bounded historical fact; it must not mark a
-    changed session as safely handed off. Calls from older clients without a visible operation keep
-    the established checkpoint-save behavior.
+    prompt, or result. ``record_event`` and ``record_lesson`` are bounded incremental additions;
+    neither replaces a complete handoff after project work changed. Calls from older clients
+    without a visible operation keep the established checkpoint-save behavior.
     """
     if tool_name not in _SAVE_TOOL_NAMES:
         return False
     tool_input = event.get("tool_input")
-    return not (isinstance(tool_input, Mapping) and tool_input.get("operation") == "record_event")
+    return not (
+        isinstance(tool_input, Mapping)
+        and tool_input.get("operation") in _INCREMENTAL_CHECKPOINT_OPERATIONS
+    )
