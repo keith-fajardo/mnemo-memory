@@ -22,9 +22,20 @@ mnemo-memory --help
 mnemo-memory init
 ```
 
-`init` creates or opens Mnemo’s local data directory. It does **not** automatically save the
-current repository, index all files, or make a chat durable. The agent must explicitly use
-`save_checkpoint` while working.
+`init` creates or opens Mnemo’s local data directory. It does **not** automatically index every
+source file or make a chat durable. For normal use, enable automatic task memory while connecting
+from the project directory. This one opt-in creates a local project binding, indexes a bounded
+source-structure map, and installs lifecycle reminders:
+
+```bash
+mnemo-memory connect codex --auto-memory
+# or
+mnemo-memory connect claude-code --auto-memory
+```
+
+This creates a private local project binding; you never enter scope UUIDs. The hook tells the agent
+to retrieve context at session start and create a compact checkpoint at a stop/compaction boundary.
+It does not read or store a raw transcript.
 
 By default, Codex and Claude Code launched normally will use the same personal Mnemo store. To use
 an isolated store—for a test, demo, or separate profile—set an absolute path before launching the
@@ -42,7 +53,7 @@ fresh Claude Code session, or the reverse.
 Prerequisite: the `codex` CLI is installed and on your `PATH`.
 
 ```bash
-mnemo-memory connect codex
+mnemo-memory connect codex --auto-memory
 ```
 
 Confirm the prompt. For a non-interactive or CI preview:
@@ -81,7 +92,7 @@ mnemo-memory disconnect codex
 Prerequisite: the `claude` CLI is installed and on your `PATH`.
 
 ```bash
-mnemo-memory connect claude-code
+mnemo-memory connect claude-code --auto-memory
 ```
 
 The same safe controls are available:
@@ -121,6 +132,27 @@ They share durable checkpoints only when they use the same `MNEMO_DATA_DIR` and 
 scope. Disconnecting one client does not disconnect the other or delete saved Mnemo data.
 
 ## How an agent uses the memory
+
+### Normal mode: automatic handoffs
+
+After connecting with `--auto-memory`, work normally. Mnemo’s lifecycle hook prompts the agent to
+call `get_context` at a new session and `save_checkpoint` before it stops meaningful work. The user
+does not need to remember a separate “save this” instruction. Codex asks you to review/trust local
+hooks once through `/hooks`; restart either client after changing its hook configuration.
+
+The automatic mode remembers task handoffs and creates a private static source-structure snapshot
+for the enabled project: modules, imports, declarations, and explicit syntactic calls. The local
+development branch currently supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++,
+C#, Java, and PHP. Mnemo does not claim an unproven runtime call graph.
+
+For code orientation, the agent can include a `source_query` (a symbol or relative-path fragment)
+in `get_context`. Mnemo returns matching structural facts plus declared module imports and explicit
+syntactic calls, each tied to the exact local snapshot. If an import points unambiguously to another
+saved module, its returned relationship identifies that module too. It does not return source text,
+chat history, or guessed calls. Like a dbt snapshot, an active source snapshot is not silently
+presented as proof that the working tree is current; its currentness is explicit.
+
+### Manual fallback
 
 Near the end of a task, ask the agent something concrete, for example:
 

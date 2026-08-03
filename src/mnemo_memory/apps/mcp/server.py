@@ -47,6 +47,9 @@ def create_server(port: McpContextPort) -> FastMCP:
             str | None, Field(default=None, min_length=36, max_length=36)
         ] = None,
         dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        source_query: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=512)
+        ] = None,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
@@ -59,6 +62,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "task_id": task_id,
                 "checkpoint_id": checkpoint_id,
                 "dbt_lineage": dbt_lineage,
+                "source_query": source_query,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }
@@ -141,7 +145,11 @@ def main(data_directory: Path | None = None) -> None:
         create_server(
             DurableMcpContextPort(
                 runtime.checkpoint_service,
-                UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+                UnifiedContextService(
+                    runtime.checkpoint_service,
+                    runtime.dbt_manifest_service,
+                    runtime.source_structure_repository,
+                ),
             )
         ).run(transport="stdio")
 

@@ -161,6 +161,136 @@ approved = true
 
 [[dependencies]]
 ecosystem = "pypi"
+name = "tree-sitter"
+version = "0.25.2"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter/0.25.2/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Offline, parser-only syntax-tree runtime for the source-structure index"
+replacement_boundary = "Project-index parser adapter boundary; Mnemo owns graph extraction and never executes indexed code"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-javascript"
+version = "0.25.0"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-javascript/0.25.0/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline JavaScript and JSX grammar for the source-structure index"
+replacement_boundary = "JavaScript/JSX parser adapter; removeable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-typescript"
+version = "0.23.2"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-typescript/0.23.2/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline TypeScript and TSX grammar for the source-structure index"
+replacement_boundary = "TypeScript/TSX parser adapter; removeable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-go"
+version = "0.25.0"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-go/0.25.0/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline Go grammar for the source-structure index"
+replacement_boundary = "Go parser adapter; removeable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-rust"
+version = "0.24.2"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-rust/0.24.2/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline Rust grammar for the source-structure index"
+replacement_boundary = "Rust parser adapter; removeable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-c"
+version = "0.24.2"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-c/0.24.2/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline C grammar for the source-structure index"
+replacement_boundary = "C parser adapter; removable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-cpp"
+version = "0.23.4"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-cpp/0.23.4/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline C++ grammar for the source-structure index"
+replacement_boundary = "C++ parser adapter; removable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-c-sharp"
+version = "0.23.5"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-c-sharp/0.23.5/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline C# grammar for the source-structure index"
+replacement_boundary = "C# parser adapter; removable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-java"
+version = "0.23.5"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-java/0.23.5/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline Java grammar for the source-structure index"
+replacement_boundary = "Java parser adapter; removable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tree-sitter-php"
+version = "0.24.1"
+license = "MIT"
+source_url = "https://pypi.org/project/tree-sitter-php/0.24.1/"
+author = "Tree-sitter contributors"
+owner = "Mnemo maintainers"
+purpose = "Precompiled offline PHP grammar for the source-structure index"
+replacement_boundary = "PHP parser adapter; removable without changing domain, storage, or context contracts"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
 name = "annotated-doc"
 version = "0.0.5"
 license = "MIT"

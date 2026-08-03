@@ -12,6 +12,12 @@ from mnemo_memory.packages.domain import (
     CheckpointId,
     CheckpointRevision,
     CheckpointRevisionId,
+    CodeEdge,
+    CodeSnapshot,
+    CodeSnapshotId,
+    CodeStructureArtifact,
+    CodeSymbol,
+    CodeSymbolId,
     EvidenceReference,
     MemoryScope,
 )
@@ -82,6 +88,14 @@ class InvalidManifestGraph(ProjectIndexRepositoryError):
 
 
 class ProjectIndexStorageFailure(ProjectIndexRepositoryError):
+    pass
+
+
+class SourceSnapshotNotFound(ProjectIndexRepositoryError):
+    pass
+
+
+class SourceIndexStorageFailure(ProjectIndexRepositoryError):
     pass
 
 
@@ -163,6 +177,12 @@ class ManifestSnapshotPage:
     next_offset: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class SourceSnapshotStoreResult:
+    snapshot: CodeSnapshot
+    idempotent: bool
+
+
 class ProjectIndexRepository(Protocol):
     def store_and_activate(
         self,
@@ -213,3 +233,37 @@ class ProjectIndexRepository(Protocol):
     def list_snapshots(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ManifestSnapshotPage: ...
+
+
+class SourceStructureRepository(Protocol):
+    """Scoped durable storage for rebuildable, static source projections."""
+
+    def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult: ...
+
+    def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None: ...
+
+    def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot: ...
+
+    def iter_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> tuple[CodeSymbol, ...]: ...
+
+    def iter_edges(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> tuple[CodeEdge, ...]: ...
+
+    def find_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
+    ) -> tuple[CodeSymbol, ...]: ...
+
+    def module_symbols_for_paths(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_paths: tuple[str, ...]
+    ) -> tuple[CodeSymbol, ...]: ...
+
+    def symbols_by_ids(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeSymbol, ...]: ...
+
+    def edges_from_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]: ...

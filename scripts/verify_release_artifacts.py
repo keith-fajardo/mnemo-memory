@@ -18,6 +18,7 @@ REQUIRED_MIGRATIONS = (
     "0001_initial.sql",
     "0002_checkpoint_aggregate_revisions.sql",
     "0003_dbt_manifest_snapshots.sql",
+    "0004_source_structure_snapshots.sql",
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",

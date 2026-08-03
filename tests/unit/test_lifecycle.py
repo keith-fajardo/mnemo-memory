@@ -9,6 +9,10 @@ from typer.testing import CliRunner
 
 from mnemo_memory.apps.api.app import create_app
 from mnemo_memory.apps.cli.main import app
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBinding,
+    LocalDbtProjectBindingStore,
+)
 from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
 from mnemo_memory.packages.application.services import LifecycleService
 
@@ -25,7 +29,7 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
     assert first["initialized"] is True
     assert second["initialized"] is False
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
     assert value.config.config_path.exists()
     assert value.config.database_path.exists()
 
@@ -80,7 +84,19 @@ def test_cli_help_explains_top_level_commands() -> None:
     assert result.exit_code == 0
     assert "Initialize Mnemo's local data directory and SQLite database." in result.output
     assert "Register Mnemo with an AI coding client." in result.output
-    assert "Ingest and inspect offline dbt manifests." in result.output
+    assert "Enable personal dbt lineage memory and wrap dbt." in result.output
+
+
+def test_dbt_help_leads_with_personal_enablement_not_advanced_scope_configuration() -> None:
+    result = CliRunner().invoke(app, ["dbt", "--help"])
+
+    assert result.exit_code == 0
+    assert "enable" in result.output
+    assert "disable" in result.output
+    assert "status" in result.output
+    assert "configure" not in result.output
+    assert "unconfigure" not in result.output
+    assert "ingest" not in result.output
 
 
 def test_interactive_guide_explains_explicit_memory_and_requires_confirmation(
@@ -195,6 +211,102 @@ def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> 
         ],
     )
     assert json.loads(status.output)["active"] is True
+
+
+def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manifest(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "dbt project Δ"
+    target = project / "target"
+    target.mkdir(parents=True)
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    fixture = Path("tests/fixtures/dbt/manifest-v12.json")
+    target.joinpath("manifest.json").write_bytes(fixture.read_bytes())
+    second = tmp_path / "another dbt project"
+    second.mkdir()
+    (second / "dbt_project.yml").write_text("name: synthetic\n")
+    data_dir = tmp_path / "Mnemo data Δ"
+    runner = CliRunner()
+
+    first = runner.invoke(
+        app, ["dbt", "enable", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert first.exit_code == 0, first.output
+    result = json.loads(first.output)
+    assert result["enabled"] is True
+    assert result["existing_manifest"] == "activated"
+    assert "scope" not in result
+    assert (data_dir / "config.json").exists()
+
+    first_binding = _binding(data_dir, project)
+    repeated = runner.invoke(
+        app, ["dbt", "enable", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert _binding(data_dir, project).scope == first_binding.scope
+
+    second_enable = runner.invoke(
+        app, ["dbt", "enable", "--project-dir", str(second), "--data-dir", str(data_dir)]
+    )
+    assert second_enable.exit_code == 0, second_enable.output
+    second_binding = _binding(data_dir, second)
+    assert second_binding.scope.owner_id == first_binding.scope.owner_id
+    assert second_binding.scope.workspace_id == first_binding.scope.workspace_id
+    assert second_binding.scope.project_id != first_binding.scope.project_id
+
+    status = runner.invoke(
+        app, ["dbt", "status", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["active"] is True
+
+    disabled = runner.invoke(
+        app, ["dbt", "disable", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert disabled.exit_code == 0, disabled.output
+    assert json.loads(disabled.output) == {"enabled": False, "removed": True}
+    disabled_status = runner.invoke(
+        app, ["dbt", "status", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert json.loads(disabled_status.output)["instruction"] == "mnemo-memory dbt enable"
+
+
+def _binding(data_dir: Path, project: Path) -> DbtProjectBinding:
+    binding = LocalDbtProjectBindingStore(data_dir).get(project)
+    assert binding is not None
+    return binding
+
+
+def test_unenabled_dbt_project_runs_normally_and_reports_one_setup_instruction(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "unenabled dbt project"
+    project.mkdir()
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    data_dir = tmp_path / "Mnemo data"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "dbt",
+            "exec",
+            "--data-dir",
+            str(data_dir),
+            "--dbt-executable",
+            str(Path(sys.executable).resolve()),
+            "--",
+            "-c",
+            "raise SystemExit(0)",
+            "--project-dir",
+            str(project),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("mnemo-memory dbt enable") == 1
+    assert "MNEMO_DBT_MANIFEST_ACTIVATED" not in result.output
+    assert not data_dir.exists()
 
 
 def test_guide_initializes_only_when_explicitly_requested(tmp_path: Path) -> None:

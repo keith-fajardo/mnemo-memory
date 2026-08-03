@@ -6,9 +6,19 @@ from .contracts import (
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ProjectIndexRepository,
+    SourceStructureRepository,
 )
-from .reference import ReferenceCheckpointRepository, ReferenceProjectIndexRepository
-from .sqlite import SQLiteCheckpointRepository, SQLiteMigrationError, SQLiteSchemaTooNewError
+from .reference import (
+    ReferenceCheckpointRepository,
+    ReferenceProjectIndexRepository,
+    ReferenceSourceStructureRepository,
+)
+from .sqlite import (
+    SQLiteCheckpointRepository,
+    SQLiteMigrationError,
+    SQLiteSchemaTooNewError,
+    SQLiteSourceStructureRepository,
+)
 
 __all__ = [
     "ActiveSnapshotConflict",
@@ -18,7 +28,10 @@ __all__ = [
     "ProjectIndexRepository",
     "ReferenceCheckpointRepository",
     "ReferenceProjectIndexRepository",
+    "ReferenceSourceStructureRepository",
     "SQLiteCheckpointRepository",
     "SQLiteMigrationError",
     "SQLiteSchemaTooNewError",
+    "SQLiteSourceStructureRepository",
+    "SourceStructureRepository",
 ]

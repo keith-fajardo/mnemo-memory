@@ -12,6 +12,13 @@ from mnemo_memory.packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
+    CodeEdge,
+    CodeSnapshot,
+    CodeSnapshotId,
+    CodeStructureArtifact,
+    CodeSymbol,
+    CodeSymbolId,
+    CodeSymbolKind,
     EvidenceReference,
     MemoryScope,
     ScopeLevel,
@@ -39,6 +46,9 @@ from .contracts import (
     ManifestSnapshotPage,
     ManifestSnapshotStoreResult,
     RevisionConflict,
+    SourceIndexStorageFailure,
+    SourceSnapshotNotFound,
+    SourceSnapshotStoreResult,
 )
 
 
@@ -460,3 +470,108 @@ class ReferenceProjectIndexRepository:
             raise InvalidManifestSnapshotScope(
                 "dbt snapshot operations require explicit project scope"
             )
+
+
+class ReferenceSourceStructureRepository:
+    """Atomic in-memory reference for immutable multi-language source snapshots."""
+
+    def __init__(self) -> None:
+        self._artifacts: dict[CodeSnapshotId, CodeStructureArtifact] = {}
+        self._active: dict[MemoryScope, CodeSnapshotId] = {}
+
+    def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
+        self._require_scope(artifact.snapshot.scope)
+        for snapshot in self._artifacts.values():
+            if (
+                snapshot.snapshot.scope == artifact.snapshot.scope
+                and snapshot.snapshot.source_digest == artifact.snapshot.source_digest
+            ):
+                self._active[artifact.snapshot.scope] = snapshot.snapshot.snapshot_id
+                return SourceSnapshotStoreResult(snapshot.snapshot, idempotent=True)
+        snapshot_id = artifact.snapshot.snapshot_id
+        if snapshot_id in self._artifacts:
+            raise SourceIndexStorageFailure("source snapshot identity already exists")
+        previous = self._active.get(artifact.snapshot.scope)
+        try:
+            self._artifacts[snapshot_id] = artifact
+            self._active[artifact.snapshot.scope] = snapshot_id
+        except BaseException:
+            self._artifacts.pop(snapshot_id, None)
+            if previous is None:
+                self._active.pop(artifact.snapshot.scope, None)
+            else:
+                self._active[artifact.snapshot.scope] = previous
+            raise
+        return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
+
+    def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
+        self._require_scope(scope)
+        snapshot_id = self._active.get(scope)
+        return None if snapshot_id is None else self._artifacts[snapshot_id].snapshot
+
+    def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
+        self._require_scope(scope)
+        artifact = self._artifacts.get(snapshot_id)
+        if artifact is None or artifact.snapshot.scope != scope:
+            raise SourceSnapshotNotFound("source snapshot was not found")
+        return artifact.snapshot
+
+    def iter_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> tuple[CodeSymbol, ...]:
+        return self._artifact(scope, snapshot_id).symbols
+
+    def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:
+        return self._artifact(scope, snapshot_id).edges
+
+    def find_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
+    ) -> tuple[CodeSymbol, ...]:
+        if not query.strip() or limit < 1:
+            return ()
+        normalized = query.casefold()
+        return tuple(
+            symbol
+            for symbol in self.iter_symbols(scope, snapshot_id)
+            if normalized in symbol.qualified_name.casefold()
+            or normalized in symbol.relative_path.casefold()
+        )[:limit]
+
+    def module_symbols_for_paths(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_paths: tuple[str, ...]
+    ) -> tuple[CodeSymbol, ...]:
+        requested = frozenset(relative_paths)
+        return tuple(
+            symbol
+            for symbol in self.iter_symbols(scope, snapshot_id)
+            if symbol.kind is CodeSymbolKind.MODULE and symbol.relative_path in requested
+        )
+
+    def symbols_by_ids(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeSymbol, ...]:
+        requested = frozenset(symbol_ids)
+        return tuple(
+            symbol
+            for symbol in self.iter_symbols(scope, snapshot_id)
+            if symbol.symbol_id in requested
+        )
+
+    def edges_from_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]:
+        requested = frozenset(symbol_ids)
+        return tuple(
+            edge
+            for edge in self.iter_edges(scope, snapshot_id)
+            if edge.source_symbol_id in requested
+        )
+
+    def _artifact(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeStructureArtifact:
+        self.get_snapshot(scope, snapshot_id)
+        return self._artifacts[snapshot_id]
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise SourceIndexStorageFailure("source snapshots require explicit project scope")

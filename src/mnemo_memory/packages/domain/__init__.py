@@ -1,5 +1,15 @@
 """Pure Mnemo domain identifiers and immutable value objects."""
 
+from .code_structure import (
+    CodeEdge,
+    CodeEdgeKind,
+    CodeSnapshot,
+    CodeSnapshotId,
+    CodeStructureArtifact,
+    CodeSymbol,
+    CodeSymbolId,
+    CodeSymbolKind,
+)
 from .context_packet import (
     DEFAULT_CONTEXT_BUDGET,
     BudgetOverride,
@@ -87,6 +97,14 @@ __all__ = [
     "CheckpointRevision",
     "CheckpointRevisionId",
     "CheckpointStatus",
+    "CodeEdge",
+    "CodeEdgeKind",
+    "CodeSnapshot",
+    "CodeSnapshotId",
+    "CodeStructureArtifact",
+    "CodeSymbol",
+    "CodeSymbolId",
+    "CodeSymbolKind",
     "ConflictNotice",
     "ConflictState",
     "ContentRepresentation",

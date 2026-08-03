@@ -25,6 +25,7 @@ PACKAGE_COMPONENTS = {
 }
 APP_COMPONENTS = {"apps/api", "apps/cli", "apps/mcp", "apps/web", "apps/worker"}
 CONNECTOR_COMPONENTS = {
+    "connectors/automatic_memory",
     "connectors/claude_code",
     "connectors/codex",
     "connectors/command_wrapper",

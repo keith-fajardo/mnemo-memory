@@ -48,7 +48,7 @@ def test_dbt_hook_activates_changed_manifest_and_skips_failed_or_unchanged(tmp_p
     store = LocalDbtProjectBindingStore(tmp_path / "memory")
     store.set(DbtProjectBinding(project.resolve(), scope()))
     service = DbtManifestApplicationService(ReferenceProjectIndexRepository(), DbtManifestParser())
-    hooks = DbtManifestHooks(store, service, lambda: NOW)
+    hooks = DbtManifestHooks(store, lambda: service, lambda: NOW)
     context = CommandContext(
         Path(__file__).resolve(), ("run",), project.resolve(), "dbt", "hook-1", NOW
     )

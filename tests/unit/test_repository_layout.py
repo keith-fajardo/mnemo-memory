@@ -10,6 +10,7 @@ EXPECTED_DIRECTORIES = {
     "src/mnemo_memory/apps/worker",
     "src/mnemo_memory/connectors/claude_code",
     "src/mnemo_memory/connectors/codex",
+    "src/mnemo_memory/connectors/automatic_memory",
     "src/mnemo_memory/connectors/dbt",
     "src/mnemo_memory/connectors/filesystem",
     "src/mnemo_memory/connectors/git",

@@ -132,7 +132,7 @@ def test_runtime_persists_checkpoint_across_instances_and_isolates_directories(
         created = runtime_a.checkpoint_service.create(
             CreateCheckpoint(scope_value, content(), (evidence(),))
         )
-        assert runtime_a.repository.schema_version() == 3
+        assert runtime_a.repository.schema_version() == 4
         assert runtime_a.repository.connection_settings()["foreign_keys"] == 1
     with build_checkpoint_runtime(configuration_a) as runtime_b:
         restored = runtime_b.checkpoint_service.get(
@@ -164,7 +164,7 @@ def test_runtime_rejects_corrupt_and_newer_databases_without_fallback(tmp_path: 
         sqlite3.connect(runtime.repository.path) as connection,
     ):
         connection.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (4, ?)",
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (5, ?)",
             (NOW.isoformat(),),
         )
     with pytest.raises(LocalRuntimeError, match="unavailable"):

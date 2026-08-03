@@ -467,12 +467,37 @@ resolves a configured project and captures the prior manifest/active snapshot; t
 activates only a changed, valid manifest after a successful non-interrupted command. Failed,
 missing, invalid, or stale competing updates retain the prior snapshot.
 
+The personal-mode path is now `mnemo-memory dbt enable` once per dbt repository: Mnemo initializes
+the local profile if needed, creates private stable owner/workspace/project identities, binds the
+canonical directory, and optionally ingests an existing valid manifest. `dbt status` and
+`dbt disable` use that local binding without asking a normal user for UUIDs. An unenabled project
+still runs dbt in fail-open mode and receives one concise enable reminder.
+
 #### Issue 14C — In progress
 
 Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-hook generation.
 The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
 strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-tool MCP contract.
+
+#### Issue 14D — In progress
+
+Automatic task-memory onboarding is being added as an explicit opt-in for Codex and Claude Code.
+It creates a private machine-local project binding, installs only Mnemo-owned lifecycle-hook entries,
+refreshes a bounded static source-structure projection at trusted lifecycle boundaries, and asks the
+connected agent to retrieve bounded context at session start and write a typed checkpoint at a
+work-stop or compaction boundary. It does not ingest transcripts, source text, or credentials.
 No dbt-core dependency, warehouse call, or automatic shell-profile modification was introduced.
 Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
 Publishing workflow after source-independent artifact verification. The remaining full
 failure/concurrency matrix and wrapper-overhead benchmark work remain tracked follow-up work.
+
+### Source-structure memory — In progress
+
+The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,
+Rust, C, C++, C#, Java, and PHP repositories as well as dbt projects. It has deterministic,
+no-execution parser adapters for modules, imports, declarations, and direct syntactically explicit
+calls; immutable scoped SQLite snapshots; unambiguous in-snapshot import links; bounded
+provenance-bearing `get_context` facts; and
+opt-in lifecycle refresh at session start and after changed work stops. Parsing is offline and
+stores no source text. Multi-language semantic resolution, safely resolved cross-file calls, a
+complete call graph, and automatic transcript capture remain separate follow-up work.

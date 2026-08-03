@@ -8,10 +8,19 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import typer
 
+from mnemo_memory.connectors.automatic_memory.client_config import (
+    AutomaticMemoryClientConfigError,
+    ClientName,
+    client_home,
+    disable_client_hooks,
+    enable_client_hooks,
+)
+from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
 from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
@@ -27,11 +36,19 @@ from mnemo_memory.connectors.dbt.project_binding import (
     find_dbt_project_root,
 )
 from mnemo_memory.packages.application import (
+    DbtApplicationConflict,
+    DbtApplicationInvalidManifest,
+    DbtApplicationStorageFailure,
+    DbtManifestApplicationService,
     GetActiveManifestStatus,
     IngestManifest,
     build_checkpoint_runtime,
     build_lifecycle_service,
     resolve_local_config,
+)
+from mnemo_memory.packages.application.automatic_memory import (
+    AutomaticMemoryBindingError,
+    LocalMemoryProjectBindingStore,
 )
 from mnemo_memory.packages.application.command_wrapper import (
     CommandInvocation,
@@ -47,6 +64,8 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
+from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
+from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -57,10 +76,18 @@ mcp_app = typer.Typer(no_args_is_help=True, help="Run the local MCP server.")
 app.add_typer(mcp_app, name="mcp", help="Run the local MCP server.")
 connect_app = typer.Typer(no_args_is_help=True, help="Register Mnemo with an AI coding client.")
 disconnect_app = typer.Typer(no_args_is_help=True, help="Remove a client registration.")
-dbt_app = typer.Typer(no_args_is_help=True, help="Ingest and inspect offline dbt manifests.")
+dbt_app = typer.Typer(
+    no_args_is_help=True,
+    help="Enable personal dbt lineage memory and safely wrap local dbt commands.",
+)
+memory_app = typer.Typer(
+    no_args_is_help=True,
+    help="Enable automatic bounded task handoffs for a connected coding client.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
-app.add_typer(dbt_app, name="dbt", help="Ingest and inspect offline dbt manifests.")
+app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
+app.add_typer(memory_app, name="memory", help="Set up automatic task memory for this project.")
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
@@ -73,9 +100,12 @@ def _show(value: object) -> None:
 
 def _guide_client_commands(choice: str) -> tuple[str, ...]:
     commands = {
-        "codex": ("mnemo-memory connect codex",),
-        "claude-code": ("mnemo-memory connect claude-code",),
-        "both": ("mnemo-memory connect codex", "mnemo-memory connect claude-code"),
+        "codex": ("mnemo-memory connect codex --auto-memory",),
+        "claude-code": ("mnemo-memory connect claude-code --auto-memory",),
+        "both": (
+            "mnemo-memory connect codex --auto-memory",
+            "mnemo-memory connect claude-code --auto-memory",
+        ),
         "later": (),
     }
     try:
@@ -95,6 +125,10 @@ def _run_setup_guide(data_dir: Path | None, *, initialize: bool, non_interactive
     typer.echo("Mnemo Memory setup guide")
     typer.echo(
         "Mnemo stores explicit task checkpoints, not an automatic chat or directory history."
+    )
+    typer.echo(
+        "When you enable automatic memory for a repository, Mnemo also stores a private "
+        "static map of supported-language modules, imports, declarations, and explicit calls."
     )
     typer.echo(
         "A later client retrieves a saved checkpoint only from this same local store and scope."
@@ -122,20 +156,20 @@ def _run_setup_guide(data_dir: Path | None, *, initialize: bool, non_interactive
     commands = _guide_client_commands(choice)
     if commands:
         typer.echo(
-            "Run the following command(s) when you are ready; each asks before changing "
-            "client configuration:"
+            "Run the following command(s) when you are ready. Add --auto-memory to enable "
+            "automatic task handoffs for the current project:"
         )
         for command in commands:
             typer.echo(f"  {command}")
     else:
         typer.echo("Client registration deferred. You can return with mnemo-memory guide.")
     typer.echo(
-        "\nBefore ending work, ask the connected agent to save a Mnemo checkpoint. "
-        "In a fresh session, ask it to retrieve Mnemo context before continuing."
+        "\nWith automatic task memory enabled, Mnemo prompts the agent to retrieve context "
+        "at a fresh session and save a bounded handoff before work stops."
     )
     typer.echo(
-        "Optional dbt lineage: run mnemo-memory dbt ingest target/manifest.json with your "
-        "scope IDs."
+        "Optional dbt lineage: from a dbt project, run mnemo-memory dbt enable once. "
+        "No UUIDs are needed."
     )
 
 
@@ -197,8 +231,94 @@ def _binding_store(data_dir: Path | None) -> LocalDbtProjectBindingStore:
     return LocalDbtProjectBindingStore(resolve_local_config(data_dir).data_directory)
 
 
+def _advanced_scope(
+    owner_id: str | None, workspace_id: str | None, project_id: str | None
+) -> MemoryScope | None:
+    values = (owner_id, workspace_id, project_id)
+    if not any(values):
+        return None
+    if not all(values):
+        raise typer.BadParameter("MNEMO_DBT_SCOPE_OVERRIDE_INCOMPLETE")
+    assert owner_id is not None and workspace_id is not None and project_id is not None
+    return _project_scope(owner_id, workspace_id, project_id)
+
+
+def _initialize_dbt_profile(data_dir: Path | None) -> tuple[Path, LocalDbtProjectBindingStore]:
+    _service(data_dir).initialize()
+    config = resolve_local_config(data_dir)
+    return config.data_directory, LocalDbtProjectBindingStore(config.data_directory)
+
+
+def _ingest_existing_manifest(data_directory: Path, binding: DbtProjectBinding) -> tuple[str, bool]:
+    manifest = binding.project_root / "target" / "manifest.json"
+    if not manifest.is_file():
+        return "unavailable", False
+    try:
+        with build_checkpoint_runtime(
+            resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
+        ) as runtime:
+            assert runtime.dbt_manifest_service is not None
+            stored = runtime.dbt_manifest_service.ingest(
+                IngestManifest(
+                    binding.scope, manifest.read_bytes(), "manifest.json", datetime.now(UTC)
+                )
+            )
+    except (
+        DbtApplicationConflict,
+        DbtApplicationInvalidManifest,
+        DbtApplicationStorageFailure,
+        OSError,
+    ):
+        return "invalid_or_unavailable", False
+    return ("unchanged" if stored.idempotent else "activated"), True
+
+
+@dbt_app.command("enable", help="Enable Mnemo for this dbt project; no UUIDs are needed normally.")
+def dbt_enable(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    ingest_existing: bool = typer.Option(True, "--ingest-existing/--no-ingest-existing"),
+    owner_id: str | None = typer.Option(None, "--owner-id", help="Advanced scope override."),
+    workspace_id: str | None = typer.Option(
+        None, "--workspace-id", help="Advanced scope override."
+    ),
+    project_id: str | None = typer.Option(None, "--project-id", help="Advanced scope override."),
+) -> None:
+    """Create/reuse private personal identities and bind the nearest dbt project once."""
+    try:
+        data_directory, store = _initialize_dbt_profile(data_dir)
+        root = find_dbt_project_root(project_dir)
+        binding = store.get(root)
+        scope_override = _advanced_scope(owner_id, workspace_id, project_id)
+        if binding is None:
+            binding = DbtProjectBinding(
+                root, scope_override or store.personal_profile().project_scope()
+            )
+            store.set(binding)
+        elif scope_override is not None and scope_override != binding.scope:
+            raise typer.BadParameter("MNEMO_DBT_PROJECT_ALREADY_ENABLED")
+
+        manifest_status, ingested = (
+            _ingest_existing_manifest(data_directory, binding)
+            if ingest_existing
+            else ("not_requested", False)
+        )
+        _show(
+            {
+                "enabled": True,
+                "project_root": str(binding.project_root),
+                "existing_manifest": manifest_status,
+                "ingested": ingested,
+            }
+        )
+    except (DbtProjectBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_DBT_ENABLE_FAILED") from error
+
+
 @dbt_app.command(
-    "configure", help="Bind one local dbt project directory to an explicit Mnemo scope."
+    "configure",
+    help="Bind one local dbt project directory to an explicit Mnemo scope.",
+    hidden=True,
 )
 def dbt_configure(
     project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
@@ -223,7 +343,9 @@ def dbt_configure(
         raise typer.BadParameter("MNEMO_DBT_CONFIGURATION_INVALID") from error
 
 
-@dbt_app.command("configuration", help="Show the local Mnemo scope binding for a dbt project.")
+@dbt_app.command(
+    "configuration", help="Show the local Mnemo scope binding for a dbt project.", hidden=True
+)
 def dbt_configuration(
     project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -247,7 +369,9 @@ def dbt_configuration(
     )
 
 
-@dbt_app.command("unconfigure", help="Remove only the local Mnemo binding for a dbt project.")
+@dbt_app.command(
+    "unconfigure", help="Remove only the local Mnemo binding for a dbt project.", hidden=True
+)
 def dbt_unconfigure(
     project_dir: Path = typer.Option(..., "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -258,12 +382,28 @@ def dbt_unconfigure(
         raise typer.BadParameter("MNEMO_DBT_CONFIGURATION_INVALID") from error
 
 
-@dbt_app.command("ingest", help="Validate and activate a local manifest.json without running dbt.")
+@dbt_app.command("disable", help="Disable Mnemo only for this dbt project; saved snapshots remain.")
+def dbt_disable(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        removed = _binding_store(data_dir).remove(project_dir)
+        _show({"enabled": False, "removed": removed})
+    except DbtProjectBindingError as error:
+        raise typer.BadParameter("MNEMO_DBT_DISABLE_FAILED") from error
+
+
+@dbt_app.command(
+    "ingest", help="Validate and activate a local manifest.json without running dbt.", hidden=True
+)
 def dbt_ingest(
     manifest: Path,
-    owner_id: str = typer.Option(...),
-    workspace_id: str = typer.Option(...),
-    project_id: str = typer.Option(...),
+    owner_id: str | None = typer.Option(None, "--owner-id", help="Advanced scope override."),
+    workspace_id: str | None = typer.Option(
+        None, "--workspace-id", help="Advanced scope override."
+    ),
+    project_id: str | None = typer.Option(None, "--project-id", help="Advanced scope override."),
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
     dry_run: bool = typer.Option(False, "--dry-run"),
     json_output: bool = typer.Option(False, "--json"),
@@ -271,7 +411,12 @@ def dbt_ingest(
     """Validate and atomically activate a local dbt manifest without executing dbt."""
     try:
         raw = manifest.read_bytes()
-        scope = _project_scope(owner_id, workspace_id, project_id)
+        scope = _advanced_scope(owner_id, workspace_id, project_id)
+        if scope is None:
+            binding = _binding_store(data_dir).get(manifest.parent)
+            if binding is None:
+                raise typer.BadParameter("MNEMO_DBT_PROJECT_NOT_ENABLED")
+            scope = binding.scope
         with build_checkpoint_runtime(
             resolve_local_config(data_dir), dbt_parser=DbtManifestParser()
         ) as runtime:
@@ -309,21 +454,39 @@ def dbt_ingest(
         raise typer.BadParameter("MNEMO_DBT_INGEST_FAILED") from error
 
 
-@dbt_app.command("status", help="Show the active local dbt manifest snapshot for a scope.")
+@dbt_app.command("status", help="Show the active Mnemo manifest snapshot for this dbt project.")
 def dbt_status(
-    owner_id: str = typer.Option(...),
-    workspace_id: str = typer.Option(...),
-    project_id: str = typer.Option(...),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    owner_id: str | None = typer.Option(None, "--owner-id", help="Advanced scope override."),
+    workspace_id: str | None = typer.Option(
+        None, "--workspace-id", help="Advanced scope override."
+    ),
+    project_id: str | None = typer.Option(None, "--project-id", help="Advanced scope override."),
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    scope = _project_scope(owner_id, workspace_id, project_id)
+    scope = _advanced_scope(owner_id, workspace_id, project_id)
+    if scope is None:
+        try:
+            binding = _binding_store(data_dir).get(project_dir)
+        except DbtProjectBindingError as error:
+            raise typer.BadParameter("MNEMO_DBT_STATUS_FAILED") from error
+        if binding is None:
+            unenabled = {
+                "enabled": False,
+                "active": False,
+                "instruction": "mnemo-memory dbt enable",
+            }
+            _show(unenabled) if json_output else typer.echo(json.dumps(unenabled, sort_keys=True))
+            return
+        scope = binding.scope
     with build_checkpoint_runtime(
         resolve_local_config(data_dir), dbt_parser=DbtManifestParser()
     ) as runtime:
         assert runtime.dbt_manifest_service is not None
         status = runtime.dbt_manifest_service.get_active_status(GetActiveManifestStatus(scope))
     result: dict[str, object] = {
+        "enabled": True,
         "active": status.snapshot is not None,
         "currentness": status.currentness.value,
         "reason": status.reason,
@@ -369,28 +532,30 @@ def dbt_exec(
     if not arguments:
         raise typer.BadParameter("MNEMO_DBT_ARGUMENTS_REQUIRED")
     config = resolve_local_config(data_dir)
-    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
-        assert runtime.dbt_manifest_service is not None
-        hooks = DbtManifestHooks(
-            LocalDbtProjectBindingStore(config.data_directory),
-            runtime.dbt_manifest_service,
-            lambda: datetime.now(UTC),
-        )
-        launcher = shutil.which("mnemo-memory")
-        wrapper_path = Path(launcher).resolve() if launcher is not None else None
-        wrapped = CommandWrapper(
-            LocalExecutableResolver(),
-            SubprocessExecutor(),
-            lambda: datetime.now(UTC),
-            lambda: str(uuid4()),
-            (HookRegistration("dbt-manifest", "dbt", hooks.before_dbt, hooks.after_dbt),),
-        ).run(
-            CommandInvocation(
-                _dbt_executable(dbt_executable), arguments, Path.cwd().resolve(), "dbt"
-            ),
-            strict_memory=strict_memory,
-            wrapper_executable=wrapper_path,
-        )
+
+    def dbt_service() -> DbtManifestApplicationService:
+        with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+            assert runtime.dbt_manifest_service is not None
+            return runtime.dbt_manifest_service
+
+    hooks = DbtManifestHooks(
+        LocalDbtProjectBindingStore(config.data_directory),
+        dbt_service,
+        lambda: datetime.now(UTC),
+    )
+    launcher = shutil.which("mnemo-memory")
+    wrapper_path = Path(launcher).resolve() if launcher is not None else None
+    wrapped = CommandWrapper(
+        LocalExecutableResolver(),
+        SubprocessExecutor(),
+        lambda: datetime.now(UTC),
+        lambda: str(uuid4()),
+        (HookRegistration("dbt-manifest", "dbt", hooks.before_dbt, hooks.after_dbt),),
+    ).run(
+        CommandInvocation(_dbt_executable(dbt_executable), arguments, Path.cwd().resolve(), "dbt"),
+        strict_memory=strict_memory,
+        wrapper_executable=wrapper_path,
+    )
     summary = {
         "exit_code": wrapped.result.exit_code,
         "started": wrapped.result.started,
@@ -408,7 +573,16 @@ def dbt_exec(
     if json_summary:
         _show(summary)
     elif wrapped.outcomes or wrapped.warnings:
-        typer.echo(json.dumps(summary, sort_keys=True), err=True)
+        setup_required = any(
+            value.outcome.code == "MNEMO_DBT_PROJECT_UNCONFIGURED" for value in wrapped.outcomes
+        )
+        if setup_required:
+            typer.echo(
+                "Mnemo skipped dbt memory for this project. Run: mnemo-memory dbt enable",
+                err=True,
+            )
+        else:
+            typer.echo(json.dumps(summary, sort_keys=True), err=True)
     raise typer.Exit(wrapped.result.exit_code)
 
 
@@ -450,34 +624,173 @@ def _claude_manager() -> ClaudeMcpManager:
     return ClaudeMcpManager.discover(Path(launcher).resolve())
 
 
+def _installed_launcher() -> Path:
+    launcher = shutil.which("mnemo-memory")
+    if launcher is None:
+        raise typer.BadParameter("MNEMO_LAUNCHER_NOT_RESOLVABLE: install Mnemo before connecting")
+    return Path(launcher).resolve()
+
+
+def _enable_automatic_task_memory(
+    client: str, project_dir: Path, data_dir: Path | None
+) -> dict[str, object]:
+    """Create local scope binding and only Mnemo's explicit client hook entries."""
+    if client not in {"codex", "claude-code"}:
+        raise typer.BadParameter("MNEMO_MEMORY_CLIENT_INVALID")
+    typed_client = cast(ClientName, client)
+    try:
+        config = resolve_local_config(data_dir)
+        _service(data_dir).initialize()
+        binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project_dir)
+        source_repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
+        source_repository.migrate()
+        source_result = source_repository.store_and_activate(
+            SourceStructureParser().parse(
+                SourceStructureParseRequest(binding.scope, binding.project_root)
+            )
+        )
+        changed = enable_client_hooks(
+            typed_client, _installed_launcher(), client_home(typed_client), config.data_directory
+        )
+        return {
+            "automatic_memory": True,
+            "project_root": str(binding.project_root),
+            "hook_configuration_changed": changed,
+            "source_structure": {
+                "indexed": True,
+                "snapshot_id": str(source_result.snapshot.snapshot_id),
+                "files": source_result.snapshot.file_count,
+                "symbols": source_result.snapshot.symbol_count,
+                "relationships": source_result.snapshot.edge_count,
+                "idempotent": source_result.idempotent,
+            },
+        }
+    except (AutomaticMemoryBindingError, AutomaticMemoryClientConfigError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_MEMORY_ENABLE_FAILED") from error
+
+
+def _disable_automatic_task_memory(client: str, data_dir: Path | None) -> bool:
+    if client not in {"codex", "claude-code"}:
+        raise typer.BadParameter("MNEMO_MEMORY_CLIENT_INVALID")
+    typed_client = cast(ClientName, client)
+    try:
+        config = resolve_local_config(data_dir)
+        return disable_client_hooks(
+            typed_client, _installed_launcher(), client_home(typed_client), config.data_directory
+        )
+    except AutomaticMemoryClientConfigError as error:
+        raise typer.BadParameter("MNEMO_MEMORY_DISABLE_FAILED") from error
+
+
+@memory_app.command("enable", help="Enable automatic task handoffs for this project and client.")
+def memory_enable(
+    client: str = typer.Argument(..., help="codex or claude-code"),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    yes: bool = typer.Option(False, "--yes", help="Confirm client hook configuration changes."),
+) -> None:
+    """Opt in once; the agent is then reminded automatically at stop/compaction."""
+    if not yes and not typer.confirm(
+        "Enable Mnemo automatic task-memory hooks for this client and project?"
+    ):
+        raise typer.Abort()
+    _show(_enable_automatic_task_memory(client, project_dir, data_dir))
+
+
+@memory_app.command("disable", help="Remove only Mnemo's automatic task-memory hooks.")
+def memory_disable(
+    client: str = typer.Argument(..., help="codex or claude-code"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    yes: bool = typer.Option(False, "--yes", help="Confirm removal of Mnemo hook entries."),
+) -> None:
+    if not yes and not typer.confirm("Remove Mnemo automatic task-memory hooks for this client?"):
+        raise typer.Abort()
+    _show(
+        {
+            "automatic_memory": False,
+            "removed": _disable_automatic_task_memory(client, data_dir),
+        }
+    )
+
+
+@app.command("automatic-memory-hook", hidden=True)
+def automatic_memory_hook(
+    client: str = typer.Option(..., "--client"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Client-facing hook entry point; JSON in, sanitized JSON out."""
+    if client not in {"codex", "claude-code"}:
+        raise typer.Exit(0)
+    try:
+        raw = json.load(sys.stdin)
+        hook = AutomaticMemoryHook(
+            resolve_local_config(data_dir).data_directory, cast(ClientName, client)
+        )
+        result = hook.handle(raw)
+    except (OSError, ValueError, json.JSONDecodeError):
+        result = {"systemMessage": "MNEMO_MEMORY_HOOK_UNAVAILABLE"}
+    typer.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
+
+
 @connect_app.command("codex", help="Register the installed Mnemo MCP launcher with Codex.")
 def connect_codex(
     check: bool = typer.Option(False, "--check"),
     dry_run: bool = typer.Option(False, "--dry-run"),
     yes: bool = typer.Option(False, "--yes"),
     json_output: bool = typer.Option(False, "--json"),
+    auto_memory: bool = typer.Option(
+        False,
+        "--auto-memory",
+        help="Also enable automatic task handoffs for the current project.",
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
     manager = _codex_manager()
     if check:
         _show({"connected": manager.inspect() is not None})
         return
-    if not yes and not dry_run and not typer.confirm("Register Mnemo with Codex?"):
+    prompt = "Register Mnemo with Codex"
+    if auto_memory:
+        prompt += " and enable automatic task memory for this project"
+    if not yes and not dry_run and not typer.confirm(f"{prompt}?"):
         raise typer.Abort()
     result = manager.connect(dry_run=dry_run)
+    if auto_memory and not dry_run:
+        result.update(_enable_automatic_task_memory("codex", project_dir, data_dir))
     _show(result) if json_output else typer.echo(result["status"])
 
 
 @connect_app.command(
     "claude-code", help="Register the installed Mnemo MCP launcher with Claude Code."
 )
-def connect_claude_code(check: bool = False, dry_run: bool = False, yes: bool = False) -> None:
+def connect_claude_code(
+    check: bool = False,
+    dry_run: bool = False,
+    yes: bool = False,
+    auto_memory: bool = typer.Option(
+        False,
+        "--auto-memory",
+        help="Also enable automatic task handoffs for the current project.",
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
     manager = _claude_manager()
     if check:
         _show({"connected": manager.inspect() is not None})
         return
-    if not yes and not dry_run and not typer.confirm("Register Mnemo with Claude Code?"):
+    prompt = "Register Mnemo with Claude Code"
+    if auto_memory:
+        prompt += " and enable automatic task memory for this project"
+    if not yes and not dry_run and not typer.confirm(f"{prompt}?"):
         raise typer.Abort()
-    typer.echo(manager.connect(dry_run=dry_run)["status"])
+    result = manager.connect(dry_run=dry_run)
+    if auto_memory and not dry_run:
+        result.update(_enable_automatic_task_memory("claude-code", project_dir, data_dir))
+    typer.echo(result["status"])
 
 
 @disconnect_app.command("codex", help="Remove the Mnemo MCP registration from Codex.")

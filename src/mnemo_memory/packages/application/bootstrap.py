@@ -12,7 +12,10 @@ from mnemo_memory.packages.application.dbt import (
     DbtManifestParserPort,
 )
 from mnemo_memory.packages.application.services import LifecycleService
-from mnemo_memory.packages.storage import SQLiteCheckpointRepository
+from mnemo_memory.packages.storage import (
+    SQLiteCheckpointRepository,
+    SQLiteSourceStructureRepository,
+)
 
 
 def build_lifecycle_service(config: LocalConfig) -> LifecycleService:
@@ -31,11 +34,13 @@ class CheckpointRuntime:
         repository: SQLiteCheckpointRepository,
         checkpoint_service: CheckpointApplicationService,
         dbt_manifest_service: DbtManifestApplicationService | None = None,
+        source_structure_repository: SQLiteSourceStructureRepository | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
         self.checkpoint_service = checkpoint_service
         self.dbt_manifest_service = dbt_manifest_service
+        self.source_structure_repository = source_structure_repository
         self._closed = False
 
     def close(self) -> None:
@@ -65,6 +70,9 @@ def build_checkpoint_runtime(
             config.database_path, base_directory=config.data_directory
         )
         repository.migrate()
+        source_repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
     except (OSError, ValueError, RuntimeError, sqlite3.DatabaseError) as error:
         raise LocalRuntimeError(
             "configured Mnemo storage is unavailable or incompatible"
@@ -74,4 +82,5 @@ def build_checkpoint_runtime(
         repository,
         CheckpointApplicationService(repository, clock=lambda: datetime.now(UTC)),
         DbtManifestApplicationService(repository, dbt_parser) if dbt_parser is not None else None,
+        source_repository,
     )

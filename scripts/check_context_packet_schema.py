@@ -17,6 +17,7 @@ from mnemo_memory.packages.domain import (  # noqa: E402
     ContextPacket,
     OmissionReason,
     PacketSchemaVersion,
+    ValidityState,
 )
 
 
@@ -39,10 +40,13 @@ def main() -> int:
         raise ValueError("context packet schema version drifts from the typed contract")
     omission_values = schema["$defs"]["omission"]["properties"]["reason"]["enum"]
     item_values = schema["$defs"]["item"]["properties"]["item_type"]["enum"]
+    validity_values = schema["$defs"]["item"]["properties"]["validity"]["enum"]
     if omission_values != [reason.value for reason in OmissionReason]:
         raise ValueError("context packet omission reasons drift from the typed contract")
     if item_values != [item_type.value for item_type in ContextItemType]:
         raise ValueError("context packet item types drift from the typed contract")
+    if validity_values != [validity.value for validity in ValidityState]:
+        raise ValueError("context packet validity values drift from the typed contract")
     if (
         schema["$defs"]["item"]["properties"]["content_representation"]["const"]
         != ContentRepresentation.UNTRUSTED_EVIDENCE.value

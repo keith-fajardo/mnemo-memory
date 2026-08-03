@@ -22,6 +22,14 @@ from mnemo_memory.packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
+    CodeEdge,
+    CodeEdgeKind,
+    CodeSnapshot,
+    CodeSnapshotId,
+    CodeStructureArtifact,
+    CodeSymbol,
+    CodeSymbolId,
+    CodeSymbolKind,
     DbtSnapshotId,
     EvidenceReference,
     MemoryScope,
@@ -62,9 +70,12 @@ from .contracts import (
     ProjectIndexStorageFailure,
     RepositoryStorageFailure,
     RevisionConflict,
+    SourceIndexStorageFailure,
+    SourceSnapshotNotFound,
+    SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -171,6 +182,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 3:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 3
+            if version < 4:
+                _execute_sql_script(
+                    connection, _migration_text("0004_source_structure_snapshots.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (4, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 4:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -703,6 +725,174 @@ class SQLiteCheckpointRepository:
         return ManifestSnapshotPage(
             items=tuple(self._snapshot_from_row(row, scope) for row in rows[:limit]),
             next_offset=offset + limit if len(rows) > limit else None,
+        )
+
+    def store_source_and_activate(
+        self, artifact: CodeStructureArtifact
+    ) -> SourceSnapshotStoreResult:
+        """Atomically persist one immutable, static source projection and select it."""
+        self._require_project_scope(artifact.snapshot.scope)
+        scope = artifact.snapshot.scope
+        try:
+            with self._transaction() as connection:
+                duplicate = connection.execute(
+                    "SELECT * FROM source_structure_snapshots WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND source_digest = ?",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        artifact.snapshot.source_digest,
+                    ),
+                ).fetchone()
+                if duplicate is not None:
+                    snapshot_id = CodeSnapshotId.from_string(duplicate["snapshot_id"])
+                    connection.execute(
+                        "UPDATE source_structure_snapshots SET is_active = 0 WHERE owner_id = ? "
+                        "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
+                        (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                    )
+                    connection.execute(
+                        "UPDATE source_structure_snapshots SET is_active = 1 WHERE snapshot_id = ? "
+                        "AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+                        (
+                            str(snapshot_id),
+                            str(scope.owner_id),
+                            _maybe(scope.workspace_id),
+                            str(scope.project_id),
+                        ),
+                    )
+                    return SourceSnapshotStoreResult(
+                        self._source_snapshot_from_row(duplicate, scope), idempotent=True
+                    )
+                self._store_project_scope(connection, scope)
+                connection.execute(
+                    "INSERT INTO source_structure_snapshots "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(artifact.snapshot.snapshot_id),
+                        str(scope.owner_id),
+                        scope.visibility.value,
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        scope.level.value,
+                        artifact.snapshot.source_digest,
+                        artifact.snapshot.file_count,
+                        artifact.snapshot.symbol_count,
+                        artifact.snapshot.edge_count,
+                        0,
+                    ),
+                )
+                connection.executemany(
+                    "INSERT INTO source_structure_symbols VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            str(artifact.snapshot.snapshot_id),
+                            str(symbol.symbol_id),
+                            symbol.relative_path,
+                            symbol.qualified_name,
+                            symbol.kind.value,
+                            symbol.line,
+                        )
+                        for symbol in artifact.symbols
+                    ],
+                )
+                connection.executemany(
+                    "INSERT INTO source_structure_edges VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            str(artifact.snapshot.snapshot_id),
+                            str(edge.source_symbol_id),
+                            edge.target,
+                            edge.kind.value,
+                            str(edge.target_symbol_id)
+                            if edge.target_symbol_id is not None
+                            else None,
+                        )
+                        for edge in artifact.edges
+                    ],
+                )
+                counts = connection.execute(
+                    "SELECT (SELECT COUNT(*) FROM source_structure_symbols WHERE snapshot_id = ?) "
+                    "AS symbols, (SELECT COUNT(*) FROM source_structure_edges "
+                    "WHERE snapshot_id = ?) "
+                    "AS edges",
+                    (str(artifact.snapshot.snapshot_id), str(artifact.snapshot.snapshot_id)),
+                ).fetchone()
+                if (
+                    counts is None
+                    or int(counts["symbols"]) != len(artifact.symbols)
+                    or int(counts["edges"]) != len(artifact.edges)
+                ):
+                    raise SourceIndexStorageFailure("source snapshot projection count mismatch")
+                connection.execute(
+                    "UPDATE source_structure_snapshots SET is_active = 0 WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                )
+                updated = connection.execute(
+                    "UPDATE source_structure_snapshots SET is_active = 1 WHERE snapshot_id = ? "
+                    "AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+                    (
+                        str(artifact.snapshot.snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise SourceIndexStorageFailure("source snapshot activation failed")
+                return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
+        except SourceIndexStorageFailure:
+            raise
+        except (TypeError, ValueError):
+            raise
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+
+    def get_active_source_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM source_structure_snapshots WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return None if row is None else self._source_snapshot_from_row(row, scope)
+
+    def get_source_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM source_structure_snapshots "
+                    "WHERE snapshot_id = ? AND owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ?",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        if row is None:
+            raise SourceSnapshotNotFound("source snapshot was not found")
+        return self._source_snapshot_from_row(row, scope)
+
+    @staticmethod
+    def _source_snapshot_from_row(row: sqlite3.Row, scope: MemoryScope) -> CodeSnapshot:
+        return CodeSnapshot(
+            CodeSnapshotId.from_string(row["snapshot_id"]),
+            scope,
+            row["source_digest"],
+            int(row["file_count"]),
+            int(row["symbol_count"]),
+            int(row["edge_count"]),
         )
 
     def _store_project_scope(self, connection: sqlite3.Connection, scope: MemoryScope) -> None:
@@ -1270,3 +1460,248 @@ def _execute_sql_script(connection: sqlite3.Connection, script: str) -> None:
 
 def _maybe(value: object | None) -> str | None:
     return None if value is None else str(value)
+
+
+class SQLiteSourceStructureRepository:
+    """Scoped SQLite adapter for immutable multi-language source-structure snapshots.
+
+    It deliberately shares Mnemo's one local database and migration lifecycle while
+    exposing only source-structure operations through its public contract.
+    """
+
+    def __init__(self, path: Path, *, base_directory: Path | None = None) -> None:
+        self._backend = SQLiteCheckpointRepository(path, base_directory=base_directory)
+
+    def migrate(self, *, fail_after_version: int | None = None) -> None:
+        self._backend.migrate(fail_after_version=fail_after_version)
+
+    def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
+        return self._backend.store_source_and_activate(artifact)
+
+    def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
+        return self._backend.get_active_source_snapshot(scope)
+
+    def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
+        return self._backend.get_source_snapshot(scope, snapshot_id)
+
+    def iter_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> tuple[CodeSymbol, ...]:
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT symbol.* FROM source_structure_symbols AS symbol JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = symbol.snapshot_id "
+                    "WHERE symbol.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "ORDER BY symbol.relative_path ASC, symbol.line_number ASC, "
+                    "symbol.qualified_name ASC, symbol.symbol_id ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            CodeSymbol(
+                snapshot_id,
+                CodeSymbolId.from_string(row["symbol_id"]),
+                row["relative_path"],
+                row["qualified_name"],
+                CodeSymbolKind(row["kind"]),
+                int(row["line_number"]),
+            )
+            for row in rows
+        )
+
+    def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT edge.* FROM source_structure_edges AS edge JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = edge.snapshot_id "
+                    "WHERE edge.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "ORDER BY edge.source_symbol_id ASC, edge.target ASC, edge.edge_type ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            CodeEdge(
+                snapshot_id,
+                CodeSymbolId.from_string(row["source_symbol_id"]),
+                row["target"],
+                CodeEdgeKind(row["edge_type"]),
+                CodeSymbolId.from_string(row["target_symbol_id"])
+                if row["target_symbol_id"] is not None
+                else None,
+            )
+            for row in rows
+        )
+
+    def find_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
+    ) -> tuple[CodeSymbol, ...]:
+        if not query.strip() or limit < 1:
+            return ()
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT symbol.* FROM source_structure_symbols AS symbol JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = symbol.snapshot_id "
+                    "WHERE symbol.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND (lower(symbol.qualified_name) LIKE ? ESCAPE '\\' "
+                    "OR lower(symbol.relative_path) LIKE ? ESCAPE '\\') "
+                    "ORDER BY symbol.relative_path ASC, symbol.line_number ASC, "
+                    "symbol.qualified_name ASC, symbol.symbol_id ASC LIMIT ?",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        f"%{escaped}%",
+                        f"%{escaped}%",
+                        limit,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return self._symbols_from_rows(snapshot_id, rows)
+
+    def module_symbols_for_paths(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_paths: tuple[str, ...]
+    ) -> tuple[CodeSymbol, ...]:
+        if not relative_paths:
+            return ()
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        values = tuple(dict.fromkeys(relative_paths))
+        placeholders = ", ".join("?" for _ in values)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT symbol.* FROM source_structure_symbols AS symbol JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = symbol.snapshot_id "
+                    "WHERE symbol.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND symbol.kind = 'module' AND symbol.relative_path IN ("
+                    + placeholders
+                    + ") ORDER BY symbol.relative_path ASC, symbol.symbol_id ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return self._symbols_from_rows(snapshot_id, rows)
+
+    def symbols_by_ids(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeSymbol, ...]:
+        if not symbol_ids:
+            return ()
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
+        placeholders = ", ".join("?" for _ in values)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT symbol.* FROM source_structure_symbols AS symbol JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = symbol.snapshot_id "
+                    "WHERE symbol.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND symbol.symbol_id IN ("
+                    + placeholders
+                    + ") ORDER BY symbol.relative_path ASC, symbol.line_number ASC, "
+                    "symbol.qualified_name ASC, symbol.symbol_id ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return self._symbols_from_rows(snapshot_id, rows)
+
+    def edges_from_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]:
+        if not symbol_ids:
+            return ()
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
+        placeholders = ", ".join("?" for _ in values)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT edge.* FROM source_structure_edges AS edge JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = edge.snapshot_id "
+                    "WHERE edge.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND edge.source_symbol_id IN ("
+                    + placeholders
+                    + ") ORDER BY edge.source_symbol_id ASC, edge.target ASC, edge.edge_type ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            CodeEdge(
+                snapshot_id,
+                CodeSymbolId.from_string(row["source_symbol_id"]),
+                row["target"],
+                CodeEdgeKind(row["edge_type"]),
+                CodeSymbolId.from_string(row["target_symbol_id"])
+                if row["target_symbol_id"] is not None
+                else None,
+            )
+            for row in rows
+        )
+
+    @staticmethod
+    def _symbols_from_rows(
+        snapshot_id: CodeSnapshotId, rows: list[sqlite3.Row]
+    ) -> tuple[CodeSymbol, ...]:
+        return tuple(
+            CodeSymbol(
+                snapshot_id,
+                CodeSymbolId.from_string(row["symbol_id"]),
+                row["relative_path"],
+                row["qualified_name"],
+                CodeSymbolKind(row["kind"]),
+                int(row["line_number"]),
+            )
+            for row in rows
+        )

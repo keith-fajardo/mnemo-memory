@@ -21,48 +21,56 @@ If dbt fails or is interrupted, Mnemo does **not** activate a manifest, even if 
 If the manifest is unchanged, it does nothing. If ingestion fails in the default mode, dbt’s own
 result remains the result you see and the prior Mnemo snapshot stays active.
 
-## One-time setup for a dbt project
+## The simple setup: once per machine, once per repository
 
-First, initialize Mnemo if you have not already:
+### Once per machine: make ordinary `dbt` use Mnemo
 
-```bash
-mnemo-memory init
-```
-
-Then bind the dbt project root to your stable Mnemo owner/workspace/project UUIDs. The UUIDs are
-explicit privacy boundaries; they are not derived from your directory or manifest. The root must
-contain `dbt_project.yml`.
+For zsh, put this one line in your own `~/.zshrc`:
 
 ```bash
-mnemo-memory dbt configure \
-  --project-dir /absolute/path/to/your-dbt-project \
-  --owner-id "$MNEMO_OWNER_ID" \
-  --workspace-id "$MNEMO_WORKSPACE_ID" \
-  --project-id "$MNEMO_PROJECT_ID"
+eval "$(mnemo-memory dbt shell-hook zsh)"
 ```
 
-The binding is stored locally in Mnemo’s data directory with restrictive permissions. It stores the
-path-to-scope mapping only; it does not read or store `profiles.yml`, credentials, environment
-variables, SQL, or manifest content.
+For the current shell only, run the same line once in the terminal. It defines a `dbt()` function
+that forwards every normal `dbt …` command to Mnemo, then Mnemo runs the real dbt executable. Use
+`bash` or `fish` in the command for those shells. Mnemo never edits a shell profile automatically.
+
+### Once per dbt repository: enable Mnemo
+
+From the dbt repository, enable Mnemo once. The root must contain `dbt_project.yml`.
+
+```bash
+cd /absolute/path/to/your-dbt-project
+mnemo-memory dbt enable
+```
+
+`enable` initializes the personal Mnemo profile if necessary, creates private stable identities,
+binds this canonical project directory, and ingests an existing valid `target/manifest.json` when
+one is present. You do not need to create, see, or remember UUIDs. The binding is stored locally
+with restrictive permissions. It stores the path-to-scope mapping only; it does not read or store
+`profiles.yml`, credentials, environment variables, SQL, or manifest content.
 
 Check or remove the binding at any time:
 
 ```bash
-mnemo-memory dbt configuration --project-dir /absolute/path/to/your-dbt-project --check
-mnemo-memory dbt unconfigure --project-dir /absolute/path/to/your-dbt-project
+mnemo-memory dbt status
+mnemo-memory dbt disable
 ```
 
-## Use the wrapper immediately
+After those two one-time steps, keep using dbt normally:
 
-The reliable form for terminals, CI, Codex, and Claude Code is explicit:
+```bash
+dbt run -s orders+
+```
+
+The function forwards those exact arguments safely. Mnemo honors both `--project-dir value` /
+`--project-dir=value` and `--target-path value` / `--target-path=value` without rewriting them.
+
+The explicit form is for CI, Codex, Claude Code, or a shell where you do not load the function:
 
 ```bash
 mnemo-memory dbt exec -- run -s orders+
 ```
-
-Everything after `--` is passed as separate arguments to the real `dbt` executable. Mnemo honors
-both `--project-dir value` / `--project-dir=value` and `--target-path value` /
-`--target-path=value` without rewriting them.
 
 By default it resolves dbt in this order:
 
@@ -72,29 +80,8 @@ By default it resolves dbt in this order:
 
 Mnemo refuses a relative configured executable and refuses recursion back into its own wrapper.
 
-## Make normal `dbt` commands use Mnemo (interactive shells)
-
-Generate a small shell function:
-
-```bash
-mnemo-memory dbt shell-hook zsh
-mnemo-memory dbt shell-hook bash
-mnemo-memory dbt shell-hook fish
-```
-
-For zsh, opt in for the current shell with:
-
-```bash
-eval "$(mnemo-memory dbt shell-hook zsh)"
-```
-
-Now `dbt run -s orders+` routes to `mnemo-memory dbt exec -- run -s orders+`, which finds the
-real filesystem dbt executable rather than calling the shell function again.
-
-If you want this every time a new shell starts, add the same `eval` line to your own `~/.zshrc`
-(or use the bash/fish equivalent). Mnemo never edits a shell profile automatically. Removing that
-line, starting a new shell, or running `mnemo-memory dbt unconfigure` returns you to the explicit
-workflow; none of these actions delete prior immutable snapshots.
+Remove the profile line, start a new shell, or run `mnemo-memory dbt disable` to return to the
+explicit workflow; none of these actions delete prior immutable snapshots.
 
 ## Before and after behavior
 
@@ -126,7 +113,7 @@ exit code always wins over Mnemo’s strict status.
 
 | What you see | What to do |
 | --- | --- |
-| `MNEMO_DBT_PROJECT_UNCONFIGURED` | Run `mnemo-memory dbt configure` for the project root. |
+| Mnemo says the project is not enabled | Run `mnemo-memory dbt enable` from that dbt repository. dbt still ran normally. |
 | `MNEMO_COMMAND_NOT_FOUND` | Install dbt or provide `--dbt-executable` with an absolute executable path. |
 | Manifest is unavailable | Check dbt’s target path and confirm the command generates `manifest.json`. Mnemo keeps the old snapshot. |
 | Snapshot conflict | Another process activated a newer manifest first. Re-run dbt/Mnemo against the current project state; Mnemo never overwrites the winner. |

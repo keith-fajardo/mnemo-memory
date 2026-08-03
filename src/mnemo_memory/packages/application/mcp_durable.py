@@ -68,11 +68,18 @@ class DurableMcpContextPort:
                 total_limit=_integer(request.get("total_tokens", 5700)),
             )
             lineage = request.get("dbt_lineage")
-            if lineage is not None:
+            source_query = request.get("source_query")
+            if source_query is not None and not isinstance(source_query, str):
+                raise ValueError("source_query must be a string")
+            if lineage is not None or source_query is not None:
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
-                if not isinstance(lineage, Mapping):
+                if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
+                if lineage is None:
+                    return self._context_service.get_context(
+                        GetUnifiedContext(scope, checkpoint, None, source_query, budget)
+                    ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
                 dbt_query = ContextLineageQuery(
                     DbtNodeId(_string(lineage, "unique_id")),
@@ -89,7 +96,7 @@ class DurableMcpContextPort:
                     bool(lineage.get("require_current", False)),
                 )
                 return self._context_service.get_context(
-                    GetUnifiedContext(scope, checkpoint, dbt_query, budget)
+                    GetUnifiedContext(scope, checkpoint, dbt_query, source_query, budget)
                 ).to_dict()
             return self._service.get_context(
                 GetCheckpointContext(scope, checkpoint, budget)

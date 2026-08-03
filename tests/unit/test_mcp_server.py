@@ -14,7 +14,17 @@ from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_ser
 from mnemo_memory.packages.application import LocalConfig, build_checkpoint_runtime
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
-from mnemo_memory.packages.domain import ContextPacket
+from mnemo_memory.packages.application.unified_context import UnifiedContextService
+from mnemo_memory.packages.domain import (
+    ContextPacket,
+    MemoryScope,
+    OwnerId,
+    ProjectId,
+    ScopeLevel,
+    Visibility,
+    WorkspaceId,
+)
+from mnemo_memory.packages.project_index import PythonSourceParser, PythonSourceParseRequest
 
 ROOT = Path(__file__).parents[2]
 IDS = {
@@ -83,6 +93,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is False
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[1].inputSchema["properties"]
+    assert "source_query" in tools[0].inputSchema["properties"]
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -152,6 +163,43 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) -> None:
+    project = tmp_path / "Project Δ"
+    project.mkdir()
+    (project / "orders.py").write_text("def build_orders():\n    return []\n")
+    config = LocalConfig.defaults(tmp_path / "durable source")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config) as runtime:
+        assert runtime.source_structure_repository is not None
+        runtime.source_structure_repository.store_and_activate(
+            PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
+        )
+
+    with build_checkpoint_runtime(config) as runtime:
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(
+                runtime.checkpoint_service, None, runtime.source_structure_repository
+            ),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(context_payload(source_query="build_orders"))
+        )
+
+    assert len(packet.structural_items) == 1
+    item = packet.structural_items[0]
+    assert "build_orders" in item.content
+    assert str(project) not in item.content
+    assert len(packet.provenance) == 1
+    assert packet.provenance[0].item_id == item.item_id
 
 
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:

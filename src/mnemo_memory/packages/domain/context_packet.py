@@ -48,6 +48,7 @@ class ContentRepresentation(str, Enum):
 class ValidityState(str, Enum):
     CURRENT = "current"
     STALE = "stale"
+    UNKNOWN = "unknown"
     EXPIRED = "expired"
     SUPERSEDED = "superseded"
 

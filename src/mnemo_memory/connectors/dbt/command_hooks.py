@@ -9,6 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBindingError,
     LocalDbtProjectBindingStore,
     find_dbt_project_root,
 )
@@ -31,11 +32,12 @@ from mnemo_memory.packages.domain import DbtSnapshotId, MemoryScope
 
 @dataclass(frozen=True, slots=True)
 class DbtBeforeState:
-    scope: MemoryScope
-    project_root: Path
-    manifest_path: Path
-    previous_digest: str | None
-    expected_active_snapshot_id: DbtSnapshotId | None
+    scope: MemoryScope | None
+    project_root: Path | None
+    manifest_path: Path | None
+    previous_digest: str | None = None
+    expected_active_snapshot_id: DbtSnapshotId | None = None
+    skip_code: str | None = None
 
 
 def _option_path(arguments: tuple[str, ...], option: str, cwd: Path) -> Path | None:
@@ -55,25 +57,40 @@ class DbtManifestHooks:
     def __init__(
         self,
         bindings: LocalDbtProjectBindingStore,
-        service: DbtManifestApplicationService,
+        service_factory: Callable[[], DbtManifestApplicationService],
         clock: Callable[[], datetime],
     ) -> None:
         self._bindings = bindings
-        self._service = service
+        self._service_factory = service_factory
         self._clock = clock
 
     def before_dbt(self, context: CommandContext) -> DbtBeforeState:
         root = _option_path(context.arguments, "--project-dir", context.working_directory)
-        project_root = find_dbt_project_root(root or context.working_directory)
+        try:
+            project_root = find_dbt_project_root(root or context.working_directory)
+        except DbtProjectBindingError:
+            return DbtBeforeState(None, None, None, skip_code="MNEMO_DBT_PROJECT_UNCONFIGURED")
         binding = self._bindings.get(project_root)
         if binding is None:
-            raise ValueError("MNEMO_DBT_PROJECT_UNCONFIGURED")
+            return DbtBeforeState(
+                None, project_root, None, skip_code="MNEMO_DBT_PROJECT_UNCONFIGURED"
+            )
         target = _option_path(context.arguments, "--target-path", context.working_directory)
         manifest_path = (target or project_root / "target") / "manifest.json"
         previous = (
             sha256(manifest_path.read_bytes()).hexdigest() if manifest_path.is_file() else None
         )
-        active = self._service.get_active_status(GetActiveManifestStatus(binding.scope)).snapshot
+        try:
+            active = (
+                self._service_factory()
+                .get_active_status(GetActiveManifestStatus(binding.scope))
+                .snapshot
+            )
+        except DbtApplicationStorageFailure:
+            # Preserve dbt's normal behavior when Mnemo storage is unavailable.
+            return DbtBeforeState(
+                None, project_root, None, skip_code="MNEMO_DBT_STORAGE_UNAVAILABLE"
+            )
         return DbtBeforeState(
             binding.scope,
             project_root,
@@ -85,16 +102,20 @@ class DbtManifestHooks:
     def after_dbt(self, _: CommandContext, state: object, result: CommandResult) -> HookOutcome:
         if not isinstance(state, DbtBeforeState):
             return HookOutcome(HookStatus.FAILED, "MNEMO_DBT_HOOK_STATE_INVALID")
+        if state.scope is None:
+            return HookOutcome(
+                HookStatus.SKIPPED, state.skip_code or "MNEMO_DBT_HOOK_STATE_INVALID"
+            )
         if not result.started or result.interrupted or result.exit_code != 0:
             return HookOutcome(HookStatus.SKIPPED, "MNEMO_DBT_COMMAND_NOT_SUCCESSFUL")
-        if not state.manifest_path.is_file():
+        if state.manifest_path is None or not state.manifest_path.is_file():
             return HookOutcome(HookStatus.UNAVAILABLE, "MNEMO_DBT_MANIFEST_UNAVAILABLE")
         try:
             raw = state.manifest_path.read_bytes()
             digest = sha256(raw).hexdigest()
             if digest == state.previous_digest:
                 return HookOutcome(HookStatus.UNCHANGED, "MNEMO_DBT_MANIFEST_UNCHANGED")
-            stored = self._service.ingest(
+            stored = self._service_factory().ingest(
                 IngestManifest(
                     state.scope,
                     raw,
