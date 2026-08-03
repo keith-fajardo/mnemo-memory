@@ -83,7 +83,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -223,6 +223,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 6:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 6
+            if version < 7:
+                _execute_sql_script(
+                    connection, _migration_text("0007_approved_episodic_events.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (7, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 7:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:

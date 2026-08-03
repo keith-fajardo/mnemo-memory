@@ -21,6 +21,7 @@ REQUIRED_MIGRATIONS = (
     "0004_source_structure_snapshots.sql",
     "0005_source_snapshot_activations.sql",
     "0006_checkpoint_lifecycle_events.sql",
+    "0007_approved_episodic_events.sql",
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",
