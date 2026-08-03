@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -33,11 +34,14 @@ from mnemo_memory.packages.storage import (
     ReferenceCheckpointLifecycleEventRepository,
     ReferenceCheckpointRepository,
     SQLiteCheckpointRepository,
+    SQLiteMigrationError,
 )
 from mnemo_memory.packages.storage.contracts import (
     CheckpointLifecycleEventRepository,
+    CheckpointNotFound,
     CheckpointRepository,
     EpisodicEventNotFound,
+    RepositoryStorageFailure,
 )
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
@@ -249,3 +253,74 @@ def test_lifecycle_writes_project_exactly_one_scoped_event_per_revision(
     assert [event.revision_number for event in page.items] == [3, 2, 1]
     assert all(event.scope == item_scope for event in page.items)
     assert event_repository.list_events(scope(), checkpoint_id=checkpoint_id).items == ()
+
+
+def test_event_projection_failure_rolls_back_the_new_revision_and_pointer(tmp_path: Path) -> None:
+    item_scope = scope()
+    checkpoint_id = CheckpointId.new()
+    revision_id = CheckpointRevisionId.new()
+    item = evidence()
+    initial = CheckpointRevision(
+        revision_id,
+        checkpoint_id,
+        1,
+        None,
+        item_scope,
+        CheckpointContent("task", (), "active", ("next",), (), (), (), (), (), (), 1),
+        CheckpointStatus.ACTIVE,
+        (item,),
+        NOW,
+    )
+    aggregate = CheckpointAggregate(
+        checkpoint_id, item_scope, revision_id, 1, CheckpointStatus.ACTIVE, NOW, NOW
+    )
+    database = tmp_path / "events.sqlite3"
+    repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
+    repository.migrate()
+    repository.create_checkpoint_aggregate(aggregate, initial)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_revised_lifecycle_event BEFORE INSERT "
+            "ON checkpoint_lifecycle_events WHEN NEW.event_kind = 'checkpoint_revised' "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic event write failure'); END"
+        )
+
+    with pytest.raises(RepositoryStorageFailure):
+        repository.append_revision(
+            item_scope,
+            checkpoint_id,
+            revision_id,
+            CheckpointContent("task", ("work",), "active", ("next",), (), (), (), (), (), (), 1),
+            (item,),
+            NOW.replace(second=1),
+        )
+
+    assert repository.get_current_revision(item_scope, checkpoint_id) == initial
+    with pytest.raises(CheckpointNotFound):
+        repository.get_revision(item_scope, checkpoint_id, revision_number=2)
+    assert [event.kind for event in repository.list_events(item_scope).items] == [
+        CheckpointEventKind.CREATED
+    ]
+
+
+def test_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
+    database = tmp_path / "events.sqlite3"
+    repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
+    repository.migrate()
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE checkpoint_lifecycle_events")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        repository.migrate(fail_after_version=6)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (5,)
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'checkpoint_lifecycle_events'"
+            ).fetchone()
+            is None
+        )
+    repository.migrate()
