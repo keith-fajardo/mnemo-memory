@@ -118,6 +118,14 @@ def test_dbt_help_leads_with_personal_enablement_not_advanced_scope_configuratio
     assert "ingest" not in result.output
 
 
+def test_dbt_wrapper_docs_forward_only_the_arguments_after_dbt() -> None:
+    """The explicit wrapper already chooses dbt; users must not pass it twice."""
+    guide = Path("docs/command-wrapper.md").read_text(encoding="utf-8")
+
+    assert "mnemo-memory dbt exec -- dbt " not in guide
+    assert "mnemo-memory dbt exec -- run --select orders+" in guide
+
+
 def test_interactive_guide_explains_explicit_memory_and_requires_confirmation(
     tmp_path: Path,
 ) -> None:

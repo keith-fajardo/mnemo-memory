@@ -14,7 +14,7 @@ You run dbt → dbt runs normally → Mnemo notices the new valid manifest → l
 For example, the explicit form is:
 
 ```bash
-mnemo-memory dbt exec -- dbt run --select orders+
+mnemo-memory dbt exec -- run --select orders+
 ```
 
 It is designed to preserve the real dbt command’s arguments, interactive terminal output, colors,
