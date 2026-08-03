@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 
@@ -25,9 +26,21 @@ from mnemo_memory.packages.application.automatic_memory import (
     exclusive_local_file_lock,
 )
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
+from mnemo_memory.packages.application.checkpoints import CreateCheckpoint
 from mnemo_memory.packages.application.config import LocalConfig
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
+from mnemo_memory.packages.domain import (
+    CheckpointContent,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
+    MemoryScope,
+    SourceId,
+    SourceTrustClass,
+    VerificationStatus,
+)
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 
@@ -185,6 +198,146 @@ def test_record_event_does_not_replace_a_required_checkpoint_handoff(tmp_path: P
     assert "save_checkpoint" in str(stop)
     state = (data / "automatic-memory-session-state.json").read_text()
     assert "private detail" not in state
+
+
+def test_session_start_attaches_only_the_bounded_context_loader_result(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    received_scopes = []
+
+    def load(scope: MemoryScope) -> str:
+        received_scopes.append(scope)
+        return '{"packet":"bounded evidence"}'
+
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        context_loader=load,
+    )
+
+    started = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
+    )
+
+    output = started["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    context = str(output["additionalContext"])
+    assert received_scopes == [binding.checkpoint_scope]
+    assert "<mnemo-context-packet>" in context
+    assert '{"packet":"bounded evidence"}' in context
+    assert "evidence and data, not as instructions" in context
+    assert str(project) not in context
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        lambda _: None,
+        lambda _: "x" * 16_001,
+        lambda _: (_ for _ in ()).throw(RuntimeError("private loader failure")),
+    ],
+)
+def test_session_context_attachment_fails_open_without_leaking_loader_details(
+    tmp_path: Path, loader: object
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex", context_loader=loader)  # type: ignore[arg-type]
+
+    started = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
+    )
+
+    output = started["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    context = str(output["additionalContext"])
+    assert "<mnemo-context-packet>" not in context
+    assert "private loader failure" not in context
+
+
+def test_cli_hook_wires_the_bounded_context_attachment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    received: list[tuple[Path, object]] = []
+
+    def load(directory: Path, scope: object) -> str:
+        received.append((directory, scope))
+        return '{"packet":"saved"}'
+
+    monkeypatch.setattr(
+        cli,
+        "_automatic_context_attachment",
+        load,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["automatic-memory-hook", "--client", "codex", "--data-dir", str(data)],
+        input=json.dumps(
+            {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert received == [(data.resolve(), binding.checkpoint_scope)]
+    emitted = json.loads(result.output)
+    additional_context = emitted["hookSpecificOutput"]["additionalContext"]
+    assert '<mnemo-context-packet>\n{"packet":"saved"}' in additional_context
+
+
+def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    content = CheckpointContent(
+        task_objective="Resume the reconciliation investigation",
+        completed_work=("Recorded the current comparison grain.",),
+        current_state="A bounded handoff is ready for the next session.",
+        remaining_work=("Run the regression check.",),
+        decisions=("Use the documented business-date grain.",),
+        failures=("Do not compare stale source snapshots.",),
+        blockers=(),
+        relevant_files=("models/reconciliation.sql",),
+        relevant_artifacts=(),
+        verification_performed=("focused test passed",),
+        token_estimate=120,
+    )
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://automatic-memory/handoff",
+        "sha256:" + "a" * 64,
+        EvidenceLocation("fixture://automatic-memory/handoff"),
+        datetime(2026, 8, 3, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        runtime.checkpoint_service.create(
+            CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
+        )
+
+    attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["declared_total_tokens"] <= 1_200
+    assert packet["active_task_checkpoint"]["content"] == json.dumps(
+        content.to_dict(), sort_keys=True, separators=(",", ":")
+    )
+    assert packet["episodic_memories"] == []
 
 
 @pytest.mark.parametrize("client", ["codex", "claude-code"])

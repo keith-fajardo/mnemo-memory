@@ -33,10 +33,12 @@ mnemo-memory connect codex --auto-memory
 mnemo-memory connect claude-code --auto-memory
 ```
 
-This creates a private local project binding; you never enter scope UUIDs. The hook tells the agent
-to retrieve context at session start and create a compact checkpoint at a stop/compaction boundary.
-It refreshes Mnemo's syntax-only source map at session start, after a checkpoint save, and before
-an unsaved changed session stops. It does not read or store a raw transcript.
+This creates a private local project binding; you never enter scope UUIDs. At a new session, the
+hook attaches the bounded saved checkpoint, lessons, and approved facts automatically, then asks
+the agent to create a compact checkpoint at a stop/compaction boundary. It refreshes Mnemo's
+syntax-only source map at session start, after a checkpoint save, and before an unsaved changed
+session stops. The attachment has a 1,200-token content budget; it does not read or store a raw
+transcript.
 
 By default, Codex and Claude Code launched normally will use the same personal Mnemo store. To use
 an isolated store—for a test, demo, or separate profile—set an absolute path before launching the
@@ -136,10 +138,11 @@ scope. Disconnecting one client does not disconnect the other or delete saved Mn
 
 ### Normal mode: automatic handoffs
 
-After connecting with `--auto-memory`, work normally. Mnemo’s lifecycle hook prompts the agent to
-call `get_context` at a new session and `save_checkpoint` before it stops meaningful work. The user
-does not need to remember a separate “save this” instruction. Codex asks you to review/trust local
-hooks once through `/hooks`; restart either client after changing its hook configuration.
+After connecting with `--auto-memory`, work normally. Mnemo’s lifecycle hook attaches the bounded
+saved checkpoint, lessons, and approved facts at a new session, then prompts the agent to
+`save_checkpoint` before it stops meaningful work. The user does not need to remember a separate
+“save this” instruction. Codex asks you to review/trust local hooks once through `/hooks`; restart
+either client after changing its hook configuration.
 
 The automatic mode remembers task handoffs and creates a private static source-structure snapshot
 for the enabled project: modules, imports, declarations, and explicit syntactic calls. The local
@@ -163,14 +166,15 @@ Near the end of a task, ask the agent something concrete, for example:
 The agent calls `save_checkpoint`. Mnemo stores a stable checkpoint identity plus an immutable
 revision. It does not save the full transcript.
 
-In a new client session, ask:
+For a named source or dbt question in a new client session, ask:
 
 > Retrieve Mnemo context for this task before continuing. Use the saved checkpoint and, if needed,
 > the current dbt lineage facts.
 
-The agent calls `get_context`. The result is bounded, cites the exact checkpoint revision, and can
-include deterministic dbt upstream/downstream facts. A completed or abandoned checkpoint is not
-chosen as active work automatically.
+The session-start hook already attached the bounded saved handoff. The agent uses `get_context`
+when it needs additional named source or deterministic dbt upstream/downstream facts. Every result
+cites the exact checkpoint revision; a completed or abandoned checkpoint is not chosen as active
+work automatically.
 
 ## Scope, in practical terms
 

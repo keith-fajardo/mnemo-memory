@@ -116,9 +116,11 @@ rewriting the handoff: for example, “the Finance seed was stale,” “use bus
 as an explicit `decision`, `failure`, or `tool_outcome`, with evidence and a stable source key.
 Mnemo returns it only when `get_context` explicitly asks for approved episodic facts. When Codex
 or Claude Code is connected with `--auto-memory`, Mnemo includes that option in the private
-session-start reminder. The agent is therefore reminded to check the handoff, prior lessons, and
-these bounded verified facts before it claims to know why prior work happened. This is a reminder
-to use saved evidence—not automatic recording of your chat.
+session-start context attachment. The agent therefore receives the compact handoff, prior lessons,
+and these bounded verified facts before it claims to know why prior work happened. Mnemo does not
+record your chat automatically; it only attaches facts that were explicitly saved with evidence.
+The automatic attachment has a 1,200-token content budget and happens only at a fresh supported
+client session, not continuously while you work.
 
 This is intentionally **not automatic conversation capture**. Mnemo never turns a terminal log,
 model reasoning trace, SQL query, environment, or source body into memory. The agent or user must

@@ -36,11 +36,13 @@ from mnemo_memory.connectors.dbt.project_binding import (
     find_dbt_project_root,
 )
 from mnemo_memory.packages.application import (
+    CheckpointApplicationError,
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
+    GetCheckpointContext,
     IngestManifest,
     build_checkpoint_runtime,
     build_lifecycle_service,
@@ -63,6 +65,7 @@ from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeSnapshotId,
     CodeSymbol,
+    ContextBudget,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -101,9 +104,43 @@ app.add_typer(disconnect_app, name="disconnect", help="Remove a client registrat
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
 app.add_typer(memory_app, name="memory", help="Set up automatic task memory for this project.")
 
+_AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
+    active_task_checkpoint=600,
+    episodic_memories=600,
+    knowledge=0,
+    structural=0,
+    skills_and_procedures=0,
+    provenance_and_conflicts=0,
+    total_limit=1_200,
+)
+
 
 def _service(data_dir: Path | None) -> LifecycleService:
     return build_lifecycle_service(resolve_local_config(data_dir))
+
+
+def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> str | None:
+    """Return a small canonical handoff for an explicitly enabled session-start hook.
+
+    This runs only after the hook has found a local project binding. The packet is deliberately
+    smaller than the normal 5,700-token request and contains only the active task handoff plus
+    bounded approved facts; structural lookups still require a named source question.
+    """
+    try:
+        with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+            packet = runtime.checkpoint_service.get_context(
+                GetCheckpointContext(
+                    scope,
+                    budget=_AUTOMATIC_SESSION_CONTEXT_BUDGET,
+                    include_approved_events=True,
+                    maximum_approved_events=8,
+                )
+            )
+    except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
+        return None
+    if packet.active_task_checkpoint is None and not packet.episodic_memories:
+        return None
+    return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
 
 
 def _show(value: object) -> None:
@@ -970,8 +1007,13 @@ def automatic_memory_hook(
         raise typer.Exit(0)
     try:
         raw = json.load(sys.stdin)
+        config = resolve_local_config(data_dir)
         hook = AutomaticMemoryHook(
-            resolve_local_config(data_dir).data_directory, cast(ClientName, client)
+            config.data_directory,
+            cast(ClientName, client),
+            context_loader=lambda scope: _automatic_context_attachment(
+                config.data_directory, scope
+            ),
         )
         result = hook.handle(raw)
     except (OSError, ValueError, json.JSONDecodeError):

@@ -8,12 +8,13 @@ calls.
 ## The promise in everyday terms
 
 At the end of a task, your connected agent saves a small handoff: what it was doing, what changed,
-what decision was made, what failed, what was verified, and what to do next. In a new Claude Code
-or Codex session, the agent asks Mnemo for that handoff before continuing.
+what decision was made, what failed, what was verified, and what to do next. In a new enabled
+Claude Code or Codex session, Mnemo attaches that bounded handoff before the agent continues.
 
 That is the “long-term memory”: durable task handoffs—not an automatic recording of every terminal
-command or chat message. You can opt into lifecycle hooks so the connected agent is reminded to
-save the handoff automatically; you do not have to remember a separate request.
+command or chat message. You can opt into lifecycle hooks so the connected agent receives the saved
+handoff at a new session and is reminded to save the next one; you do not have to remember a
+separate request.
 
 ## Does Mnemo remember an entire codebase?
 
@@ -88,9 +89,10 @@ For example, to use Mnemo while working on this Mnemo repository:
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.
 2. Ask your connected Claude Code or Codex agent to work on a concrete task in this repository.
 3. Connect with automatic task memory once in this repository:
-   `mnemo-memory connect codex --auto-memory` (or `claude-code`). Mnemo then prompts the agent to
-   retrieve context at session start and save a compact handoff when work stops or compacts.
-4. In a fresh client session, ask it to retrieve Mnemo context before continuing that task.
+   `mnemo-memory connect codex --auto-memory` (or `claude-code`). Mnemo then attaches the compact
+   saved handoff at session start and prompts the agent to save one when work stops or compacts.
+4. In a fresh client session, continue normally. Ask for `get_context` only when the task needs
+   additional named source or dbt facts beyond the attached handoff.
 
 Mnemo stores the handoff in its local data directory, not inside the repository. Using the same
 data directory and task scope lets the later session retrieve it. Starting a new repository does
@@ -109,11 +111,10 @@ and shows the exact connection command for Codex, Claude Code, or both. It does 
 change a client registration without your confirmation, or inspect your source code.
 
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
-memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo injects a private session-start instruction:
-the agent must check bounded Mnemo context, including approved decision/failure/tool-outcome facts,
-before it claims knowledge of earlier decisions, edits, verification, or impact. It must review any
-recorded lesson before it repeats an earlier analysis approach, and it is told how to ask for
-relevant saved structure. This is a
+memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
+the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also
+tells the agent to treat that material as evidence rather than instructions, and how to ask for
+relevant saved structure when a task names a symbol or file. This is a
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
 
@@ -134,9 +135,12 @@ You can connect both clients. They share saved handoffs when they use the same M
 
 ## Use task memory while working
 
-With automatic task memory enabled, you work normally. Mnemo's hook prompts the agent to save a
-fresh handoff when needed. It still uses the typed `save_checkpoint` tool, so Mnemo does not silently
-store a raw conversation. The manual fallback is:
+With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
+bounded saved handoff, lessons, and approved facts automatically. This automatic attachment has a
+1,200-token content budget and happens only when a supported client starts a new session—not
+continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
+needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw
+conversation. The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
 > exact next action. If you corrected an analysis mistake, also save its trigger, mistaken
@@ -146,13 +150,9 @@ store a raw conversation. The manual fallback is:
 > `save_checkpoint` operation `record_lesson` to append just that one correction rather than
 > rewriting the whole handoff.
 
-In the next fresh session, ask:
-
-> Retrieve Mnemo context for this task before continuing.
-
-The first request saves an immutable checkpoint revision. The second retrieves the latest relevant
-revision with its evidence. If no one saved a checkpoint, Mnemo does not pretend that it remembers
-the earlier chat.
+In the next enabled fresh session, the hook attaches the latest relevant revision with its evidence.
+If no one saved a checkpoint, Mnemo does not pretend that it remembers the earlier chat. The agent
+can still call `get_context` for an explicit historical checkpoint, a named source, or dbt lineage.
 
 ### Example: a reconciliation investigation
 
