@@ -444,9 +444,9 @@ manual `pypi` Trusted Publishing workflow. Production metadata, both artifact ha
 installation, CLI initialization, and packaged migration/schema resources were independently
 verified after upload. No long-lived API token was used.
 
-### Issue 14 — In progress
+### Issue 14 — Complete
 
-#### Issue 14A — In progress
+#### Issue 14A — Complete
 
 ##### Issue 14A.1 — Complete
 
@@ -468,7 +468,7 @@ unloadable, or duplicate entries are skipped with bounded sanitized warnings. `d
 merges accepted installed dbt hooks after Mnemo's built-in manifest hook, so the contract is live
 rather than merely a library helper; an extension cannot shadow Mnemo or another accepted hook.
 
-#### Issue 14B — In progress
+#### Issue 14B — Complete
 
 Added local, explicit dbt-project bindings and the dbt pre/post-hook functions. The pre-hook
 resolves a configured project and captures the prior manifest/active snapshot; the post-hook
@@ -481,7 +481,7 @@ canonical directory, and optionally ingests an existing valid manifest. `dbt sta
 `dbt disable` use that local binding without asking a normal user for UUIDs. An unenabled project
 still runs dbt in fail-open mode and receives one concise enable reminder.
 
-#### Issue 14C — In progress
+#### Issue 14C — Complete
 
 Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-hook generation.
 The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
@@ -491,9 +491,9 @@ the checkout, then prove the installed command can enable a synthetic project, g
 shell wrapper, activate a manifest through `dbt exec`, retain it after reopen, and idempotently
 recognize an unchanged manifest.
 
-#### Issue 14D — In progress
+#### Issue 14D — Complete
 
-Automatic task-memory onboarding is being added as an explicit opt-in for Codex and Claude Code.
+Automatic task-memory onboarding is available as an explicit opt-in for Codex and Claude Code.
 It creates a private machine-local project binding, installs only Mnemo-owned lifecycle-hook entries,
 refreshes a bounded static source-structure projection at session start, a checkpoint save, and a
 changed unsaved work-stop boundary, and asks the
