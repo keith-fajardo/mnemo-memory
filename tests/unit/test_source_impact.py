@@ -179,3 +179,31 @@ def test_python_import_alias_is_resolved_only_when_the_internal_target_is_unambi
     )
 
     assert [item.symbol.qualified_name for item in result.symbols] == ["service.process"]
+
+
+def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.ts").write_text(
+        "export function validate() { return true }\nexport function other() { return true }\n"
+    )
+    (root / "service.ts").write_text(
+        "import { validate as check } from './helpers';\n"
+        "import * as helpers from './helpers';\n"
+        "export function process() { check(); helpers.other(); }\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    validation = service.query(
+        SourceImpactQuery(item_scope, "helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    other = service.query(
+        SourceImpactQuery(item_scope, "helpers.other", SourceImpactDirection.DEPENDENTS)
+    )
+
+    assert [item.symbol.qualified_name for item in validation.symbols] == ["service.process"]
+    assert [item.symbol.qualified_name for item in other.symbols] == ["service.process"]

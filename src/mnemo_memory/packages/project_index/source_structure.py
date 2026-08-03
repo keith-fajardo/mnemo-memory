@@ -299,7 +299,9 @@ class SourceStructureParser:
             if language == "python":
                 self._parse_python(raw, relative, module, pending, imports, bindings, calls)
             else:
-                self._parse_tree_sitter(language, raw, relative, module, pending, imports, calls)
+                self._parse_tree_sitter(
+                    language, raw, relative, module, pending, imports, bindings, calls
+                )
         if len(pending) > request.limits.max_symbols:
             raise SourceStructureError("MNEMO_SOURCE_SYMBOL_LIMIT")
         source_digest = f"sha256:{digest.hexdigest()}"
@@ -362,6 +364,7 @@ class SourceStructureParser:
                             self._resolve_call_target(
                                 path,
                                 target,
+                                module_names,
                                 modules,
                                 symbols_by_name,
                                 imports,
@@ -505,6 +508,7 @@ class SourceStructureParser:
     def _resolve_call_target(
         source_path: str,
         target: str,
+        modules_by_name: dict[str, CodeSymbol],
         modules_by_path: dict[str, CodeSymbol],
         symbols_by_name: dict[str, CodeSymbol],
         imports: list[tuple[str, str]],
@@ -536,7 +540,24 @@ class SourceStructureParser:
         for _, _binding, imported_target in (
             item for item in bindings if item[0] == source_path and item[1] == binding_name
         ):
-            candidate_name = imported_target if not separator else f"{imported_target}.{remainder}"
+            import_target, marker, imported_member = imported_target.partition("|")
+            if marker:
+                module_id = SourceStructureParser._resolve_import_target(
+                    source_path, import_target, modules_by_name, modules_by_path
+                )
+                module = next(
+                    (item for item in modules_by_path.values() if item.symbol_id == module_id), None
+                )
+                if module is None:
+                    continue
+                member = remainder if separator else imported_member
+                candidate_name = (
+                    module.qualified_name if not member else f"{module.qualified_name}.{member}"
+                )
+            else:
+                candidate_name = (
+                    imported_target if not separator else f"{imported_target}.{remainder}"
+                )
             imported = symbols_by_name.get(candidate_name)
             if imported is not None:
                 candidates.append(imported)
@@ -621,6 +642,7 @@ class SourceStructureParser:
         module: str,
         symbols: list[_PendingSymbol],
         imports: list[tuple[str, str]],
+        bindings: list[tuple[str, str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
         rules = next(rule for rule in _TREE_SITTER_RULES if rule.name == language)
@@ -642,6 +664,12 @@ class SourceStructureParser:
                 target = self._import_target(language, node, raw)
                 if target is not None:
                     imports.append((relative, target))
+                    bindings.extend(
+                        (relative, binding, encoded_target)
+                        for binding, encoded_target in self._tree_import_bindings(
+                            language, node, raw, target
+                        )
+                    )
             call_fields = dict(rules.call_kinds)
             if node.type in call_fields and parent != module:
                 target = self._call_target(node, raw, call_fields[node.type])
@@ -651,6 +679,36 @@ class SourceStructureParser:
                 visit(child, next_parent)
 
         visit(root, module)
+
+    @staticmethod
+    def _tree_import_bindings(
+        language: str, node: Node, raw: bytes, target: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Extract only simple ES-module bindings from already-parsed syntax."""
+        if language not in {"javascript", "typescript", "tsx"}:
+            return ()
+        clause = next(
+            (child for child in node.named_children if child.type == "import_clause"), None
+        )
+        if clause is None:
+            return ()
+        result: list[tuple[str, str]] = []
+        for child in clause.named_children:
+            if child.type == "named_imports":
+                for specifier in child.named_children:
+                    if specifier.type != "import_specifier":
+                        continue
+                    name = _safe_tree_text(specifier.child_by_field_name("name"), raw)
+                    alias = _safe_tree_text(specifier.child_by_field_name("alias"), raw)
+                    if name is not None:
+                        result.append((alias or name, f"{target}|{name}"))
+            elif child.type == "namespace_import":
+                binding = _safe_tree_text(
+                    child.named_children[0] if child.named_children else None, raw
+                )
+                if binding is not None:
+                    result.append((binding, f"{target}|"))
+        return tuple(result)
 
     @staticmethod
     def _declaration_name(node: Node, raw: bytes) -> str | None:
