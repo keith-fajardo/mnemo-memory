@@ -5,11 +5,13 @@ from pathlib import Path
 
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.unified_context import (
+    ContextSourceChangeQuery,
     ContextSourceImpactQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
 from mnemo_memory.packages.domain import (
+    ContextBudget,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -71,6 +73,190 @@ def test_source_query_returns_scoped_provenance_bearing_structural_facts(tmp_pat
     assert item.validity.value == "unknown"
     assert '"currentness":"unknown"' in item.content
     assert str(root) not in item.content
+
+
+def test_recent_source_changes_are_scoped_bounded_and_evidenced(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source with unicode Ω"
+    root.mkdir()
+    path = root / "orders.py"
+    path.write_text("def calculate_total():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    first = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(first)
+    path.write_text(
+        "def calculate_total():\n    return 2\n\ndef reconcile_orders():\n    return 3\n"
+    )
+    second = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(second)
+
+    context = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_changes=ContextSourceChangeQuery(
+                maximum_declarations=1,
+                maximum_relationships=1,
+                current_source_digest=second.snapshot.source_digest,
+                require_current=True,
+            ),
+        )
+    )
+
+    assert len(context.structural_items) == 1
+    item = context.structural_items[0]
+    assert (
+        item.item_id == f"source-change:{first.snapshot.snapshot_id}:{second.snapshot.snapshot_id}"
+    )
+    assert '"currentness":"current"' in item.content
+    assert "reconcile_orders" in item.content
+    assert len(item.evidence_references) == 2
+    assert all(
+        reference.content_hash.startswith("sha256:") for reference in item.evidence_references
+    )
+    assert str(root) not in item.content
+    assert context.provenance[-1].item_id == item.item_id
+
+
+def test_recent_source_changes_do_not_disclose_scope_or_claim_unknown_is_current(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    wrong_task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        ProjectId.from_string("44444444-4444-4444-8444-444444444444"),
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "private.py"
+    path.write_text("def one():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    path.write_text("def two():\n    return 2\n")
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    unknown = service.get_context(
+        GetUnifiedContext(
+            MemoryScope(
+                project_scope.owner_id,
+                ScopeLevel.TASK,
+                project_scope.visibility,
+                project_scope.workspace_id,
+                project_scope.project_id,
+                SessionId.new(),
+                TaskId.new(),
+            ),
+            source_changes=ContextSourceChangeQuery(),
+        )
+    )
+    hidden = service.get_context(
+        GetUnifiedContext(wrong_task_scope, source_changes=ContextSourceChangeQuery())
+    )
+
+    assert unknown.structural_items[0].validity.value == "unknown"
+    assert hidden.structural_items == ()
+    assert hidden.omissions[-1].detail == "no prior source transition"
+
+
+def test_recent_source_changes_require_current_and_respect_the_structural_budget(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "orders.py"
+    path.write_text("def old():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    path.write_text("def new():\n    return 2\n")
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    not_current = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_changes=ContextSourceChangeQuery(require_current=True),
+        )
+    )
+    budgeted = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            budget=ContextBudget(structural=0),
+            source_changes=ContextSourceChangeQuery(),
+        )
+    )
+
+    assert not_current.structural_items == ()
+    assert not_current.omissions[-1].reason.value == "stale"
+    assert budgeted.structural_items == ()
+    assert budgeted.omissions[-1].reason.value == "token_budget"
 
 
 def test_source_query_does_not_disclose_another_projects_snapshot(tmp_path: Path) -> None:

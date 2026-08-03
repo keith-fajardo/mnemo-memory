@@ -102,6 +102,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "exactly one" in tools[1].inputSchema["properties"]["lessons"]["description"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
+    assert "source_changes" in tools[0].inputSchema["properties"]
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -318,6 +319,56 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
     assert any('"symbol":"service"' in item.content for item in packet.structural_items)
     assert all('"currentness":"current"' in item.content for item in packet.structural_items)
     assert all(item.evidence_references for item in packet.structural_items)
+
+
+def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path) -> None:
+    project = tmp_path / "Project Δ"
+    project.mkdir()
+    path = project / "orders.py"
+    path.write_text("def calculate_total():\n    return 1\n")
+    config = LocalConfig.defaults(tmp_path / "durable source changes")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config) as runtime:
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        repository.store_and_activate(
+            PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
+        )
+        path.write_text("def calculate_total():\n    return 2\n\ndef reconcile():\n    return 3\n")
+        latest = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
+        repository.store_and_activate(latest)
+
+    with build_checkpoint_runtime(config) as runtime:
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, None, repository),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    source_changes={
+                        "maximum_declarations": 4,
+                        "maximum_relationships": 4,
+                        "current_source_digest": latest.snapshot.source_digest,
+                        "require_current": True,
+                    }
+                )
+            )
+        )
+
+    assert len(packet.structural_items) == 1
+    item = packet.structural_items[0]
+    assert "reconcile" in item.content
+    assert '"currentness":"current"' in item.content
+    assert len(item.evidence_references) == 2
 
 
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:

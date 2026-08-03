@@ -546,5 +546,10 @@ automatic transcript capture remain separate follow-up work.
 
 Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful
 "previous structural state → current structural state" sequence without treating random snapshot
-UUIDs as timestamps. The repository foundation is complete; surfacing a later historical change
-summary in a bounded ContextPacket is the next follow-up.
+UUIDs as timestamps.
+
+The bounded context path now surfaces that latest recorded transition through the existing
+`get_context` tool's optional `source_changes` request. It returns only provenance-bearing added
+and removed declaration/relationship identities, preserves current/stale/unknown labeling from an
+exact supplied source digest, and emits structured omissions for missing history or budget pressure.
+It does not replay source text or infer why a change was made.

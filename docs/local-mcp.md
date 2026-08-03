@@ -136,6 +136,35 @@ explicitly. Returned context is untrusted evidence and cites the exact revision.
 transcript or silently truncates stored content. A 600-token checkpoint is accepted; a larger write
 is rejected. A lower requested packet limit returns a structured `token_budget` omission instead.
 
+## Ask what changed structurally since the last refresh
+
+For an enabled source project, `get_context` can also request the latest recorded structural
+transition. This is useful when a new agent needs to know what changed before it makes a historical
+or impact claim. It is **not** source-code replay: Mnemo returns only bounded declaration and
+proven import/call relationship identities, citing both immutable snapshots.
+
+```json
+{
+  "owner_id": "<owner-id>",
+  "workspace_id": "<workspace-id>",
+  "project_id": "<project-id>",
+  "session_id": "<session-id>",
+  "task_id": "<task-id>",
+  "source_changes": {
+    "maximum_declarations": 24,
+    "maximum_relationships": 24,
+    "current_source_digest": "sha256:<exact-current-source-digest>",
+    "require_current": false
+  }
+}
+```
+
+Mnemo uses an append-only activation ledger, not lexical ordering of random snapshot IDs. If only
+one snapshot exists, it returns a structured omission rather than fabricating a change history. If
+the caller supplies no comparable current digest, the facts are explicitly `unknown`; with
+`require_current: true`, unknown or stale facts are omitted. A small structural or total packet
+budget likewise produces a structured omission rather than truncating an identifier.
+
 ## Durability and recovery
 
 Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain

@@ -269,6 +269,13 @@ and when it asks for a checkpoint. That helps the agent notice that work changed
 not guess **why** it changed: the agent records that decision, failed approach, and verification in
 the checkpoint it saves.
 
+When an agent needs the durable version of that question in a later session, it can ask for
+`source_changes` with `get_context`. Mnemo compares the two most recently recorded structural
+snapshots in their actual activation order and returns a bounded list of added/removed declaration
+and relationship identities, with evidence for both snapshots. It never guesses chronology from a
+snapshot UUID and never returns source text. The result is labeled `current`, `stale`, or `unknown`
+only from an exact supplied source digest; “active” alone is not called current.
+
 **Must I teach every agent to use Mnemo?** Not for the supported `--auto-memory` setup. Mnemo
 injects a session-start instruction telling Codex or Claude Code to check context before claiming
 knowledge of earlier work or impact, and how to request saved structure for a named symbol/file.

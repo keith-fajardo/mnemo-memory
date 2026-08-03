@@ -95,6 +95,31 @@ class ContextSourceImpactQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextSourceChangeQuery:
+    """Request the latest explicitly recorded source-snapshot transition.
+
+    This is intentionally a transition summary rather than a source-file replay:
+    only bounded declaration and relationship identities are rendered.
+    """
+
+    maximum_declarations: int = 24
+    maximum_relationships: int = 24
+    current_source_digest: str | None = None
+    require_current: bool = False
+
+    def __post_init__(self) -> None:
+        if self.maximum_declarations < 1 or self.maximum_relationships < 1:
+            raise ValueError("source change limits must be positive")
+        if self.maximum_declarations > 100 or self.maximum_relationships > 100:
+            raise ValueError("source change limits must not exceed 100")
+        if self.current_source_digest is not None and (
+            not self.current_source_digest.startswith("sha256:")
+            or len(self.current_source_digest) != 71
+        ):
+            raise ValueError("source change digest must be a sha256 digest")
+
+
+@dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
     checkpoint_id: object | None = None
@@ -102,6 +127,7 @@ class GetUnifiedContext:
     source_query: str | None = None
     budget: ContextBudget = field(default_factory=ContextBudget)
     source_impact: ContextSourceImpactQuery | None = None
+    source_changes: ContextSourceChangeQuery | None = None
 
 
 class UnifiedContextService:
@@ -125,17 +151,18 @@ class UnifiedContextService:
             request.lineage is None
             and request.source_query is None
             and request.source_impact is None
+            and request.source_changes is None
         ):
             return packet
         if request.lineage is None:
-            return self._with_source_facts(packet, request)
+            return self._with_requested_source_facts(packet, request)
         query = request.lineage
         assert query is not None
         if self._dbt is None:
             result_packet = _with_omission(
                 packet, "dbt-lineage", OmissionReason.LOWER_RANK, "dbt index is unavailable"
             )
-            return self._with_source_facts(result_packet, request)
+            return self._with_requested_source_facts(result_packet, request)
         result = self._dbt.query(
             QueryLineage(
                 _project_scope(request.scope),
@@ -155,7 +182,7 @@ class UnifiedContextService:
             result_packet = _with_omission(
                 packet, "dbt-lineage", OmissionReason.STALE, "structural facts are not current"
             )
-            return self._with_source_facts(result_packet, request)
+            return self._with_requested_source_facts(result_packet, request)
         facts: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
         remaining = min(
@@ -239,7 +266,16 @@ class UnifiedContextService:
             omissions=omissions,
             conflicts=packet.conflicts,
         )
-        return self._with_source_facts(result_packet, request)
+        return self._with_requested_source_facts(result_packet, request)
+
+    def _with_requested_source_facts(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        if request.source_impact is not None or request.source_query:
+            packet = self._with_source_facts(packet, request)
+        if request.source_changes is not None:
+            packet = self._with_recent_source_changes(packet, request, request.source_changes)
+        return packet
 
     def _with_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -411,6 +447,148 @@ class UnifiedContextService:
             else _with_omission(result, "source-impact", OmissionReason.LOWER_RANK, truncated)
         )
 
+    def _with_recent_source_changes(
+        self,
+        packet: ContextPacket,
+        request: GetUnifiedContext,
+        query: ContextSourceChangeQuery,
+    ) -> ContextPacket:
+        if self._source is None:
+            return _with_omission(
+                packet, "source-changes", OmissionReason.LOWER_RANK, "no source snapshot"
+            )
+        scope = _project_scope(request.scope)
+        transition = self._source.latest_transition(scope)
+        if transition is None:
+            return _with_omission(
+                packet,
+                "source-changes",
+                OmissionReason.LOWER_RANK,
+                "no prior source transition",
+            )
+        before, after = transition
+        currentness = _source_currentness(after, query.current_source_digest)
+        if query.require_current and currentness is not ValidityState.CURRENT:
+            return _with_omission(
+                packet,
+                "source-changes",
+                OmissionReason.STALE,
+                "source transition is not proven current",
+            )
+        (
+            added_symbols,
+            removed_symbols,
+            added_edges,
+            removed_edges,
+        ) = _source_snapshot_difference(self._source, scope, before, after)
+        added_declarations = tuple(
+            f"{item.relative_path}:{item.qualified_name}" for item in added_symbols
+        )[: query.maximum_declarations]
+        removed_declarations = tuple(
+            f"{item.relative_path}:{item.qualified_name}" for item in removed_symbols
+        )[: query.maximum_declarations]
+        added_relationships = tuple(f"{item.kind.value}:{item.target}" for item in added_edges)[
+            : query.maximum_relationships
+        ]
+        removed_relationships = tuple(f"{item.kind.value}:{item.target}" for item in removed_edges)[
+            : query.maximum_relationships
+        ]
+        omitted_declaration_count = (
+            len(added_symbols)
+            + len(removed_symbols)
+            - len(added_declarations)
+            - len(removed_declarations)
+        )
+        omitted_relationship_count = (
+            len(added_edges)
+            + len(removed_edges)
+            - len(added_relationships)
+            - len(removed_relationships)
+        )
+        content = json.dumps(
+            {
+                "after_snapshot_id": str(after.snapshot_id),
+                "before_snapshot_id": str(before.snapshot_id),
+                "currentness": currentness.value,
+                "added_declarations": added_declarations,
+                "removed_declarations": removed_declarations,
+                "added_relationships": added_relationships,
+                "removed_relationships": removed_relationships,
+                "omitted_declaration_count": omitted_declaration_count,
+                "omitted_relationship_count": omitted_relationship_count,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        remaining = min(
+            packet.budget.structural,
+            packet.budget.total_limit - packet.declared_total_tokens,
+        ) - sum(item.token_estimate for item in packet.structural_items)
+        if tokens > remaining:
+            return _with_omission(
+                packet,
+                "source-changes",
+                OmissionReason.TOKEN_BUDGET,
+                "source transition summary exceeds remaining structural budget",
+            )
+        evidence = (
+            _source_snapshot_evidence(packet, before),
+            _source_snapshot_evidence(packet, after),
+        )
+        context_item = ContextItem(
+            f"source-change:{before.snapshot_id}:{after.snapshot_id}",
+            ContextItemType.STRUCTURAL_FACT,
+            request.scope,
+            content,
+            ContentRepresentation.UNTRUSTED_EVIDENCE,
+            tokens,
+            evidence,
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            Sensitivity.NORMAL,
+            currentness,
+            None,
+            ConflictState.NONE,
+            packet.created_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{context_item.item_id}",
+            context_item.item_id,
+            f"mnemo:source-transition/{before.snapshot_id}/{after.snapshot_id}",
+            hashlib.sha256(content.encode()).hexdigest(),
+            evidence,
+        )
+        result = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, context_item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
+        return (
+            result
+            if not (omitted_declaration_count or omitted_relationship_count)
+            else _with_omission(
+                result,
+                "source-changes",
+                OmissionReason.LOWER_RANK,
+                "source transition entries were bounded",
+            )
+        )
+
 
 def _with_omission(
     packet: ContextPacket, item_id: str, reason: OmissionReason, detail: str
@@ -458,6 +636,59 @@ def _source_currentness(snapshot: CodeSnapshot, supplied_digest: str | None) -> 
     return (
         ValidityState.CURRENT if supplied_digest == snapshot.source_digest else ValidityState.STALE
     )
+
+
+def _source_snapshot_evidence(packet: ContextPacket, snapshot: CodeSnapshot) -> EvidenceReference:
+    ref = f"source-snapshot:{snapshot.source_digest}"
+    return EvidenceReference(
+        EvidenceId(uuid5(_SOURCE_EVIDENCE_NAMESPACE, f"evidence:{ref}")),
+        SourceId(uuid5(_SOURCE_EVIDENCE_NAMESPACE, f"source:{snapshot.source_digest}")),
+        EvidenceSourceType.REPOSITORY,
+        SourceTrustClass.CURRENT_STRUCTURAL,
+        ref,
+        snapshot.source_digest,
+        EvidenceLocation(f"mnemo:source/{snapshot.snapshot_id}"),
+        packet.created_at,
+        VerificationStatus.VERIFIED,
+    )
+
+
+def _source_snapshot_difference(
+    repository: SourceStructureRepository,
+    scope: MemoryScope,
+    before: CodeSnapshot,
+    after: CodeSnapshot,
+) -> tuple[
+    tuple[CodeSymbol, ...], tuple[CodeSymbol, ...], tuple[CodeEdge, ...], tuple[CodeEdge, ...]
+]:
+    """Compare two immutable projections using only the storage-neutral source port."""
+    before_symbols = {
+        _source_symbol_key(item): item
+        for item in repository.iter_symbols(scope, before.snapshot_id)
+    }
+    after_symbols = {
+        _source_symbol_key(item): item for item in repository.iter_symbols(scope, after.snapshot_id)
+    }
+    before_edges = {
+        _source_edge_key(item): item for item in repository.iter_edges(scope, before.snapshot_id)
+    }
+    after_edges = {
+        _source_edge_key(item): item for item in repository.iter_edges(scope, after.snapshot_id)
+    }
+    return (
+        tuple(after_symbols[key] for key in sorted(after_symbols.keys() - before_symbols.keys())),
+        tuple(before_symbols[key] for key in sorted(before_symbols.keys() - after_symbols.keys())),
+        tuple(after_edges[key] for key in sorted(after_edges.keys() - before_edges.keys())),
+        tuple(before_edges[key] for key in sorted(before_edges.keys() - after_edges.keys())),
+    )
+
+
+def _source_symbol_key(symbol: CodeSymbol) -> tuple[str, str, str, int]:
+    return (symbol.relative_path, symbol.qualified_name, symbol.kind.value, symbol.line)
+
+
+def _source_edge_key(edge: CodeEdge) -> tuple[str, str, str, str]:
+    return (str(edge.source_symbol_id), edge.target, edge.kind.value, str(edge.target_symbol_id))
 
 
 def _append_source_items(

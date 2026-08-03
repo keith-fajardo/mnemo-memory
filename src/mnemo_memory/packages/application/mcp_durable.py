@@ -26,6 +26,7 @@ from mnemo_memory.packages.application.checkpoints import (
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
     ContextLineageQuery,
+    ContextSourceChangeQuery,
     ContextSourceImpactQuery,
     GetUnifiedContext,
     UnifiedContextService,
@@ -74,10 +75,13 @@ class DurableMcpContextPort:
             lineage = request.get("dbt_lineage")
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
+            source_changes = request.get("source_changes")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
                 raise ValueError("source_impact must be an object")
+            if source_changes is not None and not isinstance(source_changes, Mapping):
+                raise ValueError("source_changes must be an object")
             impact = (
                 None
                 if source_impact is None
@@ -95,14 +99,33 @@ class DurableMcpContextPort:
                     bool(source_impact.get("require_current", False)),
                 )
             )
-            if lineage is not None or source_query is not None or impact is not None:
+            changes = (
+                None
+                if source_changes is None
+                else ContextSourceChangeQuery(
+                    int(source_changes.get("maximum_declarations", 24)),
+                    int(source_changes.get("maximum_relationships", 24)),
+                    source_changes.get("current_source_digest")
+                    if isinstance(source_changes.get("current_source_digest"), str)
+                    else None,
+                    bool(source_changes.get("require_current", False)),
+                )
+            )
+            if (
+                lineage is not None
+                or source_query is not None
+                or impact is not None
+                or changes is not None
+            ):
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
                 if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
                 if lineage is None:
                     return self._context_service.get_context(
-                        GetUnifiedContext(scope, checkpoint, None, source_query, budget, impact)
+                        GetUnifiedContext(
+                            scope, checkpoint, None, source_query, budget, impact, changes
+                        )
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
                 dbt_query = ContextLineageQuery(
@@ -120,7 +143,9 @@ class DurableMcpContextPort:
                     bool(lineage.get("require_current", False)),
                 )
                 return self._context_service.get_context(
-                    GetUnifiedContext(scope, checkpoint, dbt_query, source_query, budget, impact)
+                    GetUnifiedContext(
+                        scope, checkpoint, dbt_query, source_query, budget, impact, changes
+                    )
                 ).to_dict()
             return self._service.get_context(
                 GetCheckpointContext(scope, checkpoint, budget)
