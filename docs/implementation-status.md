@@ -464,7 +464,9 @@ out of scope.
 Added deterministic installed-package hook discovery under `mnemo.command_hooks`. Only Python
 distribution entry points are considered; project files and current-directory Python are never
 loaded. Registrations are validated, sorted, filtered by their integration, and malformed,
-unloadable, or duplicate entries are skipped with bounded sanitized warnings.
+unloadable, or duplicate entries are skipped with bounded sanitized warnings. `dbt exec` now
+merges accepted installed dbt hooks after Mnemo's built-in manifest hook, so the contract is live
+rather than merely a library helper; an extension cannot shadow Mnemo or another accepted hook.
 
 #### Issue 14B — In progress
 

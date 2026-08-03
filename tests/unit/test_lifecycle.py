@@ -7,6 +7,7 @@ import pytest
 from fastapi.routing import APIRoute
 from typer.testing import CliRunner
 
+import mnemo_memory.apps.cli.main as cli_main
 from mnemo_memory.apps.api.app import create_app
 from mnemo_memory.apps.cli.main import app
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -15,6 +16,14 @@ from mnemo_memory.connectors.dbt.project_binding import (
 )
 from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.application.command_wrapper import (
+    CommandContext,
+    CommandResult,
+    HookDiscoveryResult,
+    HookOutcome,
+    HookRegistration,
+    HookStatus,
+)
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
@@ -432,6 +441,110 @@ def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> 
         ],
     )
     assert json.loads(status.output)["active"] is True
+
+
+def test_dbt_exec_does_not_activate_a_manifest_written_by_a_failing_child(tmp_path: Path) -> None:
+    """The actual CLI wrapper must retain the prior active state when dbt itself fails."""
+    project = tmp_path / "failing dbt project Δ"
+    target = project / "target"
+    target.mkdir(parents=True)
+    (project / "dbt_project.yml").write_text("name: synthetic\n")
+    data_dir = tmp_path / "Mnemo data"
+    runner = CliRunner()
+
+    enabled = runner.invoke(
+        app, ["dbt", "enable", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert enabled.exit_code == 0, enabled.output
+    assert json.loads(enabled.output)["existing_manifest"] == "unavailable"
+
+    fixture = Path("tests/fixtures/dbt/manifest-v12.json").resolve()
+    fake = tmp_path / "failing fake dbt.py"
+    fake.write_text(
+        "from pathlib import Path\nimport shutil, sys\n"
+        f"source = {str(fixture)!r}\n"
+        "target = Path(sys.argv[sys.argv.index('--target-path') + 1]) / 'manifest.json'\n"
+        "shutil.copyfile(source, target)\n"
+        "raise SystemExit(23)\n"
+    )
+    executed = runner.invoke(
+        app,
+        [
+            "dbt",
+            "exec",
+            "--data-dir",
+            str(data_dir),
+            "--dbt-executable",
+            str(Path(sys.executable).resolve()),
+            "--",
+            str(fake),
+            "run",
+            "--project-dir",
+            str(project),
+            "--target-path",
+            str(target),
+        ],
+    )
+
+    assert executed.exit_code == 23, executed.output
+    assert "MNEMO_DBT_COMMAND_NOT_SUCCESSFUL" in executed.output
+    status = runner.invoke(
+        app, ["dbt", "status", "--project-dir", str(project), "--data-dir", str(data_dir)]
+    )
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["active"] is False
+
+
+def test_dbt_exec_runs_validated_installed_hook_registrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real CLI combines the trusted dbt hook with installed extension registrations."""
+    calls: list[str] = []
+
+    def before(_: CommandContext) -> str:
+        calls.append("before")
+        return "private-state"
+
+    def after(_: CommandContext, state: object, __: CommandResult) -> HookOutcome:
+        assert state == "private-state"
+        calls.append("after")
+        return HookOutcome(HookStatus.UNCHANGED, "MNEMO_PLUGIN_UNCHANGED")
+
+    plugin = HookRegistration("installed-plugin", "dbt", before, after)
+    monkeypatch.setattr(
+        cli_main,
+        "discover_command_hooks",
+        lambda integration: (
+            HookDiscoveryResult((plugin,), ())
+            if integration == "dbt"
+            else pytest.fail("wrong integration")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "dbt",
+            "exec",
+            "--data-dir",
+            str(tmp_path / "isolated memory"),
+            "--dbt-executable",
+            str(Path(sys.executable).resolve()),
+            "--json-summary",
+            "--",
+            "-c",
+            "raise SystemExit(0)",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["before", "after"]
+    summary = json.loads(result.output)
+    assert [item["hook"] for item in summary["outcomes"]] == [
+        "installed-plugin",
+        "dbt-manifest",
+    ]
+    assert "MNEMO_PLUGIN_UNCHANGED" in [item["code"] for item in summary["outcomes"]]
 
 
 def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manifest(

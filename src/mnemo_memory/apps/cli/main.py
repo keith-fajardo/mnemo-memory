@@ -55,6 +55,8 @@ from mnemo_memory.packages.application.command_wrapper import (
     CommandInvocation,
     CommandWrapper,
     HookRegistration,
+    discover_command_hooks,
+    merge_command_hooks,
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import (
@@ -563,12 +565,14 @@ def dbt_exec(
     )
     launcher = shutil.which("mnemo-memory")
     wrapper_path = Path(launcher).resolve() if launcher is not None else None
+    built_in_hooks = (HookRegistration("dbt-manifest", "dbt", hooks.before_dbt, hooks.after_dbt),)
+    discovered_hooks = merge_command_hooks(built_in_hooks, discover_command_hooks("dbt"))
     wrapped = CommandWrapper(
         LocalExecutableResolver(),
         SubprocessExecutor(),
         lambda: datetime.now(UTC),
         lambda: str(uuid4()),
-        (HookRegistration("dbt-manifest", "dbt", hooks.before_dbt, hooks.after_dbt),),
+        discovered_hooks.registrations,
     ).run(
         CommandInvocation(_dbt_executable(dbt_executable), arguments, Path.cwd().resolve(), "dbt"),
         strict_memory=strict_memory,
@@ -586,7 +590,7 @@ def dbt_exec(
             }
             for value in wrapped.outcomes
         ],
-        "warnings": [warning.code for warning in wrapped.warnings],
+        "warnings": [warning.code for warning in (*discovered_hooks.warnings, *wrapped.warnings)],
     }
     if json_summary:
         _show(summary)

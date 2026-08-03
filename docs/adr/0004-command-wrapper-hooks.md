@@ -35,7 +35,8 @@ Only a connector may create or manage a subprocess. The generic application pack
 connector or dbt integration. Installed-package entry-point discovery uses only the explicit
 `mnemo.command_hooks` distribution-entry-point group: each entry point must load one validated
 function-level registration, and malformed or duplicate registrations are skipped with a sanitized
-warning. Mnemo never loads arbitrary Python files from a project, current directory, or user
+warning. The wrapper merges its built-ins first; an installed hook cannot shadow a built-in or an
+already accepted installed hook by reusing its name. Mnemo never loads arbitrary Python files from a project, current directory, or user
 configuration. dbt project bindings, dbt hooks, CLI integration, and shell integration are
 separate Issue 14 substeps. Arbitrary
 Python files from a working directory or a dbt project are never loaded by this kernel.

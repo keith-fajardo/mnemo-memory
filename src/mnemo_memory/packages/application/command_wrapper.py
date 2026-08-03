@@ -313,6 +313,34 @@ def discover_command_hooks(
     return HookDiscoveryResult(tuple(registrations), tuple(warnings))
 
 
+def merge_command_hooks(
+    built_in: Iterable[HookRegistration], discovered: HookDiscoveryResult
+) -> HookDiscoveryResult:
+    """Combine trusted built-ins with discovered hooks without letting a plugin replace one.
+
+    Built-ins keep their declared order. Discovery already supplies deterministic order for
+    external distributions, so accepted extensions follow them in that same order. A plugin
+    cannot shadow a built-in (or another accepted plugin): it is skipped with the same bounded
+    duplicate warning used by discovery instead of making command execution ambiguous.
+    """
+    registrations = list(built_in)
+    names: set[str] = set()
+    for registration in registrations:
+        if registration.name in names:
+            raise ValueError("MNEMO_HOOK_DUPLICATE_NAME")
+        names.add(registration.name)
+    warnings = list(discovered.warnings)
+    for registration in discovered.registrations:
+        if registration.name in names:
+            warnings.append(
+                HookWarning(registration.name, "resolve", "MNEMO_HOOK_DISCOVERY_DUPLICATE")
+            )
+            continue
+        names.add(registration.name)
+        registrations.append(registration)
+    return HookDiscoveryResult(tuple(registrations), tuple(warnings))
+
+
 @dataclass(frozen=True, slots=True)
 class CommandWrapperResult:
     result: CommandResult
@@ -517,4 +545,5 @@ __all__ = [
     "ProcessExecutor",
     "RegisteredHookOutcome",
     "discover_command_hooks",
+    "merge_command_hooks",
 ]

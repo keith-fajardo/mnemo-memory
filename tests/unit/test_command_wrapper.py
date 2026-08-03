@@ -23,6 +23,7 @@ from mnemo_memory.packages.application.command_wrapper import (
     HookStatus,
     HookWarning,
     discover_command_hooks,
+    merge_command_hooks,
 )
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
@@ -393,3 +394,31 @@ def test_installed_entry_point_discovery_is_deterministic_filtered_and_sanitized
         "MNEMO_HOOK_DISCOVERY_DUPLICATE",
     ]
     assert "secret" not in str(result.warnings)
+
+
+def test_merge_preserves_builtin_order_and_skips_a_plugin_shadowing_it() -> None:
+    def registration(name: str) -> HookRegistration:
+        return HookRegistration(
+            name,
+            "dbt",
+            lambda _: None,
+            lambda *_: HookOutcome(HookStatus.UNCHANGED),
+        )
+
+    merged = merge_command_hooks(
+        (registration("dbt-manifest"),),
+        discover_command_hooks(
+            "dbt",
+            installed_entry_points=(
+                cast(
+                    object, FakeEntryPoint("shadow", "plugin:shadow", registration("dbt-manifest"))
+                ),
+                cast(object, FakeEntryPoint("extra", "plugin:extra", registration("extra"))),
+            ),  # type: ignore[arg-type]
+        ),
+    )
+
+    assert [item.name for item in merged.registrations] == ["dbt-manifest", "extra"]
+    assert merged.warnings == (
+        HookWarning("dbt-manifest", "resolve", "MNEMO_HOOK_DISCOVERY_DUPLICATE"),
+    )

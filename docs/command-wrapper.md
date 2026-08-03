@@ -83,7 +83,10 @@ adapter or a source of executable SQL.
 ## Technical reference
 
 The generic engine uses an argv array rather than a shell command string, prevents recursion back
-into Mnemo, preserves terminal streams, and uses bounded cleanup on interruption. It accepts only
-Mnemo's built-in integration in this alpha; it will never import a Python file from your current
-directory or dbt project. The exact contract and tests are recorded in
+into Mnemo, preserves terminal streams, and uses bounded cleanup on interruption. The built-in dbt
+hook runs first. An installed Python distribution may add a validated hook registration through the
+`mnemo.command_hooks` entry-point group; Mnemo discovers installed distributions only, in a stable
+order. A plugin cannot replace Mnemo's built-in hook or another accepted hook with the same name,
+and malformed/unloadable registrations become safe warnings. Mnemo never imports a Python file from
+your current directory or dbt project. The exact contract and tests are recorded in
 [ADR 0004](adr/0004-command-wrapper-hooks.md).
