@@ -57,6 +57,9 @@ from mnemo_memory.packages.application.command_wrapper import (
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import (
+    CodeEdge,
+    CodeSnapshotId,
+    CodeSymbol,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -778,6 +781,61 @@ def memory_impact(
             ],
             "truncated": result.truncated,
             "truncation_reason": result.truncation_reason,
+        }
+    )
+
+
+@memory_app.command(
+    "changes", help="Compare two saved source-structure snapshots for this project."
+)
+def memory_changes(
+    before_snapshot_id: str = typer.Option(..., "--from", help="Earlier source snapshot UUID."),
+    after_snapshot_id: str = typer.Option(..., "--to", help="Later source snapshot UUID."),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Show only structural additions/removals; saved snapshots remain immutable."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
+        diff = SourceImpactService(repository).diff(
+            binding.scope,
+            CodeSnapshotId.from_string(before_snapshot_id),
+            CodeSnapshotId.from_string(after_snapshot_id),
+        )
+    except (AutomaticMemoryBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SOURCE_DIFF_UNAVAILABLE") from error
+
+    def symbol(value: object) -> dict[str, object]:
+        item = cast(CodeSymbol, value)
+        return {
+            "path": item.relative_path,
+            "symbol": item.qualified_name,
+            "kind": item.kind.value,
+            "line": item.line,
+        }
+
+    def edge(value: object) -> dict[str, object]:
+        item = cast(CodeEdge, value)
+        return {
+            "relationship": item.kind.value,
+            "target": item.target,
+            "resolved": item.target_symbol_id is not None,
+        }
+
+    _show(
+        {
+            "before_snapshot_id": str(diff.before.snapshot_id),
+            "after_snapshot_id": str(diff.after.snapshot_id),
+            "added_symbols": [symbol(item) for item in diff.added_symbols],
+            "removed_symbols": [symbol(item) for item in diff.removed_symbols],
+            "added_relationships": [edge(item) for item in diff.added_edges],
+            "removed_relationships": [edge(item) for item in diff.removed_edges],
         }
     )
 

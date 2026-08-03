@@ -180,6 +180,48 @@ def test_memory_impact_queries_the_enabled_projects_static_snapshot(tmp_path: Pa
     ]
 
 
+def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    before = repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+    (project / "worker.py").write_text("import core\n\ndef work():\n    return core.calculate()\n")
+    after = repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "changes",
+            "--from",
+            str(before.snapshot_id),
+            "--to",
+            str(after.snapshot_id),
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["before_snapshot_id"] == str(before.snapshot_id)
+    assert value["after_snapshot_id"] == str(after.snapshot_id)
+    assert [item["symbol"] for item in value["added_symbols"]] == ["worker", "worker.work"]
+    assert value["removed_symbols"] == []
+
+
 def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> None:
     project = tmp_path / "dbt project Δ"
     target = project / "target"

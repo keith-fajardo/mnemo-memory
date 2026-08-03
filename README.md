@@ -108,6 +108,7 @@ From an enabled repository, you can also inspect a bounded static impact candida
 
 ```bash
 mnemo-memory memory impact package.module_name
+mnemo-memory memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
 ```
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
