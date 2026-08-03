@@ -47,6 +47,7 @@ from .dbt_manifest import (
     SourceStateFingerprint,
     UnsupportedManifestSchema,
 )
+from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .identifiers import (
     AgentId,
     CheckpointId,
@@ -94,8 +95,10 @@ __all__ = [
     "Checkpoint",
     "CheckpointAggregate",
     "CheckpointContent",
+    "CheckpointEventKind",
     "CheckpointId",
     "CheckpointLesson",
+    "CheckpointLifecycleEvent",
     "CheckpointRevision",
     "CheckpointRevisionId",
     "CheckpointStatus",

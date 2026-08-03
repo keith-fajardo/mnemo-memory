@@ -6,7 +6,10 @@ import pytest
 from mnemo_memory.packages.domain import (
     AgentId,
     Checkpoint,
+    CheckpointEventKind,
     CheckpointId,
+    CheckpointLifecycleEvent,
+    CheckpointRevisionId,
     CheckpointStatus,
     DurableClaim,
     EventId,
@@ -108,6 +111,65 @@ def test_nominal_identifiers_are_validated_and_not_interchangeable() -> None:
         MemoryId("not-a-uuid")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="only"):
         MemoryId.from_dict({"value": str(memory_id), "extra": "field"})
+
+
+def test_checkpoint_lifecycle_event_is_immutable_evidence_bearing_and_deterministic() -> None:
+    scope = task_scope()
+    checkpoint_id = CheckpointId.new()
+    revision_id = CheckpointRevisionId.new()
+
+    first = CheckpointLifecycleEvent.for_revision(
+        scope=scope,
+        kind=CheckpointEventKind.LESSON_RECORDED,
+        checkpoint_id=checkpoint_id,
+        revision_id=revision_id,
+        revision_number=2,
+        occurred_at=NOW,
+        evidence_references=(evidence(),),
+    )
+    second = CheckpointLifecycleEvent.for_revision(
+        scope=scope,
+        kind=CheckpointEventKind.LESSON_RECORDED,
+        checkpoint_id=checkpoint_id,
+        revision_id=revision_id,
+        revision_number=2,
+        occurred_at=NOW,
+        evidence_references=first.evidence_references,
+    )
+
+    assert first.event_id == second.event_id
+    assert first.idempotency_key == second.idempotency_key
+    assert CheckpointLifecycleEvent.from_dict(first.to_dict()) == first
+    with pytest.raises(FrozenInstanceError):
+        first.revision_number = 3  # type: ignore[misc]
+
+
+def test_checkpoint_lifecycle_event_rejects_unscoped_raw_or_duplicate_evidence() -> None:
+    checkpoint_id = CheckpointId.new()
+    revision_id = CheckpointRevisionId.new()
+    item = evidence()
+    with pytest.raises(ValueError, match="task scope"):
+        CheckpointLifecycleEvent.for_revision(
+            scope=MemoryScope(
+                OwnerId.new(), ScopeLevel.PROJECT, Visibility.PROJECT, project_id=ProjectId.new()
+            ),
+            kind=CheckpointEventKind.CREATED,
+            checkpoint_id=checkpoint_id,
+            revision_id=revision_id,
+            revision_number=1,
+            occurred_at=NOW,
+            evidence_references=(item,),
+        )
+    with pytest.raises(ValueError, match="evidence must be unique"):
+        CheckpointLifecycleEvent.for_revision(
+            scope=task_scope(),
+            kind=CheckpointEventKind.CREATED,
+            checkpoint_id=checkpoint_id,
+            revision_id=revision_id,
+            revision_number=1,
+            occurred_at=NOW,
+            evidence_references=(item, item),
+        )
 
 
 def test_scope_combinations_and_serialization_are_strict() -> None:
