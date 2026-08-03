@@ -69,6 +69,12 @@ class AutomaticMemoryHook:
         tool_name = event.get("tool_name")
         if event_name == "PostToolUse" and isinstance(tool_name, str):
             if tool_name in _SAVE_TOOL_NAMES:
+                # A checkpoint is the trusted lifecycle boundary at which an agent says its
+                # current work is durable. Refresh the syntax-only map here as well as at a
+                # later stop/session start, so the newly saved handoff can immediately be paired
+                # with the structural state it describes. This remains fail-open and never reads
+                # tool input/output or source text into hook state.
+                self._refresh_source_structure(binding)
                 _SessionStateStore(self.data_directory).save(session_id, dirty=False, saved=True)
             elif tool_name in _MUTATING_TOOLS:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)

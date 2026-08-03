@@ -491,7 +491,8 @@ strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-
 
 Automatic task-memory onboarding is being added as an explicit opt-in for Codex and Claude Code.
 It creates a private machine-local project binding, installs only Mnemo-owned lifecycle-hook entries,
-refreshes a bounded static source-structure projection at trusted lifecycle boundaries, and asks the
+refreshes a bounded static source-structure projection at session start, a checkpoint save, and a
+changed unsaved work-stop boundary, and asks the
 connected agent to retrieve bounded context at session start and write a typed checkpoint at a
 work-stop or compaction boundary. It does not ingest transcripts, source text, or credentials.
 No dbt-core dependency, warehouse call, or automatic shell-profile modification was introduced.

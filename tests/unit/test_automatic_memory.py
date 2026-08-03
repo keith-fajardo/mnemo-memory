@@ -378,6 +378,59 @@ def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointi
     assert str(project) not in reason
 
 
+def test_checkpoint_save_refreshes_changed_structure_without_waiting_for_stop_or_restart(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    source_file = project / "service.py"
+    source_file.write_text("def initial():\n    return 1\n")
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3")
+    initial = repository.get_active_snapshot(binding.scope)
+    assert initial is not None
+
+    source_file.write_text("def current():\n    return 2\n")
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+    unchanged = repository.get_active_snapshot(binding.scope)
+    assert unchanged is not None
+    assert unchanged.snapshot_id == initial.snapshot_id
+
+    result = hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+        }
+    )
+    refreshed = repository.get_active_snapshot(binding.scope)
+
+    assert result == {}
+    assert refreshed is not None
+    assert refreshed.snapshot_id != initial.snapshot_id
+    assert {
+        item.qualified_name
+        for item in repository.iter_symbols(binding.scope, refreshed.snapshot_id)
+    } == {
+        "service",
+        "service.current",
+    }
+    state = (data / "automatic-memory-session-state.json").read_text()
+    assert "return 2" not in state
+    assert str(project) not in state
+
+
 def test_session_start_reports_a_bounded_prior_structural_change_without_source_text(
     tmp_path: Path,
 ) -> None:

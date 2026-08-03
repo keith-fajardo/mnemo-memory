@@ -62,9 +62,10 @@ the exact source digest for that refresh. An impact request that supplies that s
 `current`; a different digest is labeled `stale`; without comparable evidence it remains `unknown`.
 `require_current` omits a stale or unproven source map rather than presenting it as current.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
-Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. It
-rebuilds the bounded structural snapshot from current local syntax and preserves the previous
-snapshot for comparison.
+Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. With
+automatic memory enabled, Mnemo refreshes at session start, after a checkpoint save, and before an
+unsaved changed session is stopped. It rebuilds the bounded structural snapshot from current local
+syntax and preserves the previous snapshot for comparison.
 
 With automatic task memory, Mnemo also compares the fresh snapshot with the prior one. When it can
 prove a structural difference, the connected agent receives a short list of added/removed

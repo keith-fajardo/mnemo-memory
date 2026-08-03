@@ -35,7 +35,8 @@ mnemo-memory connect claude-code --auto-memory
 
 This creates a private local project binding; you never enter scope UUIDs. The hook tells the agent
 to retrieve context at session start and create a compact checkpoint at a stop/compaction boundary.
-It does not read or store a raw transcript.
+It refreshes Mnemo's syntax-only source map at session start, after a checkpoint save, and before
+an unsaved changed session stops. It does not read or store a raw transcript.
 
 By default, Codex and Claude Code launched normally will use the same personal Mnemo store. To use
 an isolated store—for a test, demo, or separate profile—set an absolute path before launching the

@@ -106,8 +106,9 @@ Running `mnemo-memory init` **does not** make the current directory memorable. I
 opens the local Mnemo store. From the repository you want remembered, run one connection command
 with `--auto-memory`; it creates a private project binding, records the first supported-language
 structure snapshot, and installs lifecycle reminders for that client. The hook refreshes the structure map
-at later session starts and prompts the agent to save a bounded checkpoint at a task stop or
-compaction. It never captures transcripts or conversations. An optional dbt command wrapper can
+at a later session start, when the agent saves its checkpoint, or at an unsaved task stop, then
+prompts the agent to save a bounded checkpoint at a task stop or compaction. It never captures
+transcripts or conversations. An optional dbt command wrapper can
 refresh a configured project's manifest snapshot after a successful dbt command; it is described
 in the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
 
@@ -262,8 +263,8 @@ message.
 
 **When does it get saved?** In automatic mode, Mnemo asks the connected agent to call
 `save_checkpoint` at a stop or compaction boundary. You can still ask explicitly at any point.
-The code structure refresh happens locally at session start; task handoffs remain deliberately
-bounded rather than being raw transcript capture. Structural impact requests use the active
+The code structure refresh happens locally at session start, checkpoint save, and an unsaved stop;
+task handoffs remain deliberately bounded rather than being raw transcript capture. Structural impact requests use the active
 snapshot by default, or can name an immutable snapshot when an agent needs to reason about a
 specific earlier state. A source map is called current only when its exact fresh source digest
 matches; “active” alone is never treated as proof that files have not changed.
