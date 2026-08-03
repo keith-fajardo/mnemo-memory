@@ -42,6 +42,18 @@ file. It is still deliberately not a source-code copy, a runtime trace, or a gue
 A saved snapshot is labeled **unknown currentness** unless a later source-state comparison can prove
 it matches the files being worked on.
 
+You can inspect the same proven static impact map yourself from an enabled repository:
+
+```bash
+mnemo-memory memory impact package.module_name
+mnemo-memory memory impact package.module_name --direction dependencies
+mnemo-memory memory impact package.module_name --direct
+```
+
+The result lists only saved internal relationships that Mnemo can prove from syntax, along with
+depth, snapshot identity, and a clear `unknown` currentness label when no fresh source-state proof
+was supplied. It is a useful change-planning aid, not a promise that every runtime effect was found.
+
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.
 

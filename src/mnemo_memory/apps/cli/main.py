@@ -64,7 +64,13 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
+from mnemo_memory.packages.project_index import (
+    SourceImpactDirection,
+    SourceImpactQuery,
+    SourceImpactService,
+    SourceStructureParser,
+    SourceStructureParseRequest,
+)
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 app = typer.Typer(
@@ -711,6 +717,67 @@ def memory_disable(
         {
             "automatic_memory": False,
             "removed": _disable_automatic_task_memory(client, data_dir),
+        }
+    )
+
+
+@memory_app.command(
+    "impact", help="Show proven static dependencies or dependents for this project."
+)
+def memory_impact(
+    symbol: str = typer.Argument(..., help="Saved symbol name or relative source path."),
+    direction: SourceImpactDirection = SourceImpactDirection.DEPENDENTS,
+    direct: bool = typer.Option(False, "--direct", help="Return only one relationship hop."),
+    maximum_depth: int | None = typer.Option(None, "--maximum-depth", min=0),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Query the enabled project's bounded, evidence-backed static impact map."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        repository = SQLiteSourceStructureRepository(
+            config.database_path, base_directory=config.data_directory
+        )
+        result = SourceImpactService(repository).query(
+            SourceImpactQuery(
+                binding.scope,
+                symbol,
+                direction,
+                not direct,
+                maximum_depth,
+            )
+        )
+    except (AutomaticMemoryBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SOURCE_IMPACT_UNAVAILABLE") from error
+    _show(
+        {
+            "snapshot_id": str(result.snapshot.snapshot_id),
+            "currentness": "unknown",
+            "direction": result.direction.value,
+            "start_symbols": [item.qualified_name for item in result.start_symbols],
+            "symbols": [
+                {
+                    "path": item.symbol.relative_path,
+                    "symbol": item.symbol.qualified_name,
+                    "kind": item.symbol.kind.value,
+                    "line": item.symbol.line,
+                    "depth": item.depth,
+                }
+                for item in result.symbols
+            ],
+            "relationships": [
+                {
+                    "kind": item.kind.value,
+                    "target": item.target,
+                    "resolved": item.target_symbol_id is not None,
+                }
+                for item in result.edges
+            ],
+            "truncated": result.truncated,
+            "truncation_reason": result.truncation_reason,
         }
     )
 

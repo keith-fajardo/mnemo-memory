@@ -104,6 +104,12 @@ added without changing saved memory. The
 [practical user guide](docs/user-guide.md) shows exactly how to use Mnemo on a repository such as
 this one.
 
+From an enabled repository, you can also inspect a bounded static impact candidate directly:
+
+```bash
+mnemo-memory memory impact package.module_name
+```
+
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.
 

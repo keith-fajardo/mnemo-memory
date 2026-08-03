@@ -14,7 +14,10 @@ from mnemo_memory.connectors.dbt.project_binding import (
     LocalDbtProjectBindingStore,
 )
 from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.application.services import LifecycleService
+from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
+from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 
 def service(tmp_path: Path) -> LifecycleService:
@@ -130,6 +133,51 @@ def test_agent_is_an_interactive_guide_alias(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Mnemo Memory setup guide" in result.output
+
+
+def test_memory_impact_queries_the_enabled_projects_static_snapshot(tmp_path: Path) -> None:
+    project = tmp_path / "project with spaces Δ"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n")
+    (project / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n"
+    )
+    data_dir = tmp_path / "memory data"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "impact",
+            "core",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["direction"] == "dependents"
+    assert value["start_symbols"] == ["core"]
+    assert value["symbols"] == [
+        {
+            "depth": 1,
+            "kind": "module",
+            "line": 1,
+            "path": "service.py",
+            "symbol": "service",
+        }
+    ]
 
 
 def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> None:
