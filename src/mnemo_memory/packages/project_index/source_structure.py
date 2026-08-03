@@ -363,6 +363,7 @@ class SourceStructureParser:
                             CodeEdgeKind.CALLS,
                             self._resolve_call_target(
                                 path,
+                                qualified_name,
                                 target,
                                 module_names,
                                 modules,
@@ -507,6 +508,7 @@ class SourceStructureParser:
     @staticmethod
     def _resolve_call_target(
         source_path: str,
+        caller_qualified_name: str,
         target: str,
         modules_by_name: dict[str, CodeSymbol],
         modules_by_path: dict[str, CodeSymbol],
@@ -531,6 +533,24 @@ class SourceStructureParser:
         direct = symbols_by_name.get(target)
         if direct is not None:
             candidates.append(direct)
+        owner_name, separator, member = caller_qualified_name.rpartition(".")
+        owner = symbols_by_name.get(owner_name) if separator else None
+        if (
+            owner is not None
+            and owner.kind
+            in {
+                CodeSymbolKind.CLASS,
+                CodeSymbolKind.INTERFACE,
+                CodeSymbolKind.STRUCT,
+                CodeSymbolKind.TRAIT,
+                CodeSymbolKind.ENUM,
+            }
+            and target.startswith(("self.", "this."))
+        ):
+            sibling_name = target.partition(".")[2]
+            sibling = symbols_by_name.get(f"{owner.qualified_name}.{sibling_name}")
+            if sibling is not None:
+                candidates.append(sibling)
         for _, imported_target in (item for item in imports if item[0] == source_path):
             if imported_target.endswith(f".{target}"):
                 imported = symbols_by_name.get(imported_target)
@@ -831,6 +851,7 @@ class SourceStructureParser:
             "crate",
             "self",
             "super",
+            "this",
             "name",
             "variable_name",
         }

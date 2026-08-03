@@ -221,3 +221,23 @@ def test_java_and_rust_imported_calls_resolve_only_to_local_unambiguous_symbols(
     assert calls[("Service.Service.run", "Helper.go")] is not None
     assert calls[("engine.run", "helper")] is not None
     assert calls[("engine.run", "callback")] is None
+
+
+def test_typescript_this_call_resolves_only_with_an_explicit_class_owner(tmp_path: Path) -> None:
+    root = tmp_path / "web"
+    root.mkdir()
+    (root / "service.ts").write_text(
+        "class Service { run() { return this.validate(); } validate() { return true; } }\n"
+        "function free() { return this.validate(); }\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind is CodeEdgeKind.CALLS
+    }
+
+    assert calls[("service.Service.run", "this.validate")] is not None
+    assert calls[("service.free", "this.validate")] is None

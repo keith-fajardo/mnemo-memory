@@ -95,6 +95,31 @@ def test_parser_records_only_explicit_syntactic_calls_without_resolving_dispatch
     }
 
 
+def test_parser_resolves_only_explicit_sibling_self_calls(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "service.py").write_text(
+        "class Service:\n"
+        "    def run(self):\n"
+        "        return self.validate()\n\n"
+        "    def validate(self):\n"
+        "        return True\n\n"
+        "def free():\n"
+        "    return self.validate()\n"
+    )
+
+    artifact = PythonSourceParser().parse(PythonSourceParseRequest(scope(), root.resolve()))
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind is CodeEdgeKind.CALLS
+    }
+
+    assert calls[("service.Service.run", "self.validate")] is not None
+    assert calls[("service.free", "self.validate")] is None
+
+
 @pytest.mark.parametrize(
     ("content", "limits", "code"),
     [

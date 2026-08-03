@@ -25,7 +25,8 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   only when it unambiguously resolves to a module in the same snapshot. A call gains a target link
   only for an unambiguous same-module, fully-qualified, or imported-member declaration. The current
   adapters resolve simple Python/ES-module aliases plus direct Java class imports, Rust
-  `use crate::...` items, and exact Go imported-package member calls only when a unique saved
+  `use crate::...` items, exact Go imported-package member calls, and direct `self`/`this` sibling
+  method calls only when a unique saved
   declaration exists. Go imports remain unresolved as module edges because a Go import identifies
   a package directory while this projection identifies files. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.

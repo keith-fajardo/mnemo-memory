@@ -543,7 +543,9 @@ opt-in lifecycle refresh at session start and after changed work stops. Parsing 
 stores no source text. Safe direct Java/Rust imported-call resolution now joins the existing
 Python/ES-module support. Exact Go imported-package member calls now also join when one matching
 declaration exists in the same unique local package directory; imports themselves stay unresolved
-because they name directories while the projection names files. Broad multi-language semantic resolution, a complete call graph, and
+because they name directories while the projection names files. Explicit class-owned `self`/`this`
+sibling calls now resolve across supported adapters when the enclosing type and target declaration
+are both unambiguous. Broad multi-language semantic resolution, a complete call graph, and
 automatic transcript capture remain separate follow-up work.
 
 Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful
