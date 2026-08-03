@@ -94,6 +94,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[1].inputSchema["properties"]
     assert "source_query" in tools[0].inputSchema["properties"]
+    assert "source_impact" in tools[0].inputSchema["properties"]
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -200,6 +201,50 @@ def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) 
     assert str(project) not in item.content
     assert len(packet.provenance) == 1
     assert packet.provenance[0].item_id == item.item_id
+
+
+def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> None:
+    project = tmp_path / "Project Δ"
+    project.mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n")
+    (project / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n"
+    )
+    config = LocalConfig.defaults(tmp_path / "durable source")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config) as runtime:
+        assert runtime.source_structure_repository is not None
+        runtime.source_structure_repository.store_and_activate(
+            PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
+        )
+    with build_checkpoint_runtime(config) as runtime:
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(
+                runtime.checkpoint_service, None, runtime.source_structure_repository
+            ),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    source_impact={
+                        "symbol": "core",
+                        "direction": "dependents",
+                        "maximum_depth": 1,
+                    }
+                )
+            )
+        )
+
+    assert any('"symbol":"core"' in item.content for item in packet.structural_items)
+    assert any('"symbol":"service"' in item.content for item in packet.structural_items)
+    assert all(item.evidence_references for item in packet.structural_items)
 
 
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:
