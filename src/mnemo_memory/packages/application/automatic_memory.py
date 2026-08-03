@@ -7,8 +7,11 @@ project's files is persisted here.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -28,6 +31,41 @@ from mnemo_memory.packages.domain import (
 
 class AutomaticMemoryBindingError(ValueError):
     """Safe local-binding failure; callers expose only the stable code."""
+
+
+@contextmanager
+def exclusive_local_file_lock(
+    directory: Path, name: str, *, create_directory: bool = True
+) -> Iterator[None]:
+    """Serialize a small local configuration update without following a symlink.
+
+    Mnemo currently supports macOS and Linux, where ``flock`` provides the process-level
+    serialization needed around read-modify-replace JSON updates.  The lock contains no user
+    data and is removed only by normal operating-system cleanup when the directory is deleted.
+    """
+    if not name or "/" in name or "\\" in name:
+        raise AutomaticMemoryBindingError("MNEMO_MEMORY_LOCK_INVALID")
+    try:
+        if create_directory:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        elif not directory.is_dir():
+            raise AutomaticMemoryBindingError("MNEMO_MEMORY_LOCK_UNAVAILABLE")
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(directory / name, flags, 0o600)
+    except OSError as error:
+        raise AutomaticMemoryBindingError("MNEMO_MEMORY_LOCK_UNAVAILABLE") from error
+    try:
+        os.chmod(directory / name, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    except OSError as error:
+        raise AutomaticMemoryBindingError("MNEMO_MEMORY_LOCK_UNAVAILABLE") from error
+    finally:
+        with suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +174,7 @@ class LocalMemoryProjectBindingStore:
 
     _profile_name = "automatic-memory-profile.json"
     _bindings_name = "automatic-memory-project-bindings.json"
+    _lock_name = ".automatic-memory.lock"
 
     def __init__(self, data_directory: Path) -> None:
         self._directory = data_directory.expanduser().resolve()
@@ -144,20 +183,27 @@ class LocalMemoryProjectBindingStore:
 
     def enable(self, project_dir: Path) -> MemoryProjectBinding:
         root = find_memory_project_root(project_dir)
-        existing = self.get(root)
-        if existing is not None:
-            return existing
-        project_scope = self.personal_profile().scope()
-        binding = MemoryProjectBinding(
-            root, project_scope, PersonalMemoryProfile.task_scope(project_scope)
-        )
-        values = self._read_bindings()
-        values[str(root)] = binding.to_dict()
-        self._write(self._bindings_path, values)
-        return binding
+        with exclusive_local_file_lock(self._directory, self._lock_name):
+            existing = self._get(root)
+            if existing is not None:
+                return existing
+            project_scope = self._personal_profile().scope()
+            binding = MemoryProjectBinding(
+                root, project_scope, PersonalMemoryProfile.task_scope(project_scope)
+            )
+            values = self._read_bindings()
+            values[str(root)] = binding.to_dict()
+            self._write(self._bindings_path, values)
+            return binding
 
     def get(self, project_dir: Path) -> MemoryProjectBinding | None:
         root = find_memory_project_root(project_dir)
+        if not self._directory.exists():
+            return None
+        with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
+            return self._get(root)
+
+    def _get(self, root: Path) -> MemoryProjectBinding | None:
         value = self._read_bindings().get(str(root))
         if value is None:
             return None
@@ -165,13 +211,20 @@ class LocalMemoryProjectBindingStore:
 
     def disable(self, project_dir: Path) -> bool:
         root = find_memory_project_root(project_dir)
-        values = self._read_bindings()
-        removed = values.pop(str(root), None) is not None
-        if removed:
-            self._write(self._bindings_path, values)
-        return removed
+        if not self._directory.exists():
+            return False
+        with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
+            values = self._read_bindings()
+            removed = values.pop(str(root), None) is not None
+            if removed:
+                self._write(self._bindings_path, values)
+            return removed
 
     def personal_profile(self) -> PersonalMemoryProfile:
+        with exclusive_local_file_lock(self._directory, self._lock_name):
+            return self._personal_profile()
+
+    def _personal_profile(self) -> PersonalMemoryProfile:
         value = self._read_json(self._profile_path)
         if value is not None:
             return PersonalMemoryProfile.from_dict(value)

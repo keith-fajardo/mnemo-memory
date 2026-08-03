@@ -493,8 +493,10 @@ connected agent to retrieve bounded context at session start and write a typed c
 work-stop or compaction boundary. It does not ingest transcripts, source text, or credentials.
 No dbt-core dependency, warehouse call, or automatic shell-profile modification was introduced.
 Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
-Publishing workflow after source-independent artifact verification. The remaining full
-failure/concurrency matrix and wrapper-overhead benchmark work remain tracked follow-up work.
+Publishing workflow after source-independent artifact verification. Machine-local project bindings
+and lifecycle session markers now use symlink-safe, process-serialized atomic updates so concurrent
+client events cannot discard another session's marker. The remaining wrapper-overhead benchmark
+work remains tracked follow-up work.
 
 ### Source-structure memory — In progress
 

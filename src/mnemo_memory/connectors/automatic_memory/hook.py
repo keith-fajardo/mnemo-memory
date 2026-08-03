@@ -19,6 +19,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
     MemoryProjectBinding,
+    exclusive_local_file_lock,
 )
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
@@ -137,12 +138,16 @@ class _SessionStateStore:
         return _SessionState(value.get("dirty") is True, value.get("saved") is True)
 
     def save(self, session_id: str, *, dirty: bool, saved: bool) -> None:
-        values = self._read()
-        values[session_id] = {"dirty": dirty, "saved": saved}
-        # Bounded state avoids making lifecycle metadata a long-term activity log.
-        if len(values) > 128:
-            values = {session_id: values[session_id]}
-        self._write(values)
+        try:
+            with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
+                values = self._read()
+                values[session_id] = {"dirty": dirty, "saved": saved}
+                # Bounded state avoids making lifecycle metadata a long-term activity log.
+                if len(values) > 128:
+                    values = {session_id: values[session_id]}
+                self._write(values)
+        except AutomaticMemoryBindingError:
+            return
 
     def _read(self) -> dict[str, object]:
         if not self._path.exists():

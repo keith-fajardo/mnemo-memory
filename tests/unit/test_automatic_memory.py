@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from typer.testing import CliRunner
@@ -14,7 +15,11 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     enable_client_hooks,
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
-from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.application.automatic_memory import (
+    AutomaticMemoryBindingError,
+    LocalMemoryProjectBindingStore,
+    exclusive_local_file_lock,
+)
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
 from mnemo_memory.packages.application.config import LocalConfig
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
@@ -39,6 +44,48 @@ def test_personal_binding_is_stable_and_never_derived_from_path(tmp_path: Path) 
     assert first.checkpoint_scope.level.value == "task"
     assert first.checkpoint_scope.project_id == first.scope.project_id
     assert str(project) not in (data / "automatic-memory-profile.json").read_text()
+
+
+def test_local_binding_lock_serializes_concurrent_updates_without_storing_paths(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    first_entered = Event()
+    release_first = Event()
+    second_entered = Event()
+
+    def first() -> None:
+        with exclusive_local_file_lock(data, ".test.lock"):
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+
+    def second() -> None:
+        assert first_entered.wait(timeout=2)
+        with exclusive_local_file_lock(data, ".test.lock"):
+            second_entered.set()
+
+    first_thread = Thread(target=first)
+    second_thread = Thread(target=second)
+    first_thread.start()
+    second_thread.start()
+    assert first_entered.wait(timeout=2)
+    assert not second_entered.wait(timeout=0.1)
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+    assert second_entered.is_set()
+
+
+def test_local_binding_lock_rejects_a_symlink(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / ".test.lock").symlink_to(tmp_path / "target")
+
+    with (
+        pytest.raises(AutomaticMemoryBindingError, match="MNEMO_MEMORY_LOCK_UNAVAILABLE"),
+        exclusive_local_file_lock(data, ".test.lock"),
+    ):
+        pass
 
 
 def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_path: Path) -> None:
@@ -88,6 +135,43 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     state = (data / "automatic-memory-session-state.json").read_text()
     assert str(project) not in state
     assert "transcript" not in state.lower()
+
+
+def test_concurrent_lifecycle_events_keep_each_session_marker(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    start = Event()
+
+    def mark_dirty(session_id: str) -> None:
+        assert start.wait(timeout=2)
+        assert (
+            hook.handle(
+                {
+                    "hook_event_name": "PostToolUse",
+                    "session_id": session_id,
+                    "cwd": str(project),
+                    "tool_name": "Edit",
+                }
+            )
+            == {}
+        )
+
+    first = Thread(target=mark_dirty, args=("one",))
+    second = Thread(target=mark_dirty, args=("two",))
+    first.start()
+    second.start()
+    start.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    state = json.loads((data / "automatic-memory-session-state.json").read_text())
+    assert state == {
+        "one": {"dirty": True, "saved": False},
+        "two": {"dirty": True, "saved": False},
+    }
 
 
 def test_session_start_refreshes_supported_static_source_structure(tmp_path: Path) -> None:
