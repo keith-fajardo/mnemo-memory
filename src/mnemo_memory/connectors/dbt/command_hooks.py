@@ -77,9 +77,16 @@ class DbtManifestHooks:
             )
         target = _option_path(context.arguments, "--target-path", context.working_directory)
         manifest_path = (target or project_root / "target") / "manifest.json"
-        previous = (
-            sha256(manifest_path.read_bytes()).hexdigest() if manifest_path.is_file() else None
-        )
+        try:
+            previous = (
+                sha256(manifest_path.read_bytes()).hexdigest() if manifest_path.is_file() else None
+            )
+        except OSError:
+            # Do not turn an unreadable prior target artifact into a dbt failure.  The wrapper
+            # will emit this bounded status, skip post-ingestion, and leave existing memory alone.
+            return DbtBeforeState(
+                None, project_root, None, skip_code="MNEMO_DBT_MANIFEST_UNAVAILABLE"
+            )
         try:
             active = (
                 self._service_factory()
