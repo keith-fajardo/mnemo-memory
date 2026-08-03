@@ -136,6 +136,7 @@ class ReferenceCheckpointRepository:
     def __init__(self) -> None:
         self._aggregates: dict[CheckpointId, CheckpointAggregate] = {}
         self._revisions: dict[CheckpointId, tuple[CheckpointRevision, ...]] = {}
+        self.events = ReferenceCheckpointLifecycleEventRepository(self)
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
@@ -160,6 +161,17 @@ class ReferenceCheckpointRepository:
         try:
             self._aggregates[aggregate.checkpoint_id] = aggregate
             self._revisions[aggregate.checkpoint_id] = (initial_revision,)
+            self.events.append_event(
+                CheckpointLifecycleEvent.for_revision(
+                    scope=aggregate.scope,
+                    kind=CheckpointEventKind.CREATED,
+                    checkpoint_id=initial_revision.checkpoint_id,
+                    revision_id=initial_revision.revision_id,
+                    revision_number=initial_revision.revision_number,
+                    occurred_at=initial_revision.created_at,
+                    evidence_references=initial_revision.evidence_references,
+                )
+            )
         except BaseException:
             self._aggregates.pop(aggregate.checkpoint_id, None)
             self._revisions.pop(aggregate.checkpoint_id, None)
@@ -225,6 +237,17 @@ class ReferenceCheckpointRepository:
             created_at=created_at,
         )
         self._replace_current(aggregate, revision)
+        self.events.append_event(
+            CheckpointLifecycleEvent.for_revision(
+                scope=scope,
+                kind=event_kind,
+                checkpoint_id=revision.checkpoint_id,
+                revision_id=revision.revision_id,
+                revision_number=revision.revision_number,
+                occurred_at=revision.created_at,
+                evidence_references=revision.evidence_references,
+            )
+        )
         return revision
 
     def complete_checkpoint(
@@ -245,6 +268,7 @@ class ReferenceCheckpointRepository:
             evidence_references,
             created_at,
             reason=None,
+            event_kind=CheckpointEventKind.COMPLETED,
         )
 
     def abandon_checkpoint(
@@ -273,6 +297,7 @@ class ReferenceCheckpointRepository:
             evidence_references,
             created_at,
             reason=reason,
+            event_kind=CheckpointEventKind.ABANDONED,
         )
 
     def list_current_checkpoints(
@@ -306,6 +331,7 @@ class ReferenceCheckpointRepository:
         created_at: datetime,
         *,
         reason: str | None,
+        event_kind: CheckpointEventKind,
     ) -> CheckpointRevision:
         aggregate = self.get_aggregate(scope, checkpoint_id)
         current = self.get_current_revision(scope, checkpoint_id)
@@ -332,6 +358,17 @@ class ReferenceCheckpointRepository:
             created_at=created_at,
         )
         self._replace_current(aggregate, revision)
+        self.events.append_event(
+            CheckpointLifecycleEvent.for_revision(
+                scope=scope,
+                kind=event_kind,
+                checkpoint_id=revision.checkpoint_id,
+                revision_id=revision.revision_id,
+                revision_number=revision.revision_number,
+                occurred_at=revision.created_at,
+                evidence_references=revision.evidence_references,
+            )
+        )
         return revision
 
     def _require_active_expected(
