@@ -37,6 +37,22 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
     assert value.config.database_path.exists()
 
 
+def test_cli_help_explains_the_user_facing_workflow() -> None:
+    runner = CliRunner()
+    root = runner.invoke(app, ["--help"])
+    memory = runner.invoke(app, ["memory", "--help"])
+    dbt = runner.invoke(app, ["dbt", "--help"])
+
+    assert root.exit_code == memory.exit_code == dbt.exit_code == 0
+    assert "Local-first durable task checkpoints and dbt lineage context." in root.output
+    assert "Run a deterministic interactive Mnemo setup guide." in root.output
+    assert "Register Mnemo with an AI coding client." in root.output
+    assert "Enable automatic task handoffs for this project and client." in memory.output
+    assert "Show the latest recorded structural change" in memory.output
+    assert "Enable Mnemo for this dbt project; no UUIDs are needed normally." in dbt.output
+    assert "Run exact dbt arguments with safe Mnemo pre/post manifest hooks." in dbt.output
+
+
 def test_configuration_is_strict_loopback_only_and_path_safe(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="loopback"):
         LocalConfig(tmp_path, tmp_path / "db.sqlite", host="0.0.0.0")
