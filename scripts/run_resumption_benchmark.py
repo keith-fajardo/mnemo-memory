@@ -158,6 +158,7 @@ def _quality(
     current = _facts(fixture, {"current_decision"})
     next_action = [fact for fact in required if fact["id"] == "next-action"]
     verification = [fact for fact in required if fact["id"] == "verification"]
+    lesson = [fact for fact in required if fact["id"] == "reasoning-lesson"]
     return {
         "required_fact_recall": len(required_present) / len(required),
         "optional_fact_recall": len(optional_present) / len(optional),
@@ -167,6 +168,7 @@ def _quality(
         "expected_next_action_available": bool(present(next_action, context)),
         "current_decision_available": bool(present(current, current_claims)),
         "verification_state_available": bool(present(verification, context)),
+        "reasoning_lesson_available": bool(present(lesson, context)),
     }
 
 
@@ -225,6 +227,7 @@ def evaluate(
         "next_action_present": mnemo_quality["expected_next_action_available"] is True,
         "current_decision_present": mnemo_quality["current_decision_available"] is True,
         "no_stale_decision_as_current": not mnemo_quality["forbidden_stale_fact_ids_as_current"],
+        "reasoning_lesson_present": mnemo_quality["reasoning_lesson_available"] is True,
         "context_savings_threshold": context_savings >= minimum_savings_percent,
     }
     return {
@@ -273,6 +276,7 @@ def score_context_packet(
         "current_decision_present": quality["current_decision_available"] is True,
         "verification_state_present": quality["verification_state_available"] is True,
         "no_stale_decision_as_current": not quality["forbidden_stale_fact_ids_as_current"],
+        "reasoning_lesson_present": quality["reasoning_lesson_available"] is True,
     }
     return {
         "quality": quality,

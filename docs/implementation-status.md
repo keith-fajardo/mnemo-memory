@@ -293,13 +293,14 @@ coverage.
 
 #### Issue 11A — Complete
 
-Added an original, model-free coding-task handoff fixture with a 2,917-token deterministic prior
-transcript, golden required/current/stale/inference facts, exact synthetic evidence anchors, and an
-explicit 311-token canonical checkpoint. The `npm run eval:resumption -- --json` command builds a
-357-token canonical packet, compares no-memory, full-transcript, and Mnemo conditions, and scores
-fact availability/provenance without invoking a model. It passed every fixture gate: 100% required
-fact recall and provenance coverage, accepted current decision and next action, no stale decision
-presented as current, and 87.8% contextual-token savings over full transcript replay. The full
+Added an original, model-free coding-task handoff fixture with a 2,948-token deterministic prior
+transcript, golden required/current/stale/inference facts, an evidence-backed correction lesson,
+and exact synthetic evidence anchors. The `npm run eval:resumption -- --json` command builds a
+499-token canonical packet from a 453-token checkpoint, compares no-memory, full-transcript, and
+Mnemo conditions, and scores fact availability/provenance without invoking a model. It passed every
+fixture gate: 100% required fact recall and provenance coverage, accepted current decision, next
+action, and correction lesson, no stale decision presented as current, and 83.1% contextual-token
+savings over full transcript replay. The full
 verification gate passed with 132 tests. Issue 11B was deferred to the next approved sub-issue;
 Issue 12 was not started.
 

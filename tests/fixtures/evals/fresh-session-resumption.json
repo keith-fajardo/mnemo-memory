@@ -31,6 +31,7 @@
     {"id": "accepted-decision", "kind": "current_decision", "text": "Keep validation in LocalConfig and translate only at the CLI boundary.", "evidence": ["E07"]},
     {"id": "decision-rationale", "kind": "required", "text": "Keeping validation in LocalConfig preserves one error contract for CLI, API, and MCP startup.", "evidence": ["E07"]},
     {"id": "failed-approach", "kind": "required", "text": "Do not catch ValueError separately in each Typer command because that produced inconsistent messages.", "evidence": ["E05"]},
+    {"id": "reasoning-lesson", "kind": "required", "text": "Before adding a CLI exception catch, verify that validation has one shared application owner.", "evidence": ["E05"]},
     {"id": "files", "kind": "required", "text": "Relevant files are packages/application/config.py, apps/cli/main.py, and tests/unit/test_lifecycle.py.", "mnemo_marker": "packages/application/config.py", "evidence": ["E09"]},
     {"id": "verification", "kind": "verified", "text": "The focused lifecycle tests passed after the shared CLI translator was added.", "evidence": ["E11"]},
     {"id": "next-action", "kind": "required", "text": "Add a regression test for a malformed log level, then run npm run check.", "evidence": ["E13"]},
@@ -50,6 +51,13 @@
     "relevant_files": ["packages/application/config.py", "apps/cli/main.py", "tests/unit/test_lifecycle.py"],
     "relevant_artifacts": [],
     "verification_performed": ["The focused lifecycle tests passed after the shared CLI translator was added."],
+    "lessons": [{
+      "trigger": "The per-command ValueError catch caused inconsistent output.",
+      "mistaken_assumption": "Each CLI command should own its validation exception handling.",
+      "correction": "Keep validation in LocalConfig and translate only at the CLI boundary.",
+      "prevention": "Before adding a CLI exception catch, verify that validation has one shared application owner.",
+      "evidence_ids": ["66666666-6666-4666-8666-666666666666"]
+    }],
     "token_estimate": 0
   }
 }

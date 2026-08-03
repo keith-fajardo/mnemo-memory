@@ -42,6 +42,7 @@ I tried catching `ValueError` separately in each Typer command. The result was i
 made a future API caller responsible for knowing which text belonged to which validation rule. Do
 not catch ValueError separately in each Typer command because that produced inconsistent messages.
 The failed branch was discarded without changing the configuration domain rules.
+Before adding a CLI exception catch, verify that validation has one shared application owner.
 
 ## E06 — More inspection and test evidence
 

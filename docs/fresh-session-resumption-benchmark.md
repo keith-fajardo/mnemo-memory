@@ -50,6 +50,7 @@ It also reports total-input savings including the shared prompt. The current fix
 - packet at or below the 5,700-token hard limit;
 - 100% required-fact recall and provenance coverage for Mnemo;
 - the current decision and expected next action present;
+- the evidence-backed correction lesson present;
 - no forbidden superseded decision presented as current; and
 - at least 50% fewer contextual tokens than full transcript replay.
 

@@ -59,12 +59,15 @@ def test_three_conditions_have_expected_information_and_token_outcomes() -> None
     full_quality = cast(dict[str, object], full["quality"])
     mnemo_quality = cast(dict[str, object], mnemo["quality"])
     assert no_memory_quality["required_fact_recall"] == 0.0
+    assert no_memory_quality["reasoning_lesson_available"] is False
     assert full_quality["required_fact_recall"] == 1.0
+    assert full_quality["reasoning_lesson_available"] is True
     assert full_quality["forbidden_stale_fact_ids_present"] == ["superseded-decision"]
     assert mnemo_quality["required_fact_recall"] == 1.0
     assert mnemo_quality["provenance_coverage"] == 1.0
     assert mnemo_quality["current_decision_available"] is True
     assert mnemo_quality["expected_next_action_available"] is True
+    assert mnemo_quality["reasoning_lesson_available"] is True
     assert mnemo_quality["forbidden_stale_fact_ids_as_current"] == []
     tokens = cast(dict[str, float], result["token_accounting"])
     assert tokens["full_transcript_tokens"] > tokens["context_packet_tokens"]

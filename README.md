@@ -39,16 +39,16 @@ answer.
 
 | Synthetic fixture comparison | Context tokens | Result |
 | --- | ---: | --- |
-| Full prior transcript | 2,917 | Baseline historical context. |
-| Mnemo checkpoint packet | 357 | 87.8% fewer transcript-context tokens; all required handoff facts and provenance available. |
+| Full prior transcript | 2,948 | Baseline historical context. |
+| Mnemo checkpoint packet | 499 | 83.1% fewer transcript-context tokens; all required handoff facts, a correction lesson, and provenance available. |
 | Full dbt manifest | 2,600 | Baseline structural context. |
 | Mnemo structural facts | 686 | 73.6% fewer structural-context tokens; expected lineage facts and provenance available. |
-| Transcript + manifest | 5,517 | Combined baseline. |
-| Unified Mnemo packet | 1,043 | 81.1% fewer combined-context tokens; checkpoint, lineage, currentness, and provenance gates pass. |
+| Transcript + manifest | 5,548 | Combined baseline. |
+| Unified Mnemo packet | 1,185 | 78.6% fewer combined-context tokens; checkpoint, correction lesson, lineage, currentness, and provenance gates pass. |
 
 All numbers are deterministic estimates from Mnemo’s local estimator in cold fresh-session
 fixtures—no model request, API key, provider cache, or output tokens are involved. The fixture
-requires 100% required checkpoint facts, lineage precision/recall, and provenance coverage; it
+requires 100% required checkpoint facts, including the correction lesson, lineage precision/recall, and provenance coverage; it
 rejects stale decisions presented as current. See the
 [fresh-session benchmark](docs/fresh-session-resumption-benchmark.md) and
 [unified-context benchmark](docs/unified-context-benchmark.md) for methodology and limits.
