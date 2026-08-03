@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -131,6 +131,34 @@ def test_hooks_run_in_order_and_unwind_in_reverse_with_matched_state(tmp_path: P
     assert [item.registration for item in outcome.outcomes] == ["second", "first"]
     assert outcome.outcomes[0].outcome.metadata == (("hook", "second"),)
     assert len(executor.contexts) == 1
+
+
+def test_hook_timings_are_bounded_and_follow_reverse_after_order(tmp_path: Path) -> None:
+    ticks = iter(NOW + timedelta(milliseconds=value) for value in range(20))
+
+    def hook(name: str) -> HookRegistration:
+        return HookRegistration(
+            name,
+            "dbt",
+            lambda _: name,
+            lambda *_: HookOutcome(HookStatus.UNCHANGED),
+        )
+
+    command_wrapper = CommandWrapper(
+        StaticResolver(executable(tmp_path)),
+        FakeExecutor(result()),
+        lambda: next(ticks),
+        lambda: "call-1",
+        (hook("first"), hook("second")),
+    )
+
+    wrapped = command_wrapper.run(invocation(tmp_path))
+
+    assert [value.registration for value in wrapped.hook_timings] == ["second", "first"]
+    assert all(value.after_finished_at is not None for value in wrapped.hook_timings)
+    assert all(
+        value.before_finished_at >= value.before_started_at for value in wrapped.hook_timings
+    )
 
 
 def test_fail_open_before_failure_skips_its_after_only(tmp_path: Path) -> None:

@@ -62,6 +62,18 @@ dbt before it runs, and a failed memory update turns an otherwise-successful
 wrapper result into Mnemo exit status 70. Even in strict mode, a dbt command that already failed
 keeps dbt’s original failure status.
 
+## Deterministic wrapper-phase check
+
+For release verification, Mnemo runs an offline synthetic dbt fixture:
+
+```bash
+npm run eval:wrapper-overhead -- --json
+```
+
+It reports separate deterministic phase values for Mnemo's pre-hook, the wrapped dbt process, and
+the post-hook manifest parse/activation. These values prove phase accounting and exit-code behavior;
+they are **not** a claim about your machine's real-world execution speed.
+
 ## Why this is a local process hook, not a dbt SQL hook
 
 dbt SQL hooks run in a data warehouse. Mnemo’s planned hooks run locally around a local process.

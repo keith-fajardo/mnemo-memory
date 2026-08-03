@@ -495,8 +495,9 @@ No dbt-core dependency, warehouse call, or automatic shell-profile modification 
 Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
 Publishing workflow after source-independent artifact verification. Machine-local project bindings
 and lifecycle session markers now use symlink-safe, process-serialized atomic updates so concurrent
-client events cannot discard another session's marker. The remaining wrapper-overhead benchmark
-work remains tracked follow-up work.
+client events cannot discard another session's marker. A deterministic synthetic wrapper-phase
+evaluation now separately accounts for pre-hook, child dbt, and post-hook parse/activation work
+without making a machine-performance claim.
 
 ### Source-structure memory — In progress
 

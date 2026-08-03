@@ -232,6 +232,34 @@ class RegisteredHookOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class HookTiming:
+    """Bounded timing evidence for one successfully entered hook.
+
+    The wrapper exposes phase boundaries rather than process output or arbitrary hook payloads.
+    Callers can therefore measure wrapper overhead without inspecting private hook state.
+    """
+
+    registration: str
+    before_started_at: datetime
+    before_finished_at: datetime
+    after_started_at: datetime | None = None
+    after_finished_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.registration, code="MNEMO_HOOK_TIMING_INVALID")
+        if self.before_finished_at < self.before_started_at:
+            raise ValueError("MNEMO_HOOK_TIMING_INVALID")
+        if (self.after_started_at is None) != (self.after_finished_at is None):
+            raise ValueError("MNEMO_HOOK_TIMING_INVALID")
+        if (
+            self.after_started_at is not None
+            and self.after_finished_at is not None
+            and self.after_finished_at < self.after_started_at
+        ):
+            raise ValueError("MNEMO_HOOK_TIMING_INVALID")
+
+
+@dataclass(frozen=True, slots=True)
 class HookDiscoveryResult:
     """Validated registrations discovered only from installed distributions."""
 
@@ -290,6 +318,7 @@ class CommandWrapperResult:
     result: CommandResult
     outcomes: tuple[RegisteredHookOutcome, ...]
     warnings: tuple[HookWarning, ...]
+    hook_timings: tuple[HookTiming, ...] = ()
 
 
 class ExecutableResolver(Protocol):
@@ -350,11 +379,12 @@ class CommandWrapper:
             invocation_id=self._new_invocation_id(),
             started_at=started_at,
         )
-        entered: list[tuple[HookRegistration, object]] = []
+        entered: list[tuple[HookRegistration, object, datetime, datetime]] = []
         warnings: list[HookWarning] = []
         for registration in self._hooks:
             if registration.integration != context.integration:
                 continue
+            before_started_at = self._clock()
             try:
                 state = registration.before(context)
             except Exception:
@@ -363,7 +393,7 @@ class CommandWrapper:
                     result = self._result(started_at, CommandFailureCode.STRICT_HOOK_FAILURE)
                     return self._unwind(context, entered, result, warnings, strict_memory=False)
                 continue
-            entered.append((registration, state))
+            entered.append((registration, state, before_started_at, self._clock()))
 
         try:
             result = self._executor.execute(context)
@@ -410,15 +440,17 @@ class CommandWrapper:
     def _unwind(
         self,
         context: CommandContext,
-        entered: list[tuple[HookRegistration, object]],
+        entered: list[tuple[HookRegistration, object, datetime, datetime]],
         result: CommandResult,
         warnings: list[HookWarning],
         *,
         strict_memory: bool,
     ) -> CommandWrapperResult:
         outcomes: list[RegisteredHookOutcome] = []
+        timings: list[HookTiming] = []
         final_result = result
-        for registration, state in reversed(entered):
+        for registration, state, before_started_at, before_finished_at in reversed(entered):
+            after_started_at = self._clock()
             try:
                 outcome = registration.after(context, state, final_result)
                 if not isinstance(outcome, HookOutcome):
@@ -432,7 +464,17 @@ class CommandWrapper:
                         exit_code=STRICT_HOOK_FAILURE_EXIT_CODE,
                         failure_code=CommandFailureCode.STRICT_HOOK_FAILURE,
                     )
+            after_finished_at = self._clock()
             outcomes.append(RegisteredHookOutcome(registration.name, outcome))
+            timings.append(
+                HookTiming(
+                    registration.name,
+                    before_started_at,
+                    before_finished_at,
+                    after_started_at,
+                    after_finished_at,
+                )
+            )
             warnings.extend(outcome.warnings)
             if (
                 strict_memory
@@ -445,7 +487,7 @@ class CommandWrapper:
                     exit_code=STRICT_HOOK_FAILURE_EXIT_CODE,
                     failure_code=CommandFailureCode.STRICT_HOOK_FAILURE,
                 )
-        return CommandWrapperResult(final_result, tuple(outcomes), tuple(warnings))
+        return CommandWrapperResult(final_result, tuple(outcomes), tuple(warnings), tuple(timings))
 
 
 __all__ = [
@@ -469,6 +511,7 @@ __all__ = [
     "HookOutcome",
     "HookRegistration",
     "HookStatus",
+    "HookTiming",
     "HookWarning",
     "InvocationIdFactory",
     "ProcessExecutor",
