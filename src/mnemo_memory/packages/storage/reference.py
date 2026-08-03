@@ -9,6 +9,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
+    CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
@@ -19,6 +20,7 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    EventId,
     EvidenceReference,
     MemoryScope,
     ScopeLevel,
@@ -36,9 +38,14 @@ from .contracts import (
     ActiveSnapshotConflict,
     CheckpointNotFound,
     CheckpointPage,
+    CheckpointRepository,
     DuplicateCheckpoint,
+    EpisodicEventNotFound,
+    EpisodicEventPage,
+    EpisodicEventStoreResult,
     InvalidAbandonmentReason,
     InvalidCheckpointScope,
+    InvalidEpisodicEventScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
     ManifestNodeNotFound,
@@ -50,6 +57,76 @@ from .contracts import (
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
 )
+
+
+class ReferenceCheckpointLifecycleEventRepository:
+    """Validate-before-mutate reference ledger backed by immutable checkpoint revisions."""
+
+    def __init__(self, checkpoints: CheckpointRepository) -> None:
+        self._checkpoints = checkpoints
+        self._events: dict[EventId, CheckpointLifecycleEvent] = {}
+        self._keys: dict[str, EventId] = {}
+        self._ordered: list[EventId] = []
+
+    def append(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
+        self._require_scope(event.scope)
+        revision = self._checkpoints.get_revision(
+            event.scope,
+            event.checkpoint_id,
+            revision_id=event.revision_id,
+        )
+        if (
+            revision.revision_number != event.revision_number
+            or revision.created_at != event.occurred_at
+            or revision.evidence_references != event.evidence_references
+        ):
+            raise InvalidEpisodicEventScope("event does not match its scoped checkpoint revision")
+        existing_id = self._keys.get(event.idempotency_key)
+        if existing_id is not None:
+            existing = self._events[existing_id]
+            if existing == event:
+                return EpisodicEventStoreResult(existing, idempotent=True)
+            raise InvalidEpisodicEventScope("event idempotency key conflicts")
+        if event.event_id in self._events:
+            raise InvalidEpisodicEventScope("event identity conflicts")
+        self._events[event.event_id] = event
+        self._keys[event.idempotency_key] = event.event_id
+        self._ordered.append(event.event_id)
+        return EpisodicEventStoreResult(event, idempotent=False)
+
+    def get(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent:
+        self._require_scope(scope)
+        event = self._events.get(event_id)
+        if event is None or event.scope != scope:
+            raise EpisodicEventNotFound("episodic event was not found")
+        return event
+
+    def list(
+        self,
+        scope: MemoryScope,
+        *,
+        checkpoint_id: CheckpointId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicEventPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        events = [
+            self._events[event_id]
+            for event_id in reversed(self._ordered)
+            if self._events[event_id].scope == scope
+            and (checkpoint_id is None or self._events[event_id].checkpoint_id == checkpoint_id)
+        ]
+        return EpisodicEventPage(
+            tuple(events[offset : offset + limit]),
+            offset + limit if offset + limit < len(events) else None,
+        )
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidEpisodicEventScope("episodic events require explicit task scope")
 
 
 class ReferenceCheckpointRepository:

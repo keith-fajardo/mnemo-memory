@@ -10,6 +10,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
+    CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
     CodeEdge,
@@ -18,6 +19,7 @@ from mnemo_memory.packages.domain import (
     CodeStructureArtifact,
     CodeSymbol,
     CodeSymbolId,
+    EventId,
     EvidenceReference,
     MemoryScope,
 )
@@ -60,6 +62,22 @@ class InvalidCheckpointScope(CheckpointRepositoryError):
 
 
 class RepositoryStorageFailure(CheckpointRepositoryError):
+    pass
+
+
+class EpisodicEventRepositoryError(Exception):
+    """Expected storage-independent episodic-event outcome."""
+
+
+class EpisodicEventNotFound(EpisodicEventRepositoryError):
+    pass
+
+
+class InvalidEpisodicEventScope(EpisodicEventRepositoryError):
+    pass
+
+
+class EpisodicEventStorageFailure(EpisodicEventRepositoryError):
     pass
 
 
@@ -163,6 +181,35 @@ class CheckpointRepository(Protocol):
     ) -> CheckpointPage: ...
 
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicEventStoreResult:
+    event: CheckpointLifecycleEvent
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicEventPage:
+    items: tuple[CheckpointLifecycleEvent, ...]
+    next_offset: int | None
+
+
+class CheckpointLifecycleEventRepository(Protocol):
+    """Scoped append-only storage for evidence-bearing checkpoint lifecycle facts."""
+
+    def append(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult: ...
+
+    def get(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent: ...
+
+    def list(
+        self,
+        scope: MemoryScope,
+        *,
+        checkpoint_id: CheckpointId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicEventPage: ...
 
 
 @dataclass(frozen=True, slots=True)
