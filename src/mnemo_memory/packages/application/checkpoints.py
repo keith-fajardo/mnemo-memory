@@ -16,6 +16,7 @@ from mnemo_memory.packages.domain import (
     CheckpointEventKind,
     CheckpointId,
     CheckpointLesson,
+    CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
@@ -39,9 +40,11 @@ from mnemo_memory.packages.domain import (
     ValidityState,
 )
 from mnemo_memory.packages.storage.contracts import (
+    CheckpointLifecycleEventRepository,
     CheckpointNotFound,
     CheckpointRepository,
     DuplicateCheckpoint,
+    EpisodicEventRepositoryError,
     InvalidAbandonmentReason,
     InvalidCheckpointScope,
     InvalidLifecycleTransition,
@@ -155,6 +158,17 @@ class GetCheckpointContext:
     scope: MemoryScope
     checkpoint_id: CheckpointId | None = None
     budget: ContextBudget = DEFAULT_CONTEXT_BUDGET
+    include_lifecycle_events: bool = False
+    maximum_lifecycle_events: int = 8
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.include_lifecycle_events, bool):
+            raise ValueError("include_lifecycle_events must be a boolean")
+        if (
+            not isinstance(self.maximum_lifecycle_events, int)
+            or not 1 <= self.maximum_lifecycle_events <= 16
+        ):
+            raise ValueError("maximum_lifecycle_events must be between 1 and 16")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,11 +185,13 @@ class CheckpointApplicationService:
         repository: CheckpointRepository,
         *,
         clock: Callable[[], datetime],
+        event_repository: CheckpointLifecycleEventRepository | None = None,
         checkpoint_id_factory: Callable[[], CheckpointId] = CheckpointId.new,
         revision_id_factory: Callable[[], CheckpointRevisionId] = CheckpointRevisionId.new,
         request_id_factory: Callable[[], RequestId] = RequestId.new,
     ) -> None:
         self._repository = repository
+        self._event_repository = event_repository
         self._clock = clock
         self._checkpoint_id_factory = checkpoint_id_factory
         self._revision_id_factory = revision_id_factory
@@ -408,7 +424,17 @@ class CheckpointApplicationService:
         historical_lessons, lesson_notices, lesson_omissions = self._historical_lesson_items(
             query.scope, revision, query.budget, initial_tokens=item.token_estimate
         )
+        lifecycle_events, event_notices, event_omissions = self._lifecycle_event_items(
+            query.scope,
+            revision,
+            query.budget,
+            initial_tokens=item.token_estimate
+            + sum(lesson.token_estimate for lesson in historical_lessons),
+            include=query.include_lifecycle_events,
+            maximum_events=query.maximum_lifecycle_events,
+        )
         notices.extend(lesson_notices)
+        notices.extend(event_notices)
         return ContextPacket(
             PacketSchemaVersion.V1,
             self._request_id_factory(),
@@ -417,13 +443,15 @@ class CheckpointApplicationService:
             query.scope.task_id,
             self._now(),
             None,
-            item.token_estimate + sum(lesson.token_estimate for lesson in historical_lessons),
+            item.token_estimate
+            + sum(lesson.token_estimate for lesson in historical_lessons)
+            + sum(event.token_estimate for event in lifecycle_events),
             query.budget,
             _ACTIVE_CHECKPOINT_PRODUCER,
             active_task_checkpoint=item,
-            episodic_memories=historical_lessons,
+            episodic_memories=(*historical_lessons, *lifecycle_events),
             provenance=tuple(notices),
-            omissions=lesson_omissions,
+            omissions=(*lesson_omissions, *event_omissions),
         )
 
     def _empty_packet(
@@ -565,6 +593,91 @@ class CheckpointApplicationService:
             )
         )
         return tuple(items), tuple(notices), omissions
+
+    def _lifecycle_event_items(
+        self,
+        scope: MemoryScope,
+        current: CheckpointRevision,
+        budget: ContextBudget,
+        *,
+        initial_tokens: int,
+        include: bool,
+        maximum_events: int,
+    ) -> tuple[tuple[ContextItem, ...], tuple[ProvenanceNotice, ...], tuple[OmissionNotice, ...]]:
+        """Render optional lifecycle chronology without duplicating checkpoint content."""
+        if not include or self._event_repository is None:
+            return (), (), ()
+        try:
+            events = self._event_repository.list_events(
+                scope, checkpoint_id=current.checkpoint_id, limit=maximum_events + 1
+            )
+        except EpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "episodic event storage is unavailable"
+            ) from error
+        remaining = min(budget.episodic_memories, max(0, budget.total_limit - initial_tokens))
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = []
+        omitted = events.next_offset is not None
+        for event in events.items[:maximum_events]:
+            item, notice = self._lifecycle_event_item(event)
+            if item.token_estimate > remaining:
+                omitted = True
+                continue
+            items.append(item)
+            notices.append(notice)
+            remaining -= item.token_estimate
+        omissions = (
+            ()
+            if not omitted
+            else (
+                OmissionNotice(
+                    f"checkpoint-lifecycle:{current.checkpoint_id}",
+                    OmissionReason.TOKEN_BUDGET,
+                    "lifecycle history exceeds the configured episodic-memory budget",
+                ),
+            )
+        )
+        return tuple(items), tuple(notices), omissions
+
+    @staticmethod
+    def _lifecycle_event_item(
+        event: CheckpointLifecycleEvent,
+    ) -> tuple[ContextItem, ProvenanceNotice]:
+        content = json.dumps(
+            {
+                "event_kind": event.kind.value,
+                "revision_id": str(event.revision_id),
+                "revision_number": event.revision_number,
+                "occurred_at": event.occurred_at.isoformat(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        item = ContextItem(
+            item_id=f"checkpoint-lifecycle:{event.event_id}",
+            item_type=ContextItemType.EPISODIC_MEMORY,
+            source_scope=event.scope,
+            content=content,
+            content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+            token_estimate=(len(content) + 3) // 4,
+            evidence_references=event.evidence_references,
+            source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+            sensitivity=Sensitivity.NORMAL,
+            validity=ValidityState.UNKNOWN,
+            ranking=None,
+            conflict_state=ConflictState.NONE,
+            observed_at=event.occurred_at,
+        )
+        return item, ProvenanceNotice(
+            provenance_id=f"provenance:{item.item_id}",
+            item_id=item.item_id,
+            source_reference=(
+                f"mnemo:checkpoint/{event.checkpoint_id}/revision/{event.revision_id}/event/{event.event_id}"
+            ),
+            source_digest=hashlib.sha256(content.encode()).hexdigest(),
+            evidence_references=event.evidence_references,
+        )
 
     def _validate_write(
         self,

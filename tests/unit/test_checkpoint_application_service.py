@@ -108,9 +108,11 @@ def service(
     ids = iter(UUID(int=number + 1) for number in range(50))
     revisions = iter(UUID(int=number + 101) for number in range(50))
     requests = iter(UUID(int=number + 201) for number in range(50))
+    target_repository = repository or ReferenceCheckpointRepository()
     return CheckpointApplicationService(
-        repository or ReferenceCheckpointRepository(),
+        target_repository,
         clock=lambda: next(ticks),
+        event_repository=target_repository.events,
         checkpoint_id_factory=lambda: CheckpointId(next(ids)),
         revision_id_factory=lambda: CheckpointRevisionId(next(revisions)),
         request_id_factory=lambda: RequestId(next(requests)),
@@ -151,6 +153,34 @@ def test_create_revise_get_and_stale_revision_are_typed() -> None:
                 (evidence(),),
             )
         )
+
+
+def test_optional_lifecycle_history_is_bounded_and_provenance_bearing() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(suffix="two"),
+            (evidence(),),
+        )
+    )
+
+    ordinary = target.get_context(GetCheckpointContext(scope_value))
+    history = target.get_context(
+        GetCheckpointContext(scope_value, include_lifecycle_events=True, maximum_lifecycle_events=2)
+    )
+
+    assert ordinary.episodic_memories == ()
+    assert [json.loads(item.content)["event_kind"] for item in history.episodic_memories] == [
+        "checkpoint_revised",
+        "checkpoint_created",
+    ]
+    assert all(item.evidence_references for item in history.episodic_memories)
+    assert len(history.provenance) == 3
 
 
 def test_terminal_lifecycle_and_idempotent_retry() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import cast
 from uuid import UUID, uuid5
 
 from mnemo_memory.packages.application.checkpoints import (
@@ -17,6 +18,7 @@ from mnemo_memory.packages.application.dbt import (
     QueryLineage,
 )
 from mnemo_memory.packages.domain import (
+    CheckpointId,
     CodeEdge,
     CodeEdgeKind,
     CodeSnapshot,
@@ -137,6 +139,7 @@ class GetUnifiedContext:
     budget: ContextBudget = field(default_factory=ContextBudget)
     source_impact: ContextSourceImpactQuery | None = None
     source_changes: ContextSourceChangeQuery | None = None
+    include_lifecycle_events: bool = False
 
 
 class UnifiedContextService:
@@ -154,7 +157,12 @@ class UnifiedContextService:
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
-            GetCheckpointContext(request.scope, request.checkpoint_id, request.budget)  # type: ignore[arg-type]
+            GetCheckpointContext(
+                request.scope,
+                cast(CheckpointId | None, request.checkpoint_id),
+                request.budget,
+                request.include_lifecycle_events,
+            )
         )
         if (
             request.lineage is None

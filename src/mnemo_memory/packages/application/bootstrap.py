@@ -80,7 +80,11 @@ def build_checkpoint_runtime(
     return CheckpointRuntime(
         config,
         repository,
-        CheckpointApplicationService(repository, clock=lambda: datetime.now(UTC)),
+        CheckpointApplicationService(
+            repository,
+            clock=lambda: datetime.now(UTC),
+            event_repository=repository,
+        ),
         DbtManifestApplicationService(repository, dbt_parser) if dbt_parser is not None else None,
         source_repository,
     )

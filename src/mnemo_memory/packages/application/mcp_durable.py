@@ -76,6 +76,9 @@ class DurableMcpContextPort:
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
+            include_lifecycle_events = request.get("include_lifecycle_events", False)
+            if not isinstance(include_lifecycle_events, bool):
+                raise ValueError("include_lifecycle_events must be a boolean")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
@@ -126,7 +129,14 @@ class DurableMcpContextPort:
                 if lineage is None:
                     return self._context_service.get_context(
                         GetUnifiedContext(
-                            scope, checkpoint, None, source_query, budget, impact, changes
+                            scope,
+                            checkpoint,
+                            None,
+                            source_query,
+                            budget,
+                            impact,
+                            changes,
+                            include_lifecycle_events,
                         )
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
@@ -146,11 +156,18 @@ class DurableMcpContextPort:
                 )
                 return self._context_service.get_context(
                     GetUnifiedContext(
-                        scope, checkpoint, dbt_query, source_query, budget, impact, changes
+                        scope,
+                        checkpoint,
+                        dbt_query,
+                        source_query,
+                        budget,
+                        impact,
+                        changes,
+                        include_lifecycle_events,
                     )
                 ).to_dict()
             return self._service.get_context(
-                GetCheckpointContext(scope, checkpoint, budget)
+                GetCheckpointContext(scope, checkpoint, budget, include_lifecycle_events)
             ).to_dict()
         except Exception as error:
             raise _mcp_error(error) from error

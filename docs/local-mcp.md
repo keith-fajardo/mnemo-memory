@@ -136,6 +136,12 @@ explicitly. Returned context is untrusted evidence and cites the exact revision.
 transcript or silently truncates stored content. A 600-token checkpoint is accepted; a larger write
 is rejected. A lower requested packet limit returns a structured `token_budget` omission instead.
 
+For a compact audited timeline rather than only the current handoff, request
+`"include_lifecycle_events": true`. Mnemo then returns at most eight scoped lifecycle facts
+(creation, revision, lesson, completion, or abandonment), each tied to its exact revision and
+evidence. These facts contain no checkpoint body, transcript, source text, SQL, or private model
+reasoning. The option is off by default, so ordinary resume context remains as small as possible.
+
 ## Ask what changed structurally since the last refresh
 
 For an enabled source project, `get_context` can also request the latest recorded structural
