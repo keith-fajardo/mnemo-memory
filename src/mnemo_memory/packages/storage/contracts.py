@@ -267,3 +267,7 @@ class SourceStructureRepository(Protocol):
     def edges_from_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
     ) -> tuple[CodeEdge, ...]: ...
+
+    def edges_to_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]: ...

@@ -1690,6 +1690,49 @@ class SQLiteSourceStructureRepository:
             for row in rows
         )
 
+    def edges_to_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]:
+        """Fetch a bounded frontier of resolved internal reverse relationships."""
+        if not symbol_ids:
+            return ()
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
+        placeholders = ", ".join("?" for _ in values)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT edge.* FROM source_structure_edges AS edge JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = edge.snapshot_id "
+                    "WHERE edge.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND edge.target_symbol_id IN ("
+                    + placeholders
+                    + ") ORDER BY edge.source_symbol_id ASC, edge.target ASC, edge.edge_type ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        *values,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            CodeEdge(
+                snapshot_id,
+                CodeSymbolId.from_string(row["source_symbol_id"]),
+                row["target"],
+                CodeEdgeKind(row["edge_type"]),
+                CodeSymbolId.from_string(row["target_symbol_id"])
+                if row["target_symbol_id"] is not None
+                else None,
+            )
+            for row in rows
+        )
+
     @staticmethod
     def _symbols_from_rows(
         snapshot_id: CodeSnapshotId, rows: list[sqlite3.Row]

@@ -567,6 +567,17 @@ class ReferenceSourceStructureRepository:
             if edge.source_symbol_id in requested
         )
 
+    def edges_to_symbols(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
+    ) -> tuple[CodeEdge, ...]:
+        """Return only statically resolved internal incoming relationships."""
+        requested = frozenset(symbol_ids)
+        return tuple(
+            edge
+            for edge in self.iter_edges(scope, snapshot_id)
+            if edge.target_symbol_id in requested
+        )
+
     def _artifact(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeStructureArtifact:
         self.get_snapshot(scope, snapshot_id)
         return self._artifacts[snapshot_id]
