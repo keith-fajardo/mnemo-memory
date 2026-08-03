@@ -95,6 +95,42 @@ def test_sqlite_source_snapshot_survives_reopen(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
 
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_source_snapshot_activation_history_is_scoped_and_uses_explicit_order(
+    tmp_path: Path, adapter: str
+) -> None:
+    """History is activation order, never lexical/UUID order, and remains scoped."""
+    item_scope = scope()
+    root = tmp_path / "source memory"
+    first = artifact(root, item_scope)
+    repository = (
+        ReferenceSourceStructureRepository()
+        if adapter == "reference"
+        else SQLiteSourceStructureRepository(tmp_path / "memory" / "mnemo.sqlite3")
+    )
+    if adapter == "sqlite":
+        repository.migrate()  # type: ignore[union-attr]
+
+    repository.store_and_activate(first)
+    assert repository.latest_transition(item_scope) is None
+
+    (root / "pkg" / "main.py").write_text(
+        "import pkg.dependency\n\ndef run():\n    return dependency.execute()\n"
+    )
+    second = PythonSourceParser().parse(PythonSourceParseRequest(item_scope, root.resolve()))
+    repository.store_and_activate(second)
+    transition = repository.latest_transition(item_scope)
+
+    assert transition == (first.snapshot, second.snapshot)
+    assert repository.latest_transition(scope("44444444-4444-4444-8444-444444444444")) is None
+
+    # Reactivating an existing immutable artifact is a genuine explicit transition.
+    restored = repository.store_and_activate(first)
+    assert restored.idempotent is True
+    assert repository.latest_transition(item_scope) == (second.snapshot, first.snapshot)
+    assert repository.iter_symbols(item_scope, second.snapshot.snapshot_id) == second.symbols
+
+
 def test_sqlite_persists_mixed_language_static_symbols_and_edges(tmp_path: Path) -> None:
     root = tmp_path / "polyglot"
     root.mkdir()

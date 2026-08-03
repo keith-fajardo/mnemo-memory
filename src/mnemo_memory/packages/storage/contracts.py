@@ -244,6 +244,15 @@ class SourceStructureRepository(Protocol):
 
     def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot: ...
 
+    def latest_transition(self, scope: MemoryScope) -> tuple[CodeSnapshot, CodeSnapshot] | None:
+        """Return the last scoped activation transition as ``(before, after)``.
+
+        Snapshot UUIDs are identities, not clocks.  Implementations therefore retain
+        activation history explicitly instead of deriving a previous snapshot from an
+        arbitrary identifier order.
+        """
+        ...
+
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]: ...

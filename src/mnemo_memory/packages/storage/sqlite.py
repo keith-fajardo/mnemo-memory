@@ -75,7 +75,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -193,6 +193,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 4:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 4
+            if version < 5:
+                _execute_sql_script(
+                    connection, _migration_text("0005_source_snapshot_activations.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (5, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 5:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -747,6 +758,7 @@ class SQLiteCheckpointRepository:
                 ).fetchone()
                 if duplicate is not None:
                     snapshot_id = CodeSnapshotId.from_string(duplicate["snapshot_id"])
+                    active = self._active_source_snapshot_row(connection, scope)
                     connection.execute(
                         "UPDATE source_structure_snapshots SET is_active = 0 WHERE owner_id = ? "
                         "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
@@ -762,6 +774,8 @@ class SQLiteCheckpointRepository:
                             str(scope.project_id),
                         ),
                     )
+                    if active is None or active["snapshot_id"] != str(snapshot_id):
+                        self._record_source_activation(connection, scope, snapshot_id)
                     return SourceSnapshotStoreResult(
                         self._source_snapshot_from_row(duplicate, scope), idempotent=True
                     )
@@ -842,6 +856,7 @@ class SQLiteCheckpointRepository:
                 )
                 if updated.rowcount != 1:
                     raise SourceIndexStorageFailure("source snapshot activation failed")
+                self._record_source_activation(connection, scope, artifact.snapshot.snapshot_id)
                 return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
         except SourceIndexStorageFailure:
             raise
@@ -884,6 +899,31 @@ class SQLiteCheckpointRepository:
             raise SourceSnapshotNotFound("source snapshot was not found")
         return self._source_snapshot_from_row(row, scope)
 
+    def latest_source_transition(
+        self, scope: MemoryScope
+    ) -> tuple[CodeSnapshot, CodeSnapshot] | None:
+        """Return the two most recently activated snapshots in explicit event order."""
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT snapshot.* FROM source_snapshot_activations AS activation "
+                    "JOIN source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = activation.snapshot_id "
+                    "WHERE activation.owner_id = ? AND activation.workspace_id IS ? "
+                    "AND activation.project_id = ? "
+                    "ORDER BY activation.activation_id DESC LIMIT 2",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        if len(rows) < 2:
+            return None
+        return (
+            self._source_snapshot_from_row(rows[1], scope),
+            self._source_snapshot_from_row(rows[0], scope),
+        )
+
     @staticmethod
     def _source_snapshot_from_row(row: sqlite3.Row, scope: MemoryScope) -> CodeSnapshot:
         return CodeSnapshot(
@@ -909,6 +949,35 @@ class SQLiteCheckpointRepository:
         connection.execute(
             "INSERT OR IGNORE INTO projects(project_id, workspace_id, owner_id) VALUES (?, ?, ?)",
             (str(scope.project_id), _maybe(scope.workspace_id), str(scope.owner_id)),
+        )
+
+    @staticmethod
+    def _record_source_activation(
+        connection: sqlite3.Connection, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> None:
+        connection.execute(
+            "INSERT INTO source_snapshot_activations("
+            "snapshot_id, owner_id, workspace_id, project_id, activated_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                str(snapshot_id),
+                str(scope.owner_id),
+                _maybe(scope.workspace_id),
+                str(scope.project_id),
+                _timestamp(),
+            ),
+        )
+
+    @staticmethod
+    def _active_source_snapshot_row(
+        connection: sqlite3.Connection, scope: MemoryScope
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT snapshot_id FROM source_structure_snapshots WHERE owner_id = ? "
+                "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
+                (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+            ).fetchone(),
         )
 
     def _active_snapshot_row(
@@ -1483,6 +1552,9 @@ class SQLiteSourceStructureRepository:
 
     def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
         return self._backend.get_source_snapshot(scope, snapshot_id)
+
+    def latest_transition(self, scope: MemoryScope) -> tuple[CodeSnapshot, CodeSnapshot] | None:
+        return self._backend.latest_source_transition(scope)
 
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId

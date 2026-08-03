@@ -478,6 +478,7 @@ class ReferenceSourceStructureRepository:
     def __init__(self) -> None:
         self._artifacts: dict[CodeSnapshotId, CodeStructureArtifact] = {}
         self._active: dict[MemoryScope, CodeSnapshotId] = {}
+        self._activations: dict[MemoryScope, list[CodeSnapshotId]] = {}
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
         self._require_scope(artifact.snapshot.scope)
@@ -486,7 +487,12 @@ class ReferenceSourceStructureRepository:
                 snapshot.snapshot.scope == artifact.snapshot.scope
                 and snapshot.snapshot.source_digest == artifact.snapshot.source_digest
             ):
+                previous = self._active.get(artifact.snapshot.scope)
                 self._active[artifact.snapshot.scope] = snapshot.snapshot.snapshot_id
+                if previous != snapshot.snapshot.snapshot_id:
+                    self._activations.setdefault(artifact.snapshot.scope, []).append(
+                        snapshot.snapshot.snapshot_id
+                    )
                 return SourceSnapshotStoreResult(snapshot.snapshot, idempotent=True)
         snapshot_id = artifact.snapshot.snapshot_id
         if snapshot_id in self._artifacts:
@@ -502,6 +508,7 @@ class ReferenceSourceStructureRepository:
             else:
                 self._active[artifact.snapshot.scope] = previous
             raise
+        self._activations.setdefault(artifact.snapshot.scope, []).append(snapshot_id)
         return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
 
     def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
@@ -515,6 +522,16 @@ class ReferenceSourceStructureRepository:
         if artifact is None or artifact.snapshot.scope != scope:
             raise SourceSnapshotNotFound("source snapshot was not found")
         return artifact.snapshot
+
+    def latest_transition(self, scope: MemoryScope) -> tuple[CodeSnapshot, CodeSnapshot] | None:
+        self._require_scope(scope)
+        activations = self._activations.get(scope, [])
+        if len(activations) < 2:
+            return None
+        return (
+            self._artifacts[activations[-2]].snapshot,
+            self._artifacts[activations[-1]].snapshot,
+        )
 
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId

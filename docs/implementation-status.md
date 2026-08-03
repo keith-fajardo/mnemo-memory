@@ -543,3 +543,8 @@ opt-in lifecycle refresh at session start and after changed work stops. Parsing 
 stores no source text. Safe direct Java/Rust imported-call resolution now joins the existing
 Python/ES-module support. Broad multi-language semantic resolution, a complete call graph, and
 automatic transcript capture remain separate follow-up work.
+
+Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful
+"previous structural state → current structural state" sequence without treating random snapshot
+UUIDs as timestamps. The repository foundation is complete; surfacing a later historical change
+summary in a bounded ContextPacket is the next follow-up.
