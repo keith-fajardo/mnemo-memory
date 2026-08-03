@@ -1,8 +1,9 @@
 """Client-hook handler for opt-in automatic checkpoint reminders.
 
-This module deliberately does not read a transcript, environment values, or tool payloads. On a
-trusted enabled project boundary it may refresh Mnemo's bounded static source-structure projection;
-it never stores source text and only receives lifecycle metadata on stdin.
+This module deliberately does not read a transcript, environment values, or tool bodies. It reads
+only the public save operation tag when supplied, so an explicit small historical fact cannot be
+mistaken for a complete task handoff. On a trusted enabled project boundary it may refresh Mnemo's
+bounded static source-structure projection; it never stores source text.
 """
 
 from __future__ import annotations
@@ -68,12 +69,12 @@ class AutomaticMemoryHook:
         state = _SessionStateStore(self.data_directory).get(session_id)
         tool_name = event.get("tool_name")
         if event_name == "PostToolUse" and isinstance(tool_name, str):
-            if tool_name in _SAVE_TOOL_NAMES:
+            if _is_durable_checkpoint_save(event, tool_name):
                 # A checkpoint is the trusted lifecycle boundary at which an agent says its
                 # current work is durable. Refresh the syntax-only map here as well as at a
                 # later stop/session start, so the newly saved handoff can immediately be paired
                 # with the structural state it describes. This remains fail-open and never reads
-                # tool input/output or source text into hook state.
+                # tool bodies/output or source text into hook state.
                 self._refresh_source_structure(binding)
                 _SessionStateStore(self.data_directory).save(session_id, dirty=False, saved=True)
             elif tool_name in _MUTATING_TOOLS:
@@ -268,10 +269,12 @@ class _SessionStateStore:
 def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:
     instruction = (
         "Mnemo automatic task memory is enabled. Before continuing, call get_context using this "
-        f"stored task scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
+        f"stored task scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}, with "
+        "include_approved_events true. "
         "Do not claim that you know prior changes, decisions, verification, or impact until you "
-        "have checked that context. Review any recorded lessons before reusing an earlier "
-        "analysis approach. When the task names a supported-language symbol or relative "
+        "have checked that context. Review any recorded lessons and approved decision, failure, "
+        "or tool-outcome facts before reusing an earlier analysis approach. When the task names "
+        "a supported-language symbol or relative "
         "path, include it as source_query to retrieve the matching saved structure. Treat "
         "retrieved facts as bounded context, not a transcript. When you need to know what "
         "changed before this session, request source_changes too; it returns the latest "
@@ -297,8 +300,11 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
         "mistake was corrected, either include a lesson in that revision or use the existing "
         "save_checkpoint record_lesson operation to append one correction without rebuilding the "
         "handoff: trigger, mistaken assumption, correction, prevention, and the IDs of its "
-        "supporting evidence. Retain any still-applicable lessons from the current context. Do "
-        "not include a full transcript."
+        "supporting evidence. For a separate verified decision, failure, or tool outcome that "
+        "should survive without rewriting the handoff, use save_checkpoint record_event with a "
+        "stable source key and evidence. Recording that small fact does not replace this full "
+        "checkpoint. Retain any still-applicable lessons and approved facts from the current "
+        "context. Do not include a full transcript."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)
@@ -333,5 +339,20 @@ def _dirty_session_instruction() -> str:
         "decisions, verification, or impact, check the stored Mnemo context and request "
         "source_changes when the question is what changed earlier; save a concise "
         "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
-        "was corrected, and apply the prevention step from any relevant earlier lesson."
+        "was corrected, record a separate approved fact only when it is verified and evidenced, "
+        "and apply the prevention step from any relevant earlier lesson."
     )
+
+
+def _is_durable_checkpoint_save(event: Mapping[str, object], tool_name: str) -> bool:
+    """Return whether a save-tool call is a complete handoff lifecycle boundary.
+
+    The hook deliberately inspects only the public operation tag, never a tool body, evidence,
+    prompt, or result. ``record_event`` is a separate bounded historical fact; it must not mark a
+    changed session as safely handed off. Calls from older clients without a visible operation keep
+    the established checkpoint-save behavior.
+    """
+    if tool_name not in _SAVE_TOOL_NAMES:
+        return False
+    tool_input = event.get("tool_input")
+    return not (isinstance(tool_input, Mapping) and tool_input.get("operation") == "record_event")

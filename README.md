@@ -114,7 +114,11 @@ A checkpoint is the main handoff. Sometimes there is also one small fact worth r
 rewriting the handoff: for example, “the Finance seed was stale,” “use business-date grain,” or
 “the validation command passed.” The existing `save_checkpoint` MCP tool can record one of these
 as an explicit `decision`, `failure`, or `tool_outcome`, with evidence and a stable source key.
-Mnemo returns it only when `get_context` explicitly asks for approved episodic facts.
+Mnemo returns it only when `get_context` explicitly asks for approved episodic facts. When Codex
+or Claude Code is connected with `--auto-memory`, Mnemo includes that option in the private
+session-start reminder. The agent is therefore reminded to check the handoff, prior lessons, and
+these bounded verified facts before it claims to know why prior work happened. This is a reminder
+to use saved evidence—not automatic recording of your chat.
 
 This is intentionally **not automatic conversation capture**. Mnemo never turns a terminal log,
 model reasoning trace, SQL query, environment, or source body into memory. The agent or user must

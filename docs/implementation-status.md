@@ -551,7 +551,9 @@ not capture transcripts, prompts, source bodies, raw tool output, SQL, environme
 model reasoning. Migration 0007 and matching reference/SQLite repository contracts provide the
 durable scoped store. The existing two-tool MCP surface exposes it as `save_checkpoint`
 `record_event`, while `get_context` returns bounded, cited facts only when
-`include_approved_events` is requested.
+`include_approved_events` is requested. The opt-in automatic-memory session cue now explicitly
+requests those approved facts and does not mistake a small `record_event` for a complete task
+handoff; the agent remains prompted to save the full checkpoint before it stops.
 
 ### Source-structure memory — In progress
 

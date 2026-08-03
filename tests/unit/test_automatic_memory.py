@@ -108,6 +108,8 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "source_query" in str(context)
     assert "source_changes" in str(context)
     assert "recorded lessons" in str(context)
+    assert "include_approved_events" in str(context)
+    assert "approved decision" in str(context)
     assert "current_source_digest" in str(context)
     assert "Do not claim that you know prior changes" in str(context)
     assert str(project) not in str(context)
@@ -127,6 +129,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert stop["decision"] == "block"
     assert "save_checkpoint" in str(stop)
     assert "still-applicable lessons" in str(stop)
+    assert "record_event" in str(stop)
     assert "full transcript" in str(stop)
 
     assert (
@@ -144,6 +147,44 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     state = (data / "automatic-memory-session-state.json").read_text()
     assert str(project) not in state
     assert "transcript" not in state.lower()
+
+
+def test_record_event_does_not_replace_a_required_checkpoint_handoff(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+
+    assert (
+        hook.handle(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "s1",
+                "cwd": str(project),
+                "tool_name": "mcp__mnemo-memory__save_checkpoint",
+                "tool_input": {
+                    "operation": "record_event",
+                    "event_summary": "private detail that must never enter hook state",
+                },
+            }
+        )
+        == {}
+    )
+    stop = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
+    assert stop["decision"] == "block"
+    assert "save_checkpoint" in str(stop)
+    state = (data / "automatic-memory-session-state.json").read_text()
+    assert "private detail" not in state
 
 
 @pytest.mark.parametrize("client", ["codex", "claude-code"])
