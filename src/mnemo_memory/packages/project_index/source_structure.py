@@ -554,13 +554,19 @@ class SourceStructureParser:
                 candidate_name = (
                     module.qualified_name if not member else f"{module.qualified_name}.{member}"
                 )
+                imported_names = [candidate_name]
             else:
-                candidate_name = (
+                imported_names = [
                     imported_target if not separator else f"{imported_target}.{remainder}"
-                )
-            imported = symbols_by_name.get(candidate_name)
-            if imported is not None:
-                candidates.append(imported)
+                ]
+                if separator and imported_target in modules_by_name:
+                    imported_type = imported_target.rsplit(".", maxsplit=1)[-1]
+                    if _is_safe_symbol_name(imported_type):
+                        imported_names.append(f"{imported_target}.{imported_type}.{remainder}")
+            for candidate_name in imported_names:
+                imported = symbols_by_name.get(candidate_name)
+                if imported is not None:
+                    candidates.append(imported)
         unique = {item.symbol_id: item for item in candidates}
         return next(iter(unique)) if len(unique) == 1 else None
 
@@ -684,7 +690,19 @@ class SourceStructureParser:
     def _tree_import_bindings(
         language: str, node: Node, raw: bytes, target: str
     ) -> tuple[tuple[str, str], ...]:
-        """Extract only simple ES-module bindings from already-parsed syntax."""
+        """Extract only explicit import aliases with a proven static spelling.
+
+        Java class imports and simple Rust ``use crate::...`` items are intentionally
+        supported beside ES-module aliases. A later lookup still requires one matching
+        in-snapshot declaration before any call edge is resolved.
+        """
+        if language == "java":
+            binding_name = target.rsplit(".", maxsplit=1)[-1]
+            return ((binding_name, target),) if _is_safe_symbol_name(binding_name) else ()
+        if language == "rust" and target.startswith("crate."):
+            normalized = target.removeprefix("crate.")
+            binding_name = normalized.rsplit(".", maxsplit=1)[-1]
+            return ((binding_name, normalized),) if _is_safe_symbol_name(binding_name) else ()
         if language not in {"javascript", "typescript", "tsx"}:
             return ()
         clause = next(

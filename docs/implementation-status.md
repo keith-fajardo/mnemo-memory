@@ -509,5 +509,6 @@ links; deterministic direct/transitive dependency and dependent impact candidate
 snapshot diffs; bounded
 provenance-bearing `get_context` facts; and
 opt-in lifecycle refresh at session start and after changed work stops. Parsing is offline and
-stores no source text. Multi-language semantic resolution, safely resolved cross-file calls, a
-complete call graph, and automatic transcript capture remain separate follow-up work.
+stores no source text. Safe direct Java/Rust imported-call resolution now joins the existing
+Python/ES-module support. Broad multi-language semantic resolution, a complete call graph, and
+automatic transcript capture remain separate follow-up work.

@@ -192,3 +192,32 @@ def test_parser_extracts_static_structure_from_common_enterprise_languages(tmp_p
         ("service", CodeEdgeKind.IMPORTS, "Tools\\Helper"),
         ("service.Service.run", CodeEdgeKind.CALLS, "$client.call"),
     }
+
+
+def test_java_and_rust_imported_calls_resolve_only_to_local_unambiguous_symbols(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "polyglot"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "Helper.java").write_text(
+        "package tools; public class Helper { static void go() {} }\n"
+    )
+    (root / "Service.java").write_text(
+        "import tools.Helper; class Service { void run() { Helper.go(); } }\n"
+    )
+    (root / "tools.rs").write_text("pub fn helper() {}\n")
+    (root / "engine.rs").write_text(
+        "use crate::tools::helper; fn run() { helper(); callback(); }\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind is CodeEdgeKind.CALLS
+    }
+
+    assert calls[("Service.Service.run", "Helper.go")] is not None
+    assert calls[("engine.run", "helper")] is not None
+    assert calls[("engine.run", "callback")] is None
