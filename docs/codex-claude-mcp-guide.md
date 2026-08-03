@@ -174,13 +174,21 @@ chosen as active work automatically.
 
 ## Scope, in practical terms
 
-Mnemo requests use stable owner, workspace, project, session, and task UUIDs. They are not derived
-from a directory or from dbt. They prevent one project’s checkpoint from being exposed to another
-project. The current alpha keeps scope explicit; a future project-binding workflow will reduce
-repeated setup for dbt command wrapping.
+Mnemo uses stable owner, workspace, project, session, and task identities internally. They prevent
+one project’s checkpoint from being exposed to another project. They are **not** derived from a
+directory or dbt manifest.
 
-For manual dbt ingestion, generate and retain one stable owner/workspace/project UUID set, then
-pass it to `mnemo-memory dbt ingest`. See the [README scope explanation](../README.md#scope-ids-in-plain-language).
+For the normal personal workflow, you do not create or paste any UUIDs: run
+`mnemo-memory connect codex --auto-memory` or
+`mnemo-memory connect claude-code --auto-memory` from the repository once. Mnemo creates a private
+machine-local project binding and reuses its stable scope on later sessions. `mnemo-memory dbt
+enable` does the same for a dbt repository and reuses the automatic-memory project scope when both
+are enabled for that canonical directory.
+
+Explicit scope IDs remain an advanced interface for controlled automation and manual MCP/dbt
+ingestion. They are deliberately absent from normal onboarding; use the normal personal setup in
+the [README](../README.md#start-here-let-mnemo-explain-the-setup) unless you are building such
+automation.
 
 ## What Mnemo does not change
 
