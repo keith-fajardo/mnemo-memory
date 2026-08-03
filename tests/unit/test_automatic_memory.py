@@ -102,6 +102,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert isinstance(context, dict)
     assert "get_context" in str(context)
     assert "source_query" in str(context)
+    assert "current_source_digest" in str(context)
     assert str(project) not in str(context)
 
     assert (

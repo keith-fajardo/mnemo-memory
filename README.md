@@ -243,7 +243,8 @@ message.
 The code structure refresh happens locally at session start; task handoffs remain deliberately
 bounded rather than being raw transcript capture. Structural impact requests use the active
 snapshot by default, or can name an immutable snapshot when an agent needs to reason about a
-specific earlier state.
+specific earlier state. A source map is called current only when its exact fresh source digest
+matches; “active” alone is never treated as proof that files have not changed.
 
 **How does a new agent get it?** The new agent connects to the same Mnemo store and calls
 `get_context` for the same scope. It receives the latest active checkpoint and any requested dbt

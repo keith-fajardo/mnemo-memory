@@ -325,3 +325,59 @@ def test_source_impact_can_select_an_immutable_historical_snapshot(tmp_path: Pat
         for item in packet.structural_items
     )
     assert not any('"symbol":"service"' in item.content for item in packet.structural_items)
+
+
+def test_source_impact_currentness_requires_an_exact_source_digest(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "core.py").write_text("def calculate():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    stored = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    current = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_impact=ContextSourceImpactQuery(
+                "core", current_source_digest=stored.snapshot.source_digest
+            ),
+        )
+    )
+    stale = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_impact=ContextSourceImpactQuery(
+                "core",
+                current_source_digest="sha256:" + "0" * 64,
+                require_current=True,
+            ),
+        )
+    )
+
+    assert all('"currentness":"current"' in item.content for item in current.structural_items)
+    assert stale.structural_items == ()
+    assert stale.omissions[-1].detail == "source snapshot is not proven current"

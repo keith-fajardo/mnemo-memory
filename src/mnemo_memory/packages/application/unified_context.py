@@ -75,6 +75,8 @@ class ContextSourceImpactQuery:
     maximum_symbols: int = 100
     maximum_edges: int = 200
     snapshot_id: CodeSnapshotId | None = None
+    current_source_digest: str | None = None
+    require_current: bool = False
 
     def __post_init__(self) -> None:
         if not self.symbol.strip() or len(self.symbol) > 512:
@@ -85,6 +87,11 @@ class ContextSourceImpactQuery:
             raise ValueError("source impact depth must be non-negative")
         if self.maximum_symbols < 1 or self.maximum_edges < 1:
             raise ValueError("source impact limits must be positive")
+        if self.current_source_digest is not None and (
+            not self.current_source_digest.startswith("sha256:")
+            or len(self.current_source_digest) != 71
+        ):
+            raise ValueError("source impact digest must be a sha256 digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +320,14 @@ class UnifiedContextService:
             return _with_omission(
                 packet, "source-impact", OmissionReason.LOWER_RANK, "no source snapshot"
             )
+        currentness = _source_currentness(snapshot, query.current_source_digest)
+        if query.require_current and currentness is not ValidityState.CURRENT:
+            return _with_omission(
+                packet,
+                "source-impact",
+                OmissionReason.STALE,
+                "source snapshot is not proven current",
+            )
         candidates = self._source.find_symbols(scope, snapshot.snapshot_id, query.symbol, limit=64)
         starts = (
             tuple(
@@ -400,6 +415,7 @@ class UnifiedContextService:
             {},
             impact_direction=query.direction,
             impact_depths=depths,
+            currentness=currentness,
         )
         return (
             result
@@ -436,6 +452,15 @@ def _with_omission(
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")
 
 
+def _source_currentness(snapshot: CodeSnapshot, supplied_digest: str | None) -> ValidityState:
+    """Use only an exact source-tree digest as evidence that a snapshot is current."""
+    if supplied_digest is None:
+        return ValidityState.UNKNOWN
+    return (
+        ValidityState.CURRENT if supplied_digest == snapshot.source_digest else ValidityState.STALE
+    )
+
+
 def _append_source_items(
     packet: ContextPacket,
     task_scope: MemoryScope,
@@ -446,6 +471,7 @@ def _append_source_items(
     *,
     impact_direction: str | None = None,
     impact_depths: dict[CodeSymbolId, int] | None = None,
+    currentness: ValidityState = ValidityState.UNKNOWN,
 ) -> ContextPacket:
     facts: list[ContextItem] = []
     remaining = min(
@@ -456,7 +482,7 @@ def _append_source_items(
         content = json.dumps(
             {
                 "snapshot_id": str(snapshot.snapshot_id),
-                "currentness": "unknown",
+                "currentness": currentness.value,
                 "path": symbol.relative_path,
                 "symbol": symbol.qualified_name,
                 "kind": symbol.kind.value,
@@ -501,7 +527,7 @@ def _append_source_items(
             (evidence,),
             SourceTrustClass.CURRENT_STRUCTURAL,
             Sensitivity.NORMAL,
-            ValidityState.UNKNOWN,
+            currentness,
             None,
             ConflictState.NONE,
             packet.created_at,
@@ -525,7 +551,7 @@ def _append_source_items(
         content = json.dumps(
             {
                 "snapshot_id": str(snapshot.snapshot_id),
-                "currentness": "unknown",
+                "currentness": currentness.value,
                 "path": source_paths[edge.source_symbol_id],
                 "relationship": edge.kind.value,
                 "target": edge.target,
@@ -568,7 +594,7 @@ def _append_source_items(
             (evidence,),
             SourceTrustClass.CURRENT_STRUCTURAL,
             Sensitivity.NORMAL,
-            ValidityState.UNKNOWN,
+            currentness,
             None,
             ConflictState.NONE,
             packet.created_at,

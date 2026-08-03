@@ -87,6 +87,10 @@ class DurableMcpContextPort:
                     int(source_impact.get("maximum_symbols", 100)),
                     int(source_impact.get("maximum_edges", 200)),
                     _optional_id(source_impact, "snapshot_id", CodeSnapshotId),
+                    source_impact.get("current_source_digest")
+                    if isinstance(source_impact.get("current_source_digest"), str)
+                    else None,
+                    bool(source_impact.get("require_current", False)),
                 )
             )
             if lineage is not None or source_query is not None or impact is not None:

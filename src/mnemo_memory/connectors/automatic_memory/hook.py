@@ -66,8 +66,10 @@ class AutomaticMemoryHook:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
             return {}
         if event_name == "SessionStart":
-            self._refresh_source_structure(binding)
-            return self._context_output(_resume_instruction(binding.checkpoint_scope.to_dict()))
+            source_digest = self._refresh_source_structure(binding)
+            return self._context_output(
+                _resume_instruction(binding.checkpoint_scope.to_dict(), source_digest)
+            )
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
@@ -101,18 +103,19 @@ class AutomaticMemoryHook:
         # Lifecycle hooks must fail open.  The stable code contains no local path or event payload.
         return {"systemMessage": code}
 
-    def _refresh_source_structure(self, binding: MemoryProjectBinding) -> None:
+    def _refresh_source_structure(self, binding: MemoryProjectBinding) -> str | None:
         """Best-effort local refresh; failure never blocks a coding client session."""
         try:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
             repository.migrate()
-            repository.store_and_activate(
+            stored = repository.store_and_activate(
                 SourceStructureParser().parse(
                     SourceStructureParseRequest(binding.scope, binding.project_root)
                 )
             )
+            return stored.snapshot.source_digest
         except (OSError, ValueError, RuntimeError):
-            return
+            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,14 +184,21 @@ class _SessionStateStore:
                 temporary.unlink(missing_ok=True)
 
 
-def _resume_instruction(scope: Mapping[str, object]) -> str:
-    return (
+def _resume_instruction(scope: Mapping[str, object], source_digest: str | None) -> str:
+    instruction = (
         "Mnemo automatic task memory is enabled. Before continuing, call get_context using this "
         f"stored task scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
         "When the task names a supported-language symbol or relative path, include it as "
         "source_query to retrieve the matching saved structure. Treat retrieved facts as "
         "bounded context, not a transcript."
     )
+    if source_digest is not None:
+        instruction += (
+            " For a static dependency or impact request, include this exact "
+            "current_source_digest to prove the refreshed source snapshot is current: "
+            f"{source_digest}."
+        )
+    return instruction
 
 
 def _checkpoint_instruction(scope: Mapping[str, object]) -> str:

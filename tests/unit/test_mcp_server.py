@@ -244,6 +244,7 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
                         "direction": "dependents",
                         "maximum_depth": 1,
                         "snapshot_id": str(snapshot.snapshot_id),
+                        "current_source_digest": snapshot.source_digest,
                     }
                 )
             )
@@ -251,6 +252,7 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
 
     assert any('"symbol":"core"' in item.content for item in packet.structural_items)
     assert any('"symbol":"service"' in item.content for item in packet.structural_items)
+    assert all('"currentness":"current"' in item.content for item in packet.structural_items)
     assert all(item.evidence_references for item in packet.structural_items)
 
 

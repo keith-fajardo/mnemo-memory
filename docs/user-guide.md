@@ -57,6 +57,10 @@ depth, snapshot identity, and a clear `unknown` currentness label when no fresh 
 was supplied. It is a useful change-planning aid, not a promise that every runtime effect was found.
 An agent can also request an exact immutable snapshot ID through `get_context` when it needs to
 compare a past structural state rather than the active one; otherwise Mnemo uses the active snapshot.
+When automatic memory refreshes a repository at session start, its private agent instruction carries
+the exact source digest for that refresh. An impact request that supplies that same digest is labeled
+`current`; a different digest is labeled `stale`; without comparable evidence it remains `unknown`.
+`require_current` omits a stale or unproven source map rather than presenting it as current.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
 Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. It
 rebuilds the bounded structural snapshot from current local syntax and preserves the previous
