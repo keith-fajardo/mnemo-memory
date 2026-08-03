@@ -24,6 +24,7 @@ from .checkpoints import (
     CreateCheckpoint,
     GetCheckpoint,
     GetCheckpointContext,
+    RecordCheckpointLesson,
     ReviseCheckpoint,
 )
 from .config import (
@@ -83,6 +84,7 @@ __all__ = [
     "LocalConfigurationError",
     "LocalRuntimeError",
     "QueryLineage",
+    "RecordCheckpointLesson",
     "ReviseCheckpoint",
     "build_checkpoint_runtime",
     "build_lifecycle_service",

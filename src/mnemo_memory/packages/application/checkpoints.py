@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TypeVar
 
@@ -14,6 +14,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointId,
+    CheckpointLesson,
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
@@ -23,6 +24,7 @@ from mnemo_memory.packages.domain import (
     ContextItem,
     ContextItemType,
     ContextPacket,
+    EvidenceId,
     EvidenceReference,
     MemoryScope,
     OmissionNotice,
@@ -125,6 +127,17 @@ class AbandonCheckpoint:
     expected_revision_id: CheckpointRevisionId
     reason: str
     content: CheckpointContent
+    evidence_references: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RecordCheckpointLesson:
+    """Append one correction lesson without making an agent resubmit the whole handoff."""
+
+    scope: MemoryScope
+    checkpoint_id: CheckpointId
+    expected_revision_id: CheckpointRevisionId
+    lesson: CheckpointLesson
     evidence_references: tuple[EvidenceReference, ...]
 
 
@@ -244,6 +257,78 @@ class CheckpointApplicationService:
                 command.reason,
                 command.content,
                 tuple(command.evidence_references),
+                self._now(),
+            )
+        )
+        return CheckpointView(
+            self._call(
+                lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
+            ),
+            revision,
+        )
+
+    def record_lesson(self, command: RecordCheckpointLesson) -> CheckpointView:
+        """Record a single new correction against the active revision atomically.
+
+        The caller supplies only the new lesson and its evidence.  The service takes the current
+        canonical handoff as its base, preserves its existing content, and uses the normal
+        expected-revision append path rather than adding a second mutable lesson store.
+        """
+        self._validate_scope(command.scope)
+        if not isinstance(command.lesson, CheckpointLesson):
+            raise CheckpointApplicationInvalidContent("checkpoint lesson must be canonical")
+        if not command.evidence_references:
+            raise CheckpointApplicationMissingProvenance(
+                "checkpoint lesson requires evidence-bearing provenance"
+            )
+        if any(
+            not isinstance(reference, EvidenceReference)
+            for reference in command.evidence_references
+        ):
+            raise CheckpointApplicationMissingProvenance(
+                "checkpoint lesson requires valid evidence-bearing provenance"
+            )
+        aggregate = self._call(
+            lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
+        )
+        current = self._call(
+            lambda: self._repository.get_current_revision(command.scope, command.checkpoint_id)
+        )
+        if current.revision_id != command.expected_revision_id:
+            raise CheckpointApplicationRevisionConflict("checkpoint revision is not current")
+        if aggregate.lifecycle_status is not CheckpointStatus.ACTIVE:
+            raise CheckpointApplicationInvalidLifecycle(
+                "checkpoint lifecycle transition is invalid"
+            )
+        if command.lesson in current.content.lessons:
+            return CheckpointView(aggregate, current)
+        if len(current.content.lessons) >= _MAX_HISTORICAL_LESSONS:
+            raise CheckpointApplicationInvalidContent(
+                "checkpoint has the maximum number of lessons"
+            )
+        evidence = _combined_evidence(current.evidence_references, command.evidence_references)
+        if not set(command.lesson.evidence_ids).issubset(
+            {reference.evidence_id for reference in evidence}
+        ):
+            raise CheckpointApplicationMissingProvenance(
+                "checkpoint lesson evidence must belong to the saved revision"
+            )
+        try:
+            content = replace(
+                current.content,
+                lessons=(*current.content.lessons, command.lesson),
+            )
+        except (TypeError, ValueError) as error:
+            raise CheckpointApplicationInvalidContent("checkpoint lesson is invalid") from error
+        content = replace(content, token_estimate=_checkpoint_token_estimate(content))
+        self._validate_write(command.scope, content, evidence)
+        revision = self._call(
+            lambda: self._repository.append_revision(
+                command.scope,
+                command.checkpoint_id,
+                command.expected_revision_id,
+                content,
+                evidence,
                 self._now(),
             )
         )
@@ -542,3 +627,24 @@ class CheckpointApplicationService:
         except Exception as error:
             translated = self._translate(error)
             raise translated from error
+
+
+def _checkpoint_token_estimate(content: CheckpointContent) -> int:
+    """Use Mnemo's deterministic cold-input heuristic for a lesson-only revision."""
+    payload = content.to_dict()
+    payload["token_estimate"] = 0
+    return (len(json.dumps(payload, sort_keys=True, separators=(",", ":"))) + 2) // 3
+
+
+def _combined_evidence(
+    existing: tuple[EvidenceReference, ...],
+    added: tuple[EvidenceReference, ...],
+) -> tuple[EvidenceReference, ...]:
+    """Keep immutable evidence IDs unique without accepting conflicting payloads."""
+    values: dict[EvidenceId, EvidenceReference] = {}
+    for reference in (*existing, *added):
+        previous = values.get(reference.evidence_id)
+        if previous is not None and previous != reference:
+            raise CheckpointApplicationInvalidContent("checkpoint evidence identifiers conflict")
+        values[reference.evidence_id] = reference
+    return tuple(values.values())

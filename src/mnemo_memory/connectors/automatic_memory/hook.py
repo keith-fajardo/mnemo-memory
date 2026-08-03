@@ -286,9 +286,11 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
         f"scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
         "Create or revise the active checkpoint with a concise objective, current state, "
         "decisions, verification, evidence, and next action. When a reasoning or analysis "
-        "mistake was corrected, include a lesson: trigger, mistaken assumption, correction, "
-        "prevention, and the IDs of its supporting evidence. Retain any still-applicable lessons "
-        "from the current context. Do not include a full transcript."
+        "mistake was corrected, either include a lesson in that revision or use the existing "
+        "save_checkpoint record_lesson operation to append one correction without rebuilding the "
+        "handoff: trigger, mistaken assumption, correction, prevention, and the IDs of its "
+        "supporting evidence. Retain any still-applicable lessons from the current context. Do "
+        "not include a full transcript."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)

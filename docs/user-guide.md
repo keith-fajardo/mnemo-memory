@@ -138,7 +138,9 @@ store a raw conversation. The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
 > exact next action. If you corrected an analysis mistake, also save its trigger, mistaken
-> assumption, correction, prevention, and evidence IDs as a lesson.
+> assumption, correction, prevention, and evidence IDs as a lesson. If the handoff is already
+> saved, use the existing `save_checkpoint` operation `record_lesson` to append just that one
+> correction rather than rewriting the whole handoff.
 
 In the next fresh session, ask:
 

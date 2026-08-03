@@ -525,6 +525,11 @@ and citations; token-budget pressure produces a structured omission. Mnemo does 
 reasoning from edits, test failures, or transcripts: the agent must explicitly record the lesson,
 which keeps a later prevention cue honest and scoped.
 
+The active follow-up adds `save_checkpoint` operation `record_lesson`: it appends exactly one
+evidence-backed correction to the current active handoff without requiring an agent to resend all
+checkpoint fields. It preserves the ordinary immutable revision chain, 600-token write budget,
+and expected-revision conflict behavior; an identical retry at the current revision is idempotent.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

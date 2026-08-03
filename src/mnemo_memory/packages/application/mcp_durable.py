@@ -20,6 +20,7 @@ from mnemo_memory.packages.application.checkpoints import (
     CompleteCheckpoint,
     CreateCheckpoint,
     GetCheckpointContext,
+    RecordCheckpointLesson,
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
@@ -131,9 +132,9 @@ class DurableMcpContextPort:
         try:
             operation = _string(request, "operation")
             scope = _scope(request)
-            content = _content(request)
             evidence = _evidence(request)
             if operation == "create":
+                content = _content(request)
                 view = self._service.create(
                     CreateCheckpoint(
                         scope,
@@ -148,18 +149,21 @@ class DurableMcpContextPort:
                     request, "expected_revision_id", CheckpointRevisionId
                 )
                 if operation == "revise":
+                    content = _content(request)
                     view = self._service.revise(
                         ReviseCheckpoint(
                             scope, checkpoint_id, expected_revision_id, content, evidence
                         )
                     )
                 elif operation == "complete":
+                    content = _content(request)
                     view = self._service.complete(
                         CompleteCheckpoint(
                             scope, checkpoint_id, expected_revision_id, content, evidence
                         )
                     )
                 elif operation == "abandon":
+                    content = _content(request)
                     view = self._service.abandon(
                         AbandonCheckpoint(
                             scope,
@@ -170,8 +174,19 @@ class DurableMcpContextPort:
                             evidence,
                         )
                     )
+                elif operation == "record_lesson":
+                    lessons = _lessons(request)
+                    if len(lessons) != 1:
+                        raise ValueError("record_lesson requires exactly one lesson")
+                    view = self._service.record_lesson(
+                        RecordCheckpointLesson(
+                            scope, checkpoint_id, expected_revision_id, lessons[0], evidence
+                        )
+                    )
                 else:
-                    raise ValueError("operation must be create, revise, complete, or abandon")
+                    raise ValueError(
+                        "operation must be create, revise, complete, abandon, or record_lesson"
+                    )
             return {
                 "checkpoint_id": str(view.aggregate.checkpoint_id),
                 "checkpoint_revision_id": str(view.revision.revision_id),

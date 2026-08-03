@@ -72,20 +72,31 @@ def create_server(port: McpContextPort) -> FastMCP:
 
     @server.tool(
         name="save_checkpoint",
-        description="Explicitly create, revise, complete, or abandon a durable task checkpoint.",
+        description=(
+            "Create, revise, complete, abandon, or record one evidence-backed correction "
+            "lesson for a durable task checkpoint."
+        ),
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     )
     def save_checkpoint(
-        operation: Annotated[str, Field(pattern="^(create|revise|complete|abandon)$")],
+        operation: Annotated[
+            str, Field(pattern="^(create|revise|complete|abandon|record_lesson)$")
+        ],
         owner_id: Annotated[str, Field(min_length=36, max_length=36)],
         workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
         project_id: Annotated[str, Field(min_length=36, max_length=36)],
         session_id: Annotated[str, Field(min_length=36, max_length=36)],
         task_id: Annotated[str, Field(min_length=36, max_length=36)],
-        task_objective: Annotated[str, Field(min_length=1, max_length=4_000)],
-        current_state: Annotated[str, Field(min_length=1, max_length=4_000)],
-        evidence_references: Annotated[list[dict[str, object]], Field(min_length=1, max_length=64)],
-        token_estimate: Annotated[int, Field(ge=0, le=600)],
+        task_objective: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=4_000)
+        ] = None,
+        current_state: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=4_000)
+        ] = None,
+        evidence_references: Annotated[
+            list[dict[str, object]] | None, Field(default=None, min_length=1, max_length=64)
+        ] = None,
+        token_estimate: Annotated[int | None, Field(default=None, ge=0, le=600)] = None,
         checkpoint_id: Annotated[
             str | None, Field(default=None, min_length=36, max_length=36)
         ] = None,

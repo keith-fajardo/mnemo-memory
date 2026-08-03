@@ -91,6 +91,12 @@ later session then receives the lesson—not merely a vague “test failed” no
 same bad line of analysis. Mnemo does not claim to infer a model's private reasoning from an edit
 or test output; the agent records a lesson explicitly with its checkpoint.
 
+If the correction is discovered after the checkpoint was already saved, the agent can use
+`save_checkpoint` with `operation: "record_lesson"`. That appends the single correction to the
+current handoff without making it reconstruct the whole checkpoint; Mnemo keeps the original
+progress and evidence, checks the current revision atomically, and enforces the same 600-token
+checkpoint budget. See the [local MCP guide](docs/local-mcp.md#record-a-correction-without-resending-the-handoff).
+
 If a later checkpoint revision concentrates on new progress and leaves out an older lesson,
 Mnemo still brings that bounded lesson back as historical, evidence-cited context. It is presented
 as historical task evidence—not as a claim about the current repository—so the agent can apply the

@@ -21,9 +21,9 @@ abandoned checkpoints are excluded from automatic selection. The active-checkpoi
 limited to 600 tokens by default and structured token-budget omissions are preserved.
 
 `save_checkpoint` is mutating but non-destructive. It requires a tagged `operation` of `create`,
-`revise`, `complete`, or `abandon`; the explicit task scope; canonical checkpoint payload fields;
-and structurally valid evidence references. All operations retain the submitted content and
-provenance. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
+`revise`, `complete`, `abandon`, or `record_lesson`; the explicit task scope; and structurally
+valid evidence references. `create`, `revise`, `complete`, and `abandon` require the complete
+canonical checkpoint payload. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
 `expected_revision_id`; `abandon` also requires a nonblank `reason`.
 
 For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up to 16 canonical
@@ -31,6 +31,36 @@ For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up
 `prevention`, plus `evidence_ids` that must reference evidence submitted for that exact revision.
 Mnemo preserves the lesson in the immutable checkpoint content and returns it in the later context
 packet. It never infers a lesson from a transcript, source diff, or model output.
+
+## Record a correction without resending the handoff
+
+When an agent discovers a specific reasoning mistake after it has already saved a checkpoint, it
+can use `record_lesson`. This appends one immutable revision based on the current handoff: the
+objective, progress, next action, and older evidence stay intact. Supply the checkpoint ID, the
+current revision ID, **one** lesson, and the evidence that supports that lesson. Mnemo recomputes
+the checkpoint budget and uses the ordinary atomic revision comparison, so a stale writer receives
+`MNEMO_REVISION_CONFLICT` and cannot overwrite a later handoff.
+
+```json
+{
+  "operation": "record_lesson",
+  "checkpoint_id": "<checkpoint-id>",
+  "expected_revision_id": "<current-revision-id>",
+  "evidence_references": [{"evidence_id": "<new-or-existing-evidence-id>", "...": "canonical evidence fields"}],
+  "lessons": [{
+    "trigger": "A reconciliation test disagreed with the expected result.",
+    "mistaken_assumption": "The two inputs used the same business-date grain.",
+    "correction": "Compare them at the documented business-date grain.",
+    "prevention": "Check grain and null handling before changing a join.",
+    "evidence_ids": ["<new-or-existing-evidence-id>"]
+  }]
+}
+```
+
+An identical retry against the current revision returns that revision without creating another one.
+Recording a lesson after completion or abandonment is rejected; start a new active checkpoint for
+new work instead. This is still the existing `save_checkpoint` tool—Mnemo does not add another MCP
+tool or capture an agent's private reasoning automatically.
 
 ```json
 {

@@ -25,6 +25,7 @@ from mnemo_memory.packages.application import (
     CreateCheckpoint,
     GetCheckpoint,
     GetCheckpointContext,
+    RecordCheckpointLesson,
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.domain import (
@@ -261,6 +262,137 @@ def test_context_uses_exact_current_revision_and_is_stable() -> None:
     assert packet.provenance[0].source_reference.endswith(str(revised.revision.revision_id))
     assert json.loads(packet.active_task_checkpoint.content) == revised.revision.content.to_dict()
     assert packet.to_json() == packet.to_json()
+
+
+def test_record_lesson_appends_current_handoff_without_resubmitting_it() -> None:
+    target = service()
+    scope_value = scope()
+    initial_evidence = evidence()
+    initial = target.create(CreateCheckpoint(scope_value, content(), (initial_evidence,)))
+    lesson_evidence = evidence()
+    lesson = CheckpointLesson(
+        "The focused validation test contradicted the per-command catch.",
+        "Every CLI command should translate its own ValueError.",
+        "Keep validation in LocalConfig and translate at the CLI boundary.",
+        "Check the shared validation owner before adding a CLI exception catch.",
+        (lesson_evidence.evidence_id,),
+    )
+    recorded = target.record_lesson(
+        RecordCheckpointLesson(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            lesson,
+            (lesson_evidence,),
+        )
+    )
+    assert recorded.revision.revision_number == 2
+    assert recorded.revision.content.task_objective == initial.revision.content.task_objective
+    assert recorded.revision.content.lessons == (lesson,)
+    assert recorded.revision.evidence_references == (initial_evidence, lesson_evidence)
+    assert recorded.revision.content.token_estimate <= 600
+
+    retried = target.record_lesson(
+        RecordCheckpointLesson(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            recorded.revision.revision_id,
+            lesson,
+            (lesson_evidence,),
+        )
+    )
+    assert retried.revision == recorded.revision
+
+    with pytest.raises(CheckpointApplicationRevisionConflict):
+        target.record_lesson(
+            RecordCheckpointLesson(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                initial.revision.revision_id,
+                lesson,
+                (lesson_evidence,),
+            )
+        )
+
+
+def test_record_lesson_rejects_missing_evidence_terminal_and_full_lesson_history() -> None:
+    target = service()
+    scope_value = scope()
+    initial_evidence = evidence()
+    initial = target.create(CreateCheckpoint(scope_value, content(), (initial_evidence,)))
+    missing_evidence_lesson = CheckpointLesson(
+        "A test contradicted the selected validation boundary.",
+        "The existing evidence could support a new unrelated conclusion.",
+        "Attach evidence for the exact correction before saving it.",
+        "Keep every lesson tied to evidence retained by its revision.",
+        (EvidenceId.new(),),
+    )
+    with pytest.raises(CheckpointApplicationMissingProvenance):
+        target.record_lesson(
+            RecordCheckpointLesson(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                initial.revision.revision_id,
+                missing_evidence_lesson,
+                (initial_evidence,),
+            )
+        )
+
+    completed = target.complete(
+        CompleteCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(complete=True),
+            (evidence(),),
+        )
+    )
+    lesson_evidence = evidence()
+    terminal_lesson = CheckpointLesson(
+        "A terminal checkpoint cannot be amended.",
+        "A completed task remains an active handoff.",
+        "Start a new checkpoint for follow-up work.",
+        "Do not append lifecycle history after a terminal transition.",
+        (lesson_evidence.evidence_id,),
+    )
+    with pytest.raises(CheckpointApplicationInvalidLifecycle):
+        target.record_lesson(
+            RecordCheckpointLesson(
+                scope_value,
+                initial.aggregate.checkpoint_id,
+                completed.revision.revision_id,
+                terminal_lesson,
+                (lesson_evidence,),
+            )
+        )
+
+    full_target = service()
+    full_scope = scope()
+    full_evidence = evidence()
+    full_content = replace(
+        content(),
+        lessons=tuple(
+            CheckpointLesson(
+                f"trigger {index}",
+                f"assumption {index}",
+                f"correction {index}",
+                f"prevention {index}",
+                (full_evidence.evidence_id,),
+            )
+            for index in range(16)
+        ),
+    )
+    full = full_target.create(CreateCheckpoint(full_scope, full_content, (full_evidence,)))
+    with pytest.raises(CheckpointApplicationInvalidContent, match="maximum number of lessons"):
+        full_target.record_lesson(
+            RecordCheckpointLesson(
+                full_scope,
+                full.aggregate.checkpoint_id,
+                full.revision.revision_id,
+                terminal_lesson,
+                (lesson_evidence,),
+            )
+        )
 
 
 def test_context_retains_a_prior_evidence_backed_lesson_after_revision() -> None:

@@ -94,6 +94,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[1].inputSchema["properties"]
     assert "lessons" in tools[1].inputSchema["properties"]
+    assert "record_lesson" in tools[1].inputSchema["properties"]["operation"]["pattern"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
 
@@ -194,6 +195,34 @@ def test_durable_port_preserves_an_evidence_backed_reasoning_lesson(tmp_path: Pa
                     lessons=[lesson],
                 )
             )
+
+
+def test_durable_port_records_one_lesson_without_full_checkpoint_content(tmp_path: Path) -> None:
+    lesson_evidence = {**EVIDENCE, "evidence_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+    lesson = {
+        "trigger": "A focused test contradicted the per-command validation catch.",
+        "mistaken_assumption": "Each CLI command owns validation exception handling.",
+        "correction": "Keep validation in LocalConfig and translate at the CLI boundary.",
+        "prevention": "Check the shared validation owner before adding a CLI exception catch.",
+        "evidence_ids": [lesson_evidence["evidence_id"]],
+    }
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "record lesson")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        created = port.save_checkpoint(save_payload())
+        recorded = port.save_checkpoint(
+            {
+                "operation": "record_lesson",
+                **IDS,
+                "checkpoint_id": created["checkpoint_id"],
+                "expected_revision_id": created["checkpoint_revision_id"],
+                "evidence_references": [lesson_evidence],
+                "lessons": [lesson],
+            }
+        )
+        assert recorded["revision_number"] == 2
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+    assert packet.active_task_checkpoint is not None
+    assert "Check the shared validation owner" in packet.active_task_checkpoint.content
 
 
 def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) -> None:
