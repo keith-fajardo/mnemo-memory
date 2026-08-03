@@ -37,10 +37,10 @@ event for the same transition.  The revision remains the canonical source of han
 events are chronological, evidence-bearing transition facts rather than a second checkpoint
 representation.
 
-Persistence and automatic projection must make an event and its checkpoint transition atomic.  A
-future repository operation must not report a successful checkpoint mutation while losing its
-event, or create an event for a failed mutation.  Cross-scope reads must remain indistinguishable
-from not found.
+Persistence and automatic projection make an event and its checkpoint transition atomic in both
+the SQLite and reference repositories. A successful checkpoint mutation cannot lose its event,
+and a failed mutation cannot leave an event or revision behind. Cross-scope reads remain
+indistinguishable from not found.
 
 ## Consequences
 
@@ -50,6 +50,8 @@ action or infer a reasoning mistake.  New event families—permitted tool outcom
 decisions, or imported documents—require their own domain contract, evidence source, privacy
 review, retention/deletion behavior, and explicit ingestion boundary.
 
-The first domain slice is intentionally storage-independent.  The next implementation stages add
-the immutable SQLite/reference repository contract and atomically project checkpoint lifecycle
-operations into it.
+Migration 0006 stores the event ledger separately from immutable revision content. The SQLite
+adapter projects creation, revision, completion, abandonment, and lesson-recording in the same
+transaction as their revision mutation; the reference adapter mirrors that all-or-nothing behavior
+for the shared contract. The ledger is now available for bounded future episodic retrieval, but is
+not a transcript or a second mutable checkpoint store.

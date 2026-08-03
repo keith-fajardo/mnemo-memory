@@ -537,6 +537,13 @@ evidence-backed correction to the current active handoff without requiring an ag
 checkpoint fields. It preserves the ordinary immutable revision chain, 600-token write budget,
 and expected-revision conflict behavior; an identical retry at the current revision is idempotent.
 
+Checkpoint creation, ordinary revision, completion, abandonment, and lesson recording now also
+write one scoped, append-only lifecycle event tied to the exact immutable revision and its evidence.
+The event ledger contains only transition metadata—not checkpoint bodies, transcripts, source text,
+SQL, environments, or model reasoning—and its SQLite projection is atomic with the checkpoint
+write. This is a durable foundation for later bounded episodic retrieval; the existing checkpoint
+and lesson context remains the user-facing task handoff path.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

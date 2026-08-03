@@ -107,11 +107,13 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
     repository.store_and_activate(parsed)
 
     # Recreate the durable state immediately before migration 0005 without
-    # fabricating source history. A v4 profile knows the current snapshot only.
+    # fabricating source history. Remove later migration state as well: a test
+    # database cannot claim v6 while its v5 schema has been removed.
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE checkpoint_lifecycle_events")
         connection.execute("DROP TRIGGER source_snapshot_activation_scope_match")
         connection.execute("DROP TABLE source_snapshot_activations")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=5)

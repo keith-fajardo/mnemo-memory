@@ -124,6 +124,18 @@ class ReferenceCheckpointLifecycleEventRepository:
             offset + limit if offset + limit < len(events) else None,
         )
 
+    def _snapshot(
+        self,
+    ) -> tuple[dict[EventId, CheckpointLifecycleEvent], dict[str, EventId], list[EventId]]:
+        """Return private copies so the reference aggregate can roll back compound writes."""
+        return (dict(self._events), dict(self._keys), list(self._ordered))
+
+    def _restore(
+        self,
+        state: tuple[dict[EventId, CheckpointLifecycleEvent], dict[str, EventId], list[EventId]],
+    ) -> None:
+        self._events, self._keys, self._ordered = state
+
     @staticmethod
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
@@ -158,6 +170,7 @@ class ReferenceCheckpointRepository:
                 "initial aggregate and revision must be active revision one"
             )
         # Both assignments happen only after all validation succeeds.
+        event_state = self.events._snapshot()
         try:
             self._aggregates[aggregate.checkpoint_id] = aggregate
             self._revisions[aggregate.checkpoint_id] = (initial_revision,)
@@ -175,6 +188,7 @@ class ReferenceCheckpointRepository:
         except BaseException:
             self._aggregates.pop(aggregate.checkpoint_id, None)
             self._revisions.pop(aggregate.checkpoint_id, None)
+            self.events._restore(event_state)
             raise
 
     def get_aggregate(self, scope: MemoryScope, checkpoint_id: CheckpointId) -> CheckpointAggregate:
@@ -236,18 +250,7 @@ class ReferenceCheckpointRepository:
             evidence_references=evidence_references,
             created_at=created_at,
         )
-        self._replace_current(aggregate, revision)
-        self.events.append_event(
-            CheckpointLifecycleEvent.for_revision(
-                scope=scope,
-                kind=event_kind,
-                checkpoint_id=revision.checkpoint_id,
-                revision_id=revision.revision_id,
-                revision_number=revision.revision_number,
-                occurred_at=revision.created_at,
-                evidence_references=revision.evidence_references,
-            )
-        )
+        self._replace_current_with_event(aggregate, revision, event_kind)
         return revision
 
     def complete_checkpoint(
@@ -357,19 +360,37 @@ class ReferenceCheckpointRepository:
             evidence_references=evidence_references,
             created_at=created_at,
         )
-        self._replace_current(aggregate, revision)
-        self.events.append_event(
-            CheckpointLifecycleEvent.for_revision(
-                scope=scope,
-                kind=event_kind,
-                checkpoint_id=revision.checkpoint_id,
-                revision_id=revision.revision_id,
-                revision_number=revision.revision_number,
-                occurred_at=revision.created_at,
-                evidence_references=revision.evidence_references,
-            )
-        )
+        self._replace_current_with_event(aggregate, revision, event_kind)
         return revision
+
+    def _replace_current_with_event(
+        self,
+        aggregate: CheckpointAggregate,
+        revision: CheckpointRevision,
+        event_kind: CheckpointEventKind,
+    ) -> None:
+        """Advance the reference aggregate and ledger as one caller-visible write."""
+        previous_aggregate = self._aggregates[aggregate.checkpoint_id]
+        previous_revisions = self._revisions[aggregate.checkpoint_id]
+        event_state = self.events._snapshot()
+        try:
+            self._replace_current(aggregate, revision)
+            self.events.append_event(
+                CheckpointLifecycleEvent.for_revision(
+                    scope=revision.scope,
+                    kind=event_kind,
+                    checkpoint_id=revision.checkpoint_id,
+                    revision_id=revision.revision_id,
+                    revision_number=revision.revision_number,
+                    occurred_at=revision.created_at,
+                    evidence_references=revision.evidence_references,
+                )
+            )
+        except BaseException:
+            self._aggregates[aggregate.checkpoint_id] = previous_aggregate
+            self._revisions[aggregate.checkpoint_id] = previous_revisions
+            self.events._restore(event_state)
+            raise
 
     def _require_active_expected(
         self, aggregate: CheckpointAggregate, expected_revision_id: CheckpointRevisionId

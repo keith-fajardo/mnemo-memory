@@ -31,9 +31,14 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointLifecycleEventRepository,
+    ReferenceCheckpointRepository,
     SQLiteCheckpointRepository,
 )
-from mnemo_memory.packages.storage.contracts import CheckpointRepository, EpisodicEventNotFound
+from mnemo_memory.packages.storage.contracts import (
+    CheckpointLifecycleEventRepository,
+    CheckpointRepository,
+    EpisodicEventNotFound,
+)
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
 
@@ -166,3 +171,81 @@ def test_sqlite_event_ledger_is_durable_scoped_and_idempotent(tmp_path: Path) ->
         CheckpointEventKind.CREATED,
     ]
     assert events[0].revision_id == revised.revision_id
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_lifecycle_writes_project_exactly_one_scoped_event_per_revision(
+    tmp_path: Path, adapter: str
+) -> None:
+    """The ledger is a projection of immutable revisions, never a second mutable history."""
+    item_scope = scope()
+    checkpoint_id = CheckpointId.new()
+    revision_id = CheckpointRevisionId.new()
+    item = evidence()
+    initial = CheckpointRevision(
+        revision_id,
+        checkpoint_id,
+        1,
+        None,
+        item_scope,
+        CheckpointContent("task", (), "active", ("next",), (), (), (), (), (), (), 1),
+        CheckpointStatus.ACTIVE,
+        (item,),
+        NOW,
+    )
+    aggregate = CheckpointAggregate(
+        checkpoint_id, item_scope, revision_id, 1, CheckpointStatus.ACTIVE, NOW, NOW
+    )
+    repository: CheckpointRepository
+    ledger: object
+    if adapter == "reference":
+        reference = ReferenceCheckpointRepository()
+        repository = reference
+        ledger = reference.events
+    else:
+        sqlite = SQLiteCheckpointRepository(tmp_path / "events.sqlite3", base_directory=tmp_path)
+        sqlite.migrate()
+        repository = sqlite
+        ledger = sqlite
+
+    repository.create_checkpoint_aggregate(aggregate, initial)
+    lesson = repository.append_revision(
+        item_scope,
+        checkpoint_id,
+        revision_id,
+        CheckpointContent("task", ("lesson",), "active", ("next",), (), (), (), (), (), (), 1),
+        (item,),
+        NOW.replace(second=1),
+        event_kind=CheckpointEventKind.LESSON_RECORDED,
+    )
+    completed = repository.complete_checkpoint(
+        item_scope,
+        checkpoint_id,
+        lesson.revision_id,
+        CheckpointContent("task", ("lesson",), "complete", (), (), (), (), (), (), (), 1),
+        (item,),
+        NOW.replace(second=2),
+    )
+    # An exact terminal retry does not produce another immutable revision or event.
+    assert (
+        repository.complete_checkpoint(
+            item_scope,
+            checkpoint_id,
+            lesson.revision_id,
+            CheckpointContent("task", ("lesson",), "complete", (), (), (), (), (), (), (), 1),
+            (item,),
+            NOW.replace(second=2),
+        )
+        == completed
+    )
+
+    event_repository = cast(CheckpointLifecycleEventRepository, ledger)
+    page = event_repository.list_events(item_scope, checkpoint_id=checkpoint_id)
+    assert [event.kind for event in page.items] == [
+        CheckpointEventKind.COMPLETED,
+        CheckpointEventKind.LESSON_RECORDED,
+        CheckpointEventKind.CREATED,
+    ]
+    assert [event.revision_number for event in page.items] == [3, 2, 1]
+    assert all(event.scope == item_scope for event in page.items)
+    assert event_repository.list_events(scope(), checkpoint_id=checkpoint_id).items == ()
