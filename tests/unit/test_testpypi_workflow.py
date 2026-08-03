@@ -29,6 +29,9 @@ def test_testpypi_workflow_transfers_only_a_flat_three_file_release_bundle() -> 
     assert '--sdist "build-output/$sdist"' in value
     for filename in RELEASE_FILES:
         assert f"release/{filename}" in value
+    assert "scripts/verify_installed_dbt_wrapper.py" in value
+    assert '--work-directory "$work/dbt wrapper smoke"' in value
+    assert "tests/fixtures/dbt/manifest-v12.json" in value
 
 
 def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencies() -> None:

@@ -15,6 +15,9 @@ def test_pypi_workflow_builds_once_then_transfers_an_exact_release_bundle() -> N
     assert "name: mnemo-unified-context-0.1.0a2" in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "source-run-id:" not in value
+    assert "scripts/verify_installed_dbt_wrapper.py" in value
+    assert '--work-directory "$work/dbt wrapper smoke"' in value
+    assert "tests/fixtures/dbt/manifest-v12.json" in value
 
 
 def test_pypi_workflow_isolates_oidc_publication_and_uses_explicit_artifacts() -> None:

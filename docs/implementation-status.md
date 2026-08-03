@@ -486,6 +486,10 @@ still runs dbt in fail-open mode and receives one concise enable reminder.
 Added `mnemo-memory dbt exec -- <dbt arguments>` and opt-in zsh/bash/fish shell-hook generation.
 The wrapper preserves dbt argument arrays and exit codes, supports default fail-open and explicit
 strict-memory behavior, and keeps manual `dbt ingest`/`dbt status` plus the two-tool MCP contract.
+The release workflows also install each source-independent wheel and source distribution outside
+the checkout, then prove the installed command can enable a synthetic project, generate the safe
+shell wrapper, activate a manifest through `dbt exec`, retain it after reopen, and idempotently
+recognize an unchanged manifest.
 
 #### Issue 14D — In progress
 

@@ -104,6 +104,10 @@ jobs:
             uv pip install --python "$work/venv/bin/python" "$artifact"
             (cd "$work" && "$work/venv/bin/mnemo-memory" --help)
             (cd "$work" && "$work/venv/bin/mnemo-memory" init --data-dir "$work/Mnemo Data Δ")
+            python scripts/verify_installed_dbt_wrapper.py \
+              --command "$work/venv/bin/mnemo-memory" \
+              --work-directory "$work/dbt wrapper smoke" \
+              --manifest "$(pwd)/tests/fixtures/dbt/manifest-v12.json"
             "$work/venv/bin/python" - <<'PY'
           import mnemo_memory
           from importlib import resources
