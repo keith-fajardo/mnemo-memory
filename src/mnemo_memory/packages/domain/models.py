@@ -538,6 +538,75 @@ class CheckpointStatus(str, Enum):
     EXPIRED = "expired"
 
 
+_CHECKPOINT_LESSON_TEXT_LIMIT = 1_000
+_CHECKPOINT_LESSON_METADATA_LIMIT = 16
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointLesson:
+    """An evidence-backed correction that helps a later task avoid repeating a mistake.
+
+    A lesson deliberately records the *reasoning* boundary, rather than merely a
+    failed command: what triggered the error, the assumption that was wrong, the
+    correction, and the concrete prevention step.  It is identity-free content
+    belonging to the revision that records it.
+    """
+
+    trigger: str
+    mistaken_assumption: str
+    correction: str
+    prevention: str
+    evidence_ids: tuple[EvidenceId, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("trigger", "mistaken_assumption", "correction", "prevention"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"checkpoint lesson {name} must not be blank")
+            if len(value) > _CHECKPOINT_LESSON_TEXT_LIMIT:
+                raise ValueError(
+                    f"checkpoint lesson {name} exceeds {_CHECKPOINT_LESSON_TEXT_LIMIT} characters"
+                )
+
+        evidence_ids = tuple(self.evidence_ids)
+        if not evidence_ids or any(not isinstance(item, EvidenceId) for item in evidence_ids):
+            raise ValueError("checkpoint lesson requires evidence identifiers")
+        if len(evidence_ids) > _CHECKPOINT_LESSON_METADATA_LIMIT:
+            raise ValueError("checkpoint lesson has too many evidence identifiers")
+        if len(set(evidence_ids)) != len(evidence_ids):
+            raise ValueError("checkpoint lesson evidence identifiers must be unique")
+        object.__setattr__(self, "evidence_ids", evidence_ids)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "trigger": self.trigger,
+            "mistaken_assumption": self.mistaken_assumption,
+            "correction": self.correction,
+            "prevention": self.prevention,
+            "evidence_ids": [str(item) for item in self.evidence_ids],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        fields = {"trigger", "mistaken_assumption", "correction", "prevention", "evidence_ids"}
+        _strict_fields(value, fields, "checkpoint lesson")
+        evidence_ids = value["evidence_ids"]
+        if not isinstance(evidence_ids, list):
+            raise TypeError("checkpoint lesson evidence_ids must be an array")
+        return cls(
+            trigger=_string_value(value["trigger"], "checkpoint lesson trigger"),
+            mistaken_assumption=_string_value(
+                value["mistaken_assumption"], "checkpoint lesson mistaken_assumption"
+            ),
+            correction=_string_value(value["correction"], "checkpoint lesson correction"),
+            prevention=_string_value(value["prevention"], "checkpoint lesson prevention"),
+            evidence_ids=tuple(
+                _identifier_from_value(item, EvidenceId, "checkpoint lesson evidence_id")
+                for item in evidence_ids
+            ),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class CheckpointContent:
     """Identity-free, immutable payload of one checkpoint revision."""
@@ -553,12 +622,21 @@ class CheckpointContent:
     relevant_artifacts: tuple[str, ...]
     verification_performed: tuple[str, ...]
     token_estimate: int
+    lessons: tuple[CheckpointLesson, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.task_objective.strip() or not self.current_state.strip():
             raise ValueError("checkpoint objective and current_state must not be blank")
         if self.token_estimate < 0:
             raise ValueError("token_estimate cannot be negative")
+        lessons = tuple(self.lessons)
+        if len(lessons) > _CHECKPOINT_LESSON_METADATA_LIMIT:
+            raise ValueError("checkpoint content has too many lessons")
+        if any(not isinstance(item, CheckpointLesson) for item in lessons):
+            raise TypeError("checkpoint lessons must be CheckpointLesson values")
+        if len(set(lessons)) != len(lessons):
+            raise ValueError("checkpoint lessons must be unique")
+        object.__setattr__(self, "lessons", lessons)
         for name in (
             "completed_work",
             "remaining_work",
@@ -600,12 +678,19 @@ class CheckpointContent:
             "relevant_artifacts": list(self.relevant_artifacts),
             "verification_performed": list(self.verification_performed),
             "token_estimate": self.token_estimate,
+            "lessons": [item.to_dict() for item in self.lessons],
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
         fields = set(cls.__dataclass_fields__)
-        _strict_fields(value, fields, "checkpoint content")
+        # Canonical payloads written before lessons existed remain readable; every
+        # newly serialized payload contains ``lessons`` explicitly.
+        if set(value) not in (fields, fields - {"lessons"}):
+            _strict_fields(value, fields, "checkpoint content")
+        lessons = value.get("lessons", [])
+        if not isinstance(lessons, list) or not all(isinstance(item, Mapping) for item in lessons):
+            raise TypeError("checkpoint content lessons must be an array of objects")
         return cls(
             _string_value(value["task_objective"], "task_objective"),
             _string_tuple(value["completed_work"], "completed_work"),
@@ -618,6 +703,7 @@ class CheckpointContent:
             _string_tuple(value["relevant_artifacts"], "relevant_artifacts"),
             _string_tuple(value["verification_performed"], "verification_performed"),
             _int_value(value["token_estimate"], "token_estimate"),
+            tuple(CheckpointLesson.from_dict(item) for item in lessons),
         )
 
 
@@ -660,7 +746,13 @@ class CheckpointRevision:
             not isinstance(item, EvidenceReference) for item in self.evidence_references
         ):
             raise ValueError("revision requires structurally valid evidence references")
-        object.__setattr__(self, "evidence_references", tuple(self.evidence_references))
+        evidence_references = tuple(self.evidence_references)
+        evidence_ids = {item.evidence_id for item in evidence_references}
+        if any(
+            not set(lesson.evidence_ids).issubset(evidence_ids) for lesson in self.content.lessons
+        ):
+            raise ValueError("checkpoint lesson evidence must belong to its revision")
+        object.__setattr__(self, "evidence_references", evidence_references)
         _require_aware(self.created_at, "created_at")
 
     def to_dict(self) -> dict[str, object]:

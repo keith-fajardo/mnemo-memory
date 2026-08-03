@@ -515,6 +515,12 @@ receives one bounded reminder to consult Mnemo before making historical or impac
 checkpoint clears that reminder. This is a client-integrated cue, not a replacement for model
 reasoning or transcript capture.
 
+Checkpoint content now has a bounded, immutable, evidence-backed lesson type for corrected
+reasoning or analysis mistakes. A lesson records the trigger, mistaken assumption, correction,
+prevention, and exact revision evidence IDs. It is returned with the checkpoint in a later bounded
+context packet. Mnemo does not infer private reasoning from edits, test failures, or transcripts:
+the agent must explicitly record the lesson, which keeps a later prevention cue honest and scoped.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

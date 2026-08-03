@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib import resources
 from pathlib import Path
@@ -14,6 +15,7 @@ from mnemo_memory.packages.domain import (
     Checkpoint,
     CheckpointContent,
     CheckpointId,
+    CheckpointLesson,
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
@@ -208,6 +210,72 @@ def test_canonical_content_round_trip_is_identity_free() -> None:
     assert not forbidden.intersection(encoded)
     with pytest.raises(ValueError, match="fields are invalid"):
         CheckpointContent.from_dict({**encoded, "supersedes_checkpoint_id": None})
+
+
+def test_checkpoint_lesson_round_trip_is_identity_free_and_evidence_backed() -> None:
+    reference = evidence()
+    legacy = checkpoint(task_scope(), reference)
+    lesson = CheckpointLesson(
+        trigger="The reconciliation total diverged after the timestamp join.",
+        mistaken_assumption="The finance seed and model timestamps used the same grain.",
+        correction="Compare values at the documented business-date grain.",
+        prevention="Verify grain and null behavior before changing a reconciliation join.",
+        evidence_ids=(reference.evidence_id,),
+    )
+    content = replace(CheckpointContent.from_legacy(legacy), lessons=(lesson,))
+
+    encoded = content.to_dict()
+    assert CheckpointContent.from_dict(encoded) == content
+    assert encoded["lessons"] == [lesson.to_dict()]
+    assert "checkpoint_id" not in encoded["lessons"][0]
+    assert "checkpoint_revision_id" not in encoded["lessons"][0]
+
+    revision = CheckpointRevision(
+        revision_id=CheckpointRevisionId.new(),
+        checkpoint_id=legacy.checkpoint_id,
+        revision_number=1,
+        predecessor_revision_id=None,
+        scope=legacy.scope,
+        content=content,
+        status=CheckpointStatus.ACTIVE,
+        evidence_references=(reference,),
+        created_at=NOW,
+    )
+    assert CheckpointRevision.from_dict(revision.to_dict()) == revision
+
+
+def test_checkpoint_lesson_rejects_missing_or_unrelated_evidence() -> None:
+    reference = evidence()
+    with pytest.raises(ValueError, match="requires evidence identifiers"):
+        CheckpointLesson("trigger", "assumption", "correction", "prevention", ())
+
+    legacy = checkpoint(task_scope(), reference)
+    lesson = CheckpointLesson(
+        "trigger",
+        "assumption",
+        "correction",
+        "prevention",
+        (EvidenceId.new(),),
+    )
+    content = replace(CheckpointContent.from_legacy(legacy), lessons=(lesson,))
+    with pytest.raises(ValueError, match="must belong to its revision"):
+        CheckpointRevision(
+            CheckpointRevisionId.new(),
+            legacy.checkpoint_id,
+            1,
+            None,
+            legacy.scope,
+            content,
+            CheckpointStatus.ACTIVE,
+            (reference,),
+            NOW,
+        )
+
+
+def test_old_canonical_content_without_lessons_remains_readable() -> None:
+    encoded = CheckpointContent.from_legacy(checkpoint(task_scope(), evidence())).to_dict()
+    encoded.pop("lessons")
+    assert CheckpointContent.from_dict(encoded).lessons == ()
 
 
 def test_canonical_revision_round_trip_keeps_ids_distinct() -> None:

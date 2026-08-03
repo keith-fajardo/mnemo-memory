@@ -97,6 +97,9 @@ def create_server(port: McpContextPort) -> FastMCP:
         remaining_work: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         decisions: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         failures: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
+        lessons: Annotated[
+            list[dict[str, object]] | None, Field(default=None, max_length=16)
+        ] = None,
         blockers: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         relevant_files: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         relevant_artifacts: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
@@ -123,6 +126,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "remaining_work": remaining_work,
                 "decisions": decisions,
                 "failures": failures,
+                "lessons": lessons,
                 "blockers": blockers,
                 "relevant_files": relevant_files,
                 "relevant_artifacts": relevant_artifacts,

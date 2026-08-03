@@ -284,8 +284,9 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
         "Before finishing or compacting this task, call Mnemo save_checkpoint with this project "
         f"scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
         "Create or revise the active checkpoint with a concise objective, current state, "
-        "decisions, "
-        "verification, evidence, and next action. Do not include a full transcript."
+        "decisions, verification, evidence, and next action. When a reasoning or analysis "
+        "mistake was corrected, include a lesson: trigger, mistaken assumption, correction, "
+        "prevention, and the IDs of its supporting evidence. Do not include a full transcript."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)
@@ -318,5 +319,6 @@ def _dirty_session_instruction() -> str:
     return (
         "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
         "decisions, verification, or impact, check the stored Mnemo context; save a concise "
-        "checkpoint before the task ends."
+        "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
+        "was corrected."
     )

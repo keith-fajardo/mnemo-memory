@@ -71,7 +71,11 @@ prove a structural difference, the connected agent receives a short list of adde
 declarations and resolved relationships at session start and in the checkpoint reminder. This is a
 useful factual cue that a model or file changed; Mnemo does not pretend it can infer the reason
 from source text. The checkpoint is where the agent records why the change was made, what failed,
-and what was verified.
+and what was verified. When it corrects a reasoning mistake, it should also save a compact
+**lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to
+avoid it next time. A later agent receives that lesson with the task handoff. Mnemo does not guess
+private reasoning from a diff or a failed test; it preserves a correction only when the agent
+records it explicitly.
 
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.
@@ -130,7 +134,8 @@ fresh handoff when needed. It still uses the typed `save_checkpoint` tool, so Mn
 store a raw conversation. The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
-> exact next action.
+> exact next action. If you corrected an analysis mistake, also save its trigger, mistaken
+> assumption, correction, prevention, and evidence IDs as a lesson.
 
 In the next fresh session, ask:
 

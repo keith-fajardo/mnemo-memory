@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from mnemo_memory.packages.application import (
 )
 from mnemo_memory.packages.domain import (
     CheckpointContent,
+    CheckpointLesson,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -147,6 +149,28 @@ def test_runtime_persists_checkpoint_across_instances_and_isolates_directories(
         runtime_c.checkpoint_service.get(
             GetCheckpoint(scope_value, created.aggregate.checkpoint_id)
         )
+
+
+def test_runtime_preserves_reasoning_lesson_across_reopen(tmp_path: Path) -> None:
+    configuration = LocalConfig.defaults(tmp_path / "lesson runtime")
+    scope_value = scope()
+    reference = evidence()
+    lesson = CheckpointLesson(
+        "A test showed the expected and actual values had different grains.",
+        "A timestamp join was assumed to represent the Finance business day.",
+        "Use the documented business-date grain for reconciliation.",
+        "Verify both input grains before proposing a join change.",
+        (reference.evidence_id,),
+    )
+    with build_checkpoint_runtime(configuration) as runtime:
+        created = runtime.checkpoint_service.create(
+            CreateCheckpoint(scope_value, replace(content(), lessons=(lesson,)), (reference,))
+        )
+    with build_checkpoint_runtime(configuration) as runtime:
+        restored = runtime.checkpoint_service.get(
+            GetCheckpoint(scope_value, created.aggregate.checkpoint_id)
+        )
+    assert restored.revision.content.lessons == (lesson,)
 
 
 def test_runtime_rejects_corrupt_and_newer_databases_without_fallback(tmp_path: Path) -> None:

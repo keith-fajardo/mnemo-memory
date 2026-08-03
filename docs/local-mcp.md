@@ -26,6 +26,12 @@ and structurally valid evidence references. All operations retain the submitted 
 provenance. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
 `expected_revision_id`; `abandon` also requires a nonblank `reason`.
 
+For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up to 16 canonical
+`lessons`. Each lesson has a nonblank `trigger`, `mistaken_assumption`, `correction`, and
+`prevention`, plus `evidence_ids` that must reference evidence submitted for that exact revision.
+Mnemo preserves the lesson in the immutable checkpoint content and returns it in the later context
+packet. It never infers a lesson from a transcript, source diff, or model output.
+
 ```json
 {
   "operation": "create",

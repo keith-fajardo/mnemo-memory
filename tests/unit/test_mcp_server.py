@@ -93,6 +93,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is False
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[1].inputSchema["properties"]
+    assert "lessons" in tools[1].inputSchema["properties"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
 
@@ -164,6 +165,35 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_preserves_an_evidence_backed_reasoning_lesson(tmp_path: Path) -> None:
+    lesson = {
+        "trigger": "A reconciliation test disagreed with the finance seed.",
+        "mistaken_assumption": "Both inputs used the same date grain.",
+        "correction": "Compare at the documented business-date grain.",
+        "prevention": "Check grain and null handling before changing a join.",
+        "evidence_ids": [EVIDENCE["evidence_id"]],
+    }
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "lesson")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        port.save_checkpoint(save_payload(lessons=[lesson]))
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+        assert packet.active_task_checkpoint is not None
+        content = packet.active_task_checkpoint.content
+        assert '"lessons"' in content
+        assert "Check grain and null handling" in content
+
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.save_checkpoint(
+                save_payload(
+                    task_id="99999999-9999-4999-8999-999999999999",
+                    evidence_references=[
+                        {**EVIDENCE, "evidence_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+                    ],
+                    lessons=[lesson],
+                )
+            )
 
 
 def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) -> None:

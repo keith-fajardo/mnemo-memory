@@ -85,6 +85,12 @@ process—the agent can call `get_context` against the **same Mnemo data directo
 Mnemo returns that checkpoint, not a guessed summary or a full transcript. Later revisions retain
 the same logical checkpoint identity and preserve earlier evidence.
 
+When an agent corrects a reasoning mistake, it can save a compact **lesson** too: what triggered
+the mistake, the mistaken assumption, the evidence-backed correction, and the prevention step. A
+later session then receives the lesson—not merely a vague “test failed” note—so it can avoid the
+same bad line of analysis. Mnemo does not claim to infer a model's private reasoning from an edit
+or test output; the agent records a lesson explicitly with its checkpoint.
+
 Running `mnemo-memory init` **does not** make the current directory memorable. It only creates or
 opens the local Mnemo store. From the repository you want remembered, run one connection command
 with `--auto-memory`; it creates a private project binding, records the first supported-language

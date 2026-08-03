@@ -32,6 +32,7 @@ from mnemo_memory.packages.application.unified_context import (
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointId,
+    CheckpointLesson,
     CheckpointRevisionId,
     CodeSnapshotId,
     ContextBudget,
@@ -208,6 +209,7 @@ def _content(request: Mapping[str, object]) -> CheckpointContent:
         relevant_artifacts=_strings(request, "relevant_artifacts"),
         verification_performed=_strings(request, "verification_performed"),
         token_estimate=_integer(request.get("token_estimate")),
+        lessons=_lessons(request),
     )
 
 
@@ -227,6 +229,15 @@ def _strings(request: Mapping[str, object], name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{name} must be an array of strings")
     return tuple(value)
+
+
+def _lessons(request: Mapping[str, object]) -> tuple[CheckpointLesson, ...]:
+    value = request.get("lessons", [])
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+        raise ValueError("lessons must be an array of objects")
+    return tuple(CheckpointLesson.from_dict(item) for item in value)
 
 
 def _string(request: Mapping[str, object], name: str, *, default: str | None = None) -> str:
