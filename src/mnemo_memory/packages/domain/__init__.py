@@ -1,5 +1,6 @@
 """Pure Mnemo domain identifiers and immutable value objects."""
 
+from .approved_episodic_events import ApprovedEpisodicEvent, ApprovedEventKind
 from .code_structure import (
     CodeEdge,
     CodeEdgeKind,
@@ -90,6 +91,8 @@ from .models import (
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "AgentId",
+    "ApprovedEpisodicEvent",
+    "ApprovedEventKind",
     "ArtifactCurrentness",
     "BudgetOverride",
     "Checkpoint",

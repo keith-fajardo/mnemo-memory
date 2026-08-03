@@ -5,6 +5,8 @@ import pytest
 
 from mnemo_memory.packages.domain import (
     AgentId,
+    ApprovedEpisodicEvent,
+    ApprovedEventKind,
     Checkpoint,
     CheckpointEventKind,
     CheckpointId,
@@ -340,3 +342,32 @@ def test_domain_value_objects_are_immutable() -> None:
     scope = task_scope()
     with pytest.raises(FrozenInstanceError):
         scope.level = ScopeLevel.PERSONAL  # type: ignore[misc]
+
+
+def test_approved_episodic_event_is_explicit_scoped_and_round_trips() -> None:
+    item_scope = task_scope()
+    event = ApprovedEpisodicEvent.create(
+        scope=item_scope,
+        kind=ApprovedEventKind.FAILURE,
+        summary="The reconciliation query used the wrong business-date grain.",
+        source_event_key="fixture:failure:1",
+        occurred_at=NOW,
+        evidence_references=(evidence(),),
+    )
+
+    assert ApprovedEpisodicEvent.from_dict(event.to_dict()) == event
+    assert (
+        ApprovedEpisodicEvent.create(
+            scope=item_scope,
+            kind=ApprovedEventKind.FAILURE,
+            summary=event.summary,
+            source_event_key="fixture:failure:1",
+            occurred_at=NOW,
+            evidence_references=event.evidence_references,
+        ).event_id
+        == event.event_id
+    )
+    malformed = event.to_dict()
+    malformed["transcript"] = "not permitted"
+    with pytest.raises(ValueError, match="fields"):
+        ApprovedEpisodicEvent.from_dict(malformed)
