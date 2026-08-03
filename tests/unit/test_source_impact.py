@@ -207,3 +207,55 @@ def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_
 
     assert [item.symbol.qualified_name for item in validation.symbols] == ["service.process"]
     assert [item.symbol.qualified_name for item in other.symbols] == ["service.process"]
+
+
+def test_go_import_aliases_resolve_only_unique_local_package_calls(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "internal" / "orders").mkdir(parents=True)
+    (root / "internal" / "orders" / "orders.go").write_text("package orders\nfunc Process() {}\n")
+    (root / "service").mkdir()
+    (root / "service" / "service.go").write_text(
+        "package service\n"
+        'import local_orders "example.com/demo/internal/orders"\n'
+        "func Run() { local_orders.Process() }\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(
+            item_scope,
+            "internal.orders.orders.Process",
+            SourceImpactDirection.DEPENDENTS,
+        )
+    )
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.service.Run"]
+    calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
+    assert any(
+        edge.target == "local_orders.Process" and edge.target_symbol_id is not None
+        for edge in calls
+    )
+
+
+def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "internal" / "orders").mkdir(parents=True)
+    (root / "internal" / "orders" / "first.go").write_text("package orders\nfunc Process() {}\n")
+    (root / "internal" / "orders" / "second.go").write_text("package orders\nfunc Process() {}\n")
+    (root / "service").mkdir()
+    (root / "service" / "service.go").write_text(
+        "package service\n"
+        'import "example.com/demo/internal/orders"\n'
+        "func Run() { orders.Process() }\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
+
+    assert any(edge.target == "orders.Process" and edge.target_symbol_id is None for edge in calls)

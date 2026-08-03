@@ -542,6 +542,14 @@ class SourceStructureParser:
         ):
             import_target, marker, imported_member = imported_target.partition("|")
             if marker:
+                if import_target.startswith("go:"):
+                    member = remainder if separator else imported_member
+                    candidates.extend(
+                        SourceStructureParser._go_imported_member_candidates(
+                            import_target.removeprefix("go:"), member, symbols_by_name
+                        )
+                    )
+                    continue
                 module_id = SourceStructureParser._resolve_import_target(
                     source_path, import_target, modules_by_name, modules_by_path
                 )
@@ -569,6 +577,32 @@ class SourceStructureParser:
                     candidates.append(imported)
         unique = {item.symbol_id: item for item in candidates}
         return next(iter(unique)) if len(unique) == 1 else None
+
+    @staticmethod
+    def _go_imported_member_candidates(
+        import_target: str, member: str, symbols_by_name: dict[str, CodeSymbol]
+    ) -> tuple[CodeSymbol, ...]:
+        """Resolve an exact Go package member only when its local directory is unique.
+
+        Go imports identify directories, while Mnemo's immutable module symbols
+        identify files. This deliberately creates no import-to-file graph edge.
+        It may link ``alias.Member()`` only when exactly one saved declaration
+        named ``Member`` lives below the exact trailing local package directory.
+        """
+        if not _is_safe_symbol_name(member):
+            return ()
+        target_parts = PurePosixPath(import_target).parts
+        candidates = [
+            symbol
+            for symbol in symbols_by_name.values()
+            if symbol.qualified_name.endswith(f".{member}")
+            and len(PurePosixPath(symbol.relative_path).parent.parts) >= 2
+            and len(PurePosixPath(symbol.relative_path).parent.parts) <= len(target_parts)
+            and target_parts[-len(PurePosixPath(symbol.relative_path).parent.parts) :]
+            == PurePosixPath(symbol.relative_path).parent.parts
+        ]
+        unique = {item.symbol_id: item for item in candidates}
+        return tuple(unique.values()) if len(unique) == 1 else ()
 
     @classmethod
     def _parse_python(
@@ -703,6 +737,12 @@ class SourceStructureParser:
             normalized = target.removeprefix("crate.")
             binding_name = normalized.rsplit(".", maxsplit=1)[-1]
             return ((binding_name, normalized),) if _is_safe_symbol_name(binding_name) else ()
+        if language == "go":
+            alias = _safe_tree_text(node.child_by_field_name("name"), raw)
+            # A missing Go import alias means the final path component is the
+            # package spelling. Dot/blank imports deliberately stay unresolved.
+            binding_name = alias or target.rsplit("/", maxsplit=1)[-1]
+            return ((binding_name, f"go:{target}|"),) if _is_safe_symbol_name(binding_name) else ()
         if language not in {"javascript", "typescript", "tsx"}:
             return ()
         clause = next(
