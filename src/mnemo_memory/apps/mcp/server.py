@@ -52,6 +52,13 @@ def create_server(port: McpContextPort) -> FastMCP:
         ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        include_lifecycle_events: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Include a bounded evidence-bearing checkpoint lifecycle timeline.",
+            ),
+        ] = False,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
@@ -67,6 +74,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "source_query": source_query,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
+                "include_lifecycle_events": include_lifecycle_events,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }

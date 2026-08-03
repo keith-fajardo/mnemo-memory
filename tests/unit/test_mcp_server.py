@@ -103,6 +103,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
+    assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -172,6 +173,28 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_returns_opt_in_scoped_lifecycle_history(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "timeline")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        created = port.save_checkpoint(save_payload())
+        port.save_checkpoint(
+            save_payload(
+                "revise",
+                checkpoint_id=created["checkpoint_id"],
+                expected_revision_id=created["checkpoint_revision_id"],
+                current_state="revised",
+            )
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(context_payload(include_lifecycle_events=True))
+        )
+    assert ["checkpoint_revised" in item.content for item in packet.episodic_memories] == [
+        True,
+        False,
+    ]
+    assert all(item.evidence_references for item in packet.episodic_memories)
 
 
 def test_durable_port_preserves_an_evidence_backed_reasoning_lesson(tmp_path: Path) -> None:
