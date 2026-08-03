@@ -179,17 +179,20 @@ def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) 
         ProjectId.from_string(IDS["project_id"]),
     )
     with build_checkpoint_runtime(config) as runtime:
-        assert runtime.source_structure_repository is not None
-        runtime.source_structure_repository.store_and_activate(
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        repository.store_and_activate(
             PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
         )
 
     with build_checkpoint_runtime(config) as runtime:
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        snapshot = repository.get_active_snapshot(project_scope)
+        assert snapshot is not None
         port = DurableMcpContextPort(
             runtime.checkpoint_service,
-            UnifiedContextService(
-                runtime.checkpoint_service, None, runtime.source_structure_repository
-            ),
+            UnifiedContextService(runtime.checkpoint_service, None, repository),
         )
         packet = ContextPacket.from_dict(
             port.get_context(context_payload(source_query="build_orders"))
@@ -219,16 +222,19 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
         ProjectId.from_string(IDS["project_id"]),
     )
     with build_checkpoint_runtime(config) as runtime:
-        assert runtime.source_structure_repository is not None
-        runtime.source_structure_repository.store_and_activate(
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        repository.store_and_activate(
             PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
         )
     with build_checkpoint_runtime(config) as runtime:
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        snapshot = repository.get_active_snapshot(project_scope)
+        assert snapshot is not None
         port = DurableMcpContextPort(
             runtime.checkpoint_service,
-            UnifiedContextService(
-                runtime.checkpoint_service, None, runtime.source_structure_repository
-            ),
+            UnifiedContextService(runtime.checkpoint_service, None, repository),
         )
         packet = ContextPacket.from_dict(
             port.get_context(
@@ -237,6 +243,7 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
                         "symbol": "core",
                         "direction": "dependents",
                         "maximum_depth": 1,
+                        "snapshot_id": str(snapshot.snapshot_id),
                     }
                 )
             )

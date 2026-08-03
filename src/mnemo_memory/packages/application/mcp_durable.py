@@ -33,6 +33,7 @@ from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointId,
     CheckpointRevisionId,
+    CodeSnapshotId,
     ContextBudget,
     DbtNodeId,
     DbtSnapshotId,
@@ -85,6 +86,7 @@ class DurableMcpContextPort:
                     source_impact.get("maximum_depth"),
                     int(source_impact.get("maximum_symbols", 100)),
                     int(source_impact.get("maximum_edges", 200)),
+                    _optional_id(source_impact, "snapshot_id", CodeSnapshotId),
                 )
             )
             if lineage is not None or source_query is not None or impact is not None:

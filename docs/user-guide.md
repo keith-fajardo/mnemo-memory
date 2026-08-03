@@ -55,6 +55,8 @@ mnemo-memory memory refresh
 The result lists only saved internal relationships that Mnemo can prove from syntax, along with
 depth, snapshot identity, and a clear `unknown` currentness label when no fresh source-state proof
 was supplied. It is a useful change-planning aid, not a promise that every runtime effect was found.
+An agent can also request an exact immutable snapshot ID through `get_context` when it needs to
+compare a past structural state rather than the active one; otherwise Mnemo uses the active snapshot.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
 Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. It
 rebuilds the bounded structural snapshot from current local syntax and preserves the previous

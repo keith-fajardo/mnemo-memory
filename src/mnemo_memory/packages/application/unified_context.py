@@ -20,6 +20,7 @@ from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeEdgeKind,
     CodeSnapshot,
+    CodeSnapshotId,
     CodeSymbol,
     CodeSymbolId,
     ConflictState,
@@ -73,6 +74,7 @@ class ContextSourceImpactQuery:
     maximum_depth: int | None = None
     maximum_symbols: int = 100
     maximum_edges: int = 200
+    snapshot_id: CodeSnapshotId | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol.strip() or len(self.symbol) > 512:
@@ -302,7 +304,11 @@ class UnifiedContextService:
             request.scope.workspace_id,
             request.scope.project_id,
         )
-        snapshot = self._source.get_active_snapshot(scope)
+        snapshot = (
+            self._source.get_snapshot(scope, query.snapshot_id)
+            if query.snapshot_id is not None
+            else self._source.get_active_snapshot(scope)
+        )
         if snapshot is None:
             return _with_omission(
                 packet, "source-impact", OmissionReason.LOWER_RANK, "no source snapshot"
