@@ -68,12 +68,12 @@ automatic memory enabled, Mnemo refreshes at session start, after a checkpoint s
 unsaved changed session is stopped. It rebuilds the bounded structural snapshot from current local
 syntax and preserves the previous snapshot for comparison.
 
-With automatic task memory, Mnemo also compares the fresh snapshot with the prior one. When it can
-prove a structural difference, the connected agent receives a short list of added/removed
-declarations and resolved relationships at session start and in the checkpoint reminder. This is a
-useful factual cue that a model or file changed; Mnemo does not pretend it can infer the reason
-from source text. The checkpoint is where the agent records why the change was made, what failed,
-and what was verified. When it corrects a reasoning mistake, it should also save a compact
+With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
+fresh session, the connected agent receives a short list of its added/removed declarations and
+resolved relationships, tied to the source snapshot Mnemo just refreshed. This is a useful factual
+cue that a model or file changed; Mnemo does not pretend it can infer the reason from source text.
+The checkpoint is where the agent records why the change was made, what failed, and what was
+verified. When it corrects a reasoning mistake, it should also save a compact
 **lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to
 avoid it next time. A later agent receives that lesson with the task handoff. Mnemo does not guess
 private reasoning from a diff or a failed test; it preserves a correction only when the agent

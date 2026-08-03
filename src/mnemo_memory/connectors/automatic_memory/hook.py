@@ -84,7 +84,7 @@ class AutomaticMemoryHook:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
             return {}
         if event_name == "SessionStart":
-            refreshed = self._refresh_source_structure(binding)
+            refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
             return self._context_output(
                 _resume_instruction(binding.checkpoint_scope.to_dict(), refreshed),
                 attached_context=self._attached_context(binding.checkpoint_scope),
@@ -151,7 +151,9 @@ class AutomaticMemoryHook:
         # Lifecycle hooks must fail open.  The stable code contains no local path or event payload.
         return {"systemMessage": code}
 
-    def _refresh_source_structure(self, binding: MemoryProjectBinding) -> _SourceRefresh:
+    def _refresh_source_structure(
+        self, binding: MemoryProjectBinding, *, include_latest_transition: bool = False
+    ) -> _SourceRefresh:
         """Best-effort local refresh; failure never blocks a coding client session."""
         try:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
@@ -162,10 +164,19 @@ class AutomaticMemoryHook:
                     SourceStructureParseRequest(binding.scope, binding.project_root)
                 )
             )
-            if previous is None or previous.snapshot_id == stored.snapshot.snapshot_id:
+            if previous is None:
                 return _SourceRefresh(stored.snapshot.source_digest)
+            if previous.snapshot_id == stored.snapshot.snapshot_id:
+                if not include_latest_transition:
+                    return _SourceRefresh(stored.snapshot.source_digest)
+                transition = repository.latest_transition(binding.scope)
+                if transition is None:
+                    return _SourceRefresh(stored.snapshot.source_digest)
+                before, after = transition
+            else:
+                before, after = previous, stored.snapshot
             diff = SourceImpactService(repository).diff(
-                binding.scope, previous.snapshot_id, stored.snapshot.snapshot_id
+                binding.scope, before.snapshot_id, after.snapshot_id
             )
             return _SourceRefresh(
                 stored.snapshot.source_digest,
@@ -347,7 +358,7 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
             "changed in Mnemo's bounded structural projection. Do not infer a reason from that."
         )
     instruction = (
-        " Mnemo observed a structural change since its prior snapshot: "
+        " Mnemo observed a structural change in its most recent saved transition: "
         f"{changes.added_symbol_count} declaration(s) added, "
         f"{changes.removed_symbol_count} removed, "
         f"{changes.added_edge_count} resolved relationship(s) added, and "

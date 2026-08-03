@@ -652,6 +652,18 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     assert "private changed body" not in instruction
     assert str(project) not in instruction
 
+    later = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "third", "cwd": str(project)}
+    )
+    later_output = later["hookSpecificOutput"]
+    assert isinstance(later_output, dict)
+    later_instruction = str(later_output["additionalContext"])
+    assert "most recent saved transition" in later_instruction
+    assert "service.py:service.current" in later_instruction
+    assert "service.py:service.initial" in later_instruction
+    assert "private initial body" not in later_instruction
+    assert "private changed body" not in later_instruction
+
 
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:
     project = tmp_path / "private repo"

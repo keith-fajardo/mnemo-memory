@@ -149,6 +149,11 @@ for the enabled project: modules, imports, declarations, and explicit syntactic 
 development branch currently supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++,
 C#, Java, and PHP. Mnemo does not claim an unproven runtime call graph.
 
+At a fresh session, Mnemo also shows the bounded added/removed declarations and resolved
+relationships from the most recent proved structural transition. It is a cue to investigate a
+recent code change, not a claim about why the change was made; the saved checkpoint supplies that
+task reasoning and evidence.
+
 For code orientation, the agent can include a `source_query` (a symbol or relative-path fragment)
 in `get_context`. Mnemo returns matching structural facts plus declared module imports and explicit
 syntactic calls, each tied to the exact local snapshot. If an import points unambiguously to another

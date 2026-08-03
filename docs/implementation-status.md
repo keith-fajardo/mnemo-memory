@@ -513,9 +513,10 @@ to that project scope only for structural lookups, so a checkpoint handoff and a
 lineage can appear together without weakening cross-project isolation.
 
 Lifecycle source refresh now compares immutable structural snapshots and provides a bounded,
-metadata-only added/removed declaration and relationship summary to the connected agent at session
-start and in its checkpoint reminder. It stores no source bodies or transcript; intent remains
-explicit checkpoint evidence rather than an inference from a diff.
+metadata-only added/removed declaration and relationship summary from the most recent persisted
+transition to the connected agent at session start and in its checkpoint reminder. It stores no
+source bodies or transcript; intent remains explicit checkpoint evidence rather than an inference
+from a diff.
 
 Supported Codex and Claude Code integrations also now use their prompt-boundary lifecycle event
 without inspecting submitted prompt text. After a tracked project mutation, the next user turn
