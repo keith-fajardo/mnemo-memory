@@ -68,7 +68,7 @@ class ReferenceCheckpointLifecycleEventRepository:
         self._keys: dict[str, EventId] = {}
         self._ordered: list[EventId] = []
 
-    def append(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
+    def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
         self._require_scope(event.scope)
         revision = self._checkpoints.get_revision(
             event.scope,
@@ -94,14 +94,14 @@ class ReferenceCheckpointLifecycleEventRepository:
         self._ordered.append(event.event_id)
         return EpisodicEventStoreResult(event, idempotent=False)
 
-    def get(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent:
+    def get_event(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent:
         self._require_scope(scope)
         event = self._events.get(event_id)
         if event is None or event.scope != scope:
             raise EpisodicEventNotFound("episodic event was not found")
         return event
 
-    def list(
+    def list_events(
         self,
         scope: MemoryScope,
         *,

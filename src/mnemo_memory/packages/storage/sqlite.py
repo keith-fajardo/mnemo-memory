@@ -18,7 +18,9 @@ from mnemo_memory.packages.domain import (
     Checkpoint,
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointEventKind,
     CheckpointId,
+    CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
@@ -31,6 +33,7 @@ from mnemo_memory.packages.domain import (
     CodeSymbolId,
     CodeSymbolKind,
     DbtSnapshotId,
+    EventId,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -59,8 +62,13 @@ from .contracts import (
     CheckpointNotFound,
     CheckpointPage,
     DuplicateCheckpoint,
+    EpisodicEventNotFound,
+    EpisodicEventPage,
+    EpisodicEventStorageFailure,
+    EpisodicEventStoreResult,
     InvalidAbandonmentReason,
     InvalidCheckpointScope,
+    InvalidEpisodicEventScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
     ManifestNodeNotFound,
@@ -75,7 +83,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -204,6 +212,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 5:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 5
+            if version < 6:
+                _execute_sql_script(
+                    connection, _migration_text("0006_checkpoint_lifecycle_events.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (6, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 6:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -527,6 +546,113 @@ class SQLiteCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
+        self._require_checkpoint_scope(event.scope)
+        try:
+            with self._transaction() as connection:
+                revision = connection.execute(
+                    "SELECT revision.* FROM checkpoint_aggregates AS aggregate "
+                    "JOIN checkpoint_revision_records AS revision "
+                    "ON revision.checkpoint_id = aggregate.checkpoint_id "
+                    "WHERE aggregate.checkpoint_id = ? AND revision.checkpoint_revision_id = ? "
+                    "AND aggregate.owner_id = ? AND aggregate.visibility = ? "
+                    "AND aggregate.workspace_id IS ? AND aggregate.project_id = ? "
+                    "AND aggregate.session_id = ? AND aggregate.task_id = ?",
+                    (
+                        str(event.checkpoint_id),
+                        str(event.revision_id),
+                        *self._scope_values(event.scope),
+                    ),
+                ).fetchone()
+                if revision is None:
+                    raise InvalidEpisodicEventScope("event revision is unavailable in this scope")
+                if (
+                    int(revision["revision_number"]) != event.revision_number
+                    or str(revision["created_at"]) != event.occurred_at.isoformat()
+                ):
+                    raise InvalidEpisodicEventScope("event does not match its checkpoint revision")
+                existing = connection.execute(
+                    "SELECT * FROM checkpoint_lifecycle_events WHERE idempotency_key = ?",
+                    (event.idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    stored = self._event_from_row(connection, existing, event.scope)
+                    if stored == event:
+                        return EpisodicEventStoreResult(stored, idempotent=True)
+                    raise InvalidEpisodicEventScope("event idempotency key conflicts")
+                connection.execute(
+                    "INSERT INTO checkpoint_lifecycle_events("
+                    "event_id,idempotency_key,event_kind,checkpoint_id,checkpoint_revision_id,"
+                    "revision_number,owner_id,visibility,workspace_id,project_id,session_id,task_id,"
+                    "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(event.event_id),
+                        event.idempotency_key,
+                        event.kind.value,
+                        str(event.checkpoint_id),
+                        str(event.revision_id),
+                        event.revision_number,
+                        *self._scope_values(event.scope),
+                        event.occurred_at.isoformat(),
+                    ),
+                )
+                return EpisodicEventStoreResult(event, idempotent=False)
+        except (InvalidEpisodicEventScope, ValueError, TypeError):
+            raise
+        except sqlite3.IntegrityError as error:
+            raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
+        except sqlite3.Error as error:
+            raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
+
+    def get_event(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent:
+        self._require_checkpoint_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM checkpoint_lifecycle_events WHERE event_id = ? AND owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ?",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicEventNotFound("episodic event was not found")
+                return self._event_from_row(connection, row, scope)
+        except EpisodicEventNotFound:
+            raise
+        except sqlite3.Error as error:
+            raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
+
+    def list_events(
+        self,
+        scope: MemoryScope,
+        *,
+        checkpoint_id: CheckpointId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicEventPage:
+        self._require_checkpoint_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        checkpoint_filter = "" if checkpoint_id is None else " AND checkpoint_id = ?"
+        values: tuple[object, ...] = (*self._scope_values(scope),)
+        if checkpoint_id is not None:
+            values += (str(checkpoint_id),)
+        values += (limit + 1, offset)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM checkpoint_lifecycle_events WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ?"
+                    + checkpoint_filter
+                    + " ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
+                    values,
+                ).fetchall()
+                items = tuple(self._event_from_row(connection, row, scope) for row in rows[:limit])
+        except sqlite3.Error as error:
+            raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
+        return EpisodicEventPage(items, offset + limit if len(rows) > limit else None)
 
     def store_and_activate(
         self,
@@ -1517,6 +1643,29 @@ class SQLiteCheckpointRepository:
                 for item in evidence_rows
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _event_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> CheckpointLifecycleEvent:
+        revision_row = connection.execute(
+            "SELECT * FROM checkpoint_revision_records WHERE checkpoint_revision_id = ?",
+            (row["checkpoint_revision_id"],),
+        ).fetchone()
+        if revision_row is None:
+            raise EpisodicEventStorageFailure("episodic event revision is unavailable")
+        revision = SQLiteCheckpointRepository._revision_from_row(connection, revision_row, scope)
+        return CheckpointLifecycleEvent(
+            EventId.from_string(row["event_id"]),
+            scope,
+            CheckpointEventKind(row["event_kind"]),
+            CheckpointId.from_string(row["checkpoint_id"]),
+            CheckpointRevisionId.from_string(row["checkpoint_revision_id"]),
+            int(row["revision_number"]),
+            datetime.fromisoformat(row["occurred_at"]),
+            row["idempotency_key"],
+            revision.evidence_references,
         )
 
     @staticmethod

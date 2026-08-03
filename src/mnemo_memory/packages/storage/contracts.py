@@ -198,11 +198,11 @@ class EpisodicEventPage:
 class CheckpointLifecycleEventRepository(Protocol):
     """Scoped append-only storage for evidence-bearing checkpoint lifecycle facts."""
 
-    def append(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult: ...
+    def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult: ...
 
-    def get(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent: ...
+    def get_event(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent: ...
 
-    def list(
+    def list_events(
         self,
         scope: MemoryScope,
         *,
