@@ -66,6 +66,13 @@ Run `memory refresh` after edits when you are not using an automatic client life
 rebuilds the bounded structural snapshot from current local syntax and preserves the previous
 snapshot for comparison.
 
+With automatic task memory, Mnemo also compares the fresh snapshot with the prior one. When it can
+prove a structural difference, the connected agent receives a short list of added/removed
+declarations and resolved relationships at session start and in the checkpoint reminder. This is a
+useful factual cue that a model or file changed; Mnemo does not pretend it can infer the reason
+from source text. The checkpoint is where the agent records why the change was made, what failed,
+and what was verified.
+
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.
 
@@ -93,6 +100,13 @@ mnemo-memory agent
 The guide explains the steps in your terminal, can initialize your local store after confirmation,
 and shows the exact connection command for Codex, Claude Code, or both. It does not call a model,
 change a client registration without your confirmation, or inspect your source code.
+
+After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
+memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo injects a private session-start instruction:
+the agent must check bounded Mnemo context before it claims knowledge of earlier decisions, edits,
+verification, or impact. It also tells the agent how to ask for relevant saved structure. This is a
+reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
+Mnemo can read a model's private reasoning.
 
 The short manual equivalent is:
 

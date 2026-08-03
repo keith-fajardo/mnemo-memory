@@ -21,7 +21,13 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
     exclusive_local_file_lock,
 )
-from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
+from mnemo_memory.packages.domain import CodeSymbol
+from mnemo_memory.packages.project_index import (
+    SourceImpactService,
+    SourceSnapshotDiff,
+    SourceStructureParser,
+    SourceStructureParseRequest,
+)
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 ClientName = Literal["codex", "claude-code"]
@@ -31,6 +37,8 @@ _SAVE_TOOL_NAMES = {
     "mcp__mnemo_memory__save_checkpoint",
 }
 _MUTATING_TOOLS = {"Bash", "apply_patch", "Edit", "Write"}
+_MAX_CHANGE_SYMBOLS = 12
+_MAX_CHANGE_SYMBOL_LABEL_LENGTH = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,16 +74,16 @@ class AutomaticMemoryHook:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
             return {}
         if event_name == "SessionStart":
-            source_digest = self._refresh_source_structure(binding)
+            refreshed = self._refresh_source_structure(binding)
             return self._context_output(
-                _resume_instruction(binding.checkpoint_scope.to_dict(), source_digest)
+                _resume_instruction(binding.checkpoint_scope.to_dict(), refreshed)
             )
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
-            self._refresh_source_structure(binding)
+            refreshed = self._refresh_source_structure(binding)
             return self._checkpoint_output(
-                _checkpoint_instruction(binding.checkpoint_scope.to_dict())
+                _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
             )
         return {}
 
@@ -103,19 +111,81 @@ class AutomaticMemoryHook:
         # Lifecycle hooks must fail open.  The stable code contains no local path or event payload.
         return {"systemMessage": code}
 
-    def _refresh_source_structure(self, binding: MemoryProjectBinding) -> str | None:
+    def _refresh_source_structure(self, binding: MemoryProjectBinding) -> _SourceRefresh:
         """Best-effort local refresh; failure never blocks a coding client session."""
         try:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
             repository.migrate()
+            previous = repository.get_active_snapshot(binding.scope)
             stored = repository.store_and_activate(
                 SourceStructureParser().parse(
                     SourceStructureParseRequest(binding.scope, binding.project_root)
                 )
             )
-            return stored.snapshot.source_digest
+            if previous is None or previous.snapshot_id == stored.snapshot.snapshot_id:
+                return _SourceRefresh(stored.snapshot.source_digest)
+            diff = SourceImpactService(repository).diff(
+                binding.scope, previous.snapshot_id, stored.snapshot.snapshot_id
+            )
+            return _SourceRefresh(
+                stored.snapshot.source_digest,
+                _SourceChangeSummary.from_diff(diff),
+            )
         except (OSError, ValueError, RuntimeError):
-            return None
+            return _SourceRefresh(None)
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceChangeSummary:
+    """Bounded metadata-only summary; it deliberately contains no source text."""
+
+    added_symbol_count: int
+    removed_symbol_count: int
+    added_edge_count: int
+    removed_edge_count: int
+    added_symbols: tuple[str, ...]
+    removed_symbols: tuple[str, ...]
+
+    @classmethod
+    def from_diff(cls, diff: SourceSnapshotDiff) -> _SourceChangeSummary:
+        # ``SourceSnapshotDiff`` is intentionally structural: safe relative paths and qualified
+        # names only. Keep the hook payload bounded even for a large repository rewrite.
+        return cls(
+            len(diff.added_symbols),
+            len(diff.removed_symbols),
+            len(diff.added_edges),
+            len(diff.removed_edges),
+            _summary_symbols(diff.added_symbols),
+            _summary_symbols(diff.removed_symbols),
+        )
+
+    @property
+    def changed(self) -> bool:
+        return any(
+            (
+                self.added_symbol_count,
+                self.removed_symbol_count,
+                self.added_edge_count,
+                self.removed_edge_count,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceRefresh:
+    digest: str | None
+    changes: _SourceChangeSummary | None = None
+
+
+def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
+    """Return whole safe structural identities; never truncate a symbol into a false fact."""
+    labels = tuple(
+        f"{symbol.relative_path}:{symbol.qualified_name}"
+        for symbol in symbols
+        if len(symbol.relative_path) + len(symbol.qualified_name) + 1
+        <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
+    )
+    return labels[:_MAX_CHANGE_SYMBOLS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,28 +254,55 @@ class _SessionStateStore:
                 temporary.unlink(missing_ok=True)
 
 
-def _resume_instruction(scope: Mapping[str, object], source_digest: str | None) -> str:
+def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:
     instruction = (
         "Mnemo automatic task memory is enabled. Before continuing, call get_context using this "
         f"stored task scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
-        "When the task names a supported-language symbol or relative path, include it as "
-        "source_query to retrieve the matching saved structure. Treat retrieved facts as "
-        "bounded context, not a transcript."
+        "Do not claim that you know prior changes, decisions, verification, or impact until you "
+        "have checked that context. When the task names a supported-language symbol or relative "
+        "path, include it as source_query to retrieve the matching saved structure. Treat "
+        "retrieved facts as bounded context, not a transcript."
     )
-    if source_digest is not None:
+    if refreshed.digest is not None:
         instruction += (
             " For a static dependency or impact request, include this exact "
             "current_source_digest to prove the refreshed source snapshot is current: "
-            f"{source_digest}."
+            f"{refreshed.digest}."
         )
+    if refreshed.changes is not None:
+        instruction += _source_change_instruction(refreshed.changes)
     return instruction
 
 
-def _checkpoint_instruction(scope: Mapping[str, object]) -> str:
-    return (
+def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:
+    instruction = (
         "Before finishing or compacting this task, call Mnemo save_checkpoint with this project "
         f"scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
         "Create or revise the active checkpoint with a concise objective, current state, "
         "decisions, "
         "verification, evidence, and next action. Do not include a full transcript."
     )
+    if refreshed.changes is not None:
+        instruction += _source_change_instruction(refreshed.changes)
+    return instruction
+
+
+def _source_change_instruction(changes: _SourceChangeSummary) -> str:
+    """Tell the agent only what Mnemo can prove about a structural refresh."""
+    if not changes.changed:
+        return (
+            " The source digest changed, but no supported declaration or resolved relationship "
+            "changed in Mnemo's bounded structural projection. Do not infer a reason from that."
+        )
+    instruction = (
+        " Mnemo observed a structural change since its prior snapshot: "
+        f"{changes.added_symbol_count} declaration(s) added, "
+        f"{changes.removed_symbol_count} removed, "
+        f"{changes.added_edge_count} resolved relationship(s) added, and "
+        f"{changes.removed_edge_count} removed."
+    )
+    if changes.added_symbols:
+        instruction += f" Added declarations: {', '.join(changes.added_symbols)}."
+    if changes.removed_symbols:
+        instruction += f" Removed declarations: {', '.join(changes.removed_symbols)}."
+    return instruction

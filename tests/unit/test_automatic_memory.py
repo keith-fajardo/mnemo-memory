@@ -107,6 +107,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "get_context" in str(context)
     assert "source_query" in str(context)
     assert "current_source_digest" in str(context)
+    assert "Do not claim that you know prior changes" in str(context)
     assert str(project) not in str(context)
 
     assert (
@@ -307,6 +308,40 @@ def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointi
     assert result["decision"] == "block"
     assert refreshed is not None
     assert refreshed.snapshot_id != initial.snapshot_id
+    reason = str(result["reason"])
+    assert "Mnemo observed a structural change" in reason
+    assert "service.py:service.current" in reason
+    assert "service.py:service.initial" in reason
+    assert "return 2" not in reason
+    assert str(project) not in reason
+
+
+def test_session_start_reports_a_bounded_prior_structural_change_without_source_text(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    source_file = project / "service.py"
+    source_file.write_text("def initial():\n    return 'private initial body'\n")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
+
+    source_file.write_text("def current():\n    return 'private changed body'\n")
+    result = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+
+    context = result["hookSpecificOutput"]
+    assert isinstance(context, dict)
+    instruction = str(context["additionalContext"])
+    assert "Mnemo observed a structural change" in instruction
+    assert "service.py:service.current" in instruction
+    assert "service.py:service.initial" in instruction
+    assert "private initial body" not in instruction
+    assert "private changed body" not in instruction
+    assert str(project) not in instruction
 
 
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:

@@ -178,4 +178,6 @@ def test_source_repository_finds_symbols_and_bounded_adjacency(
         parsed.snapshot.snapshot_id,
         tuple(edge.target_symbol_id for edge in edges if edge.target_symbol_id is not None),
     )
-    assert {symbol.qualified_name for symbol in resolved} == {"pricing"}
+    # The import edge resolves the module and the explicit imported call resolves the local
+    # function. Both are in-snapshot structural facts, not guessed runtime relationships.
+    assert {symbol.qualified_name for symbol in resolved} == {"pricing", "pricing.total"}

@@ -246,6 +246,18 @@ snapshot by default, or can name an immutable snapshot when an agent needs to re
 specific earlier state. A source map is called current only when its exact fresh source digest
 matches; “active” alone is never treated as proof that files have not changed.
 
+When Mnemo observes a supported structural change between snapshots, it gives the connected agent
+a short factual summary of added/removed declarations and proven relationships at session start
+and when it asks for a checkpoint. That helps the agent notice that work changed. It still does
+not guess **why** it changed: the agent records that decision, failed approach, and verification in
+the checkpoint it saves.
+
+**Must I teach every agent to use Mnemo?** Not for the supported `--auto-memory` setup. Mnemo
+injects a session-start instruction telling Codex or Claude Code to check context before claiming
+knowledge of earlier work or impact, and how to request saved structure for a named symbol/file.
+It does not read every subsequent prompt or a model's private reasoning, so this is a transparent
+fresh-session reminder—not surveillance or a hidden automatic transcript recorder.
+
 **How does a new agent get it?** The new agent connects to the same Mnemo store and calls
 `get_context` for the same scope. It receives the latest active checkpoint and any requested dbt
 facts, with provenance. If no checkpoint was saved, it receives no hidden history.

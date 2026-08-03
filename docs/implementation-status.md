@@ -504,6 +504,11 @@ enabled for the same canonical repository. Unified context deliberately translat
 to that project scope only for structural lookups, so a checkpoint handoff and authoritative dbt
 lineage can appear together without weakening cross-project isolation.
 
+Lifecycle source refresh now compares immutable structural snapshots and provides a bounded,
+metadata-only added/removed declaration and relationship summary to the connected agent at session
+start and in its checkpoint reminder. It stores no source bodies or transcript; intent remains
+explicit checkpoint evidence rather than an inference from a diff.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,
