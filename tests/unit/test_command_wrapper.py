@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from mnemo_memory.packages.application.command_wrapper import (
+    COMMAND_HOOK_ENTRY_POINT_GROUP,
     COMMAND_NOT_EXECUTABLE_EXIT_CODE,
     COMMAND_NOT_FOUND_EXIT_CODE,
     STRICT_HOOK_FAILURE_EXIT_CODE,
@@ -21,6 +22,7 @@ from mnemo_memory.packages.application.command_wrapper import (
     HookRegistration,
     HookStatus,
     HookWarning,
+    discover_command_hooks,
 )
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
@@ -320,3 +322,46 @@ def test_generic_application_kernel_has_no_connector_or_dbt_integration_imports(
 
     assert "mnemo_memory.connectors" not in source
     assert "connectors.dbt" not in source
+
+
+class FakeEntryPoint:
+    def __init__(self, name: str, value: str, loaded: object | BaseException) -> None:
+        self.name = name
+        self.value = value
+        self.group = COMMAND_HOOK_ENTRY_POINT_GROUP
+        self._loaded = loaded
+
+    def load(self) -> object:
+        if isinstance(self._loaded, BaseException):
+            raise self._loaded
+        return self._loaded
+
+
+def test_installed_entry_point_discovery_is_deterministic_filtered_and_sanitized() -> None:
+    def registration(name: str, integration: str = "dbt") -> HookRegistration:
+        return HookRegistration(
+            name,
+            integration,
+            lambda _: None,
+            lambda *_: HookOutcome(HookStatus.UNCHANGED),
+        )
+
+    result = discover_command_hooks(
+        "dbt",
+        installed_entry_points=(
+            cast(object, FakeEntryPoint("zeta", "package:zeta", registration("zeta"))),
+            cast(object, FakeEntryPoint("broken", "package:broken", RuntimeError("secret"))),
+            cast(object, FakeEntryPoint("invalid", "package:invalid", object())),
+            cast(object, FakeEntryPoint("other", "package:other", registration("other", "other"))),
+            cast(object, FakeEntryPoint("duplicate", "package:duplicate", registration("zeta"))),
+            cast(object, FakeEntryPoint("alpha", "package:alpha", registration("alpha"))),
+        ),  # type: ignore[arg-type]
+    )
+
+    assert [item.name for item in result.registrations] == ["alpha", "zeta"]
+    assert [item.code for item in result.warnings] == [
+        "MNEMO_HOOK_DISCOVERY_LOAD_FAILED",
+        "MNEMO_HOOK_DISCOVERY_INVALID",
+        "MNEMO_HOOK_DISCOVERY_DUPLICATE",
+    ]
+    assert "secret" not in str(result.warnings)

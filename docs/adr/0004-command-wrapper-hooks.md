@@ -32,8 +32,12 @@ conventional statuses: not found 127, not executable 126, and wrapper/launch fai
 ## Trust boundary and deferred work
 
 Only a connector may create or manage a subprocess. The generic application package imports no
-connector or dbt integration. Installed-package entry-point discovery, dbt project bindings, dbt
-hooks, CLI integration, and shell integration are deferred to later Issue 14 substeps. Arbitrary
+connector or dbt integration. Installed-package entry-point discovery uses only the explicit
+`mnemo.command_hooks` distribution-entry-point group: each entry point must load one validated
+function-level registration, and malformed or duplicate registrations are skipped with a sanitized
+warning. Mnemo never loads arbitrary Python files from a project, current directory, or user
+configuration. dbt project bindings, dbt hooks, CLI integration, and shell integration are
+separate Issue 14 substeps. Arbitrary
 Python files from a working directory or a dbt project are never loaded by this kernel.
 
 ## Consequences

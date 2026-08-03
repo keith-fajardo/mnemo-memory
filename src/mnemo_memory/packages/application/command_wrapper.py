@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Protocol
 
@@ -27,6 +28,7 @@ _MAX_METADATA_ITEMS = 8
 _MAX_METADATA_KEY_LENGTH = 64
 _MAX_METADATA_VALUE_LENGTH = 256
 _MAX_WARNING_FIELD_LENGTH = 64
+COMMAND_HOOK_ENTRY_POINT_GROUP = "mnemo.command_hooks"
 
 
 class CommandFailureCode(str, Enum):
@@ -230,6 +232,60 @@ class RegisteredHookOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class HookDiscoveryResult:
+    """Validated registrations discovered only from installed distributions."""
+
+    registrations: tuple[HookRegistration, ...]
+    warnings: tuple[HookWarning, ...]
+
+
+def discover_command_hooks(
+    integration: str,
+    *,
+    installed_entry_points: Iterable[EntryPoint] | None = None,
+) -> HookDiscoveryResult:
+    """Load deterministic, applicable registrations from installed entry points.
+
+    An entry point in ``mnemo.command_hooks`` must load to one
+    :class:`HookRegistration`. Working-directory files and project-provided
+    Python are never scanned or imported. A malformed or duplicate external
+    registration is skipped with a sanitized discovery warning.
+    """
+    _validate_identifier(integration, code="MNEMO_HOOK_DISCOVERY_INVALID_INTEGRATION")
+    candidates = (
+        tuple(installed_entry_points)
+        if installed_entry_points is not None
+        else tuple(entry_points(group=COMMAND_HOOK_ENTRY_POINT_GROUP))
+    )
+    registrations: list[HookRegistration] = []
+    warnings: list[HookWarning] = []
+    names: set[str] = set()
+    for candidate in sorted(
+        (item for item in candidates if item.group == COMMAND_HOOK_ENTRY_POINT_GROUP),
+        key=lambda item: (item.name, item.value),
+    ):
+        warning_name = candidate.name if _IDENTIFIER.fullmatch(candidate.name) else "discovery"
+        try:
+            loaded = candidate.load()
+        except Exception:
+            warnings.append(
+                HookWarning(warning_name, "resolve", "MNEMO_HOOK_DISCOVERY_LOAD_FAILED")
+            )
+            continue
+        if not isinstance(loaded, HookRegistration):
+            warnings.append(HookWarning(warning_name, "resolve", "MNEMO_HOOK_DISCOVERY_INVALID"))
+            continue
+        if loaded.integration != integration:
+            continue
+        if loaded.name in names:
+            warnings.append(HookWarning(loaded.name, "resolve", "MNEMO_HOOK_DISCOVERY_DUPLICATE"))
+            continue
+        names.add(loaded.name)
+        registrations.append(loaded)
+    return HookDiscoveryResult(tuple(registrations), tuple(warnings))
+
+
+@dataclass(frozen=True, slots=True)
 class CommandWrapperResult:
     result: CommandResult
     outcomes: tuple[RegisteredHookOutcome, ...]
@@ -393,6 +449,7 @@ class CommandWrapper:
 
 
 __all__ = [
+    "COMMAND_HOOK_ENTRY_POINT_GROUP",
     "COMMAND_NOT_EXECUTABLE_EXIT_CODE",
     "COMMAND_NOT_FOUND_EXIT_CODE",
     "COMMAND_WRAPPER_FAILURE_EXIT_CODE",
@@ -408,6 +465,7 @@ __all__ = [
     "CommandWrapper",
     "CommandWrapperResult",
     "ExecutableResolver",
+    "HookDiscoveryResult",
     "HookOutcome",
     "HookRegistration",
     "HookStatus",
@@ -415,4 +473,5 @@ __all__ = [
     "InvocationIdFactory",
     "ProcessExecutor",
     "RegisteredHookOutcome",
+    "discover_command_hooks",
 ]

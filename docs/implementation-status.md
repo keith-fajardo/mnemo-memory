@@ -458,7 +458,12 @@ result. The local adapter inherits terminal streams, avoids shells, and performs
 interrupt cleanup. Entry-point discovery, dbt hooks/bindings, CLI and shell integration remain
 out of scope.
 
-##### Issue 14A.2 — Not started
+##### Issue 14A.2 — Complete
+
+Added deterministic installed-package hook discovery under `mnemo.command_hooks`. Only Python
+distribution entry points are considered; project files and current-directory Python are never
+loaded. Registrations are validated, sorted, filtered by their integration, and malformed,
+unloadable, or duplicate entries are skipped with bounded sanitized warnings.
 
 #### Issue 14B — In progress
 
