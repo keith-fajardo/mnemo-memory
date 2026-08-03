@@ -544,6 +544,15 @@ SQL, environments, or model reasoning—and its SQLite projection is atomic with
 write. This is a durable foundation for later bounded episodic retrieval; the existing checkpoint
 and lesson context remains the user-facing task handoff path.
 
+The next episodic-memory foundation slice adds immutable, explicit approved facts for a decision,
+failure, or bounded tool outcome. Each fact is task-scoped, evidence-bearing, idempotent by a
+caller-supplied source key, and stored separately from checkpoint revisions. It deliberately does
+not capture transcripts, prompts, source bodies, raw tool output, SQL, environments, or private
+model reasoning. Migration 0007 and matching reference/SQLite repository contracts provide the
+durable scoped store. The existing two-tool MCP surface exposes it as `save_checkpoint`
+`record_event`, while `get_context` returns bounded, cited facts only when
+`include_approved_events` is requested.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

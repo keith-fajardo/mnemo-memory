@@ -104,6 +104,9 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
+    assert "include_approved_events" in tools[0].inputSchema["properties"]
+    assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
+    assert "event_summary" in tools[1].inputSchema["properties"]
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -195,6 +198,43 @@ def test_durable_port_returns_opt_in_scoped_lifecycle_history(tmp_path: Path) ->
         False,
     ]
     assert all(item.evidence_references for item in packet.episodic_memories)
+
+
+def test_durable_port_records_and_returns_explicit_approved_episodic_fact(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "approved event")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        port.save_checkpoint(save_payload())
+        stored = port.save_checkpoint(
+            {
+                "operation": "record_event",
+                **IDS,
+                "event_kind": "failure",
+                "event_summary": "The reconciliation used a stale source snapshot.",
+                "source_event_key": "reconciliation:stale-source:1",
+                "evidence_references": [EVIDENCE],
+            }
+        )
+        assert stored["event_kind"] == "failure"
+        assert stored["idempotent"] is False
+        assert (
+            port.save_checkpoint(
+                {
+                    "operation": "record_event",
+                    **IDS,
+                    "event_kind": "failure",
+                    "event_summary": "The reconciliation used a stale source snapshot.",
+                    "source_event_key": "reconciliation:stale-source:1",
+                    "evidence_references": [EVIDENCE],
+                }
+            )["idempotent"]
+            is True
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(context_payload(include_approved_events=True))
+        )
+    assert len(packet.episodic_memories) == 1
+    assert "stale source snapshot" in packet.episodic_memories[0].content
+    assert packet.episodic_memories[0].evidence_references
 
 
 def test_durable_port_preserves_an_evidence_backed_reasoning_lesson(tmp_path: Path) -> None:

@@ -106,15 +106,22 @@ class ApprovedEpisodicEvent:
         evidence = value["evidence_references"]
         if not isinstance(scope, Mapping) or not isinstance(evidence, list):
             raise TypeError("approved episodic event serialization is invalid")
-        raw = (value["event_id"], value["kind"], value["summary"], value["source_event_key"])
-        if not all(isinstance(item, str) for item in raw):
+        event_id = value["event_id"]
+        kind = value["kind"]
+        summary = value["summary"]
+        source_event_key = value["source_event_key"]
+        if not all(isinstance(item, str) for item in (event_id, kind, summary, source_event_key)):
             raise TypeError("approved episodic event fields must be strings")
+        assert isinstance(event_id, str)
+        assert isinstance(kind, str)
+        assert isinstance(summary, str)
+        assert isinstance(source_event_key, str)
         return cls(
-            EventId.from_string(raw[0]),
+            EventId.from_string(event_id),
             MemoryScope.from_dict(scope),
-            ApprovedEventKind(raw[1]),
-            raw[2],
-            raw[3],
+            ApprovedEventKind(kind),
+            summary,
+            source_event_key,
             _parse_datetime(value["occurred_at"], "occurred_at"),
             tuple(EvidenceReference.from_dict(item) for item in evidence),
         )

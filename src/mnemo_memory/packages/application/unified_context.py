@@ -140,6 +140,7 @@ class GetUnifiedContext:
     source_impact: ContextSourceImpactQuery | None = None
     source_changes: ContextSourceChangeQuery | None = None
     include_lifecycle_events: bool = False
+    include_approved_events: bool = False
 
 
 class UnifiedContextService:
@@ -162,6 +163,8 @@ class UnifiedContextService:
                 cast(CheckpointId | None, request.checkpoint_id),
                 request.budget,
                 request.include_lifecycle_events,
+                8,
+                request.include_approved_events,
             )
         )
         if (

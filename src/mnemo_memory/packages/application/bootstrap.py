@@ -84,6 +84,7 @@ def build_checkpoint_runtime(
             repository,
             clock=lambda: datetime.now(UTC),
             event_repository=repository,
+            approved_event_repository=repository,
         ),
         DbtManifestApplicationService(repository, dbt_parser) if dbt_parser is not None else None,
         source_repository,

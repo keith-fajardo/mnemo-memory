@@ -12,6 +12,7 @@ from mnemo_memory.packages.application import (
     AbandonCheckpoint,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
+    CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationInvalidContent,
     CheckpointApplicationInvalidLifecycle,
     CheckpointApplicationInvalidScope,
@@ -25,10 +26,12 @@ from mnemo_memory.packages.application import (
     CreateCheckpoint,
     GetCheckpoint,
     GetCheckpointContext,
+    RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.domain import (
+    ApprovedEventKind,
     CheckpointContent,
     CheckpointId,
     CheckpointLesson,
@@ -113,6 +116,7 @@ def service(
         target_repository,
         clock=lambda: next(ticks),
         event_repository=target_repository.events,
+        approved_event_repository=target_repository.approved_events,
         checkpoint_id_factory=lambda: CheckpointId(next(ids)),
         revision_id_factory=lambda: CheckpointRevisionId(next(revisions)),
         request_id_factory=lambda: RequestId(next(requests)),
@@ -181,6 +185,105 @@ def test_optional_lifecycle_history_is_bounded_and_provenance_bearing() -> None:
     ]
     assert all(item.evidence_references for item in history.episodic_memories)
     assert len(history.provenance) == 3
+
+
+def test_explicit_approved_events_are_idempotent_evidenced_and_opt_in() -> None:
+    target = service()
+    scope_value = scope()
+    create(target, scope_value)
+    command = RecordApprovedEpisodicEvent(
+        scope_value,
+        ApprovedEventKind.FAILURE,
+        "The comparison used a stale finance seed and must be rerun at source grain.",
+        "reconciliation:stale-seed:1",
+        (evidence(),),
+    )
+
+    stored = target.record_approved_event(command)
+    assert stored.idempotent is False
+    assert target.record_approved_event(command).idempotent is True
+    assert target.get_context(GetCheckpointContext(scope_value)).episodic_memories == ()
+    packet = target.get_context(GetCheckpointContext(scope_value, include_approved_events=True))
+    facts = [
+        json.loads(item.content)
+        for item in packet.episodic_memories
+        if item.item_id.startswith("approved-episodic:")
+    ]
+    assert facts == [
+        {
+            "event_kind": "failure",
+            "occurred_at": stored.event.occurred_at.isoformat(),
+            "summary": command.summary,
+        }
+    ]
+    assert any(item.item_id.startswith("approved-episodic:") for item in packet.provenance)
+    with pytest.raises(CheckpointApplicationEpisodicEventConflict):
+        target.record_approved_event(
+            RecordApprovedEpisodicEvent(
+                scope_value,
+                ApprovedEventKind.FAILURE,
+                "A different fact must not replace the original one.",
+                command.source_event_key,
+                (evidence(),),
+            )
+        )
+
+
+def test_episodic_lifecycle_and_approved_facts_share_one_hard_budget() -> None:
+    target = service()
+    scope_value = scope()
+    initial = create(target, scope_value)
+    target.revise(
+        ReviseCheckpoint(
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            content(suffix="revised"),
+            (evidence(),),
+        )
+    )
+    target.record_approved_event(
+        RecordApprovedEpisodicEvent(
+            scope_value,
+            ApprovedEventKind.DECISION,
+            "Use the verified source grain before changing the reconciliation join.",
+            "reconciliation:grain:1",
+            (evidence(),),
+        )
+    )
+    packet = target.get_context(
+        GetCheckpointContext(
+            scope_value,
+            budget=ContextBudget(episodic_memories=1),
+            include_lifecycle_events=True,
+            include_approved_events=True,
+        )
+    )
+    assert packet.episodic_memories == ()
+    assert packet.active_task_checkpoint is not None
+    assert packet.declared_total_tokens == packet.active_task_checkpoint.token_estimate
+    assert {omission.item_id for omission in packet.omissions} == {
+        "checkpoint-lifecycle:" + str(initial.aggregate.checkpoint_id),
+        "approved-episodic-events",
+    }
+
+
+def test_approved_fact_is_available_without_an_active_checkpoint() -> None:
+    target = service()
+    scope_value = scope()
+    target.record_approved_event(
+        RecordApprovedEpisodicEvent(
+            scope_value,
+            ApprovedEventKind.TOOL_OUTCOME,
+            "The scoped validation completed successfully before the handoff was created.",
+            "validation:success:1",
+            (evidence(),),
+        )
+    )
+    packet = target.get_context(GetCheckpointContext(scope_value, include_approved_events=True))
+    assert packet.active_task_checkpoint is None
+    assert len(packet.episodic_memories) == 1
+    assert "validation completed successfully" in packet.episodic_memories[0].content
 
 
 def test_terminal_lifecycle_and_idempotent_retry() -> None:

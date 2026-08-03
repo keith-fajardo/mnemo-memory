@@ -59,6 +59,16 @@ def create_server(port: McpContextPort) -> FastMCP:
                 description="Include a bounded evidence-bearing checkpoint lifecycle timeline.",
             ),
         ] = False,
+        include_approved_events: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Include bounded explicit evidence-backed decisions, failures, and "
+                    "tool outcomes."
+                ),
+            ),
+        ] = False,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
@@ -75,6 +85,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "source_impact": source_impact,
                 "source_changes": source_changes,
                 "include_lifecycle_events": include_lifecycle_events,
+                "include_approved_events": include_approved_events,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }
@@ -83,8 +94,8 @@ def create_server(port: McpContextPort) -> FastMCP:
     @server.tool(
         name="save_checkpoint",
         description=(
-            "Create, revise, complete, abandon, or record one evidence-backed correction "
-            "lesson for a durable task checkpoint."
+            "Create, revise, complete, abandon, record a correction lesson, or record one "
+            "explicit evidence-backed decision, failure, or tool outcome for durable task memory."
         ),
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     )
@@ -92,11 +103,11 @@ def create_server(port: McpContextPort) -> FastMCP:
         operation: Annotated[
             str,
             Field(
-                pattern="^(create|revise|complete|abandon|record_lesson)$",
+                pattern="^(create|revise|complete|abandon|record_lesson|record_event)$",
                 description=(
                     "Lifecycle operation. record_lesson appends exactly one evidence-backed "
                     "correction to the current active revision without resending the complete "
-                    "checkpoint."
+                    "checkpoint; record_event stores one explicit approved episodic fact."
                 ),
             ),
         ],
@@ -158,6 +169,16 @@ def create_server(port: McpContextPort) -> FastMCP:
             ),
         ] = None,
         reason: Annotated[str | None, Field(default=None, max_length=4_000)] = None,
+        event_kind: Annotated[
+            str | None,
+            Field(default=None, pattern="^(decision|failure|tool_outcome)$"),
+        ] = None,
+        event_summary: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=1_200)
+        ] = None,
+        source_event_key: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=256)
+        ] = None,
         completed_work: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         remaining_work: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         decisions: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
@@ -195,6 +216,9 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "checkpoint_id": checkpoint_id,
                 "expected_revision_id": expected_revision_id,
                 "reason": reason,
+                "event_kind": event_kind,
+                "event_summary": event_summary,
+                "source_event_key": source_event_key,
                 "completed_work": completed_work,
                 "remaining_work": remaining_work,
                 "decisions": decisions,

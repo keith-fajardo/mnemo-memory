@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import cast
 
 from mnemo_memory.packages.domain import (
+    ApprovedEpisodicEvent,
+    ApprovedEventKind,
     Checkpoint,
     CheckpointAggregate,
     CheckpointContent,
@@ -59,6 +61,11 @@ from mnemo_memory.packages.domain.dbt_manifest import (
 
 from .contracts import (
     ActiveSnapshotConflict,
+    ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventNotFound,
+    ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventStorageFailure,
+    ApprovedEpisodicEventStoreResult,
     CheckpointNotFound,
     CheckpointPage,
     DuplicateCheckpoint,
@@ -67,6 +74,7 @@ from .contracts import (
     EpisodicEventStorageFailure,
     EpisodicEventStoreResult,
     InvalidAbandonmentReason,
+    InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
     InvalidLifecycleTransition,
@@ -680,6 +688,91 @@ class SQLiteCheckpointRepository:
         except sqlite3.Error as error:
             raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
         return EpisodicEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def append_approved_event(
+        self, event: ApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventStoreResult:
+        self._require_approved_episodic_scope(event.scope)
+        try:
+            with self._transaction() as connection:
+                self._store_scope(connection, event.scope)
+                existing = connection.execute(
+                    "SELECT * FROM approved_episodic_events WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND source_event_key = ?",
+                    (*self._scope_values(event.scope), event.source_event_key),
+                ).fetchone()
+                if existing is not None:
+                    stored = self._approved_event_from_row(connection, existing, event.scope)
+                    if stored == event:
+                        return ApprovedEpisodicEventStoreResult(stored, idempotent=True)
+                    raise ApprovedEpisodicEventConflict("approved episodic event key conflicts")
+                connection.execute(
+                    "INSERT INTO approved_episodic_events("
+                    "event_id,source_event_key,event_kind,summary,owner_id,visibility,workspace_id,"
+                    "project_id,session_id,task_id,occurred_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(event.event_id),
+                        event.source_event_key,
+                        event.kind.value,
+                        event.summary,
+                        *self._scope_values(event.scope),
+                        event.occurred_at.isoformat(),
+                    ),
+                )
+                self._insert_approved_event_evidence(connection, event)
+                return ApprovedEpisodicEventStoreResult(event, idempotent=False)
+        except ApprovedEpisodicEventConflict:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event storage operation failed"
+            ) from error
+
+    def get_approved_event(self, scope: MemoryScope, event_id: EventId) -> ApprovedEpisodicEvent:
+        self._require_approved_episodic_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM approved_episodic_events WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+                return self._approved_event_from_row(connection, row, scope)
+        except ApprovedEpisodicEventNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event storage operation failed"
+            ) from error
+
+    def list_approved_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventPage:
+        self._require_approved_episodic_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM approved_episodic_events WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? "
+                    "ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
+                    (*self._scope_values(scope), limit + 1, offset),
+                ).fetchall()
+                items = tuple(
+                    self._approved_event_from_row(connection, row, scope) for row in rows[:limit]
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event storage operation failed"
+            ) from error
+        return ApprovedEpisodicEventPage(items, offset + limit if len(rows) > limit else None)
 
     def store_and_activate(
         self,
@@ -1446,6 +1539,13 @@ class SQLiteCheckpointRepository:
                 (str(scope.agent_id), str(scope.project_id)),
             )
 
+    @staticmethod
+    def _require_approved_episodic_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidApprovedEpisodicEventScope(
+                "approved episodic events require explicit task scope"
+            )
+
     def _mutate_revision(
         self,
         scope: MemoryScope,
@@ -1579,6 +1679,21 @@ class SQLiteCheckpointRepository:
                 event.occurred_at.isoformat(),
             ),
         )
+
+    @staticmethod
+    def _insert_approved_event_evidence(
+        connection: sqlite3.Connection, event: ApprovedEpisodicEvent
+    ) -> None:
+        for evidence in event.evidence_references:
+            connection.execute(
+                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) "
+                "VALUES (?, ?, ?)",
+                (str(evidence.evidence_id), str(evidence.source_id), _json(evidence.to_dict())),
+            )
+            connection.execute(
+                "INSERT INTO approved_episodic_event_evidence(event_id, evidence_id) VALUES (?, ?)",
+                (str(event.event_id), str(evidence.evidence_id)),
+            )
 
     def _advance_current_pointer(
         self,
@@ -1726,6 +1841,29 @@ class SQLiteCheckpointRepository:
             datetime.fromisoformat(row["occurred_at"]),
             row["idempotency_key"],
             revision.evidence_references,
+        )
+
+    @staticmethod
+    def _approved_event_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> ApprovedEpisodicEvent:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json FROM approved_episodic_event_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.event_id = ? ORDER BY link.evidence_id ASC",
+            (row["event_id"],),
+        ).fetchall()
+        return ApprovedEpisodicEvent(
+            event_id=EventId.from_string(row["event_id"]),
+            scope=scope,
+            kind=ApprovedEventKind(row["event_kind"]),
+            summary=row["summary"],
+            source_event_key=row["source_event_key"],
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
         )
 
     @staticmethod

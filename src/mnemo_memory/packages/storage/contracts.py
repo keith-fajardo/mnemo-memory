@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Protocol
 
 from mnemo_memory.packages.domain import (
+    ApprovedEpisodicEvent,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -80,6 +81,54 @@ class InvalidEpisodicEventScope(EpisodicEventRepositoryError):
 
 class EpisodicEventStorageFailure(EpisodicEventRepositoryError):
     pass
+
+
+class ApprovedEpisodicEventRepositoryError(Exception):
+    """Expected storage-independent approved-episodic-event outcome."""
+
+
+class ApprovedEpisodicEventNotFound(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+class ApprovedEpisodicEventConflict(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+class InvalidApprovedEpisodicEventScope(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+class ApprovedEpisodicEventStorageFailure(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventStoreResult:
+    event: ApprovedEpisodicEvent
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventPage:
+    items: tuple[ApprovedEpisodicEvent, ...]
+    next_offset: int | None
+
+
+class ApprovedEpisodicEventRepository(Protocol):
+    """Explicit task-scoped decision/failure/tool-outcome facts."""
+
+    def append_approved_event(
+        self, event: ApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventStoreResult: ...
+
+    def get_approved_event(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEvent: ...
+
+    def list_approved_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventPage: ...
 
 
 class ProjectIndexRepositoryError(Exception):

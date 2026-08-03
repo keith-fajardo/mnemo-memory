@@ -108,6 +108,20 @@ Mnemo still brings that bounded lesson back as historical, evidence-cited contex
 as historical task evidence—not as a claim about the current repository—so the agent can apply the
 prevention step while checking current structure separately.
 
+### Decisions and failed approaches that are worth keeping
+
+A checkpoint is the main handoff. Sometimes there is also one small fact worth retaining without
+rewriting the handoff: for example, “the Finance seed was stale,” “use business-date grain,” or
+“the validation command passed.” The existing `save_checkpoint` MCP tool can record one of these
+as an explicit `decision`, `failure`, or `tool_outcome`, with evidence and a stable source key.
+Mnemo returns it only when `get_context` explicitly asks for approved episodic facts.
+
+This is intentionally **not automatic conversation capture**. Mnemo never turns a terminal log,
+model reasoning trace, SQL query, environment, or source body into memory. The agent or user must
+state the bounded fact and provide evidence, which means a later agent can see what is known and
+where it came from without treating a private transcript as truth. The [local MCP guide](docs/local-mcp.md#record-an-explicit-decision-failure-or-tool-outcome)
+has the exact request shape.
+
 Running `mnemo-memory init` **does not** make the current directory memorable. It only creates or
 opens the local Mnemo store. From the repository you want remembered, run one connection command
 with `--auto-memory`; it creates a private project binding, records the first supported-language

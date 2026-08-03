@@ -11,6 +11,8 @@ from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
     DEFAULT_CONTEXT_BUDGET,
+    ApprovedEpisodicEvent,
+    ApprovedEventKind,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -40,6 +42,10 @@ from mnemo_memory.packages.domain import (
     ValidityState,
 )
 from mnemo_memory.packages.storage.contracts import (
+    ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventNotFound,
+    ApprovedEpisodicEventRepository,
+    ApprovedEpisodicEventRepositoryError,
     CheckpointLifecycleEventRepository,
     CheckpointNotFound,
     CheckpointRepository,
@@ -98,6 +104,10 @@ class CheckpointApplicationStorageFailure(CheckpointApplicationError):
     pass
 
 
+class CheckpointApplicationEpisodicEventConflict(CheckpointApplicationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CreateCheckpoint:
     scope: MemoryScope
@@ -146,6 +156,17 @@ class RecordCheckpointLesson:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordApprovedEpisodicEvent:
+    """Record one explicit decision, failure, or bounded tool outcome for this task."""
+
+    scope: MemoryScope
+    kind: ApprovedEventKind
+    summary: str
+    source_event_key: str
+    evidence_references: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class GetCheckpoint:
     scope: MemoryScope
     checkpoint_id: CheckpointId
@@ -160,6 +181,8 @@ class GetCheckpointContext:
     budget: ContextBudget = DEFAULT_CONTEXT_BUDGET
     include_lifecycle_events: bool = False
     maximum_lifecycle_events: int = 8
+    include_approved_events: bool = False
+    maximum_approved_events: int = 8
 
     def __post_init__(self) -> None:
         if not isinstance(self.include_lifecycle_events, bool):
@@ -169,12 +192,25 @@ class GetCheckpointContext:
             or not 1 <= self.maximum_lifecycle_events <= 16
         ):
             raise ValueError("maximum_lifecycle_events must be between 1 and 16")
+        if not isinstance(self.include_approved_events, bool):
+            raise ValueError("include_approved_events must be a boolean")
+        if (
+            not isinstance(self.maximum_approved_events, int)
+            or not 1 <= self.maximum_approved_events <= 16
+        ):
+            raise ValueError("maximum_approved_events must be between 1 and 16")
 
 
 @dataclass(frozen=True, slots=True)
 class CheckpointView:
     aggregate: CheckpointAggregate
     revision: CheckpointRevision
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventView:
+    event: ApprovedEpisodicEvent
+    idempotent: bool
 
 
 class CheckpointApplicationService:
@@ -186,12 +222,14 @@ class CheckpointApplicationService:
         *,
         clock: Callable[[], datetime],
         event_repository: CheckpointLifecycleEventRepository | None = None,
+        approved_event_repository: ApprovedEpisodicEventRepository | None = None,
         checkpoint_id_factory: Callable[[], CheckpointId] = CheckpointId.new,
         revision_id_factory: Callable[[], CheckpointRevisionId] = CheckpointRevisionId.new,
         request_id_factory: Callable[[], RequestId] = RequestId.new,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
+        self._approved_event_repository = approved_event_repository
         self._clock = clock
         self._checkpoint_id_factory = checkpoint_id_factory
         self._revision_id_factory = revision_id_factory
@@ -357,6 +395,67 @@ class CheckpointApplicationService:
             revision,
         )
 
+    def record_approved_event(
+        self, command: RecordApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventView:
+        """Persist an explicitly approved fact without inferring a private reasoning trace."""
+        self._validate_scope(command.scope)
+        if self._approved_event_repository is None:
+            raise CheckpointApplicationStorageFailure("approved episodic storage is unavailable")
+        if not isinstance(command.kind, ApprovedEventKind):
+            raise CheckpointApplicationInvalidContent("approved episodic event kind is invalid")
+        if not command.evidence_references or any(
+            not isinstance(item, EvidenceReference) for item in command.evidence_references
+        ):
+            raise CheckpointApplicationMissingProvenance(
+                "approved episodic events require evidence-bearing provenance"
+            )
+        try:
+            candidate = ApprovedEpisodicEvent.create(
+                scope=command.scope,
+                kind=command.kind,
+                summary=command.summary,
+                source_event_key=command.source_event_key,
+                occurred_at=self._now(),
+                evidence_references=tuple(command.evidence_references),
+            )
+        except (TypeError, ValueError) as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved episodic event is invalid"
+            ) from error
+        try:
+            existing = self._approved_event_repository.get_approved_event(
+                command.scope, candidate.event_id
+            )
+        except ApprovedEpisodicEventNotFound:
+            existing = None
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        if existing is not None:
+            if (
+                existing.kind is command.kind
+                and existing.summary == command.summary
+                and existing.source_event_key == command.source_event_key
+                and existing.evidence_references == tuple(command.evidence_references)
+            ):
+                return ApprovedEpisodicEventView(existing, idempotent=True)
+            raise CheckpointApplicationEpisodicEventConflict(
+                "approved episodic event conflicts with an existing fact"
+            )
+        try:
+            stored = self._approved_event_repository.append_approved_event(candidate)
+        except ApprovedEpisodicEventConflict as error:
+            raise CheckpointApplicationEpisodicEventConflict(
+                "approved episodic event conflicts with an existing fact"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        return ApprovedEpisodicEventView(stored.event, stored.idempotent)
+
     def get(self, query: GetCheckpoint) -> CheckpointView:
         self._validate_scope(query.scope)
         if query.revision_id is not None and query.revision_number is not None:
@@ -393,7 +492,7 @@ class CheckpointApplicationService:
                 lambda: self._repository.get_aggregate(query.scope, checkpoint_id)
             )
         if aggregate is None or aggregate.lifecycle_status is not CheckpointStatus.ACTIVE:
-            return self._empty_packet(query.scope, query.budget)
+            return self._empty_context_with_approved_events(query)
         revision = self._call(
             lambda: self._repository.get_current_revision(query.scope, aggregate.checkpoint_id)
         )
@@ -430,11 +529,24 @@ class CheckpointApplicationService:
             query.budget,
             initial_tokens=item.token_estimate
             + sum(lesson.token_estimate for lesson in historical_lessons),
+            initial_episodic_tokens=sum(lesson.token_estimate for lesson in historical_lessons),
             include=query.include_lifecycle_events,
             maximum_events=query.maximum_lifecycle_events,
         )
+        approved_events, approved_notices, approved_omissions = self._approved_event_items(
+            query.scope,
+            query.budget,
+            initial_tokens=item.token_estimate
+            + sum(lesson.token_estimate for lesson in historical_lessons)
+            + sum(event.token_estimate for event in lifecycle_events),
+            initial_episodic_tokens=sum(lesson.token_estimate for lesson in historical_lessons)
+            + sum(event.token_estimate for event in lifecycle_events),
+            include=query.include_approved_events,
+            maximum_events=query.maximum_approved_events,
+        )
         notices.extend(lesson_notices)
         notices.extend(event_notices)
+        notices.extend(approved_notices)
         return ContextPacket(
             PacketSchemaVersion.V1,
             self._request_id_factory(),
@@ -445,13 +557,14 @@ class CheckpointApplicationService:
             None,
             item.token_estimate
             + sum(lesson.token_estimate for lesson in historical_lessons)
-            + sum(event.token_estimate for event in lifecycle_events),
+            + sum(event.token_estimate for event in lifecycle_events)
+            + sum(event.token_estimate for event in approved_events),
             query.budget,
             _ACTIVE_CHECKPOINT_PRODUCER,
             active_task_checkpoint=item,
-            episodic_memories=(*historical_lessons, *lifecycle_events),
+            episodic_memories=(*historical_lessons, *lifecycle_events, *approved_events),
             provenance=tuple(notices),
-            omissions=(*lesson_omissions, *event_omissions),
+            omissions=(*lesson_omissions, *event_omissions, *approved_omissions),
         )
 
     def _empty_packet(
@@ -472,6 +585,27 @@ class CheckpointApplicationService:
             budget,
             _ACTIVE_CHECKPOINT_PRODUCER,
             omissions=() if omission is None else (omission,),
+        )
+
+    def _empty_context_with_approved_events(self, query: GetCheckpointContext) -> ContextPacket:
+        """Return explicit task facts even when no active checkpoint is selected."""
+        packet = self._empty_packet(query.scope, query.budget)
+        events, notices, omissions = self._approved_event_items(
+            query.scope,
+            query.budget,
+            initial_tokens=0,
+            initial_episodic_tokens=0,
+            include=query.include_approved_events,
+            maximum_events=query.maximum_approved_events,
+        )
+        if not events and not notices and not omissions:
+            return packet
+        return replace(
+            packet,
+            declared_total_tokens=sum(event.token_estimate for event in events),
+            episodic_memories=events,
+            provenance=notices,
+            omissions=(*packet.omissions, *omissions),
         )
 
     @staticmethod
@@ -601,6 +735,7 @@ class CheckpointApplicationService:
         budget: ContextBudget,
         *,
         initial_tokens: int,
+        initial_episodic_tokens: int,
         include: bool,
         maximum_events: int,
     ) -> tuple[tuple[ContextItem, ...], tuple[ProvenanceNotice, ...], tuple[OmissionNotice, ...]]:
@@ -615,7 +750,10 @@ class CheckpointApplicationService:
             raise CheckpointApplicationStorageFailure(
                 "episodic event storage is unavailable"
             ) from error
-        remaining = min(budget.episodic_memories, max(0, budget.total_limit - initial_tokens))
+        remaining = min(
+            max(0, budget.episodic_memories - initial_episodic_tokens),
+            max(0, budget.total_limit - initial_tokens),
+        )
         items: list[ContextItem] = []
         notices: list[ProvenanceNotice] = []
         omitted = events.next_offset is not None
@@ -678,6 +816,87 @@ class CheckpointApplicationService:
             source_digest=hashlib.sha256(content.encode()).hexdigest(),
             evidence_references=event.evidence_references,
         )
+
+    def _approved_event_items(
+        self,
+        scope: MemoryScope,
+        budget: ContextBudget,
+        *,
+        initial_tokens: int,
+        initial_episodic_tokens: int,
+        include: bool,
+        maximum_events: int,
+    ) -> tuple[tuple[ContextItem, ...], tuple[ProvenanceNotice, ...], tuple[OmissionNotice, ...]]:
+        """Render opt-in explicit facts without claiming they are current structure."""
+        if not include or self._approved_event_repository is None:
+            return (), (), ()
+        try:
+            page = self._approved_event_repository.list_approved_events(
+                scope, limit=maximum_events + 1
+            )
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        remaining = min(
+            max(0, budget.episodic_memories - initial_episodic_tokens),
+            max(0, budget.total_limit - initial_tokens),
+        )
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = []
+        omitted = page.next_offset is not None
+        for event in page.items[:maximum_events]:
+            content = json.dumps(
+                {
+                    "event_kind": event.kind.value,
+                    "occurred_at": event.occurred_at.isoformat(),
+                    "summary": event.summary,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            tokens = (len(content) + 3) // 4
+            if tokens > remaining:
+                omitted = True
+                continue
+            item = ContextItem(
+                item_id=f"approved-episodic:{event.event_id}",
+                item_type=ContextItemType.EPISODIC_MEMORY,
+                source_scope=event.scope,
+                content=content,
+                content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+                token_estimate=tokens,
+                evidence_references=event.evidence_references,
+                source_trust=SourceTrustClass.USER_AUTHORED,
+                sensitivity=Sensitivity.NORMAL,
+                validity=ValidityState.UNKNOWN,
+                ranking=None,
+                conflict_state=ConflictState.NONE,
+                observed_at=event.occurred_at,
+            )
+            items.append(item)
+            notices.append(
+                ProvenanceNotice(
+                    provenance_id=f"provenance:{item.item_id}",
+                    item_id=item.item_id,
+                    source_reference=f"mnemo:approved-episodic/{event.event_id}",
+                    source_digest=hashlib.sha256(content.encode()).hexdigest(),
+                    evidence_references=event.evidence_references,
+                )
+            )
+            remaining -= tokens
+        omissions = (
+            ()
+            if not omitted
+            else (
+                OmissionNotice(
+                    "approved-episodic-events",
+                    OmissionReason.TOKEN_BUDGET,
+                    "approved episodic facts exceed the remaining context budget",
+                ),
+            )
+        )
+        return tuple(items), tuple(notices), omissions
 
     def _validate_write(
         self,

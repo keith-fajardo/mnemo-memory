@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from mnemo_memory.packages.domain import (
+    ApprovedEpisodicEvent,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -37,6 +38,10 @@ from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
 
 from .contracts import (
     ActiveSnapshotConflict,
+    ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventNotFound,
+    ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventStoreResult,
     CheckpointNotFound,
     CheckpointPage,
     CheckpointRepository,
@@ -45,6 +50,7 @@ from .contracts import (
     EpisodicEventPage,
     EpisodicEventStoreResult,
     InvalidAbandonmentReason,
+    InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
     InvalidLifecycleTransition,
@@ -58,6 +64,61 @@ from .contracts import (
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
 )
+
+
+class ReferenceApprovedEpisodicEventRepository:
+    """Append-only reference store for explicit, evidence-backed task facts."""
+
+    def __init__(self) -> None:
+        self._events: dict[EventId, ApprovedEpisodicEvent] = {}
+        self._keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._ordered: list[EventId] = []
+
+    def append_approved_event(
+        self, event: ApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventStoreResult:
+        self._require_scope(event.scope)
+        key = (event.scope, event.source_event_key)
+        existing_id = self._keys.get(key)
+        if existing_id is not None:
+            existing = self._events[existing_id]
+            if existing == event:
+                return ApprovedEpisodicEventStoreResult(existing, True)
+            raise ApprovedEpisodicEventConflict("approved episodic event key conflicts")
+        self._events[event.event_id] = event
+        self._keys[key] = event.event_id
+        self._ordered.append(event.event_id)
+        return ApprovedEpisodicEventStoreResult(event, False)
+
+    def get_approved_event(self, scope: MemoryScope, event_id: EventId) -> ApprovedEpisodicEvent:
+        self._require_scope(scope)
+        event = self._events.get(event_id)
+        if event is None or event.scope != scope:
+            raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+        return event
+
+    def list_approved_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        items = tuple(
+            self._events[event_id]
+            for event_id in reversed(self._ordered)
+            if self._events[event_id].scope == scope
+        )
+        return ApprovedEpisodicEventPage(
+            items[offset : offset + limit],
+            offset + limit if offset + limit < len(items) else None,
+        )
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if scope.level is not ScopeLevel.TASK:
+            raise InvalidApprovedEpisodicEventScope(
+                "approved episodic events require explicit task scope"
+            )
 
 
 class ReferenceCheckpointLifecycleEventRepository:
@@ -149,6 +210,7 @@ class ReferenceCheckpointRepository:
         self._aggregates: dict[CheckpointId, CheckpointAggregate] = {}
         self._revisions: dict[CheckpointId, tuple[CheckpointRevision, ...]] = {}
         self.events = ReferenceCheckpointLifecycleEventRepository(self)
+        self.approved_events = ReferenceApprovedEpisodicEventRepository()
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision

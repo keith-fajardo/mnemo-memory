@@ -3,7 +3,7 @@
 Mnemo exposes one local stdio MCP server, `mnemo-local` version `0.1.0`:
 
 ```sh
-mnemo mcp serve --stdio
+mnemo-memory mcp serve --stdio
 ```
 
 It resolves the same durable personal data directory as the local lifecycle commands. Use an
@@ -21,7 +21,7 @@ abandoned checkpoints are excluded from automatic selection. The active-checkpoi
 limited to 600 tokens by default and structured token-budget omissions are preserved.
 
 `save_checkpoint` is mutating but non-destructive. It requires a tagged `operation` of `create`,
-`revise`, `complete`, `abandon`, or `record_lesson`; the explicit task scope; and structurally
+`revise`, `complete`, `abandon`, `record_lesson`, or `record_event`; the explicit task scope; and structurally
 valid evidence references. `create`, `revise`, `complete`, and `abandon` require the complete
 canonical checkpoint payload. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
 `expected_revision_id`; `abandon` also requires a nonblank `reason`.
@@ -31,6 +31,35 @@ For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up
 `prevention`, plus `evidence_ids` that must reference evidence submitted for that exact revision.
 Mnemo preserves the lesson in the immutable checkpoint content and returns it in the later context
 packet. It never infers a lesson from a transcript, source diff, or model output.
+
+## Record an explicit decision, failure, or tool outcome
+
+Use `record_event` when there is one bounded, evidence-backed fact that should be available to a
+later task session but does **not** need to rewrite the active checkpoint. Its `source_event_key`
+is a stable caller key for retry safety: sending the same fact again returns the original event;
+a different fact with that key is rejected rather than replacing history.
+
+```json
+{
+  "operation": "record_event",
+  "owner_id": "<owner-id>",
+  "workspace_id": "<workspace-id>",
+  "project_id": "<project-id>",
+  "session_id": "<session-id>",
+  "task_id": "<task-id>",
+  "event_kind": "failure",
+  "event_summary": "The reconciliation used a stale source snapshot; refresh it before comparing totals.",
+  "source_event_key": "reconciliation:stale-source:1",
+  "evidence_references": [{"evidence_id": "<evidence-id>", "...": "canonical evidence fields"}]
+}
+```
+
+The only accepted kinds are `decision`, `failure`, and `tool_outcome`. Mnemo stores the short
+summary, exact scope, time, and evidence—not a transcript, raw terminal output, source text, SQL,
+environment, credentials, or a model's private reasoning. To include these facts in a later packet,
+call `get_context` with `"include_approved_events": true`; the option is off by default to keep
+ordinary handoffs compact. They are historical evidence, never a claim that the current repository
+structure is still true.
 
 ## Record a correction without resending the handoff
 

@@ -8,6 +8,7 @@ from mnemo_memory.packages.application.checkpoints import (
     AbandonCheckpoint,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
+    CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationError,
     CheckpointApplicationInvalidContent,
     CheckpointApplicationInvalidLifecycle,
@@ -20,6 +21,7 @@ from mnemo_memory.packages.application.checkpoints import (
     CompleteCheckpoint,
     CreateCheckpoint,
     GetCheckpointContext,
+    RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
     ReviseCheckpoint,
 )
@@ -32,6 +34,7 @@ from mnemo_memory.packages.application.unified_context import (
     UnifiedContextService,
 )
 from mnemo_memory.packages.domain import (
+    ApprovedEventKind,
     CheckpointContent,
     CheckpointId,
     CheckpointLesson,
@@ -77,8 +80,11 @@ class DurableMcpContextPort:
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
             include_lifecycle_events = request.get("include_lifecycle_events", False)
+            include_approved_events = request.get("include_approved_events", False)
             if not isinstance(include_lifecycle_events, bool):
                 raise ValueError("include_lifecycle_events must be a boolean")
+            if not isinstance(include_approved_events, bool):
+                raise ValueError("include_approved_events must be a boolean")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
@@ -137,6 +143,7 @@ class DurableMcpContextPort:
                             impact,
                             changes,
                             include_lifecycle_events,
+                            include_approved_events,
                         )
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
@@ -164,10 +171,18 @@ class DurableMcpContextPort:
                         impact,
                         changes,
                         include_lifecycle_events,
+                        include_approved_events,
                     )
                 ).to_dict()
             return self._service.get_context(
-                GetCheckpointContext(scope, checkpoint, budget, include_lifecycle_events)
+                GetCheckpointContext(
+                    scope,
+                    checkpoint,
+                    budget,
+                    include_lifecycle_events,
+                    8,
+                    include_approved_events,
+                )
             ).to_dict()
         except Exception as error:
             raise _mcp_error(error) from error
@@ -177,6 +192,23 @@ class DurableMcpContextPort:
             operation = _string(request, "operation")
             scope = _scope(request)
             evidence = _evidence(request)
+            if operation == "record_event":
+                event = self._service.record_approved_event(
+                    RecordApprovedEpisodicEvent(
+                        scope,
+                        ApprovedEventKind(_string(request, "event_kind")),
+                        _string(request, "event_summary"),
+                        _string(request, "source_event_key"),
+                        evidence,
+                    )
+                )
+                return {
+                    "event_id": str(event.event.event_id),
+                    "event_kind": event.event.kind.value,
+                    "scope": event.event.scope.to_dict(),
+                    "persistence": "durable",
+                    "idempotent": event.idempotent,
+                }
             if operation == "create":
                 content = _content(request)
                 view = self._service.create(
@@ -229,7 +261,8 @@ class DurableMcpContextPort:
                     )
                 else:
                     raise ValueError(
-                        "operation must be create, revise, complete, abandon, or record_lesson"
+                        "operation must be create, revise, complete, abandon, record_lesson, "
+                        "or record_event"
                     )
             return {
                 "checkpoint_id": str(view.aggregate.checkpoint_id),
@@ -333,6 +366,7 @@ def _mcp_error(error: Exception) -> ValueError:
     codes: tuple[tuple[type[Exception], str], ...] = (
         (CheckpointApplicationNotFound, "MNEMO_CHECKPOINT_NOT_FOUND"),
         (CheckpointApplicationDuplicate, "MNEMO_DUPLICATE_CHECKPOINT"),
+        (CheckpointApplicationEpisodicEventConflict, "MNEMO_EPISODIC_EVENT_CONFLICT"),
         (CheckpointApplicationRevisionConflict, "MNEMO_REVISION_CONFLICT"),
         (CheckpointApplicationInvalidLifecycle, "MNEMO_INVALID_LIFECYCLE"),
         (CheckpointApplicationInvalidScope, "MNEMO_INVALID_SCOPE"),

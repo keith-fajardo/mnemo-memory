@@ -2,6 +2,8 @@
 
 from .contracts import (
     ActiveSnapshotConflict,
+    ApprovedEpisodicEventRepository,
+    ApprovedEpisodicEventStorageFailure,
     CheckpointLifecycleEventRepository,
     CheckpointRepository,
     EpisodicEventNotFound,
@@ -11,6 +13,7 @@ from .contracts import (
     SourceStructureRepository,
 )
 from .reference import (
+    ReferenceApprovedEpisodicEventRepository,
     ReferenceCheckpointLifecycleEventRepository,
     ReferenceCheckpointRepository,
     ReferenceProjectIndexRepository,
@@ -25,12 +28,15 @@ from .sqlite import (
 
 __all__ = [
     "ActiveSnapshotConflict",
+    "ApprovedEpisodicEventRepository",
+    "ApprovedEpisodicEventStorageFailure",
     "CheckpointLifecycleEventRepository",
     "CheckpointRepository",
     "EpisodicEventNotFound",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
     "ProjectIndexRepository",
+    "ReferenceApprovedEpisodicEventRepository",
     "ReferenceCheckpointLifecycleEventRepository",
     "ReferenceCheckpointRepository",
     "ReferenceProjectIndexRepository",

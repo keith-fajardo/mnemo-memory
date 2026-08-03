@@ -308,8 +308,10 @@ def test_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE approved_episodic_event_evidence")
+        connection.execute("DROP TABLE approved_episodic_events")
         connection.execute("DROP TABLE checkpoint_lifecycle_events")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 6")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=6)

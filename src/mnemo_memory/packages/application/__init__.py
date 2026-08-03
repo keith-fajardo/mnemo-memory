@@ -8,8 +8,10 @@ from .bootstrap import (
 )
 from .checkpoints import (
     AbandonCheckpoint,
+    ApprovedEpisodicEventView,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
+    CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationError,
     CheckpointApplicationInvalidContent,
     CheckpointApplicationInvalidLifecycle,
@@ -24,6 +26,7 @@ from .checkpoints import (
     CreateCheckpoint,
     GetCheckpoint,
     GetCheckpointContext,
+    RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
     ReviseCheckpoint,
 )
@@ -51,8 +54,10 @@ from .services import LifecycleService
 
 __all__ = [
     "AbandonCheckpoint",
+    "ApprovedEpisodicEventView",
     "CheckpointApplicationBudgetExceeded",
     "CheckpointApplicationDuplicate",
+    "CheckpointApplicationEpisodicEventConflict",
     "CheckpointApplicationError",
     "CheckpointApplicationInvalidContent",
     "CheckpointApplicationInvalidLifecycle",
@@ -84,6 +89,7 @@ __all__ = [
     "LocalConfigurationError",
     "LocalRuntimeError",
     "QueryLineage",
+    "RecordApprovedEpisodicEvent",
     "RecordCheckpointLesson",
     "ReviseCheckpoint",
     "build_checkpoint_runtime",
