@@ -147,8 +147,22 @@ def test_sqlite_event_ledger_is_durable_scoped_and_idempotent(tmp_path: Path) ->
         evidence_references=(item,),
     )
 
-    assert repository.append_event(event).idempotent is False
     assert repository.append_event(event).idempotent is True
     assert repository.get_event(item_scope, event.event_id) == event
     assert repository.list_events(item_scope).items == (event,)
     assert repository.list_events(scope()).items == ()
+
+    revised = repository.append_revision(
+        item_scope,
+        checkpoint_id,
+        revision_id,
+        CheckpointContent("task", ("done",), "active", ("next",), (), (), (), (), (), (), 1),
+        (item,),
+        NOW.replace(second=1),
+    )
+    events = repository.list_events(item_scope).items
+    assert [item.kind for item in events] == [
+        CheckpointEventKind.REVISED,
+        CheckpointEventKind.CREATED,
+    ]
+    assert events[0].revision_id == revised.revision_id

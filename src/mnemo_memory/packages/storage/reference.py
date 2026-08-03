@@ -8,6 +8,7 @@ from datetime import datetime
 from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointEventKind,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -207,6 +208,7 @@ class ReferenceCheckpointRepository:
         content: CheckpointContent,
         evidence_references: tuple[EvidenceReference, ...],
         created_at: datetime,
+        event_kind: CheckpointEventKind = CheckpointEventKind.REVISED,
     ) -> CheckpointRevision:
         aggregate = self.get_aggregate(scope, checkpoint_id)
         self._require_active_expected(aggregate, expected_revision_id)

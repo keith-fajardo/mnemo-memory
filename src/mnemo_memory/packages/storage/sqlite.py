@@ -368,6 +368,18 @@ class SQLiteCheckpointRepository:
                     self._aggregate_values(aggregate),
                 )
                 self._insert_canonical_revision(connection, initial_revision)
+                self._insert_lifecycle_event(
+                    connection,
+                    CheckpointLifecycleEvent.for_revision(
+                        scope=aggregate.scope,
+                        kind=CheckpointEventKind.CREATED,
+                        checkpoint_id=initial_revision.checkpoint_id,
+                        revision_id=initial_revision.revision_id,
+                        revision_number=initial_revision.revision_number,
+                        occurred_at=initial_revision.created_at,
+                        evidence_references=initial_revision.evidence_references,
+                    ),
+                )
         except sqlite3.IntegrityError as error:
             raise DuplicateCheckpoint("checkpoint already exists in this scope") from error
         except (ValueError, TypeError):
@@ -459,6 +471,7 @@ class SQLiteCheckpointRepository:
         content: CheckpointContent,
         evidence_references: tuple[EvidenceReference, ...],
         created_at: datetime,
+        event_kind: CheckpointEventKind = CheckpointEventKind.REVISED,
     ) -> CheckpointRevision:
         return self._mutate_revision(
             scope,
@@ -469,6 +482,7 @@ class SQLiteCheckpointRepository:
             evidence_references,
             created_at,
             reason=None,
+            event_kind=event_kind,
         )
 
     def complete_checkpoint(
@@ -489,6 +503,7 @@ class SQLiteCheckpointRepository:
             evidence_references,
             created_at,
             reason=None,
+            event_kind=CheckpointEventKind.COMPLETED,
         )
 
     def abandon_checkpoint(
@@ -517,6 +532,7 @@ class SQLiteCheckpointRepository:
             evidence_references,
             created_at,
             reason=reason,
+            event_kind=CheckpointEventKind.ABANDONED,
         )
 
     def list_current_checkpoints(
@@ -1430,6 +1446,7 @@ class SQLiteCheckpointRepository:
         created_at: datetime,
         *,
         reason: str | None,
+        event_kind: CheckpointEventKind,
     ) -> CheckpointRevision:
         self._require_checkpoint_scope(scope)
         try:
@@ -1478,6 +1495,18 @@ class SQLiteCheckpointRepository:
                     != 1
                 ):
                     raise RevisionConflict("expected revision is not current")
+                self._insert_lifecycle_event(
+                    connection,
+                    CheckpointLifecycleEvent.for_revision(
+                        scope=scope,
+                        kind=event_kind,
+                        checkpoint_id=revision.checkpoint_id,
+                        revision_id=revision.revision_id,
+                        revision_number=revision.revision_number,
+                        occurred_at=revision.created_at,
+                        evidence_references=revision.evidence_references,
+                    ),
+                )
                 return revision
         except (
             CheckpointNotFound,
@@ -1518,6 +1547,26 @@ class SQLiteCheckpointRepository:
                 (str(revision.revision_id), str(evidence.evidence_id))
                 for evidence in revision.evidence_references
             ],
+        )
+
+    def _insert_lifecycle_event(
+        self, connection: sqlite3.Connection, event: CheckpointLifecycleEvent
+    ) -> None:
+        connection.execute(
+            "INSERT INTO checkpoint_lifecycle_events("
+            "event_id,idempotency_key,event_kind,checkpoint_id,checkpoint_revision_id,"
+            "revision_number,owner_id,visibility,workspace_id,project_id,session_id,task_id,"
+            "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(event.event_id),
+                event.idempotency_key,
+                event.kind.value,
+                str(event.checkpoint_id),
+                str(event.revision_id),
+                event.revision_number,
+                *self._scope_values(event.scope),
+                event.occurred_at.isoformat(),
+            ),
         )
 
     def _advance_current_pointer(

@@ -13,6 +13,7 @@ from mnemo_memory.packages.domain import (
     DEFAULT_CONTEXT_BUDGET,
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointEventKind,
     CheckpointId,
     CheckpointLesson,
     CheckpointRevision,
@@ -330,6 +331,7 @@ class CheckpointApplicationService:
                 content,
                 evidence,
                 self._now(),
+                CheckpointEventKind.LESSON_RECORDED,
             )
         )
         return CheckpointView(

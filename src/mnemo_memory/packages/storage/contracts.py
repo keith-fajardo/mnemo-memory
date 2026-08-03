@@ -9,6 +9,7 @@ from typing import Protocol
 from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointEventKind,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -153,6 +154,7 @@ class CheckpointRepository(Protocol):
         content: CheckpointContent,
         evidence_references: tuple[EvidenceReference, ...],
         created_at: datetime,
+        event_kind: CheckpointEventKind = CheckpointEventKind.REVISED,
     ) -> CheckpointRevision: ...
 
     def complete_checkpoint(
