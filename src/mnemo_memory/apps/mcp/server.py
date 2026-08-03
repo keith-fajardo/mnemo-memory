@@ -80,7 +80,15 @@ def create_server(port: McpContextPort) -> FastMCP:
     )
     def save_checkpoint(
         operation: Annotated[
-            str, Field(pattern="^(create|revise|complete|abandon|record_lesson)$")
+            str,
+            Field(
+                pattern="^(create|revise|complete|abandon|record_lesson)$",
+                description=(
+                    "Lifecycle operation. record_lesson appends exactly one evidence-backed "
+                    "correction to the current active revision without resending the complete "
+                    "checkpoint."
+                ),
+            ),
         ],
         owner_id: Annotated[str, Field(min_length=36, max_length=36)],
         workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
@@ -88,20 +96,56 @@ def create_server(port: McpContextPort) -> FastMCP:
         session_id: Annotated[str, Field(min_length=36, max_length=36)],
         task_id: Annotated[str, Field(min_length=36, max_length=36)],
         task_objective: Annotated[
-            str | None, Field(default=None, min_length=1, max_length=4_000)
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=4_000,
+                description=(
+                    "Required checkpoint content for create, revise, complete, and abandon."
+                ),
+            ),
         ] = None,
         current_state: Annotated[
-            str | None, Field(default=None, min_length=1, max_length=4_000)
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=4_000,
+                description=(
+                    "Required checkpoint content for create, revise, complete, and abandon."
+                ),
+            ),
         ] = None,
         evidence_references: Annotated[
-            list[dict[str, object]] | None, Field(default=None, min_length=1, max_length=64)
+            list[dict[str, object]] | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=64,
+                description=(
+                    "Required evidence for every save; lesson evidence IDs must be retained here."
+                ),
+            ),
         ] = None,
         token_estimate: Annotated[int | None, Field(default=None, ge=0, le=600)] = None,
         checkpoint_id: Annotated[
-            str | None, Field(default=None, min_length=36, max_length=36)
+            str | None,
+            Field(
+                default=None,
+                min_length=36,
+                max_length=36,
+                description="Required for every operation except create.",
+            ),
         ] = None,
         expected_revision_id: Annotated[
-            str | None, Field(default=None, min_length=36, max_length=36)
+            str | None,
+            Field(
+                default=None,
+                min_length=36,
+                max_length=36,
+                description="Required for revise, complete, abandon, and record_lesson.",
+            ),
         ] = None,
         reason: Annotated[str | None, Field(default=None, max_length=4_000)] = None,
         completed_work: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
@@ -109,7 +153,15 @@ def create_server(port: McpContextPort) -> FastMCP:
         decisions: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         failures: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         lessons: Annotated[
-            list[dict[str, object]] | None, Field(default=None, max_length=16)
+            list[dict[str, object]] | None,
+            Field(
+                default=None,
+                max_length=16,
+                description=(
+                    "Canonical correction lessons. record_lesson requires exactly one; complete "
+                    "content revisions may retain up to 16 applicable lessons."
+                ),
+            ),
         ] = None,
         blockers: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,
         relevant_files: Annotated[list[str] | None, Field(default=None, max_length=128)] = None,

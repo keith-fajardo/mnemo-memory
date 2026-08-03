@@ -95,6 +95,11 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "operation" in tools[1].inputSchema["properties"]
     assert "lessons" in tools[1].inputSchema["properties"]
     assert "record_lesson" in tools[1].inputSchema["properties"]["operation"]["pattern"]
+    assert (
+        "without resending the complete checkpoint"
+        in tools[1].inputSchema["properties"]["operation"]["description"]
+    )
+    assert "exactly one" in tools[1].inputSchema["properties"]["lessons"]["description"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
 
