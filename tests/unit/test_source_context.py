@@ -123,7 +123,7 @@ def test_source_query_returns_scoped_provenance_bearing_structural_facts(tmp_pat
         ),
         None,
         source,
-    ).get_context(GetUnifiedContext(task_scope, source_query="process_order"))
+    ).get_context(GetUnifiedContext(task_scope, source_query="process order"))
 
     assert len(context.structural_items) == 1
     item = context.structural_items[0]

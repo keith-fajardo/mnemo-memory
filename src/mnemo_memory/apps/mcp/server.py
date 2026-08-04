@@ -52,7 +52,16 @@ def create_server(port: McpContextPort) -> FastMCP:
         ] = None,
         dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_query: Annotated[
-            str | None, Field(default=None, min_length=1, max_length=512)
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=512,
+                description=(
+                    "Optional scoped source identity query. Exact names rank first; otherwise "
+                    "all literal terms must match a saved symbol or relative path."
+                ),
+            ),
         ] = None,
         knowledge_query: Annotated[
             str | None,

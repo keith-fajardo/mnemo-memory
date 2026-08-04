@@ -254,6 +254,12 @@ depends on another saved local package. It does **not** run npm/pnpm/Yarn, read 
 runtime resolution, or treat external, development, optional, or peer dependencies as proven
 relationships.
 
+When an agent does not yet know the exact file or symbol, it can use Mnemo's existing
+`source_query` field with a few literal words, such as `reconcile orders`. Mnemo ranks exact saved
+names first, then prefixes, then identities containing every supplied word. It searches only the
+current scoped structural snapshot—not source bodies, comments, embeddings, or another project—so
+the result is a small cited starting point for a later proven impact query.
+
 Rust repositories receive the same limited package-level help for an exact local Cargo path
 dependency. Mnemo accepts only a runtime `[dependencies] name = { path = "..." }` declaration
 whose normalized local path and package name both match another parsed local library crate. It does

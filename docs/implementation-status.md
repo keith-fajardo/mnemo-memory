@@ -549,6 +549,13 @@ normalized local path and unrenamed package name identify another parsed local l
 Cargo is never executed; version-only, workspace-inherited, build, development, optional, feature,
 renamed, and escaping dependencies remain unresolved.
 
+Scoped source discovery now reuses the existing `source_query` route with deterministic lexical
+ranking: exact saved identities, then prefixes, then all-literal-token matches. Reference and
+SQLite adapters share the same bounded ranking contract, while SQLite retrieves only a bounded
+scoped candidate set per query. The search uses retained symbol/path identities only—not source
+bodies, comments, embeddings, model calls, or cross-project data—and its results still carry the
+immutable snapshot provenance needed before an impact traversal.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and

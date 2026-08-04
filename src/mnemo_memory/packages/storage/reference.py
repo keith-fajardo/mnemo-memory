@@ -86,6 +86,7 @@ from .contracts import (
     rank_knowledge_sections,
     validate_knowledge_search,
 )
+from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
 
 class ReferenceKnowledgeDocumentRepository:
@@ -1116,14 +1117,18 @@ class ReferenceSourceStructureRepository:
     def find_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
     ) -> tuple[CodeSymbol, ...]:
-        if not query.strip() or limit < 1:
+        terms = source_search_terms(query)
+        if not terms or limit < 1:
             return ()
-        normalized = query.casefold()
         return tuple(
-            symbol
-            for symbol in self.iter_symbols(scope, snapshot_id)
-            if normalized in symbol.qualified_name.casefold()
-            or normalized in symbol.relative_path.casefold()
+            sorted(
+                (
+                    symbol
+                    for symbol in self.iter_symbols(scope, snapshot_id)
+                    if source_symbol_matches(symbol, terms)
+                ),
+                key=lambda symbol: source_symbol_rank(symbol, query, terms),
+            )
         )[:limit]
 
     def module_symbols_for_paths(

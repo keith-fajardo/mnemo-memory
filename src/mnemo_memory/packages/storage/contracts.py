@@ -553,7 +553,9 @@ class SourceStructureRepository(Protocol):
 
     def find_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
-    ) -> tuple[CodeSymbol, ...]: ...
+    ) -> tuple[CodeSymbol, ...]:
+        """Return bounded scoped matches: exact identity, prefix, then all-token lexical rank."""
+        ...
 
     def module_symbols_for_paths(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_paths: tuple[str, ...]

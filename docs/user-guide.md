@@ -180,6 +180,16 @@ local package. Mnemo does not run npm, pnpm, or Yarn; inspect a lockfile; or gue
 resolution. External packages and ordinary version ranges, plus development, peer, and optional
 dependencies, remain outside this evidence boundary.
 
+### Finding a structural starting point
+
+You or a connected agent do not need to remember an exact source path before asking Mnemo about an
+unfamiliar repository. Use `get_context` with a short literal `source_query`, for example
+`reconcile orders`. Mnemo searches the **current scoped structural snapshot** and ranks an exact
+saved symbol or path first, then prefixes, then identities containing every supplied word. The
+result remains a bounded cited map of module/class/function/package identities; it never searches
+or returns source bodies, comments, chat history, embeddings, or another project. From that result,
+use the normal source-impact request to inspect only relationships Mnemo can prove.
+
 Rust projects have the same narrow package-level support for an explicit local Cargo runtime
 dependency: `[dependencies] name = { path = "..." }`. Mnemo records it only when the normalized
 local path and unrenamed package name both match another parsed local library crate. It does not

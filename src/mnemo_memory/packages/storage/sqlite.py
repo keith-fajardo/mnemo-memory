@@ -118,6 +118,7 @@ from .contracts import (
     rank_knowledge_sections,
     validate_knowledge_search,
 )
+from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
 LATEST_SCHEMA_VERSION = 12
 BUSY_TIMEOUT_MS = 5000
@@ -3072,10 +3073,20 @@ class SQLiteSourceStructureRepository:
     def find_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, query: str, *, limit: int
     ) -> tuple[CodeSymbol, ...]:
-        if not query.strip() or limit < 1:
+        terms = source_search_terms(query)
+        if not terms or limit < 1:
             return ()
         self._backend.get_source_snapshot(scope, snapshot_id)
-        escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped_terms = tuple(
+            term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") for term in terms
+        )
+        term_clauses = " AND ".join(
+            "(lower(symbol.qualified_name) LIKE ? ESCAPE '\\' "
+            "OR lower(symbol.relative_path) LIKE ? ESCAPE '\\')"
+            for _ in escaped_terms
+        )
+        query_values = tuple(value for term in escaped_terms for value in (f"%{term}%",) * 2)
+        candidate_limit = min(limit * 8, 2048)
         try:
             with self._backend._connect() as connection:
                 rows = connection.execute(
@@ -3084,23 +3095,31 @@ class SQLiteSourceStructureRepository:
                     "ON snapshot.snapshot_id = symbol.snapshot_id "
                     "WHERE symbol.snapshot_id = ? AND snapshot.owner_id = ? "
                     "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
-                    "AND (lower(symbol.qualified_name) LIKE ? ESCAPE '\\' "
-                    "OR lower(symbol.relative_path) LIKE ? ESCAPE '\\') "
-                    "ORDER BY symbol.relative_path ASC, symbol.line_number ASC, "
+                    "AND "
+                    + term_clauses
+                    + " ORDER BY symbol.relative_path ASC, symbol.line_number ASC, "
                     "symbol.qualified_name ASC, symbol.symbol_id ASC LIMIT ?",
                     (
                         str(snapshot_id),
                         str(scope.owner_id),
                         _maybe(scope.workspace_id),
                         str(scope.project_id),
-                        f"%{escaped}%",
-                        f"%{escaped}%",
-                        limit,
+                        *query_values,
+                        candidate_limit,
                     ),
                 ).fetchall()
         except sqlite3.Error as error:
             raise SourceIndexStorageFailure("source index storage operation failed") from error
-        return self._symbols_from_rows(snapshot_id, rows)
+        return tuple(
+            sorted(
+                (
+                    symbol
+                    for symbol in self._symbols_from_rows(snapshot_id, rows)
+                    if source_symbol_matches(symbol, terms)
+                ),
+                key=lambda symbol: source_symbol_rank(symbol, query, terms),
+            )
+        )[:limit]
 
     def module_symbols_for_paths(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_paths: tuple[str, ...]
