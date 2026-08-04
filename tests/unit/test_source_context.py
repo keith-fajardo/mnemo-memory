@@ -911,6 +911,7 @@ def test_source_impact_honors_the_symbol_limit_for_a_file_start(tmp_path: Path) 
 
     symbols = [item for item in packet.structural_items if item.item_id.startswith("source:")]
     assert len(symbols) == 1
+    assert not any(item.item_id.startswith("source-edge:") for item in packet.structural_items)
     assert packet.omissions[-1].detail == "maximum symbol count reached"
 
 
