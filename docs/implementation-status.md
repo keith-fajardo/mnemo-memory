@@ -606,3 +606,6 @@ relative path. Results are newest-first, scoped, bounded, and cited to each befo
 unrelated project changes and source bodies remain excluded. This lets a later agent investigate
 what was recorded for a particular model or file while relying on the checkpoint, lesson, or
 approved fact—not a diff—as evidence for why it changed.
+
+The same personal audit is available without MCP through `mnemo-memory memory changes --path
+RELATIVE_PATH --history-limit N`; unrelated transitions are omitted from a path-filtered history.

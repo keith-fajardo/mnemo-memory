@@ -57,7 +57,7 @@ def test_cli_help_explains_the_user_facing_workflow() -> None:
     assert "Run a deterministic interactive Mnemo setup guide." in root.output
     assert "Register Mnemo with an AI coding client." in root.output
     assert "Enable automatic task handoffs for this project and client." in memory.output
-    assert "Show the latest recorded structural change" in memory.output
+    assert "Show bounded saved structural changes" in memory.output
     assert "Enable Mnemo for this dbt project; no UUIDs are needed normally." in dbt.output
     assert "Run exact dbt arguments with safe Mnemo pre/post manifest hooks." in dbt.output
 
@@ -331,6 +331,57 @@ def test_memory_changes_reports_a_body_only_file_change_without_source_text(tmp_
     assert "private first value" not in result.output
     assert "private corrected value" not in result.output
     assert str(project) not in result.output
+
+
+def test_memory_changes_can_show_bounded_newest_first_history_for_one_path(tmp_path: Path) -> None:
+    project = tmp_path / "project history Ω"
+    project.mkdir()
+    (project / ".git").mkdir()
+    tracked = project / "core.py"
+    unrelated = project / "private.py"
+    tracked.write_text("def core():\n    return 1\n")
+    unrelated.write_text("def private():\n    return 1\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    parser = SourceStructureParser()
+    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+    tracked.write_text("def core():\n    return 2\n")
+    second = repository.store_and_activate(
+        parser.parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+    unrelated.write_text("def private():\n    return 2\n")
+    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+    tracked.write_text("def core():\n    return 3\n")
+    fourth = repository.store_and_activate(
+        parser.parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "changes",
+            "--path",
+            "core.py",
+            "--history-limit",
+            "3",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["requested_relative_path"] == "core.py"
+    assert len(value["transitions"]) == 2
+    assert value["transitions"][0]["after_snapshot_id"] == str(fourth.snapshot_id)
+    assert value["transitions"][1]["after_snapshot_id"] == str(second.snapshot_id)
+    assert all("private.py" not in json.dumps(item) for item in value["transitions"])
 
 
 def test_memory_changes_defaults_to_latest_and_requires_a_real_transition(tmp_path: Path) -> None:

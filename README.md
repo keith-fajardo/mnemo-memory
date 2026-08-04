@@ -162,6 +162,7 @@ From an enabled repository, you can also inspect a bounded static impact candida
 mnemo-memory memory impact package.module_name
 mnemo-memory memory history
 mnemo-memory memory changes
+mnemo-memory memory changes --path models/orders.sql --history-limit 4
 mnemo-memory memory refresh
 ```
 
@@ -171,6 +172,7 @@ mnemo-memory memory refresh
 `get_context` for a bounded `source_changes` history for one relative path such as
 `models/orders.sql`; Mnemo returns only saved file/declaration/relationship identities for that
 path, newest transition first, with snapshot citations. It never returns the SQL or source body.
+You can inspect the same bounded history yourself with `memory changes --path ... --history-limit`.
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.

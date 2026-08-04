@@ -83,6 +83,15 @@ matching saved transitions first, with snapshot citations. It shows only file/de
 relationship identities and fingerprints—never the SQL or source body—and the checkpoint or a
 recorded lesson remains the evidence for **why** a change was made.
 
+You can inspect that same safe history yourself:
+
+```bash
+mnemo-memory memory changes --path models/orders.sql --history-limit 4
+```
+
+The path is relative to the enabled repository. Mnemo rejects absolute paths and parent traversal,
+and it returns no other project’s history.
+
 With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
 fresh session, the connected agent receives a short list of added/removed/modified **relative
 files**, declarations, and resolved relationships, tied to the source snapshot Mnemo just

@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 from uuid import uuid4
 
@@ -82,6 +82,7 @@ from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
     SourceImpactQuery,
     SourceImpactService,
+    SourceSnapshotDiff,
     SourceStructureParser,
     SourceStructureParseRequest,
 )
@@ -165,6 +166,35 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
 
 def _show(value: object) -> None:
     typer.echo(json.dumps(value, sort_keys=True))
+
+
+def _validate_cli_relative_path(value: str) -> None:
+    """Keep a human-facing source-history filter scoped to one canonical relative path."""
+    path = PurePosixPath(value)
+    if (
+        not value
+        or len(value) > 512
+        or "\\" in value
+        or path.is_absolute()
+        or ".." in path.parts
+        or value != path.as_posix()
+    ):
+        raise typer.BadParameter("MNEMO_SOURCE_DIFF_PATH_INVALID")
+
+
+def _has_source_diff_entries(value: dict[str, object]) -> bool:
+    return any(
+        bool(value[key])
+        for key in (
+            "added_files",
+            "removed_files",
+            "modified_files",
+            "added_symbols",
+            "removed_symbols",
+            "added_relationships",
+            "removed_relationships",
+        )
+    )
 
 
 def _guide_client_commands(choice: str) -> tuple[str, ...]:
@@ -905,7 +935,7 @@ def memory_impact(
 
 
 @memory_app.command(
-    "changes", help="Show the latest recorded structural change, or compare two snapshots."
+    "changes", help="Show bounded saved structural changes, optionally for one relative file."
 )
 def memory_changes(
     before_snapshot_id: str | None = typer.Option(
@@ -917,11 +947,25 @@ def memory_changes(
     latest: bool = typer.Option(
         False, "--latest", help="Use the two most recent recorded snapshot activations."
     ),
+    relative_path: str | None = typer.Option(
+        None,
+        "--path",
+        help="Canonical repository-relative path to inspect, for example models/orders.sql.",
+    ),
+    history_limit: int = typer.Option(
+        1,
+        "--history-limit",
+        min=1,
+        max=16,
+        help="Return this many newest-first recorded transitions (advanced).",
+    ),
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
     """Show bounded file/declaration/relationship changes; snapshots remain immutable."""
     try:
+        if relative_path is not None:
+            _validate_cli_relative_path(relative_path)
         config = resolve_local_config(data_dir)
         binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
         if binding is None:
@@ -931,22 +975,34 @@ def memory_changes(
         )
         if latest and (before_snapshot_id is not None or after_snapshot_id is not None):
             raise typer.BadParameter("MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID")
+        if history_limit > 1 and (
+            latest or before_snapshot_id is not None or after_snapshot_id is not None
+        ):
+            raise typer.BadParameter("MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID")
         use_latest = latest or (before_snapshot_id is None and after_snapshot_id is None)
-        if use_latest:
+        service = SourceImpactService(repository)
+        if history_limit > 1:
+            history = repository.list_activation_history(binding.scope, limit=history_limit + 1)
+            if len(history) < 2:
+                raise typer.BadParameter("MNEMO_SOURCE_DIFF_NO_PRIOR_TRANSITION")
+            diffs = tuple(
+                service.diff(
+                    binding.scope, history[index + 1].snapshot_id, history[index].snapshot_id
+                )
+                for index in range(len(history) - 1)
+            )
+        elif use_latest:
             transition = repository.latest_transition(binding.scope)
             if transition is None:
                 raise typer.BadParameter("MNEMO_SOURCE_DIFF_NO_PRIOR_TRANSITION")
             before_id, after_id = transition[0].snapshot_id, transition[1].snapshot_id
+            diffs = (service.diff(binding.scope, before_id, after_id),)
         elif before_snapshot_id is None or after_snapshot_id is None:
             raise typer.BadParameter("MNEMO_SOURCE_DIFF_ARGUMENTS_INVALID")
         else:
             before_id = CodeSnapshotId.from_string(before_snapshot_id)
             after_id = CodeSnapshotId.from_string(after_snapshot_id)
-        diff = SourceImpactService(repository).diff(
-            binding.scope,
-            before_id,
-            after_id,
-        )
+            diffs = (service.diff(binding.scope, before_id, after_id),)
     except (AutomaticMemoryBindingError, ValueError) as error:
         raise typer.BadParameter("MNEMO_SOURCE_DIFF_UNAVAILABLE") from error
 
@@ -970,18 +1026,63 @@ def memory_changes(
     def file(value: object) -> str:
         return cast(CodeFile, value).relative_path
 
-    _show(
-        {
+    def rendered(diff: SourceSnapshotDiff) -> dict[str, object]:
+        before_symbols = {
+            item.symbol_id: item.relative_path
+            for item in repository.iter_symbols(binding.scope, diff.before.snapshot_id)
+        }
+        after_symbols = {
+            item.symbol_id: item.relative_path
+            for item in repository.iter_symbols(binding.scope, diff.after.snapshot_id)
+        }
+
+        def selected_file(item: object) -> bool:
+            return relative_path is None or cast(CodeFile, item).relative_path == relative_path
+
+        def selected_added_edge(item: object) -> bool:
+            return (
+                relative_path is None
+                or after_symbols.get(cast(CodeEdge, item).source_symbol_id) == relative_path
+            )
+
+        def selected_removed_edge(item: object) -> bool:
+            return (
+                relative_path is None
+                or before_symbols.get(cast(CodeEdge, item).source_symbol_id) == relative_path
+            )
+
+        return {
             "before_snapshot_id": str(diff.before.snapshot_id),
             "after_snapshot_id": str(diff.after.snapshot_id),
             "file_fingerprints_available": diff.file_fingerprints_available,
-            "added_files": [file(item) for item in diff.added_files],
-            "removed_files": [file(item) for item in diff.removed_files],
-            "modified_files": [file(item) for item in diff.modified_files],
-            "added_symbols": [symbol(item) for item in diff.added_symbols],
-            "removed_symbols": [symbol(item) for item in diff.removed_symbols],
-            "added_relationships": [edge(item) for item in diff.added_edges],
-            "removed_relationships": [edge(item) for item in diff.removed_edges],
+            "added_files": [file(item) for item in diff.added_files if selected_file(item)],
+            "removed_files": [file(item) for item in diff.removed_files if selected_file(item)],
+            "modified_files": [file(item) for item in diff.modified_files if selected_file(item)],
+            "added_symbols": [symbol(item) for item in diff.added_symbols if selected_file(item)],
+            "removed_symbols": [
+                symbol(item) for item in diff.removed_symbols if selected_file(item)
+            ],
+            "added_relationships": [
+                edge(item) for item in diff.added_edges if selected_added_edge(item)
+            ],
+            "removed_relationships": [
+                edge(item) for item in diff.removed_edges if selected_removed_edge(item)
+            ],
+        }
+
+    if history_limit == 1:
+        result = rendered(diffs[0])
+        if relative_path is not None:
+            result["requested_relative_path"] = relative_path
+        _show(result)
+        return
+    transitions = tuple(rendered(diff) for diff in diffs)
+    if relative_path is not None:
+        transitions = tuple(item for item in transitions if _has_source_diff_entries(item))
+    _show(
+        {
+            "requested_relative_path": relative_path,
+            "transitions": transitions,
         }
     )
 
