@@ -297,6 +297,12 @@ snapshot by default, or can name an immutable snapshot when an agent needs to re
 specific earlier state. A source map is called current only when its exact fresh source digest
 matches; “active” alone is never treated as proof that files have not changed.
 
+When an enabled project saves a checkpoint, Mnemo may also record the exact source snapshot it
+observed immediately afterward. This is a useful, cited answer to “which saved structure was the
+agent looking at when it handed work off?” It is **not** a claim that the snapshot caused the
+change or explains the decision: the checkpoint’s explicit evidence and lessons remain the source
+for *why* work was done.
+
 When Mnemo observes a supported structural change between snapshots, it gives the connected agent
 a short factual summary of added/removed/modified **relative files**, declarations, and proven
 relationships in the automatically attached fresh-session context. A body-only edit is therefore

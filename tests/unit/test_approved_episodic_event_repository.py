@@ -173,6 +173,9 @@ def test_approved_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER checkpoint_source_observation_snapshot_scope_match")
+        connection.execute("DROP TRIGGER checkpoint_source_observation_checkpoint_scope_match")
+        connection.execute("DROP TABLE checkpoint_source_observations")
         connection.execute("DROP TABLE source_structure_files")
         connection.execute("DROP TABLE approved_episodic_event_evidence")
         connection.execute("DROP TABLE approved_episodic_events")

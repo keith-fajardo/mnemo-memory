@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from mnemo_memory.packages.application.checkpoints import (
     AbandonCheckpoint,
@@ -18,6 +18,7 @@ from mnemo_memory.packages.application.checkpoints import (
     CheckpointApplicationRevisionConflict,
     CheckpointApplicationService,
     CheckpointApplicationStorageFailure,
+    CheckpointView,
     CompleteCheckpoint,
     CreateCheckpoint,
     GetCheckpointContext,
@@ -63,9 +64,11 @@ class DurableMcpContextPort:
         self,
         service: CheckpointApplicationService,
         context_service: UnifiedContextService | None = None,
+        after_checkpoint_save: Callable[[CheckpointView], object] | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
+        self._after_checkpoint_save = after_checkpoint_save
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -269,6 +272,7 @@ class DurableMcpContextPort:
                         "operation must be create, revise, complete, abandon, record_lesson, "
                         "or record_event"
                     )
+            self._observe_checkpoint_save(view)
             return {
                 "checkpoint_id": str(view.aggregate.checkpoint_id),
                 "checkpoint_revision_id": str(view.revision.revision_id),
@@ -279,6 +283,17 @@ class DurableMcpContextPort:
             }
         except Exception as error:
             raise _mcp_error(error) from error
+
+    def _observe_checkpoint_save(self, view: CheckpointView) -> None:
+        """Keep optional local structure observation fail-open and outside MCP errors."""
+        if self._after_checkpoint_save is None:
+            return
+        try:
+            self._after_checkpoint_save(view)
+        except Exception:
+            # A durable checkpoint has already succeeded. Do not disclose parser/storage details
+            # or turn an optional local index refresh into a failed save response.
+            return
 
 
 def _scope(request: Mapping[str, object]) -> MemoryScope:

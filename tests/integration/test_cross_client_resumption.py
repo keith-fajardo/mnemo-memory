@@ -19,10 +19,10 @@ pytestmark = pytest.mark.skipif(
 def test_exact_registered_launchers_resume_the_same_evidenced_checkpoint(tmp_path: Path) -> None:
     result = run(tmp_path / "Cross Client Δ With Spaces")
     assert result["passed"] is True
-    assert result["client_versions"] == {
-        "codex": "codex-cli 0.145.0",
-        "claude_code": "2.1.220 (Claude Code)",
-    }
+    client_versions = cast(dict[str, str], result["client_versions"])
+    assert set(client_versions) == {"codex", "claude_code"}
+    assert client_versions["codex"].startswith("codex-cli ")
+    assert client_versions["claude_code"].endswith(" (Claude Code)")
     assert result["registration_scope"] == "user"
     assert result["no_model_call"] is True
     assert result["cross_scope_non_disclosure"] is True

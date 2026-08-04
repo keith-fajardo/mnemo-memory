@@ -519,6 +519,12 @@ reminder. Immutable per-file SHA-256 fingerprints make a body-only change visibl
 source bodies or transcript; intent remains explicit checkpoint evidence rather than an inference
 from a diff.
 
+Each successful checkpoint save for an enabled local project can also record one immutable,
+scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
+association is idempotent, survives restart, and appears in bounded context with checkpoint and
+snapshot provenance. It is deliberately not causal: only explicit checkpoint evidence and lessons
+can explain why work changed.
+
 Supported Codex and Claude Code integrations also now use their prompt-boundary lifecycle event
 without inspecting submitted prompt text. After a tracked project mutation, the next user turn
 receives one bounded reminder to consult Mnemo before making historical or impact claims; saving a

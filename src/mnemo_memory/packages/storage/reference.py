@@ -14,6 +14,7 @@ from mnemo_memory.packages.domain import (
     CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
+    CheckpointSourceObservation,
     CheckpointStatus,
     CodeEdge,
     CodeFile,
@@ -46,6 +47,9 @@ from .contracts import (
     CheckpointNotFound,
     CheckpointPage,
     CheckpointRepository,
+    CheckpointSourceObservationConflict,
+    CheckpointSourceObservationNotFound,
+    CheckpointSourceObservationStoreResult,
     DuplicateCheckpoint,
     EpisodicEventNotFound,
     EpisodicEventPage,
@@ -64,6 +68,7 @@ from .contracts import (
     SourceIndexStorageFailure,
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
+    SourceStructureRepository,
 )
 
 
@@ -202,6 +207,72 @@ class ReferenceCheckpointLifecycleEventRepository:
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise InvalidEpisodicEventScope("episodic events require explicit task scope")
+
+
+class ReferenceCheckpointSourceObservationRepository:
+    """Reference association store that validates both immutable sides before mutation."""
+
+    def __init__(
+        self, checkpoints: CheckpointRepository, source: SourceStructureRepository
+    ) -> None:
+        self._checkpoints = checkpoints
+        self._source = source
+        self._observations: dict[CheckpointRevisionId, CheckpointSourceObservation] = {}
+
+    def append_checkpoint_source_observation(
+        self, observation: CheckpointSourceObservation
+    ) -> CheckpointSourceObservationStoreResult:
+        if observation.scope.level is not ScopeLevel.TASK:
+            raise CheckpointSourceObservationNotFound("checkpoint source observation was not found")
+        try:
+            revision = self._checkpoints.get_revision(
+                observation.scope,
+                observation.checkpoint_id,
+                revision_id=observation.revision_id,
+            )
+        except CheckpointNotFound as error:
+            raise CheckpointSourceObservationNotFound(
+                "checkpoint revision was not found"
+            ) from error
+        if revision.revision_id != observation.revision_id:
+            raise CheckpointSourceObservationNotFound("checkpoint revision was not found")
+        project_scope = MemoryScope(
+            observation.scope.owner_id,
+            ScopeLevel.PROJECT,
+            observation.scope.visibility,
+            observation.scope.workspace_id,
+            observation.scope.project_id,
+        )
+        try:
+            self._source.get_snapshot(project_scope, observation.source_snapshot_id)
+        except SourceSnapshotNotFound as error:
+            raise CheckpointSourceObservationNotFound("source snapshot was not found") from error
+        existing = self._observations.get(observation.revision_id)
+        if existing is not None:
+            if existing == observation:
+                return CheckpointSourceObservationStoreResult(existing, True)
+            raise CheckpointSourceObservationConflict(
+                "checkpoint revision already has a source observation"
+            )
+        self._observations[observation.revision_id] = observation
+        return CheckpointSourceObservationStoreResult(observation, False)
+
+    def get_checkpoint_source_observation(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        revision_id: CheckpointRevisionId,
+    ) -> CheckpointSourceObservation:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise CheckpointSourceObservationNotFound("checkpoint source observation was not found")
+        observation = self._observations.get(revision_id)
+        if (
+            observation is None
+            or observation.scope != scope
+            or observation.checkpoint_id != checkpoint_id
+        ):
+            raise CheckpointSourceObservationNotFound("checkpoint source observation was not found")
+        return observation
 
 
 class ReferenceCheckpointRepository:

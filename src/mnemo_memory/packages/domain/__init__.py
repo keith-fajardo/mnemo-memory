@@ -1,6 +1,7 @@
 """Pure Mnemo domain identifiers and immutable value objects."""
 
 from .approved_episodic_events import ApprovedEpisodicEvent, ApprovedEventKind
+from .checkpoint_source_observation import CheckpointSourceObservation
 from .code_structure import (
     CodeEdge,
     CodeEdgeKind,
@@ -105,6 +106,7 @@ __all__ = [
     "CheckpointLifecycleEvent",
     "CheckpointRevision",
     "CheckpointRevisionId",
+    "CheckpointSourceObservation",
     "CheckpointStatus",
     "CodeEdge",
     "CodeEdgeKind",

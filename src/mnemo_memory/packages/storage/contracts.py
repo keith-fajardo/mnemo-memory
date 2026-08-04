@@ -15,6 +15,7 @@ from mnemo_memory.packages.domain import (
     CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
+    CheckpointSourceObservation,
     CodeEdge,
     CodeFile,
     CodeSnapshot,
@@ -165,6 +166,18 @@ class SourceSnapshotNotFound(ProjectIndexRepositoryError):
 
 
 class SourceIndexStorageFailure(ProjectIndexRepositoryError):
+    pass
+
+
+class CheckpointSourceObservationNotFound(ProjectIndexRepositoryError):
+    pass
+
+
+class CheckpointSourceObservationConflict(ProjectIndexRepositoryError):
+    pass
+
+
+class CheckpointSourceObservationStorageFailure(ProjectIndexRepositoryError):
     pass
 
 
@@ -389,3 +402,21 @@ class SourceStructureRepository(Protocol):
     def edges_to_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, symbol_ids: tuple[CodeSymbolId, ...]
     ) -> tuple[CodeEdge, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointSourceObservationStoreResult:
+    observation: CheckpointSourceObservation
+    idempotent: bool
+
+
+class CheckpointSourceObservationRepository(Protocol):
+    """Scoped immutable links between a checkpoint revision and a source snapshot."""
+
+    def append_checkpoint_source_observation(
+        self, observation: CheckpointSourceObservation
+    ) -> CheckpointSourceObservationStoreResult: ...
+
+    def get_checkpoint_source_observation(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId, revision_id: CheckpointRevisionId
+    ) -> CheckpointSourceObservation: ...

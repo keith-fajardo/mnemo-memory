@@ -19,6 +19,7 @@ from mnemo_memory.packages.application.dbt import (
 )
 from mnemo_memory.packages.domain import (
     CheckpointId,
+    CheckpointRevisionId,
     CodeEdge,
     CodeEdgeKind,
     CodeFile,
@@ -50,7 +51,11 @@ from mnemo_memory.packages.domain import (
     VerificationStatus,
 )
 from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, SourceStateFingerprint
-from mnemo_memory.packages.storage.contracts import SourceStructureRepository
+from mnemo_memory.packages.storage.contracts import (
+    CheckpointSourceObservationNotFound,
+    CheckpointSourceObservationRepository,
+    SourceStructureRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,10 +166,12 @@ class UnifiedContextService:
         checkpoints: CheckpointApplicationService,
         dbt: DbtManifestApplicationService | None,
         source: SourceStructureRepository | None = None,
+        checkpoint_source_observations: CheckpointSourceObservationRepository | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
         self._source = source
+        self._checkpoint_source_observations = checkpoint_source_observations
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -177,6 +184,7 @@ class UnifiedContextService:
                 request.include_approved_events,
             )
         )
+        packet = self._with_checkpoint_source_observation(packet, request)
         if (
             request.lineage is None
             and request.source_query is None
@@ -186,6 +194,10 @@ class UnifiedContextService:
             return packet
         if request.lineage is None:
             return self._with_requested_source_facts(packet, request)
+        return self._with_dbt_lineage(packet, request)
+
+    def _with_dbt_lineage(self, packet: ContextPacket, request: GetUnifiedContext) -> ContextPacket:
+        """Attach requested dbt lineage, then any requested source facts."""
         query = request.lineage
         assert query is not None
         if self._dbt is None:
@@ -297,6 +309,107 @@ class UnifiedContextService:
             conflicts=packet.conflicts,
         )
         return self._with_requested_source_facts(result_packet, request)
+
+    def _with_checkpoint_source_observation(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach an exact co-observed source snapshot without claiming it explains a change."""
+        if (
+            self._source is None
+            or self._checkpoint_source_observations is None
+            or packet.active_task_checkpoint is None
+        ):
+            return packet
+        checkpoint_id, revision_id = _checkpoint_reference_from_context_item(
+            packet.active_task_checkpoint.item_id
+        )
+        if checkpoint_id is None or revision_id is None:
+            return packet
+        try:
+            observation = self._checkpoint_source_observations.get_checkpoint_source_observation(
+                request.scope, checkpoint_id, revision_id
+            )
+            snapshot = self._source.get_snapshot(
+                _project_scope(request.scope), observation.source_snapshot_id
+            )
+        except CheckpointSourceObservationNotFound:
+            return packet
+        except Exception:
+            return _with_omission(
+                packet,
+                "checkpoint-source-observation",
+                OmissionReason.LOWER_RANK,
+                "checkpoint source observation is unavailable",
+            )
+        content = json.dumps(
+            {
+                "checkpoint_revision_id": str(observation.revision_id),
+                "observation": "source_snapshot_observed_after_checkpoint_revision_persisted",
+                "observed_at": observation.observed_at.isoformat(),
+                "source_digest": snapshot.source_digest,
+                "source_snapshot_id": str(snapshot.snapshot_id),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        remaining = min(
+            packet.budget.structural,
+            packet.budget.total_limit - packet.declared_total_tokens,
+        ) - sum(item.token_estimate for item in packet.structural_items)
+        if tokens > remaining:
+            return _with_omission(
+                packet,
+                "checkpoint-source-observation",
+                OmissionReason.TOKEN_BUDGET,
+                "checkpoint source observation exceeds remaining structural budget",
+            )
+        evidence = (
+            *packet.active_task_checkpoint.evidence_references,
+            _source_snapshot_evidence(packet, snapshot),
+        )
+        item = ContextItem(
+            f"source-observation:{observation.revision_id}:{snapshot.snapshot_id}",
+            ContextItemType.STRUCTURAL_FACT,
+            request.scope,
+            content,
+            ContentRepresentation.UNTRUSTED_EVIDENCE,
+            tokens,
+            evidence,
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            Sensitivity.NORMAL,
+            ValidityState.UNKNOWN,
+            None,
+            ConflictState.NONE,
+            observation.observed_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{item.item_id}",
+            item.item_id,
+            f"mnemo:checkpoint-source-observation/{observation.revision_id}/{snapshot.snapshot_id}",
+            hashlib.sha256(content.encode()).hexdigest(),
+            evidence,
+        )
+        return ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
 
     def _with_requested_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -682,6 +795,23 @@ def _project_scope(scope: MemoryScope) -> MemoryScope:
         scope.workspace_id,
         scope.project_id,
     )
+
+
+def _checkpoint_reference_from_context_item(
+    item_id: str,
+) -> tuple[CheckpointId | None, CheckpointRevisionId | None]:
+    """Decode only the canonical item identity emitted by ``CheckpointApplicationService``."""
+    prefix = "checkpoint:"
+    separator = ":revision:"
+    if not isinstance(item_id, str) or not item_id.startswith(prefix) or separator not in item_id:
+        return None, None
+    checkpoint_value, revision_value = item_id[len(prefix) :].split(separator, maxsplit=1)
+    try:
+        return CheckpointId.from_string(checkpoint_value), CheckpointRevisionId.from_string(
+            revision_value
+        )
+    except ValueError:
+        return None, None
 
 
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")

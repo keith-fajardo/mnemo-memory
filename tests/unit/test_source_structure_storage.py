@@ -113,6 +113,9 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
     # fabricating source history. Remove later migration state as well: a test
     # database cannot claim v6 while its v5 schema has been removed.
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER checkpoint_source_observation_snapshot_scope_match")
+        connection.execute("DROP TRIGGER checkpoint_source_observation_checkpoint_scope_match")
+        connection.execute("DROP TABLE checkpoint_source_observations")
         connection.execute("DROP TABLE checkpoint_lifecycle_events")
         connection.execute("DROP TABLE approved_episodic_event_evidence")
         connection.execute("DROP TABLE approved_episodic_events")
@@ -156,8 +159,11 @@ def test_file_fingerprint_migration_is_atomic_and_legacy_snapshots_make_no_false
     # so a later comparison must report file-level history as unavailable, not claim
     # every file was newly added.
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER checkpoint_source_observation_snapshot_scope_match")
+        connection.execute("DROP TRIGGER checkpoint_source_observation_checkpoint_scope_match")
+        connection.execute("DROP TABLE checkpoint_source_observations")
         connection.execute("DROP TABLE source_structure_files")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 8")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 8")
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=8)
     with sqlite3.connect(database) as connection:

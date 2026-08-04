@@ -178,6 +178,21 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
 
 
+def test_optional_checkpoint_observation_failure_never_changes_a_successful_save(
+    tmp_path: Path,
+) -> None:
+    def failing_observer(_: object) -> object:
+        raise RuntimeError("private parser failure")
+
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "durable")) as runtime:
+        result = DurableMcpContextPort(
+            runtime.checkpoint_service, after_checkpoint_save=failing_observer
+        ).save_checkpoint(save_payload())
+
+    assert result["persistence"] == "durable"
+    assert result["lifecycle_status"] == "active"
+
+
 def test_durable_port_returns_opt_in_scoped_lifecycle_history(tmp_path: Path) -> None:
     with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "timeline")) as runtime:
         port = DurableMcpContextPort(runtime.checkpoint_service)

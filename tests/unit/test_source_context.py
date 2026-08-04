@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
+from mnemo_memory.packages.application.checkpoints import (
+    CheckpointApplicationService,
+    CreateCheckpoint,
+)
 from mnemo_memory.packages.application.unified_context import (
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
@@ -11,13 +14,22 @@ from mnemo_memory.packages.application.unified_context import (
     UnifiedContextService,
 )
 from mnemo_memory.packages.domain import (
+    CheckpointContent,
+    CheckpointSourceObservation,
     ContextBudget,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
     MemoryScope,
     OwnerId,
     ProjectId,
     ScopeLevel,
     SessionId,
+    SourceId,
+    SourceTrustClass,
     TaskId,
+    VerificationStatus,
     Visibility,
     WorkspaceId,
 )
@@ -29,8 +41,39 @@ from mnemo_memory.packages.project_index import (
 )
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointRepository,
+    ReferenceCheckpointSourceObservationRepository,
     ReferenceSourceStructureRepository,
 )
+
+
+def _checkpoint_content() -> CheckpointContent:
+    return CheckpointContent(
+        task_objective="Continue the bounded source-context task.",
+        completed_work=("Saved an exact handoff.",),
+        current_state="A source snapshot may be co-observed after this revision.",
+        remaining_work=("Review the resulting structural facts.",),
+        decisions=("Keep source observations explicitly non-causal.",),
+        failures=(),
+        blockers=(),
+        relevant_files=("service.py",),
+        relevant_artifacts=(),
+        verification_performed=("focused test passed",),
+        token_estimate=80,
+    )
+
+
+def _checkpoint_evidence() -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://source-context/checkpoint",
+        "sha256:" + "a" * 64,
+        EvidenceLocation("fixture://source-context/checkpoint"),
+        datetime(2026, 8, 4, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
 
 
 def test_source_query_returns_scoped_provenance_bearing_structural_facts(tmp_path: Path) -> None:
@@ -72,6 +115,67 @@ def test_source_query_returns_scoped_provenance_bearing_structural_facts(tmp_pat
     assert item.evidence_references[0].content_hash.startswith("sha256:")
     assert item.validity.value == "unknown"
     assert '"currentness":"unknown"' in item.content
+    assert str(root) not in item.content
+
+
+def test_context_attaches_an_exact_checkpoint_source_observation_without_claiming_cause(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "service.py").write_text("def reconcile():\n    return True\n", encoding="utf-8")
+    source = ReferenceSourceStructureRepository()
+    artifact = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    checkpoints = ReferenceCheckpointRepository()
+    service = CheckpointApplicationService(
+        checkpoints, clock=lambda: datetime(2026, 8, 4, tzinfo=UTC)
+    )
+    view = service.create(
+        CreateCheckpoint(task_scope, _checkpoint_content(), (_checkpoint_evidence(),))
+    )
+    observations = ReferenceCheckpointSourceObservationRepository(checkpoints, source)
+    observations.append_checkpoint_source_observation(
+        CheckpointSourceObservation(
+            task_scope,
+            view.aggregate.checkpoint_id,
+            view.revision.revision_id,
+            artifact.snapshot.snapshot_id,
+            datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+
+    packet = UnifiedContextService(service, None, source, observations).get_context(
+        GetUnifiedContext(task_scope)
+    )
+
+    item = next(
+        item for item in packet.structural_items if item.item_id.startswith("source-observation:")
+    )
+    assert str(view.revision.revision_id) in item.content
+    assert str(artifact.snapshot.snapshot_id) in item.content
+    assert "source_snapshot_observed_after_checkpoint_revision_persisted" in item.content
+    assert "because" not in item.content
+    assert item.validity.value == "unknown"
+    assert len(item.evidence_references) == 2
+    assert packet.provenance[-1].item_id == item.item_id
     assert str(root) not in item.content
 
 

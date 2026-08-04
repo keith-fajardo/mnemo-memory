@@ -25,6 +25,7 @@ from mnemo_memory.packages.domain import (
     CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
+    CheckpointSourceObservation,
     CheckpointStatus,
     CodeEdge,
     CodeEdgeKind,
@@ -69,6 +70,10 @@ from .contracts import (
     ApprovedEpisodicEventStoreResult,
     CheckpointNotFound,
     CheckpointPage,
+    CheckpointSourceObservationConflict,
+    CheckpointSourceObservationNotFound,
+    CheckpointSourceObservationStorageFailure,
+    CheckpointSourceObservationStoreResult,
     DuplicateCheckpoint,
     EpisodicEventNotFound,
     EpisodicEventPage,
@@ -92,7 +97,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -254,6 +259,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 8:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 8
+            if version < 9:
+                _execute_sql_script(
+                    connection, _migration_text("0009_checkpoint_source_observations.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (9, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 9:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -593,6 +609,107 @@ class SQLiteCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def append_checkpoint_source_observation(
+        self, observation: CheckpointSourceObservation
+    ) -> CheckpointSourceObservationStoreResult:
+        """Durably link one exact revision to a scoped source snapshot without inferring cause."""
+        self._require_checkpoint_scope(observation.scope)
+        scope = observation.scope
+        try:
+            with self._transaction() as connection:
+                revision = connection.execute(
+                    "SELECT revision.checkpoint_revision_id "
+                    "FROM checkpoint_revision_records AS revision "
+                    "JOIN checkpoint_aggregates AS aggregate "
+                    "ON aggregate.checkpoint_id = revision.checkpoint_id "
+                    "WHERE revision.checkpoint_revision_id = ? AND revision.checkpoint_id = ? "
+                    "AND aggregate.owner_id = ? AND aggregate.visibility = ? "
+                    "AND aggregate.workspace_id IS ? AND aggregate.project_id = ? "
+                    "AND aggregate.session_id = ? AND aggregate.task_id = ?",
+                    (
+                        str(observation.revision_id),
+                        str(observation.checkpoint_id),
+                        *self._scope_values(scope),
+                    ),
+                ).fetchone()
+                if revision is None:
+                    raise CheckpointSourceObservationNotFound("checkpoint revision was not found")
+                snapshot = connection.execute(
+                    "SELECT snapshot_id FROM source_structure_snapshots WHERE snapshot_id = ? "
+                    "AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+                    (
+                        str(observation.source_snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+                if snapshot is None:
+                    raise CheckpointSourceObservationNotFound("source snapshot was not found")
+                existing = connection.execute(
+                    "SELECT * FROM checkpoint_source_observations WHERE checkpoint_revision_id = ?",
+                    (str(observation.revision_id),),
+                ).fetchone()
+                if existing is not None:
+                    stored = self._checkpoint_source_observation_from_row(existing, scope)
+                    if stored == observation:
+                        return CheckpointSourceObservationStoreResult(stored, idempotent=True)
+                    raise CheckpointSourceObservationConflict(
+                        "checkpoint revision already has a source observation"
+                    )
+                connection.execute(
+                    "INSERT INTO checkpoint_source_observations("
+                    "checkpoint_revision_id,checkpoint_id,source_snapshot_id,owner_id,visibility,"
+                    "workspace_id,project_id,session_id,task_id,observed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(observation.revision_id),
+                        str(observation.checkpoint_id),
+                        str(observation.source_snapshot_id),
+                        *self._scope_values(scope),
+                        observation.observed_at.isoformat(),
+                    ),
+                )
+                return CheckpointSourceObservationStoreResult(observation, idempotent=False)
+        except (
+            CheckpointSourceObservationNotFound,
+            CheckpointSourceObservationConflict,
+            ValueError,
+            TypeError,
+        ):
+            raise
+        except sqlite3.IntegrityError as error:
+            raise CheckpointSourceObservationStorageFailure(
+                "checkpoint source observation storage failed"
+            ) from error
+        except sqlite3.Error as error:
+            raise CheckpointSourceObservationStorageFailure(
+                "checkpoint source observation storage failed"
+            ) from error
+
+    def get_checkpoint_source_observation(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        revision_id: CheckpointRevisionId,
+    ) -> CheckpointSourceObservation:
+        self._require_checkpoint_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM checkpoint_source_observations WHERE checkpoint_revision_id = ? "
+                    "AND checkpoint_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(revision_id), str(checkpoint_id), *self._scope_values(scope)),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise CheckpointSourceObservationStorageFailure(
+                "checkpoint source observation storage failed"
+            ) from error
+        if row is None:
+            raise CheckpointSourceObservationNotFound("checkpoint source observation was not found")
+        return self._checkpoint_source_observation_from_row(row, scope)
 
     def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
         self._require_checkpoint_scope(event.scope)
@@ -1846,6 +1963,18 @@ class SQLiteCheckpointRepository:
                 for item in evidence_rows
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _checkpoint_source_observation_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> CheckpointSourceObservation:
+        return CheckpointSourceObservation(
+            scope=scope,
+            checkpoint_id=CheckpointId.from_string(row["checkpoint_id"]),
+            revision_id=CheckpointRevisionId.from_string(row["checkpoint_revision_id"]),
+            source_snapshot_id=CodeSnapshotId.from_string(row["source_snapshot_id"]),
+            observed_at=datetime.fromisoformat(row["observed_at"]),
         )
 
     @staticmethod

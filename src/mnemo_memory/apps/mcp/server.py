@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application import (
     LocalConfigurationError,
@@ -19,6 +21,7 @@ from mnemo_memory.packages.application import (
     build_checkpoint_runtime,
     resolve_local_config,
 )
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -245,6 +248,13 @@ def main(data_directory: Path | None = None) -> None:
         resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
     ) as runtime:
         assert runtime.dbt_manifest_service is not None
+        assert runtime.source_structure_repository is not None
+        observer = CheckpointSourceObserver(
+            LocalMemoryProjectBindingStore(runtime.config.data_directory),
+            runtime.source_structure_repository,
+            runtime.repository,
+            lambda: datetime.now(UTC),
+        )
         create_server(
             DurableMcpContextPort(
                 runtime.checkpoint_service,
@@ -252,7 +262,9 @@ def main(data_directory: Path | None = None) -> None:
                     runtime.checkpoint_service,
                     runtime.dbt_manifest_service,
                     runtime.source_structure_repository,
+                    runtime.repository,
                 ),
+                observer.observe,
             )
         ).run(transport="stdio")
 

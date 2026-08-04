@@ -16,6 +16,7 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     enable_client_hooks,
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
+from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
     LocalDbtProjectBindingStore,
@@ -342,6 +343,73 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
         content.to_dict(), sort_keys=True, separators=(",", ":")
     )
     assert packet["episodic_memories"] == []
+
+
+def test_checkpoint_save_observes_the_bound_source_snapshot_without_affecting_checkpoint_success(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo with Ω"
+    project.mkdir()
+    (project / "service.py").write_text("def reconcile():\n    return True\n", encoding="utf-8")
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://automatic-memory/observation",
+        "sha256:" + "b" * 64,
+        EvidenceLocation("fixture://automatic-memory/observation"),
+        datetime(2026, 8, 4, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
+    content = CheckpointContent(
+        task_objective="Resume from a co-observed source snapshot.",
+        completed_work=("Created a durable handoff.",),
+        current_state="The exact source projection is attached as evidence.",
+        remaining_work=(),
+        decisions=("Do not infer a cause from a snapshot association.",),
+        failures=(),
+        blockers=(),
+        relevant_files=("service.py",),
+        relevant_artifacts=(),
+        verification_performed=("focused test passed",),
+        token_estimate=80,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        assert runtime.source_structure_repository is not None
+        view = runtime.checkpoint_service.create(
+            CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
+        )
+        observer = CheckpointSourceObserver(
+            LocalMemoryProjectBindingStore(data),
+            runtime.source_structure_repository,
+            runtime.repository,
+            lambda: datetime(2026, 8, 4, tzinfo=UTC),
+        )
+        assert observer.observe(view)
+        observation = runtime.repository.get_checkpoint_source_observation(
+            binding.checkpoint_scope,
+            view.aggregate.checkpoint_id,
+            view.revision.revision_id,
+        )
+        assert observation.revision_id == view.revision.revision_id
+
+    attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
+
+    assert attached is not None
+    packet = json.loads(attached)
+    observations = [
+        item
+        for item in packet["structural_items"]
+        if item["item_id"].startswith("source-observation:")
+    ]
+    assert len(observations) == 1
+    assert (
+        "source_snapshot_observed_after_checkpoint_revision_persisted" in observations[0]["content"]
+    )
+    assert "return True" not in attached
 
 
 def test_automatic_context_attachment_includes_the_latest_bounded_source_transition(

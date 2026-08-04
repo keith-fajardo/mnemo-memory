@@ -139,6 +139,7 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                 runtime.checkpoint_service,
                 runtime.dbt_manifest_service,
                 runtime.source_structure_repository,
+                runtime.repository,
             ).get_context(
                 GetUnifiedContext(
                     scope,

@@ -213,6 +213,30 @@ class LocalMemoryProjectBindingStore:
         with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
             return self._get(root)
 
+    def get_for_scope(self, scope: MemoryScope) -> MemoryProjectBinding | None:
+        """Return one local binding for the exact project identity, or fail closed.
+
+        Paths remain local lookup data, never a durable identity.  More than one local path
+        claiming the same project identity is ambiguous for automatic source observation and is
+        deliberately treated as unavailable.
+        """
+        if not isinstance(scope, MemoryScope) or scope.project_id is None:
+            return None
+        if not self._directory.exists():
+            return None
+        with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
+            matches = tuple(
+                binding
+                for root, value in self._read_bindings().items()
+                if isinstance(root, str)
+                and (binding := MemoryProjectBinding.from_dict(Path(root), value)).scope.owner_id
+                == scope.owner_id
+                and binding.scope.workspace_id == scope.workspace_id
+                and binding.scope.project_id == scope.project_id
+                and binding.scope.visibility == scope.visibility
+            )
+        return matches[0] if len(matches) == 1 else None
+
     def _get(self, root: Path) -> MemoryProjectBinding | None:
         value = self._read_bindings().get(str(root))
         if value is None:
