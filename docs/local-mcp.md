@@ -254,6 +254,25 @@ returns its normal bounded, cited lineage facts. It rejects no match or multiple
 than guessing. As with a unique ID request, add an explicit snapshot ID for a historical audit and
 currentness evidence when you need to prove the artifact still matches your project.
 
+## Ask for static code impact from an exact file
+
+For a supported parsed language, use `source_impact.relative_path` when the changed file is known.
+This is exact: Mnemo starts from saved declarations in that one repository-relative POSIX path and
+does not fall back to a similarly named file.
+
+```json
+{
+  "source_impact": {
+    "relative_path": "src/billing/reconcile.py",
+    "direction": "dependents",
+    "transitive": true
+  }
+}
+```
+
+It returns only statically proven, snapshot-cited relationships. A file with no parsed declarations
+or no proven links returns a structured omission instead of an invented impact claim.
+
 ## Durability and recovery
 
 Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain

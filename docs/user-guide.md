@@ -64,6 +64,7 @@ You can inspect the same proven static impact map yourself from an enabled repos
 mnemo-memory memory impact package.module_name
 mnemo-memory memory impact package.module_name --direction dependencies
 mnemo-memory memory impact package.module_name --direct
+mnemo-memory memory impact --path src/billing/reconcile.py
 mnemo-memory memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
 mnemo-memory memory refresh
 ```
@@ -77,6 +78,8 @@ When automatic memory refreshes a repository at session start, its private agent
 the exact source digest for that refresh. An impact request that supplies that same digest is labeled
 `current`; a different digest is labeled `stale`; without comparable evidence it remains `unknown`.
 `require_current` omits a stale or unproven source map rather than presenting it as current.
+`memory impact --path` is the safer form when you know the changed file: Mnemo starts from every
+saved declaration in that exact relative path and never falls back to a same-named file elsewhere.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
 Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. With
 automatic memory enabled, Mnemo refreshes at session start, after a checkpoint save, and before an

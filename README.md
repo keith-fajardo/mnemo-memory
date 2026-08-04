@@ -171,6 +171,7 @@ From an enabled repository, you can also inspect a bounded static impact candida
 
 ```bash
 mnemo-memory memory impact package.module_name
+mnemo-memory memory impact --path src/billing/reconcile.py
 mnemo-memory memory history
 mnemo-memory memory changes
 mnemo-memory memory changes --path models/orders.sql --history-limit 4
@@ -184,6 +185,9 @@ mnemo-memory memory refresh
 `models/orders.sql`; Mnemo returns only saved file/declaration/relationship identities for that
 path, newest transition first, with snapshot citations. It never returns the SQL or source body.
 You can inspect the same bounded history yourself with `memory changes --path ... --history-limit`.
+Use `memory impact --path RELATIVE_PATH` when the question is “what proven static code depends on
+this exact file?” It includes all saved declarations in that file and never substitutes a similarly
+named path.
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.
