@@ -1000,12 +1000,18 @@ class SourceStructureParser:
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
             return ((alias or parts[-1], target),)
         if language == "php":
-            # ``use Namespace\\Type;`` imports exactly one class-like spelling. PHP aliases,
-            # grouped imports, and namespace-only imports are outside this static subset.
+            # ``use Namespace\\Type;`` and its explicit ``as Alias`` spelling import exactly
+            # one class-like target. Grouped imports and namespace-only imports are outside this
+            # static subset.
             parts = target.split("\\")
             if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
                 return ()
-            return ((parts[-1], ".".join(parts)),)
+            clause = next(
+                (child for child in node.named_children if child.type == "namespace_use_clause"),
+                None,
+            )
+            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw) if clause else None
+            return ((alias or parts[-1], ".".join(parts)),)
         if language not in {"javascript", "typescript", "tsx"}:
             return ()
         clause = next(
@@ -1066,7 +1072,18 @@ class SourceStructureParser:
                 (child for child in node.named_children if child.type == "namespace_use_clause"),
                 None,
             )
-            return _safe_tree_text(clause, raw)
+            # A clause can include an ``as Alias`` suffix.  The imported target is its
+            # qualified name alone; retaining the suffix here would make the binding
+            # invalid and would incorrectly leave an otherwise static alias unresolved.
+            qualified_name = next(
+                (
+                    child
+                    for child in (clause.named_children if clause is not None else ())
+                    if child.type == "qualified_name"
+                ),
+                None,
+            )
+            return _safe_tree_text(qualified_name, raw)
         return None
 
     @staticmethod

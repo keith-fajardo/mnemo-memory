@@ -148,8 +148,9 @@ relative imports that remain inside the registered project. Rust recognizes an e
 `import static package.Type.member` imports. They record explicit syntactic calls separately from imports and can follow only **proven** internal links to show a
 bounded dependency/impact candidate. It does not guess runtime dispatch or claim a complete call
 graph. That includes exact local C++ namespace calls, C# `using Namespace.Type` calls, and PHP
-`use Namespace\\Type` static calls when one saved target matches; namespace-only imports, aliases,
-computed/dynamic `require` calls, relative imports that escape the registered project, and duplicate
+`use Namespace\\Type` or `use Namespace\\Type as Alias` static calls when one saved target matches.
+Namespace-only imports, aliases that do not name one unique target, computed/dynamic `require` calls,
+relative imports that escape the registered project, and duplicate
 candidates stay unresolved. The storage and
 context contracts are language-neutral, so more language adapters and semantic resolution can be
 added without changing saved memory. The

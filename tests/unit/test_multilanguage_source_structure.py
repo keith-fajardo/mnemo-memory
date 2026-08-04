@@ -260,7 +260,7 @@ def test_cpp_csharp_and_php_resolve_only_explicit_unambiguous_local_calls(tmp_pa
     assert calls[("service.Service.run", "Helper.go")] is not None
 
 
-def test_cross_file_static_call_resolution_rejects_namespace_alias_and_duplicate_candidates(
+def test_cross_file_static_call_resolution_rejects_ambiguous_targets_but_resolves_php_alias(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "ambiguous"
@@ -292,7 +292,7 @@ def test_cross_file_static_call_resolution_rejects_namespace_alias_and_duplicate
 
     assert calls[("main.Run", "tools.go")] is None
     assert calls[("NamespaceOnly.Service.Run", "Helper.Go")] is None
-    assert calls[("Aliased.Service.run", "H.go")] is None
+    assert calls[("Aliased.Service.run", "H.go")] is not None
 
 
 def test_typescript_this_call_resolves_only_with_an_explicit_class_owner(tmp_path: Path) -> None:
