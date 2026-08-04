@@ -36,8 +36,10 @@ files or languages remain unresolved rather than being guessed. More adapters an
 resolvable call edges use the same graph contract. That subset now includes exact local C++
 namespace calls, C# `using Namespace.Type` calls, PHP `use Namespace\\Type` static calls, and
 direct top-level literal CommonJS `require("./local")` bindings in JavaScript and TypeScript.
-Namespace-only imports, computed/dynamic `require` calls, aliases that cannot be matched uniquely,
-and duplicate candidates remain unresolved. No unproven runtime relationship is
+Python also resolves direct local `from .module import member` and parent-package relative imports
+that remain inside the registered project. Namespace-only imports, computed/dynamic `require` calls,
+relative imports that escape the registered project, aliases that cannot be matched uniquely, and
+duplicate candidates remain unresolved. No unproven runtime relationship is
 presented as fact.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt

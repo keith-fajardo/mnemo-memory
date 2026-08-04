@@ -245,6 +245,73 @@ def test_python_import_alias_is_resolved_only_when_the_internal_target_is_unambi
     assert [item.symbol.qualified_name for item in result.symbols] == ["service.process"]
 
 
+def test_python_relative_imports_resolve_exact_internal_members_and_parent_packages(
+    tmp_path: Path,
+) -> None:
+    """Relative imports are common local links and must not be treated as external text."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "pkg" / "nested").mkdir(parents=True)
+    (root / "pkg" / "helpers.py").write_text("def validate():\n    return True\n")
+    (root / "pkg" / "service.py").write_text(
+        "from .helpers import validate as check\n\ndef process():\n    return check()\n"
+    )
+    (root / "pkg" / "nested" / "worker.py").write_text(
+        "from ..helpers import validate\n\ndef execute():\n    return validate()\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    result = service.query(
+        SourceImpactQuery(item_scope, "pkg.helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+    imports = [edge for edge in artifact.edges if edge.kind.value == "imports"]
+    symbol_ids = {item.qualified_name: item.symbol_id for item in artifact.symbols}
+
+    assert [item.symbol.qualified_name for item in result.symbols] == [
+        "pkg.nested.worker.execute",
+        "pkg.service.process",
+    ]
+    assert calls[("pkg.service.process", "check")] == symbol_ids["pkg.helpers.validate"]
+    assert calls[("pkg.nested.worker.execute", "validate")] == symbol_ids["pkg.helpers.validate"]
+    assert any(
+        edge.target == ".helpers.validate" and edge.target_symbol_id == symbol_ids["pkg.helpers"]
+        for edge in imports
+    )
+    assert any(
+        edge.target == "..helpers.validate" and edge.target_symbol_id == symbol_ids["pkg.helpers"]
+        for edge in imports
+    )
+
+
+def test_python_relative_import_that_escapes_the_registered_root_stays_unresolved(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "service.py").write_text(
+        "from ...outside import validate\n\ndef process():\n    return validate()\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    imports = [edge for edge in artifact.edges if edge.kind.value == "imports"]
+    calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
+
+    assert imports[0].target == "...outside.validate"
+    assert imports[0].target_symbol_id is None
+    assert calls[0].target == "validate"
+    assert calls[0].target_symbol_id is None
+
+
 def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"

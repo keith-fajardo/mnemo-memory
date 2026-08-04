@@ -515,18 +515,57 @@ class SourceStructureParser:
             candidate = _single_symbol(modules_by_name.get(".".join(parts[:end]), ()))
             if candidate is not None:
                 return candidate.symbol_id
-        if target.startswith("."):
-            source_parent = PurePosixPath(source_path).parent
-            normalized = SourceStructureParser._normal_relative_path(
-                source_parent.joinpath(PurePosixPath(target)).as_posix()
+        # Python relative imports use a dot prefix such as ``.helpers`` or
+        # ``..helpers``. JavaScript/TypeScript use filesystem spellings such as
+        # ``./helpers`` and must continue through the path resolver below.
+        if target.startswith(".") and not target.startswith(("./", "../")):
+            resolved = SourceStructureParser._relative_python_import_reference(
+                source_path, target, modules_by_path
             )
-        else:
-            normalized = SourceStructureParser._normal_relative_path(target)
+            return None if resolved is None else resolved[0].symbol_id
+        normalized = SourceStructureParser._normal_relative_path(target)
         return (
             None
             if normalized is None
             else SourceStructureParser._path_import_target(normalized, modules_by_path)
         )
+
+    @staticmethod
+    def _relative_python_import_reference(
+        source_path: str, target: str, modules_by_path: dict[str, CodeSymbol]
+    ) -> tuple[CodeSymbol, tuple[str, ...]] | None:
+        """Resolve one explicit relative Python import to its local module plus member tail.
+
+        ``from .helpers import validate`` is stored as ``.helpers.validate``.  The source-root
+        parser has no packaging/import execution context, so it follows only directory-relative,
+        in-snapshot paths and stops if the dot prefix would escape the registered root.  The
+        returned tail preserves the imported member spelling for a later call binding lookup.
+        """
+        levels = len(target) - len(target.lstrip("."))
+        if levels < 1:
+            return None
+        remainder = target[levels:]
+        parts = tuple(part for part in remainder.split(".") if part)
+        if remainder and len(parts) != len(remainder.split(".")):
+            return None
+        source_parent_parts = list(PurePosixPath(source_path).parent.parts)
+        parents_to_leave = levels - 1
+        if parents_to_leave > len(source_parent_parts):
+            return None
+        base = source_parent_parts[: len(source_parent_parts) - parents_to_leave]
+        for end in range(len(parts), -1, -1):
+            candidate = "/".join((*base, *parts[:end]))
+            if not candidate:
+                continue
+            module_id = SourceStructureParser._path_import_target(candidate, modules_by_path)
+            if module_id is None:
+                continue
+            module = next(
+                (item for item in modules_by_path.values() if item.symbol_id == module_id), None
+            )
+            if module is not None:
+                return module, parts[end:]
+        return None
 
     @staticmethod
     def _path_import_target(
@@ -644,6 +683,19 @@ class SourceStructureParser:
         for _, _binding, imported_target in (
             item for item in bindings if item[0] == source_path and item[1] == binding_name
         ):
+            if imported_target.startswith(".") and not imported_target.startswith(("./", "../")):
+                relative_reference = SourceStructureParser._relative_python_import_reference(
+                    source_path, imported_target, modules_by_path
+                )
+                if relative_reference is None:
+                    continue
+                module, imported_tail = relative_reference
+                member_parts = (*imported_tail, *((remainder,) if separator else ()))
+                candidate_name = ".".join((module.qualified_name, *member_parts))
+                imported = _single_symbol(symbols_by_name.get(candidate_name, ()))
+                if imported is not None:
+                    candidates.append(imported)
+                continue
             import_target, marker, imported_member = imported_target.partition("|")
             if marker:
                 if import_target.startswith("go:"):
