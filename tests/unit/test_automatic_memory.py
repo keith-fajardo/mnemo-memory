@@ -528,6 +528,7 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
     instruction = str(output["additionalContext"])
     assert "Modified files: core.py." in instruction
     assert "static dependent candidates" in instruction
+    assert "source snapshot " in instruction
     assert "service.py:service" in instruction
     assert "return 1" not in instruction
     assert "return 2" not in instruction
@@ -873,6 +874,7 @@ def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_f
     assert isinstance(output, dict)
     instruction = str(output["additionalContext"])
     assert "static dependent candidates" in instruction
+    assert "source snapshot " in instruction
     assert "core.py" in instruction
     assert "service.py:service" in instruction
     assert "return 1" not in instruction

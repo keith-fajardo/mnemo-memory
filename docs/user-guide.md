@@ -123,9 +123,9 @@ That gives the agent relevant structural facts while it is analyzing the next re
 capturing the user’s prompt or source body.
 
 For an exact changed file in a supported parsed language, that fresh-session cue also includes a
-small list of proven **static dependent candidates**. This is a practical “what might be affected?”
-starting point, not a runtime promise: the agent should still inspect the cited structure and run
-the appropriate verification.
+small list of proven **static dependent candidates** and the immutable source snapshot that proves
+them. This is a practical “what might be affected?” starting point, not a runtime promise: the
+agent should still inspect the cited structure and run the appropriate verification.
 
 If that changed file is a dbt `.sql` model and Mnemo has an active manifest for the same project,
 the cue instead also includes bounded downstream dbt model identities from the manifest. That is

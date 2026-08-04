@@ -29,7 +29,13 @@ from mnemo_memory.packages.application.dbt import (
     QueryLineage,
     ResolveManifestFile,
 )
-from mnemo_memory.packages.domain import CodeFile, CodeSymbol, DbtSnapshotId, MemoryScope
+from mnemo_memory.packages.domain import (
+    CodeFile,
+    CodeSnapshotId,
+    CodeSymbol,
+    DbtSnapshotId,
+    MemoryScope,
+)
 from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
     SourceImpactQuery,
@@ -268,6 +274,7 @@ class _SourceImpactCue:
     """A bounded, static dependent cue for one exact changed source file."""
 
     relative_path: str
+    snapshot_id: CodeSnapshotId
     dependents: tuple[str, ...]
 
 
@@ -460,7 +467,11 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
 
 def _source_impact_instruction(cues: tuple[_SourceImpactCue, ...]) -> str:
     """Phrase bounded static impact candidates without elevating them to runtime facts."""
-    rendered = "; ".join(f"{cue.relative_path} → {', '.join(cue.dependents)}" for cue in cues)
+    rendered = "; ".join(
+        f"{cue.relative_path} (source snapshot {cue.snapshot_id}, static) → "
+        f"{', '.join(cue.dependents)}"
+        for cue in cues
+    )
     return (
         " Mnemo also found these bounded static dependent candidates from exact changed files: "
         f"{rendered}. They are syntax-derived impact candidates, not proof of runtime behavior; "
@@ -531,7 +542,7 @@ def _dependent_impact_cues(
             <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
         )[:_MAX_IMPACT_CUE_DEPENDENTS]
         if dependents:
-            cues.append(_SourceImpactCue(relative_path, dependents))
+            cues.append(_SourceImpactCue(relative_path, result.snapshot.snapshot_id, dependents))
     return tuple(cues)
 
 

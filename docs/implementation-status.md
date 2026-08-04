@@ -604,9 +604,10 @@ labeling from an exact supplied source digest, and emits structured omissions fo
 or budget pressure. It does not replay source text or infer why a change was made.
 
 For each bounded exact changed file that has saved parsed declarations, the lifecycle cue also
-includes up to six static dependent candidates through resolved in-snapshot relationships. It is
-explicitly a syntax-derived impact candidate—not a runtime call-graph claim—and omits unparsed,
-ambiguous, or unresolved files rather than guessing.
+includes up to six static dependent candidates through resolved in-snapshot relationships, with
+the exact immutable source snapshot ID as provenance. It is explicitly a syntax-derived impact
+candidate—not a runtime call-graph claim—and omits unparsed, ambiguous, or unresolved files rather
+than guessing.
 
 After a trusted client mutation, source refresh is batched to the next `UserPromptSubmit` lifecycle
 boundary rather than executed for every editor operation. The resulting cue contains the same

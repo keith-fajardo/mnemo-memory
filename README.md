@@ -345,9 +345,11 @@ boundary**, not after every keystroke. The agent therefore receives the same sma
 cue while it is still working, before it needs to make another historical claim.
 
 For a changed file in a supported parsed language, Mnemo also includes a very small list of
-**static dependent candidates** from that exact file. This saves the agent from first asking “what
-could be affected?” after a fresh session. They are syntax-derived, bounded, and cited—not proof of
-runtime behavior, and not a substitute for tests or current verification.
+**static dependent candidates** from that exact file. The cue names the immutable source snapshot
+that proves them, so the agent can request or compare that exact structural evidence. This saves the
+agent from first asking “what could be affected?” after a fresh session. They are syntax-derived,
+bounded, and cited—not proof of runtime behavior, and not a substitute for tests or current
+verification.
 
 For a changed dbt `.sql` model with an active manifest, the same cue includes bounded downstream
 model identities from that manifest. Those are authoritative structural facts for that artifact,
