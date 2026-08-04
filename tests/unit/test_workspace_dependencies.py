@@ -143,3 +143,76 @@ def test_source_context_preserves_workspace_dependency_evidence(tmp_path: Path) 
     )
     assert any("@example/shared" in item.content for item in packet.structural_items)
     assert len(packet.provenance) == len(packet.structural_items)
+
+
+def test_exact_local_cargo_path_dependency_becomes_a_resolved_static_package_edge(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "rust-workspace"
+    (root / "crates" / "app" / "src").mkdir(parents=True)
+    (root / "crates" / "shared" / "src").mkdir(parents=True)
+    (root / "crates" / "app" / "Cargo.toml").write_text(
+        """[package]
+name = "app"
+
+[dependencies]
+shared = { path = "../shared" }
+""",
+        encoding="utf-8",
+    )
+    (root / "crates" / "shared" / "Cargo.toml").write_text(
+        """[package]
+name = "shared"
+""",
+        encoding="utf-8",
+    )
+    (root / "crates" / "app" / "src" / "lib.rs").write_text("pub fn app() {}\n")
+    (root / "crates" / "shared" / "src" / "lib.rs").write_text("pub fn shared() {}\n")
+
+    scope = _scope()
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope, root))
+    modules = {
+        item.qualified_name: item for item in artifact.symbols if item.kind is CodeSymbolKind.MODULE
+    }
+    edge = next(item for item in artifact.edges if item.kind is CodeEdgeKind.PACKAGE_DEPENDENCY)
+
+    assert edge.target == "shared"
+    assert edge.source_symbol_id == modules["crates.app.src.lib"].symbol_id
+    assert edge.target_symbol_id == modules["crates.shared.src.lib"].symbol_id
+
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    impact = SourceImpactService(repository).query(
+        SourceImpactQuery(scope, "crates.shared.src.lib", SourceImpactDirection.DEPENDENTS)
+    )
+    assert [item.symbol.qualified_name for item in impact.symbols] == ["crates.app.src.lib"]
+
+
+def test_cargo_dependency_requires_exact_local_path_and_matching_package_name(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "rust-workspace"
+    (root / "crates" / "app" / "src").mkdir(parents=True)
+    (root / "crates" / "shared" / "src").mkdir(parents=True)
+    (root / "crates" / "app" / "Cargo.toml").write_text(
+        """[package]
+name = "app"
+
+[dependencies]
+shared = "1.0"
+wrong_name = { path = "../shared" }
+escaping = { path = "../../../outside" }
+""",
+        encoding="utf-8",
+    )
+    (root / "crates" / "shared" / "Cargo.toml").write_text(
+        """[package]
+name = "shared"
+""",
+        encoding="utf-8",
+    )
+    (root / "crates" / "app" / "src" / "lib.rs").write_text("pub fn app() {}\n")
+    (root / "crates" / "shared" / "src" / "lib.rs").write_text("pub fn shared() {}\n")
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(_scope(), root))
+    assert all(edge.kind is not CodeEdgeKind.PACKAGE_DEPENDENCY for edge in artifact.edges)

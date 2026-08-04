@@ -543,6 +543,12 @@ for a runtime `dependencies` entry with a literal `workspace:` specifier. This l
 queries identify a proven dependent workspace package without executing a package manager or
 claiming lockfile, build, development, peer, optional, or runtime-resolution behavior.
 
+Rust source structure now applies an equally narrow rule to local Cargo library crates: a literal
+runtime `[dependencies] name = { path = "..." }` declaration becomes an edge only when its
+normalized local path and unrenamed package name identify another parsed local library crate.
+Cargo is never executed; version-only, workspace-inherited, build, development, optional, feature,
+renamed, and escaping dependencies remain unresolved.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and

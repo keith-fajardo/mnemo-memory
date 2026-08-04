@@ -54,6 +54,10 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   for a literal runtime `dependencies` declaration whose value begins `workspace:` and whose
   package entry is already proven local. Ordinary version ranges, external packages, lockfiles,
   peer/optional/development dependencies, scripts, and package-manager resolution are excluded.
+  Rust can likewise record a local package dependency only when one parsed Rust library crate has
+  a literal `[dependencies] name = { path = "..." }` entry whose normalized path and package name
+  both identify another parsed local library crate. Version-only, renamed, workspace-inherited,
+  development, build, optional, and feature dependencies remain unresolved.
   It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a

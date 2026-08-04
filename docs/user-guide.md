@@ -180,6 +180,12 @@ local package. Mnemo does not run npm, pnpm, or Yarn; inspect a lockfile; or gue
 resolution. External packages and ordinary version ranges, plus development, peer, and optional
 dependencies, remain outside this evidence boundary.
 
+Rust projects have the same narrow package-level support for an explicit local Cargo runtime
+dependency: `[dependencies] name = { path = "..." }`. Mnemo records it only when the normalized
+local path and unrenamed package name both match another parsed local library crate. It does not
+run Cargo, inspect `Cargo.lock`, or claim version, feature, build, development, optional, renamed,
+or workspace-inherited dependency behavior.
+
 The same help is available when there was no new edit yet: if the current saved checkpoint lists
 supported relative files under `relevant_files`, Mnemo uses up to two matching files in checkpoint
 order as small static-impact starting points in the next automatic handoff. For example, a

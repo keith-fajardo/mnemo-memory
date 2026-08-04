@@ -174,6 +174,16 @@ class _PendingSymbol:
 
 
 @dataclass(frozen=True, slots=True)
+class _CargoPackage:
+    """One exact local Rust library crate declared by its own ``Cargo.toml``."""
+
+    manifest_path: str
+    directory: str
+    name: str
+    entry_module: CodeSymbol
+
+
+@dataclass(frozen=True, slots=True)
 class _LanguageRules:
     name: str
     suffixes: tuple[str, ...]
@@ -372,6 +382,7 @@ class SourceStructureParser:
         typescript_path_aliases: dict[str, str] = {}
         python_source_roots: tuple[str, ...] = ()
         package_json_documents: dict[str, bytes] = {}
+        cargo_toml_documents: dict[str, bytes] = {}
         total_bytes = 0
         for path in paths:
             raw = self._read(path, request.limits)
@@ -396,6 +407,8 @@ class SourceStructureParser:
                 python_source_roots = self._python_source_roots(raw)
             elif path.name == "package.json":
                 package_json_documents[relative] = raw
+            elif path.name == "Cargo.toml":
+                cargo_toml_documents[relative] = raw
             language = self._suffixes.get(path.suffix.lower())
             if language is None:
                 # Keep only the path/digest projection for a deliberately file-only extension.
@@ -464,6 +477,10 @@ class SourceStructureParser:
         )
         workspace_dependency_edges = self._javascript_workspace_dependency_edges(
             package_json_documents, javascript_workspace_modules
+        )
+        cargo_packages = self._cargo_packages(cargo_toml_documents, modules)
+        cargo_dependency_edges = self._cargo_package_dependency_edges(
+            cargo_toml_documents, cargo_packages
         )
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
@@ -571,6 +588,16 @@ class SourceStructureParser:
                             target.symbol_id,
                         )
                         for source, target_name, target in workspace_dependency_edges
+                    ),
+                    *(
+                        CodeEdge(
+                            snapshot_id,
+                            source.entry_module.symbol_id,
+                            target.name,
+                            CodeEdgeKind.PACKAGE_DEPENDENCY,
+                            target.entry_module.symbol_id,
+                        )
+                        for source, target in cargo_dependency_edges
                     ),
                 ),
                 key=lambda edge: (str(edge.source_symbol_id), edge.kind.value, edge.target),
@@ -835,6 +862,124 @@ class SourceStructureParser:
                     edges.add(key)
                     values.append((source, target_name, target))
         return tuple(values)
+
+    @staticmethod
+    def _cargo_packages(
+        cargo_toml_documents: dict[str, bytes], modules_by_path: dict[str, CodeSymbol]
+    ) -> tuple[_CargoPackage, ...]:
+        """Return unique local library-crate entries declared in strict Cargo TOML.
+
+        Cargo has a broad feature and target model. Mnemo accepts only a package's literal
+        ``[package].name`` and exact ``[lib].path`` (or Cargo's ordinary ``src/lib.rs`` default)
+        when that file is already a parsed Rust module. Binary-only crates, generated targets,
+        build scripts, and malformed manifests stay file-only.
+        """
+        candidates: dict[str, list[_CargoPackage]] = {}
+        for manifest_path, raw in sorted(cargo_toml_documents.items()):
+            try:
+                document = tomllib.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                continue
+            package = document.get("package") if isinstance(document, dict) else None
+            name = package.get("name") if isinstance(package, dict) else None
+            library = document.get("lib") if isinstance(document, dict) else None
+            entry = library.get("path", "src/lib.rs") if isinstance(library, dict) else "src/lib.rs"
+            if (
+                not SourceStructureParser._safe_cargo_package_name(name)
+                or not isinstance(entry, str)
+                or (entry_path := SourceStructureParser._safe_local_source_root(entry)) is None
+            ):
+                continue
+            directory_path = PurePosixPath(manifest_path).parent
+            directory = "" if directory_path == PurePosixPath(".") else directory_path.as_posix()
+            module_path = "/".join(part for part in (directory, entry_path) if part)
+            entry_module_id = SourceStructureParser._path_import_target(
+                module_path, modules_by_path
+            )
+            entry_module = next(
+                (
+                    item
+                    for item in modules_by_path.values()
+                    if item.symbol_id == entry_module_id and item.relative_path.endswith(".rs")
+                ),
+                None,
+            )
+            if entry_module is not None:
+                assert isinstance(name, str)
+                candidates.setdefault(name, []).append(
+                    _CargoPackage(manifest_path, directory, name, entry_module)
+                )
+        return tuple(
+            values[0]
+            for _, values in sorted(candidates.items())
+            if len({item.manifest_path for item in values}) == 1
+        )
+
+    @staticmethod
+    def _cargo_package_dependency_edges(
+        cargo_toml_documents: dict[str, bytes], packages: tuple[_CargoPackage, ...]
+    ) -> tuple[tuple[_CargoPackage, _CargoPackage], ...]:
+        """Return exact local runtime Cargo path dependencies.
+
+        Only a literal ``[dependencies] name = { path = "..." }`` form is accepted. The
+        dependency spelling, normalized local path, and target package name must all agree. This
+        deliberately excludes renamed, version-only, workspace-inherited, development, build,
+        optional, and feature dependencies.
+        """
+        by_manifest = {item.manifest_path: item for item in packages}
+        by_directory = {item.directory: item for item in packages}
+        result: list[tuple[_CargoPackage, _CargoPackage]] = []
+        for manifest_path, source in sorted(by_manifest.items()):
+            raw = cargo_toml_documents.get(manifest_path)
+            if raw is None:
+                continue
+            try:
+                document = tomllib.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                continue
+            dependencies = document.get("dependencies") if isinstance(document, dict) else None
+            if not isinstance(dependencies, dict):
+                continue
+            for name, specification in sorted(dependencies.items()):
+                path = specification.get("path") if isinstance(specification, dict) else None
+                target_directory = (
+                    SourceStructureParser._cargo_local_dependency_directory(source.directory, path)
+                    if isinstance(name, str)
+                    else None
+                )
+                target = (
+                    by_directory.get(target_directory) if target_directory is not None else None
+                )
+                if target is None or target.name != name:
+                    continue
+                result.append((source, target))
+        return tuple(result)
+
+    @staticmethod
+    def _safe_cargo_package_name(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and 0 < len(value) <= 64
+            and all(character.isalnum() or character in {"-", "_"} for character in value)
+        )
+
+    @staticmethod
+    def _cargo_local_dependency_directory(source_directory: str, value: object) -> str | None:
+        if not isinstance(value, str) or not value or len(value) > 256 or value.startswith("/"):
+            return None
+        if "\\" in value:
+            return None
+        parts = [] if not source_directory else source_directory.split("/")
+        for part in value.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not parts:
+                    return None
+                parts.pop()
+            else:
+                parts.append(part)
+        return "/".join(parts)
 
     @staticmethod
     def _javascript_workspace_patterns(raw: bytes | None) -> tuple[str, ...]:

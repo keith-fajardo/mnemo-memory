@@ -254,6 +254,12 @@ depends on another saved local package. It does **not** run npm/pnpm/Yarn, read 
 runtime resolution, or treat external, development, optional, or peer dependencies as proven
 relationships.
 
+Rust repositories receive the same limited package-level help for an exact local Cargo path
+dependency. Mnemo accepts only a runtime `[dependencies] name = { path = "..." }` declaration
+whose normalized local path and package name both match another parsed local library crate. It does
+not run Cargo, read `Cargo.lock`, or infer version, feature, build, development, optional, renamed,
+or workspace-inherited dependencies.
+
 > Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
 > project intentionally does not yet provide automatic transcript capture, catalog/run-results ingestion,
 > semantic cross-language call graphs, embeddings, a UI, or team workspaces.
