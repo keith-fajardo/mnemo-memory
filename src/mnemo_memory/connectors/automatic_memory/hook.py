@@ -29,7 +29,7 @@ from mnemo_memory.packages.application.dbt import (
     QueryLineage,
     ResolveManifestFile,
 )
-from mnemo_memory.packages.domain import CodeFile, CodeSymbol, MemoryScope
+from mnemo_memory.packages.domain import CodeFile, CodeSymbol, DbtSnapshotId, MemoryScope
 from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
     SourceImpactQuery,
@@ -271,6 +271,7 @@ class _DbtImpactCue:
     """A bounded authoritative manifest downstream cue for one changed dbt model path."""
 
     relative_path: str
+    snapshot_id: DbtSnapshotId
     downstream: tuple[str, ...]
 
 
@@ -464,7 +465,11 @@ def _source_impact_instruction(cues: tuple[_SourceImpactCue, ...]) -> str:
 
 def _dbt_impact_instruction(cues: tuple[_DbtImpactCue, ...]) -> str:
     """Render only exact manifest identities; never SQL, descriptions, or relation metadata."""
-    rendered = "; ".join(f"{cue.relative_path} → {', '.join(cue.downstream)}" for cue in cues)
+    rendered = "; ".join(
+        f"{cue.relative_path} (manifest snapshot {cue.snapshot_id}, currentness unknown) → "
+        f"{', '.join(cue.downstream)}"
+        for cue in cues
+    )
     return (
         " Mnemo also found these authoritative dbt-manifest downstream facts for exact changed "
         f"model files: {rendered}. The manifest snapshot is structural evidence; verify whether it "
@@ -564,7 +569,7 @@ def _dbt_downstream_cues(
                 :_MAX_DBT_IMPACT_CUE_NODES
             ]
             if downstream:
-                cues.append(_DbtImpactCue(relative_path, downstream))
+                cues.append(_DbtImpactCue(relative_path, resolved.snapshot.snapshot_id, downstream))
         return tuple(cues)
     except (DbtApplicationError, ProjectIndexRepositoryError, ValueError, OSError):
         return ()

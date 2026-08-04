@@ -123,7 +123,8 @@ the appropriate verification.
 If that changed file is a dbt `.sql` model and Mnemo has an active manifest for the same project,
 the cue instead also includes bounded downstream dbt model identities from the manifest. That is
 the authoritative source for dbt structure; it still does not expose SQL or pretend that an active
-manifest is automatically current.
+manifest is automatically current. The cue includes the immutable snapshot ID so an agent can
+request or compare that exact historical structure.
 
 After a checkpoint is saved for an enabled project, Mnemo may add one small citation saying which
 immutable source snapshot it observed immediately afterward. Think of it as a timestamped bookmark

@@ -848,7 +848,7 @@ def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_mod
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     checkpoint_repository = SQLiteCheckpointRepository(data / "mnemo.sqlite3")
     checkpoint_repository.migrate()
-    DbtManifestApplicationService(checkpoint_repository, DbtManifestParser()).ingest(
+    ingested = DbtManifestApplicationService(checkpoint_repository, DbtManifestParser()).ingest(
         IngestManifest(
             binding.scope,
             DBT_FIXTURE.read_bytes(),
@@ -870,6 +870,8 @@ def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_mod
     assert "authoritative dbt-manifest downstream facts" in instruction
     assert "models/marts/fct_orders.sql" in instruction
     assert "model.mnemo_analytics.mart_customer_value" in instruction
+    assert str(ingested.snapshot.snapshot_id) in instruction
+    assert "currentness unknown" in instruction
     assert "select 1" not in instruction
     assert "select 2" not in instruction
 
