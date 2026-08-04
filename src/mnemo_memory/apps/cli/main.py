@@ -137,6 +137,19 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
     """
     try:
         with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+            source_digest: str | None = None
+            if runtime.source_structure_repository is not None:
+                project_scope = MemoryScope(
+                    scope.owner_id,
+                    ScopeLevel.PROJECT,
+                    scope.visibility,
+                    scope.workspace_id,
+                    scope.project_id,
+                )
+                active_snapshot = runtime.source_structure_repository.get_active_snapshot(
+                    project_scope
+                )
+                source_digest = None if active_snapshot is None else active_snapshot.source_digest
             packet = UnifiedContextService(
                 runtime.checkpoint_service,
                 runtime.dbt_manifest_service,
@@ -151,11 +164,13 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                         maximum_declarations=8,
                         maximum_relationships=8,
                         maximum_files=8,
+                        current_source_digest=source_digest,
                     ),
                     source_overview=ContextSourceOverviewQuery(
                         maximum_files=3,
                         maximum_modules=2,
                         maximum_declarations=2,
+                        current_source_digest=source_digest,
                     ),
                 )
             )

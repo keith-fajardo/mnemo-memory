@@ -136,6 +136,11 @@ copy of its source code. The packet never includes source bodies, chat prompts, 
 absolute local paths. A budget-constrained packet says exactly what it omitted rather than silently
 altering structural identities.
 
+At session start, Mnemo has just refreshed the snapshot it attaches, so that attached source map
+is explicitly labeled **current** for the captured digest. Later manual requests still require
+comparable source-state evidence before Mnemo calls a saved snapshot current; active alone is not
+enough.
+
 During an active session, Mnemo does not scan after every edit. It marks project work as changed,
 then refreshes once at the next user-turn boundary and attaches the same small file/impact cue.
 That gives the agent relevant structural facts while it is analyzing the next request without

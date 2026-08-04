@@ -362,6 +362,11 @@ terminal output, and absolute local paths remain out of the packet. When the map
 the automatic-session budget, Mnemo records a structured omission instead of silently trimming an
 identifier or pretending the rest was read.
 
+At automatic session start, Mnemo has just rebuilt that snapshot. Its attached overview and
+transition facts therefore carry the matching snapshot digest and are labeled **current** for that
+captured state. A later manual query still needs comparable digest evidence; an active saved
+snapshot is never silently treated as current merely because it is active.
+
 After an agent changes a project file, Mnemo batches that work and refreshes at the **next user-turn
 boundary**, not after every keystroke. The agent therefore receives the same small change and impact
 cue while it is still working, before it needs to make another historical claim.

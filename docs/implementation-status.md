@@ -616,6 +616,11 @@ inputs without claiming an unparsed file has declarations or dependencies. It is
 structured budget omission rather than dropping identifiers silently. It does not add a source
 replay, automatic reasoning, or a runtime call-graph claim.
 
+The automatic session-start path passes the exact freshly activated source digest into its bounded
+overview and latest-transition request, so those facts are labeled current for that captured
+snapshot. It does not weaken the normal rule that a later manual request needs comparable evidence
+before an active snapshot can be called current.
+
 For each bounded exact changed file that has saved parsed declarations, the lifecycle cue also
 includes up to six static dependent candidates through resolved in-snapshot relationships, with
 the exact immutable source snapshot ID as provenance. It is explicitly a syntax-derived impact

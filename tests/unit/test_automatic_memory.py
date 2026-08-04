@@ -450,6 +450,7 @@ def test_automatic_context_attachment_includes_the_latest_bounded_source_transit
     )
     summary = json.loads(change["content"])
     assert summary["modified_files"] == ["service.py"]
+    assert summary["currentness"] == "current"
     assert "return 'before'" not in attached
     assert "return 'after'" not in attached
 
@@ -480,6 +481,7 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     summary = json.loads(overview["content"])
     assert summary["kind"] == "source_snapshot_overview"
     assert summary["file_count"] == 1
+    assert summary["currentness"] == "current"
     assert any(item["item_id"].startswith("source-file:") for item in packet["structural_items"])
     assert packet["declared_total_tokens"] <= 1_200
     assert "return True" not in attached
