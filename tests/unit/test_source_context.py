@@ -6,12 +6,19 @@ from pathlib import Path
 
 import pytest
 
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application.checkpoints import (
     CheckpointApplicationService,
     CreateCheckpoint,
 )
+from mnemo_memory.packages.application.dbt import (
+    DbtManifestApplicationService,
+    IngestManifest,
+    LineageDirection,
+)
 from mnemo_memory.packages.application.unified_context import (
     ContextCheckpointSourceImpact,
+    ContextLineageQuery,
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
     ContextSourceOverviewQuery,
@@ -23,6 +30,7 @@ from mnemo_memory.packages.domain import (
     CheckpointSourceObservation,
     CodeSnapshotId,
     ContextBudget,
+    DbtNodeId,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -48,8 +56,11 @@ from mnemo_memory.packages.project_index import (
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointRepository,
     ReferenceCheckpointSourceObservationRepository,
+    ReferenceProjectIndexRepository,
     ReferenceSourceStructureRepository,
 )
+
+DBT_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 
 
 def _checkpoint_content() -> CheckpointContent:
@@ -230,6 +241,30 @@ def test_context_attaches_an_exact_checkpoint_source_observation_without_claimin
     assert len(item.evidence_references) == 2
     assert packet.provenance[-1].item_id == item.item_id
     assert str(root) not in item.content
+
+    dbt = DbtManifestApplicationService(ReferenceProjectIndexRepository(), DbtManifestParser())
+    dbt.ingest(
+        IngestManifest(
+            project_scope,
+            DBT_FIXTURE.read_text(encoding="utf-8"),
+            "fixtures/dbt/manifest-v12.json",
+            datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+    combined = UnifiedContextService(service, dbt, source, observations).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("model.mnemo_analytics.fct_orders"), LineageDirection.DOWNSTREAM
+            ),
+        )
+    )
+    assert combined.active_task_checkpoint is not None
+    assert any(item.item_id.startswith("source-observation:") for item in combined.structural_items)
+    assert any(item.item_id.startswith("dbt:") for item in combined.structural_items)
+    assert {item.item_id for item in combined.items} == {
+        notice.item_id for notice in combined.provenance
+    }
 
 
 def test_recent_source_changes_are_scoped_bounded_and_evidenced(tmp_path: Path) -> None:

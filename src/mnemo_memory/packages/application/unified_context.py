@@ -326,7 +326,9 @@ class UnifiedContextService:
         facts: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
         remaining = min(
-            request.budget.structural, request.budget.total_limit - packet.declared_total_tokens
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
         )
         for item in result.nodes:
             content = json.dumps(
@@ -401,7 +403,10 @@ class UnifiedContextService:
             packet.budget,
             packet.producer_version,
             active_task_checkpoint=packet.active_task_checkpoint,
-            structural_items=tuple(facts),
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, *facts),
+            skills_and_procedures=packet.skills_and_procedures,
             provenance=tuple(notices),
             omissions=omissions,
             conflicts=packet.conflicts,
