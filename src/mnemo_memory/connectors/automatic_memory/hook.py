@@ -12,6 +12,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal
@@ -109,8 +110,10 @@ class AutomaticMemoryHook:
                 self._refresh_project_knowledge(binding)
                 self._refresh_source_structure(binding)
                 _SessionStateStore(self.data_directory).save(session_id, dirty=False, saved=True)
+                _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
+                _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
         if event_name == "SessionStart":
             self._refresh_project_knowledge(binding)
@@ -120,6 +123,9 @@ class AutomaticMemoryHook:
                     binding.checkpoint_scope.to_dict(),
                     refreshed,
                     self._knowledge_document_count(binding),
+                    handoff_pending=_ProjectHandoffStateStore(self.data_directory).is_pending(
+                        binding.scope
+                    ),
                 ),
                 attached_context=self._attached_context(binding.checkpoint_scope),
             )
@@ -135,6 +141,7 @@ class AutomaticMemoryHook:
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
+            _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
             return self._checkpoint_output(
@@ -442,8 +449,92 @@ class _SessionStateStore:
                 temporary.unlink(missing_ok=True)
 
 
+class _ProjectHandoffStateStore:
+    """Persist only whether one enabled project still needs a complete handoff.
+
+    This is intentionally a local lifecycle marker, not a second task history.  It contains a
+    one-way hash of the already-local project scope and one boolean.  No path, prompt, source
+    body, command output, checkpoint body, or model reasoning is retained.  A full checkpoint
+    lifecycle save clears it; incremental lessons and approved facts do not.
+    """
+
+    _name = "automatic-memory-handoff-state.json"
+
+    def __init__(self, data_directory: Path) -> None:
+        self._directory = data_directory.expanduser().resolve()
+        self._path = self._directory / self._name
+
+    def is_pending(self, scope: MemoryScope) -> bool:
+        return self._read().get(_handoff_scope_key(scope)) is True
+
+    def mark_pending(self, scope: MemoryScope) -> None:
+        self._set(scope, True)
+
+    def clear(self, scope: MemoryScope) -> None:
+        self._set(scope, False)
+
+    def _set(self, scope: MemoryScope, pending: bool) -> None:
+        try:
+            with exclusive_local_file_lock(self._directory, ".automatic-memory-handoff.lock"):
+                values = self._read()
+                key = _handoff_scope_key(scope)
+                if pending:
+                    values[key] = True
+                else:
+                    values.pop(key, None)
+                # The marker is a bounded local reminder, never an activity history.
+                if len(values) > 128:
+                    values = {key: True} if pending else {}
+                self._write(values)
+        except AutomaticMemoryBindingError:
+            return
+
+    def _read(self) -> dict[str, bool]:
+        if not self._path.exists() or self._path.is_symlink():
+            return {}
+        try:
+            value = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items() if isinstance(key, str) and item is True}
+
+    def _write(self, values: dict[str, bool]) -> None:
+        temporary: Path | None = None
+        try:
+            self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if self._path.exists() and self._path.is_symlink():
+                return
+            with NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self._directory, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                os.chmod(temporary, 0o600)
+                json.dump(values, handle, sort_keys=True, separators=(",", ":"))
+                handle.write("\n")
+            os.replace(temporary, self._path)
+            os.chmod(self._path, 0o600)
+        except OSError:
+            return
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+def _handoff_scope_key(scope: MemoryScope) -> str:
+    """Return a stable non-path local key for one already-enabled project scope."""
+    return sha256(
+        json.dumps(scope.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _resume_instruction(
-    scope: Mapping[str, object], refreshed: _SourceRefresh, knowledge_document_count: int = 0
+    scope: Mapping[str, object],
+    refreshed: _SourceRefresh,
+    knowledge_document_count: int = 0,
+    *,
+    handoff_pending: bool = False,
 ) -> str:
     instruction = (
         "Mnemo automatic task memory is enabled. Before continuing, call get_context using this "
@@ -473,6 +564,13 @@ def _resume_instruction(
         instruction += _source_impact_instruction(refreshed.impact_cues)
     if refreshed.dbt_impact_cues:
         instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
+    if handoff_pending:
+        instruction += (
+            " Mnemo also recorded that an earlier tracked session changed this project without "
+            "a complete checkpoint. It retained no transcript or inferred explanation. Review "
+            "the attached recent-work evidence, then save a concise checkpoint with the actual "
+            "progress, verification, rationale, and next action before ending this task."
+        )
     if knowledge_document_count:
         instruction += (
             " Mnemo also has "

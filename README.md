@@ -121,6 +121,14 @@ prior lessons, and these bounded verified facts. It tells the agent *what was sa
 and cites the exact revision or evidence. The checkpoint remains the place that explains *why*;
 Mnemo never guesses a reason from a filename or test result. Mnemo does not record your chat
 automatically; it only attaches facts that were explicitly saved with evidence.
+
+If an enabled client changes a project and reaches a stop or compaction boundary without saving a
+complete checkpoint, Mnemo keeps a tiny local **handoff needed** marker for that project. The next
+fresh session is reminded to review the cited recent-work context and save an actual handoff. The
+marker contains only a hashed local scope and a boolean—never a prompt, transcript, terminal
+output, source body, or inferred explanation—and an ordinary checkpoint create/revise/terminal
+save clears it. A standalone `record_event` or `record_lesson` deliberately does not clear it,
+because neither is a complete task handoff.
 The automatic attachment has a 1,750-token total budget and happens only at a fresh supported
 client session, not continuously while you work.
 

@@ -421,6 +421,10 @@ conversation or source body. The manual fallback is:
 In the next enabled fresh session, the hook attaches the latest relevant revision with its evidence.
 If no one saved a checkpoint, Mnemo does not pretend that it remembers the earlier chat. The agent
 can still call `get_context` for an explicit historical checkpoint, a named source, or dbt lineage.
+If tracked work stopped without a complete checkpoint, Mnemo also remembers only that a handoff is
+still needed for this project. At the next fresh session it asks the agent to review the cited
+recent-work context and write the real handoff. This small local marker has no chat, prompt,
+source text, command output, or guessed rationale; a normal complete checkpoint clears it.
 
 ### Example: a reconciliation investigation
 

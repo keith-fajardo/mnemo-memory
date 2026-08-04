@@ -591,6 +591,13 @@ what was saved or verified and where its evidence lives; the checkpoint or lesso
 evidence for why the work happened. It stores no transcript, terminal output, source body, SQL,
 environment, or inferred reasoning.
 
+When tracked project work reaches a stop/compaction boundary without a complete checkpoint, Mnemo
+also retains one bounded local handoff-needed marker per enabled project. It survives a client
+restart and causes the next automatic session reminder to request a real handoff; an ordinary
+checkpoint lifecycle save clears it, while incremental fact/lesson recording does not. The marker
+is a hashed local scope plus a boolean, not a transcript, source copy, terminal log, command
+payload, or inferred explanation.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

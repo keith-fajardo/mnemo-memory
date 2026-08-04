@@ -317,6 +317,105 @@ def test_incremental_checkpoint_operations_do_not_replace_a_required_handoff(
     assert "private detail" not in state
 
 
+def test_unsaved_project_handoff_marker_survives_restart_and_full_checkpoint_clears_it(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo Δ with spaces"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "first",
+            "cwd": str(project),
+            "tool_name": "Edit",
+            "tool_input": {"private": "must never become lifecycle memory"},
+        }
+    )
+
+    marker = (data / "automatic-memory-handoff-state.json").read_text(encoding="utf-8")
+    assert str(project) not in marker
+    assert "private" not in marker
+    assert binding.scope.project_id is not None
+    assert len(json.loads(marker)) == 1
+
+    restarted = AutomaticMemoryHook(data, "codex").handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+    context = str(restarted["hookSpecificOutput"])
+    assert "without a complete checkpoint" in context
+    assert "no transcript or inferred explanation" in context
+
+    # An incremental evidence record is useful but does not replace a complete handoff.
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "second",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+            "tool_input": {"operation": "record_event"},
+        }
+    )
+    still_pending = AutomaticMemoryHook(data, "codex").handle(
+        {"hook_event_name": "SessionStart", "session_id": "third", "cwd": str(project)}
+    )
+    assert "without a complete checkpoint" in str(still_pending["hookSpecificOutput"])
+
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "third",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+            "tool_input": {"operation": "revise"},
+        }
+    )
+    cleared = AutomaticMemoryHook(data, "codex").handle(
+        {"hook_event_name": "SessionStart", "session_id": "fourth", "cwd": str(project)}
+    )
+    assert "without a complete checkpoint" not in str(cleared["hookSpecificOutput"])
+    assert json.loads((data / "automatic-memory-handoff-state.json").read_text()) == {}
+
+
+def test_unsaved_handoff_marker_is_isolated_to_its_enabled_project(tmp_path: Path) -> None:
+    first_project = tmp_path / "first"
+    second_project = tmp_path / "second"
+    first_project.mkdir()
+    second_project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(first_project)
+    LocalMemoryProjectBindingStore(data).enable(second_project)
+    hook = AutomaticMemoryHook(data, "claude-code")
+
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "first",
+            "cwd": str(first_project),
+            "tool_name": "Write",
+        }
+    )
+    first = hook.handle(
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "first-restart",
+            "cwd": str(first_project),
+        }
+    )
+    second = hook.handle(
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "second-restart",
+            "cwd": str(second_project),
+        }
+    )
+    assert "without a complete checkpoint" in str(first["hookSpecificOutput"])
+    assert "without a complete checkpoint" not in str(second["hookSpecificOutput"])
+
+
 def test_session_start_attaches_only_the_bounded_context_loader_result(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
