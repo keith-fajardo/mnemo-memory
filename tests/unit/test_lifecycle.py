@@ -253,6 +253,10 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
     assert value["after_snapshot_id"] == str(after.snapshot_id)
     assert [item["symbol"] for item in value["added_symbols"]] == ["worker", "worker.work"]
     assert value["removed_symbols"] == []
+    assert value["file_fingerprints_available"] is True
+    assert value["added_files"] == ["worker.py"]
+    assert value["removed_files"] == []
+    assert value["modified_files"] == []
 
     latest = CliRunner().invoke(
         app,
@@ -290,6 +294,43 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
         str(before.snapshot_id),
     ]
     assert all("path" not in item for item in history_value["snapshots"])
+
+
+def test_memory_changes_reports_a_body_only_file_change_without_source_text(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    source = project / "core.py"
+    source.write_text("def calculate():\n    return 'private first value'\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+    source.write_text("def calculate():\n    return 'private corrected value'\n")
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["memory", "changes", "--project-dir", str(project), "--data-dir", str(data_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["file_fingerprints_available"] is True
+    assert value["added_files"] == []
+    assert value["removed_files"] == []
+    assert value["modified_files"] == ["core.py"]
+    assert value["added_symbols"] == []
+    assert value["removed_symbols"] == []
+    assert "private first value" not in result.output
+    assert "private corrected value" not in result.output
+    assert str(project) not in result.output
 
 
 def test_memory_changes_defaults_to_latest_and_requires_a_real_transition(tmp_path: Path) -> None:

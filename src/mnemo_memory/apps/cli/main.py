@@ -63,6 +63,7 @@ from mnemo_memory.packages.application.command_wrapper import (
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import (
     CodeEdge,
+    CodeFile,
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
@@ -900,7 +901,7 @@ def memory_changes(
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
-    """Show only structural additions/removals; saved snapshots remain immutable."""
+    """Show bounded file/declaration/relationship changes; snapshots remain immutable."""
     try:
         config = resolve_local_config(data_dir)
         binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
@@ -947,10 +948,17 @@ def memory_changes(
             "resolved": item.target_symbol_id is not None,
         }
 
+    def file(value: object) -> str:
+        return cast(CodeFile, value).relative_path
+
     _show(
         {
             "before_snapshot_id": str(diff.before.snapshot_id),
             "after_snapshot_id": str(diff.after.snapshot_id),
+            "file_fingerprints_available": diff.file_fingerprints_available,
+            "added_files": [file(item) for item in diff.added_files],
+            "removed_files": [file(item) for item in diff.removed_files],
+            "modified_files": [file(item) for item in diff.modified_files],
             "added_symbols": [symbol(item) for item in diff.added_symbols],
             "removed_symbols": [symbol(item) for item in diff.removed_symbols],
             "added_relationships": [edge(item) for item in diff.added_edges],
