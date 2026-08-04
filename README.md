@@ -144,7 +144,8 @@ TypeScript also recognize direct top-level literal CommonJS `require("./local")`
 deliberately narrow default-import form: `import local from "./module"` only when that module
 explicitly declares one named `export default function Name` or `export default class Name`.
 It also follows an exact local named barrel export such as
-`export { validate as check } from "./helpers"`. Anonymous defaults, wildcard exports,
+`export { validate as check } from "./helpers"`, and a local `export * from "./helpers"` only
+when the requested non-default name has exactly one proven local declaration. Anonymous defaults,
 ambiguous re-exports, and `export default existingName` remain unresolved rather than guessed.
 For a default class, Mnemo follows `Class.staticMethod()` only when that method is explicitly
 declared `static`; it never pretends an instance method is a class call. These forms sit alongside

@@ -35,7 +35,8 @@ calls (same-module, fully-qualified, or unique imported members). Duplicate cand
 files or languages remain unresolved rather than being guessed. A JavaScript/TypeScript local
 default import is resolved only for one named `export default function` or `export default class`;
 an exact local named barrel export such as `export { validate as check } from "./helpers"` is also
-resolved. Anonymous, wildcard, ambiguous, and value-flow defaults remain deliberately unresolved. For a default
+resolved. A local wildcard barrel can resolve one non-default member only when it has exactly one
+proven local declaration. Anonymous, ambiguous, and value-flow defaults remain deliberately unresolved. For a default
 class, `Class.method()` is linked only when `method` is explicitly static; Mnemo does not turn an
 instance method into a guessed class call. More adapters and safely
 resolvable call edges use the same graph contract. That subset now includes exact local C++

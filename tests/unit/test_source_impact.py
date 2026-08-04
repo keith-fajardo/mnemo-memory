@@ -471,6 +471,33 @@ def test_typescript_explicit_local_barrel_re_exports_resolve_exact_calls(tmp_pat
     ] == ["service.process"]
 
 
+def test_typescript_local_wildcard_barrel_resolves_one_non_default_member(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.ts").write_text(
+        "export function validate() { return true }\n"
+        "export default function hidden() { return false }\n",
+        encoding="utf-8",
+    )
+    (root / "barrel.ts").write_text("export * from './helpers';\n", encoding="utf-8")
+    (root / "service.ts").write_text(
+        "import { validate } from './barrel';\n"
+        "import hidden from './barrel';\n"
+        "export function process() { validate(); return hidden(); }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = {
+        item.target: item.target_symbol_id for item in artifact.edges if item.kind.value == "calls"
+    }
+    validate = next(item for item in artifact.symbols if item.qualified_name == "helpers.validate")
+
+    assert calls["validate"] == validate.symbol_id
+    assert calls["hidden"] is None
+
+
 def test_typescript_wildcard_and_ambiguous_barrel_exports_stay_unresolved(tmp_path: Path) -> None:
     """Mnemo keeps barrel support literal: wildcard and duplicate aliases are not guessed."""
     item_scope = scope()

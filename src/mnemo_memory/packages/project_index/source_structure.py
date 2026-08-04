@@ -337,6 +337,7 @@ class SourceStructureParser:
         bindings: list[tuple[str, str, str]] = []
         default_exports: list[tuple[str, str]] = []
         re_exports: list[tuple[str, str, str]] = []
+        wildcard_re_exports: list[tuple[str, str]] = []
         static_methods: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
         total_bytes = 0
@@ -370,6 +371,7 @@ class SourceStructureParser:
                     bindings,
                     default_exports,
                     re_exports,
+                    wildcard_re_exports,
                     static_methods,
                     calls,
                 )
@@ -421,6 +423,12 @@ class SourceStructureParser:
         for export_path, exported_name, encoded_target in re_exports:
             exports = re_exports_by_path.setdefault(export_path, {})
             exports[exported_name] = (*exports.get(exported_name, ()), encoded_target)
+        wildcard_re_exports_by_path: dict[str, tuple[str, ...]] = {}
+        for export_path, import_target in wildcard_re_exports:
+            wildcard_re_exports_by_path[export_path] = (
+                *wildcard_re_exports_by_path.get(export_path, ()),
+                import_target,
+            )
         static_method_ids = frozenset(
             item.symbol_id
             for static_path, qualified_name in static_methods
@@ -452,6 +460,7 @@ class SourceStructureParser:
                         bindings,
                         default_exports_by_path,
                         re_exports_by_path,
+                        wildcard_re_exports_by_path,
                         static_method_ids,
                     ),
                 )
@@ -668,6 +677,7 @@ class SourceStructureParser:
         bindings: list[tuple[str, str, str]],
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
         re_exports_by_path: dict[str, dict[str, tuple[str, ...]]],
+        wildcard_re_exports_by_path: dict[str, tuple[str, ...]],
         static_method_ids: frozenset[CodeSymbolId],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
@@ -766,7 +776,7 @@ class SourceStructureParser:
                     symbols_by_name,
                     default_exports_by_path,
                     re_exports_by_path,
-                    static_method_ids,
+                    wildcard_re_exports_by_path,
                 )
                 if re_exported is not None:
                     if not separator:
@@ -961,6 +971,7 @@ class SourceStructureParser:
         bindings: list[tuple[str, str, str]],
         default_exports: list[tuple[str, str]],
         re_exports: list[tuple[str, str, str]],
+        wildcard_re_exports: list[tuple[str, str]],
         static_methods: list[tuple[str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
@@ -984,6 +995,7 @@ class SourceStructureParser:
                 if default_export is not None:
                     default_exports.append((relative, default_export))
                 re_exports.extend(self._tree_re_export_bindings(node, raw, relative))
+                wildcard_re_exports.extend(self._tree_wildcard_re_exports(node, raw, relative))
             if (
                 language in {"javascript", "typescript", "tsx"}
                 and node.type == "method_definition"
@@ -1315,6 +1327,21 @@ class SourceStructureParser:
         return tuple(result)
 
     @staticmethod
+    def _tree_wildcard_re_exports(
+        node: Node, raw: bytes, relative: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Return a literal local ``export * from`` relationship, if present.
+
+        The relationship is private parser state, not a public claim that every
+        eventual export is known.  A later lookup resolves one requested member
+        only when the bounded local export chain proves exactly one declaration.
+        """
+        source = _string_literal(node.child_by_field_name("source"), raw)
+        if source is None or not source.startswith(("./", "../")):
+            return ()
+        return ((relative, source),) if any(child.type == "*" for child in node.children) else ()
+
+    @staticmethod
     def _resolve_re_export_target(
         module: CodeSymbol,
         member: str,
@@ -1323,7 +1350,7 @@ class SourceStructureParser:
         symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
         re_exports_by_path: dict[str, dict[str, tuple[str, ...]]],
-        static_method_ids: frozenset[CodeSymbolId],
+        wildcard_re_exports_by_path: dict[str, tuple[str, ...]],
     ) -> CodeSymbol | None:
         """Follow one unambiguous, explicit local barrel-export chain.
 
@@ -1331,40 +1358,55 @@ class SourceStructureParser:
         parser loop.  Every hop remains a literal relative module and exact
         exported member; ambiguity intentionally produces no claimed call edge.
         """
-        current_module = module
-        current_member = member
+        pending = [(module, member)]
         visited: set[tuple[str, str]] = set()
-        for _ in range(8):
+        candidates: dict[CodeSymbolId, CodeSymbol] = {}
+        for _ in range(16):
+            if not pending:
+                break
+            current_module, current_member = pending.pop(0)
             key = (current_module.relative_path, current_member)
             if key in visited:
-                return None
+                continue
             visited.add(key)
             encoded_targets = re_exports_by_path.get(current_module.relative_path, {}).get(
                 current_member, ()
             )
-            if len(set(encoded_targets)) != 1:
-                return None
-            import_target, marker, exported_member = encoded_targets[0].partition("|")
-            if not marker:
-                return None
-            target_id = SourceStructureParser._resolve_import_target(
-                current_module.relative_path, import_target, modules_by_name, modules_by_path
-            )
-            target_module = next(
-                (item for item in modules_by_path.values() if item.symbol_id == target_id), None
-            )
-            if target_module is None:
-                return None
-            if exported_member == "default":
-                return _single_symbol(default_exports_by_path.get(target_module.relative_path, ()))
-            direct = _single_symbol(
-                symbols_by_name.get(f"{target_module.qualified_name}.{exported_member}", ())
-            )
-            if direct is not None:
-                return direct
-            current_module = target_module
-            current_member = exported_member
-        return None
+            if encoded_targets:
+                if len(set(encoded_targets)) != 1:
+                    continue
+                targets = encoded_targets
+            elif current_member != "default":
+                targets = wildcard_re_exports_by_path.get(current_module.relative_path, ())
+            else:
+                continue
+            for encoded_target in targets:
+                import_target, marker, exported_member = encoded_target.partition("|")
+                if not marker:
+                    exported_member = current_member
+                target_id = SourceStructureParser._resolve_import_target(
+                    current_module.relative_path, import_target, modules_by_name, modules_by_path
+                )
+                target_module = next(
+                    (item for item in modules_by_path.values() if item.symbol_id == target_id), None
+                )
+                if target_module is None:
+                    continue
+                if exported_member == "default":
+                    default_export = _single_symbol(
+                        default_exports_by_path.get(target_module.relative_path, ())
+                    )
+                    if default_export is not None:
+                        candidates[default_export.symbol_id] = default_export
+                    continue
+                direct = _single_symbol(
+                    symbols_by_name.get(f"{target_module.qualified_name}.{exported_member}", ())
+                )
+                if direct is not None:
+                    candidates[direct.symbol_id] = direct
+                else:
+                    pending.append((target_module, exported_member))
+        return next(iter(candidates.values())) if len(candidates) == 1 else None
 
     @staticmethod
     def _explicit_default_export(node: Node, raw: bytes, module: str) -> str | None:

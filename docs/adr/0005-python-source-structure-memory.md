@@ -26,8 +26,9 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   only for an unambiguous same-module, fully-qualified, or imported-member declaration. JavaScript
   and TypeScript additionally resolve a local default import only when its target file contains one
   named `export default function` or `export default class`, and one exact named local barrel export
-  such as `export { member as alias } from "./module"`; anonymous defaults, wildcard/ambiguous
-  re-exports, and `export default existingName` require value-flow semantics and remain unresolved. A default
+  such as `export { member as alias } from "./module"`. A local wildcard barrel can resolve a requested
+  non-default member only when exactly one saved local declaration is proven; anonymous defaults,
+  ambiguous re-exports, and `export default existingName` require value-flow semantics and remain unresolved. A default
   class member call resolves only for an explicitly declared static method. The current
   adapters resolve simple Python/ES-module aliases plus direct Java class imports, Rust
   `use crate::...` items, exact Go imported-package member calls, and direct `self`/`this` sibling

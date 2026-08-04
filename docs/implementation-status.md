@@ -584,7 +584,8 @@ imports now resolve when their path remains inside the registered project. Direc
 CommonJS `require("./local")` bindings in JavaScript/TypeScript now also resolve exact local members;
 named explicit local default function/class exports resolve through `import local from "./module"`, and
 an exact named local barrel export such as `export { member as alias } from "./module"` resolves through
-that literal link. Anonymous, wildcard/ambiguous re-exports, and value-flow defaults remain deliberately
+that literal link. A local wildcard barrel resolves one non-default member only when it proves exactly
+one saved local declaration; anonymous, ambiguous re-exports, and value-flow defaults remain deliberately
 unresolved, and default-class
 member calls resolve only when the method is syntactically static; computed/dynamic or nested requires remain deliberately unresolved. Explicit Rust `use crate::path::member as local_name` aliases and flat `use crate::path::{member as local_name, member}` lists now resolve only to unique local members; wildcards and nested groups remain unresolved. Exact C++ namespace calls, C#
 `using Namespace.Type`, explicit `using Local = Namespace.Type`, and `using static Namespace.Type` calls, and PHP
