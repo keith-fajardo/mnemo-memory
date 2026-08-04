@@ -233,11 +233,19 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     schema = models / "schema.yml"
     finance_seed = seeds / "finance_orders.csv"
     swift = root / "Application.swift"
+    stylesheet = root / "web" / "application.css"
+    interface = root / "api" / "schema.graphql"
+    configuration = root / "tooling.toml"
+    stylesheet.parent.mkdir()
+    interface.parent.mkdir()
     secret_body = "private model expression must not persist"
     sql.write_text(f"select '{secret_body}' as value\n", encoding="utf-8")
     schema.write_text("version: 2\nmodels: []\n", encoding="utf-8")
     finance_seed.write_text("order_id,amount\n1,100\n", encoding="utf-8")
     swift.write_text("struct Application {}\n", encoding="utf-8")
+    stylesheet.write_text(".button { color: blue; }\n", encoding="utf-8")
+    interface.write_text("type Query { orders: [Order!]! }\n", encoding="utf-8")
+    configuration.write_text("[tool.mnemo]\nenabled = true\n", encoding="utf-8")
     (root / ".env").write_text("PASSWORD=not-indexed\n", encoding="utf-8")
     parser = SourceStructureParser()
     first = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
@@ -250,20 +258,35 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
         repository.migrate()  # type: ignore[union-attr]
     repository.store_and_activate(first)
 
-    assert {".csv", ".sql", ".tsv", ".yaml", ".yml"}.issubset(parser.file_only_suffixes)
+    assert {
+        ".csv",
+        ".css",
+        ".graphql",
+        ".sql",
+        ".toml",
+        ".tsv",
+        ".yaml",
+        ".yml",
+    }.issubset(parser.file_only_suffixes)
     assert first.snapshot.symbol_count == 0
     assert first.snapshot.edge_count == 0
     assert [item.relative_path for item in first.files] == [
         "Application.swift",
+        "api/schema.graphql",
         "models/orders.sql",
         "models/schema.yml",
         "seeds/finance_orders.csv",
+        "tooling.toml",
+        "web/application.css",
     ]
     assert secret_body not in repr(first)
 
     sql.write_text("select 'changed' as value\n", encoding="utf-8")
     schema.write_text("version: 2\nmodels:\n  - name: orders\n", encoding="utf-8")
     finance_seed.write_text("order_id,amount\n1,110\n", encoding="utf-8")
+    stylesheet.write_text(".button { color: green; }\n", encoding="utf-8")
+    interface.write_text("type Query { orders: [Order!]!, orderCount: Int! }\n", encoding="utf-8")
+    configuration.write_text("[tool.mnemo]\nenabled = false\n", encoding="utf-8")
     second = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
     repository.store_and_activate(second)
     diff = SourceImpactService(repository).diff(
@@ -271,9 +294,12 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     )
 
     assert [item.relative_path for item in diff.modified_files] == [
+        "api/schema.graphql",
         "models/orders.sql",
         "models/schema.yml",
         "seeds/finance_orders.csv",
+        "tooling.toml",
+        "web/application.css",
     ]
     assert [item.relative_path for item in diff.added_files] == []
     assert [item.relative_path for item in diff.removed_files] == []

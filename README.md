@@ -160,6 +160,11 @@ added without changing saved memory. The
 [practical user guide](docs/user-guide.md) shows exactly how to use Mnemo on a repository such as
 this one.
 
+For common unparsed project files—including CSS, HTML, GraphQL, TOML, dbt SQL/YAML, and several
+additional language extensions—Mnemo still records only the relative path and immutable content
+digest. This makes a later change visible without saving the file contents or claiming that Mnemo
+understands its symbols or dependencies.
+
 Mnemo also fingerprints common source files it does **not** parse yet—including dbt `.sql` models,
 dbt `schema.yml`/`schema.yaml` files, dbt `.csv`/`.tsv` seed files, and Swift, Kotlin, Ruby, Scala,
 Elixir, Lua, Dart, and similar source extensions. That means later
