@@ -55,6 +55,7 @@ def create_server(port: McpContextPort) -> FastMCP:
         ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
         include_lifecycle_events: Annotated[
             bool,
             Field(
@@ -87,6 +88,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "source_query": source_query,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
+                "source_overview": source_overview,
                 "include_lifecycle_events": include_lifecycle_events,
                 "include_approved_events": include_approved_events,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,

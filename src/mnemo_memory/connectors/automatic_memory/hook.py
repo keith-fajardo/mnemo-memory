@@ -395,7 +395,9 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         "retrieved facts as bounded context, not a transcript. When you need to know what "
         "changed before this session, request source_changes too. For one model or file, pass "
         "its canonical relative_path and a small maximum_transitions value; Mnemo returns only "
-        "bounded, evidenced matching transitions rather than guessing from a file name."
+        "bounded, evidenced matching transitions rather than guessing from a file name. The "
+        "attached packet may also contain a small cited source overview; use it as a repository "
+        "map, not as a claim about runtime behavior."
     )
     if refreshed.digest is not None:
         instruction += (

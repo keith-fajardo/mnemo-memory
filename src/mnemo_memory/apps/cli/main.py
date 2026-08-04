@@ -62,6 +62,7 @@ from mnemo_memory.packages.application.command_wrapper import (
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.application.unified_context import (
     ContextSourceChangeQuery,
+    ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
@@ -150,6 +151,10 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                         maximum_declarations=8,
                         maximum_relationships=8,
                         maximum_files=8,
+                    ),
+                    source_overview=ContextSourceOverviewQuery(
+                        maximum_modules=6,
+                        maximum_declarations=10,
                     ),
                 )
             )

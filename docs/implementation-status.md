@@ -608,6 +608,13 @@ provenance-bearing file, declaration, and relationship identities, preserves cur
 labeling from an exact supplied source digest, and emits structured omissions for missing history
 or budget pressure. It does not replay source text or infer why a change was made.
 
+Fresh enabled sessions also receive a bounded `source_overview` when an active scoped source
+snapshot exists, even if no latest transition is available. The overview contains only cited
+snapshot identity, file/symbol/edge counts, and a deterministic bounded sample of module and
+declaration identities. It is subject to the same current/stale/unknown policy and records a
+structured budget omission rather than dropping identifiers silently. It does not add a source
+replay, automatic reasoning, or a runtime call-graph claim.
+
 For each bounded exact changed file that has saved parsed declarations, the lifecycle cue also
 includes up to six static dependent candidates through resolved in-snapshot relationships, with
 the exact immutable source snapshot ID as provenance. It is explicitly a syntax-derived impact

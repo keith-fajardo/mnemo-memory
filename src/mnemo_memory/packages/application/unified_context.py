@@ -29,6 +29,7 @@ from mnemo_memory.packages.domain import (
     CodeSnapshotId,
     CodeSymbol,
     CodeSymbolId,
+    CodeSymbolKind,
     ConflictState,
     ContentRepresentation,
     ContextBudget,
@@ -168,6 +169,33 @@ class ContextSourceChangeQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextSourceOverviewQuery:
+    """Request a small deterministic inventory of one scoped source snapshot.
+
+    This is intentionally an inventory of persisted identities and counts, not a source replay or
+    a claim about runtime behavior. It is bounded before packet rendering so an automatic session
+    can learn repository shape without consuming a full structural section.
+    """
+
+    maximum_modules: int = 12
+    maximum_declarations: int = 24
+    snapshot_id: CodeSnapshotId | None = None
+    current_source_digest: str | None = None
+    require_current: bool = False
+
+    def __post_init__(self) -> None:
+        if self.maximum_modules < 1 or self.maximum_declarations < 1:
+            raise ValueError("source overview limits must be positive")
+        if self.maximum_modules > 32 or self.maximum_declarations > 64:
+            raise ValueError("source overview limits exceed bounded inventory")
+        if self.current_source_digest is not None and (
+            not self.current_source_digest.startswith("sha256:")
+            or len(self.current_source_digest) != 71
+        ):
+            raise ValueError("source overview digest must be a sha256 digest")
+
+
+@dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
     checkpoint_id: object | None = None
@@ -176,6 +204,7 @@ class GetUnifiedContext:
     budget: ContextBudget = field(default_factory=ContextBudget)
     source_impact: ContextSourceImpactQuery | None = None
     source_changes: ContextSourceChangeQuery | None = None
+    source_overview: ContextSourceOverviewQuery | None = None
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
 
@@ -212,6 +241,7 @@ class UnifiedContextService:
             and request.source_query is None
             and request.source_impact is None
             and request.source_changes is None
+            and request.source_overview is None
         ):
             return packet
         if request.lineage is None:
@@ -448,7 +478,91 @@ class UnifiedContextService:
             packet = self._with_source_facts(packet, request)
         if request.source_changes is not None:
             packet = self._with_recent_source_changes(packet, request, request.source_changes)
+        if request.source_overview is not None:
+            packet = self._with_source_overview(packet, request, request.source_overview)
         return packet
+
+    def _with_source_overview(
+        self, packet: ContextPacket, request: GetUnifiedContext, query: ContextSourceOverviewQuery
+    ) -> ContextPacket:
+        if self._source is None:
+            return _with_omission(
+                packet, "source-overview", OmissionReason.LOWER_RANK, "no source snapshot"
+            )
+        scope = _project_scope(request.scope)
+        snapshot = (
+            self._source.get_snapshot(scope, query.snapshot_id)
+            if query.snapshot_id
+            else self._source.get_active_snapshot(scope)
+        )
+        if snapshot is None:
+            return _with_omission(
+                packet, "source-overview", OmissionReason.LOWER_RANK, "no source snapshot"
+            )
+        currentness = _source_currentness(snapshot, query.current_source_digest)
+        if query.require_current and currentness is not ValidityState.CURRENT:
+            return _with_omission(
+                packet,
+                "source-overview",
+                OmissionReason.STALE,
+                "source snapshot is not proven current",
+            )
+        all_symbols = tuple(
+            sorted(
+                self._source.iter_symbols(scope, snapshot.snapshot_id),
+                key=lambda item: (
+                    item.relative_path,
+                    item.line,
+                    item.qualified_name,
+                    str(item.symbol_id),
+                ),
+            )
+        )
+        modules = tuple(item for item in all_symbols if item.kind is CodeSymbolKind.MODULE)[
+            : query.maximum_modules
+        ]
+        declarations = tuple(
+            item for item in all_symbols if item.kind is not CodeSymbolKind.MODULE
+        )[: query.maximum_declarations]
+        packet = _with_source_overview_summary(
+            packet,
+            request.scope,
+            snapshot,
+            currentness,
+            len(modules),
+            len(declarations),
+        )
+        if not packet.structural_items or not any(
+            item.item_id == f"source-overview:{snapshot.snapshot_id}"
+            for item in packet.structural_items
+        ):
+            return packet
+        prior_source_item_ids = {
+            item.item_id for item in packet.structural_items if item.item_id.startswith("source:")
+        }
+        result = _append_source_items(
+            packet,
+            request.scope,
+            snapshot,
+            (*modules, *declarations),
+            (),
+            {item.relative_path: item for item in modules},
+            currentness=currentness,
+        )
+        requested_count = len(modules) + len(declarations)
+        rendered_count = sum(
+            1
+            for item in result.structural_items
+            if item.item_id.startswith("source:") and item.item_id not in prior_source_item_ids
+        )
+        if rendered_count < requested_count:
+            return _with_omission(
+                result,
+                "source-overview-items",
+                OmissionReason.TOKEN_BUDGET,
+                "source overview inventory exceeds remaining structural budget",
+            )
+        return result
 
     def _with_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -1059,6 +1173,91 @@ def _source_edge_key(edge: CodeEdge) -> tuple[str, str, str, str]:
     return (str(edge.source_symbol_id), edge.target, edge.kind.value, str(edge.target_symbol_id))
 
 
+def _with_source_overview_summary(
+    packet: ContextPacket,
+    task_scope: MemoryScope,
+    snapshot: CodeSnapshot,
+    currentness: ValidityState,
+    selected_module_count: int,
+    selected_declaration_count: int,
+) -> ContextPacket:
+    """Attach a bounded snapshot-level inventory before individual declaration facts.
+
+    The summary deliberately carries only counts and immutable snapshot identity.  It gives an
+    automatic session a reliable answer to "what has been indexed?" without retaining source
+    text, a project root, or an inferred runtime relationship.
+    """
+    content = json.dumps(
+        {
+            "currentness": currentness.value,
+            "edge_count": snapshot.edge_count,
+            "file_count": snapshot.file_count,
+            "kind": "source_snapshot_overview",
+            "selected_declaration_count": selected_declaration_count,
+            "selected_module_count": selected_module_count,
+            "snapshot_id": str(snapshot.snapshot_id),
+            "symbol_count": snapshot.symbol_count,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    tokens = (len(content) + 3) // 4
+    remaining = min(
+        packet.budget.structural - sum(item.token_estimate for item in packet.structural_items),
+        packet.budget.total_limit - packet.declared_total_tokens,
+    )
+    if tokens > remaining:
+        return _with_omission(
+            packet,
+            "source-overview",
+            OmissionReason.TOKEN_BUDGET,
+            "source overview summary exceeds remaining structural budget",
+        )
+    evidence = _source_snapshot_evidence(packet, snapshot)
+    item = ContextItem(
+        f"source-overview:{snapshot.snapshot_id}",
+        ContextItemType.STRUCTURAL_FACT,
+        task_scope,
+        content,
+        ContentRepresentation.UNTRUSTED_EVIDENCE,
+        tokens,
+        (evidence,),
+        SourceTrustClass.CURRENT_STRUCTURAL,
+        Sensitivity.NORMAL,
+        currentness,
+        None,
+        ConflictState.NONE,
+        packet.created_at,
+    )
+    notice = ProvenanceNotice(
+        f"provenance:{item.item_id}",
+        item.item_id,
+        f"mnemo:source/{snapshot.snapshot_id}/overview",
+        hashlib.sha256(content.encode()).hexdigest(),
+        (evidence,),
+    )
+    return ContextPacket(
+        packet.schema_version,
+        packet.request_id,
+        packet.owner_scope,
+        packet.query_id,
+        packet.task_id,
+        packet.created_at,
+        packet.expires_at,
+        packet.declared_total_tokens + tokens,
+        packet.budget,
+        packet.producer_version,
+        active_task_checkpoint=packet.active_task_checkpoint,
+        episodic_memories=packet.episodic_memories,
+        knowledge_items=packet.knowledge_items,
+        structural_items=(*packet.structural_items, item),
+        skills_and_procedures=packet.skills_and_procedures,
+        provenance=(*packet.provenance, notice),
+        omissions=packet.omissions,
+        conflicts=packet.conflicts,
+    )
+
+
 def _append_source_items(
     packet: ContextPacket,
     task_scope: MemoryScope,
@@ -1073,7 +1272,8 @@ def _append_source_items(
 ) -> ContextPacket:
     facts: list[ContextItem] = []
     remaining = min(
-        packet.budget.structural, packet.budget.total_limit - packet.declared_total_tokens
+        packet.budget.structural - sum(item.token_estimate for item in packet.structural_items),
+        packet.budget.total_limit - packet.declared_total_tokens,
     )
     notices: list[ProvenanceNotice] = list(packet.provenance)
     for symbol in symbols:

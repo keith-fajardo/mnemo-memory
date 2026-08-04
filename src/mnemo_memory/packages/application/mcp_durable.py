@@ -32,6 +32,7 @@ from mnemo_memory.packages.application.unified_context import (
     ContextLineageQuery,
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
+    ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
@@ -83,6 +84,7 @@ class DurableMcpContextPort:
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
+            source_overview = request.get("source_overview")
             include_lifecycle_events = request.get("include_lifecycle_events", False)
             include_approved_events = request.get("include_approved_events", False)
             if not isinstance(include_lifecycle_events, bool):
@@ -107,6 +109,8 @@ class DurableMcpContextPort:
                 and not isinstance(source_changes["relative_path"], str)
             ):
                 raise ValueError("source_changes.relative_path must be a string")
+            if source_overview is not None and not isinstance(source_overview, Mapping):
+                raise ValueError("source_overview must be an object")
             impact = (
                 None
                 if source_impact is None
@@ -152,11 +156,25 @@ class DurableMcpContextPort:
                     ),
                 )
             )
+            overview = (
+                None
+                if source_overview is None
+                else ContextSourceOverviewQuery(
+                    maximum_modules=int(source_overview.get("maximum_modules", 12)),
+                    maximum_declarations=int(source_overview.get("maximum_declarations", 24)),
+                    snapshot_id=_optional_id(source_overview, "snapshot_id", CodeSnapshotId),
+                    current_source_digest=source_overview.get("current_source_digest")
+                    if isinstance(source_overview.get("current_source_digest"), str)
+                    else None,
+                    require_current=bool(source_overview.get("require_current", False)),
+                )
+            )
             if (
                 lineage is not None
                 or source_query is not None
                 or impact is not None
                 or changes is not None
+                or overview is not None
             ):
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
@@ -165,15 +183,15 @@ class DurableMcpContextPort:
                 if lineage is None:
                     return self._context_service.get_context(
                         GetUnifiedContext(
-                            scope,
-                            checkpoint,
-                            None,
-                            source_query,
-                            budget,
-                            impact,
-                            changes,
-                            include_lifecycle_events,
-                            include_approved_events,
+                            scope=scope,
+                            checkpoint_id=checkpoint,
+                            source_query=source_query,
+                            budget=budget,
+                            source_impact=impact,
+                            source_changes=changes,
+                            source_overview=overview,
+                            include_lifecycle_events=include_lifecycle_events,
+                            include_approved_events=include_approved_events,
                         )
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
@@ -200,15 +218,16 @@ class DurableMcpContextPort:
                 )
                 return self._context_service.get_context(
                     GetUnifiedContext(
-                        scope,
-                        checkpoint,
-                        dbt_query,
-                        source_query,
-                        budget,
-                        impact,
-                        changes,
-                        include_lifecycle_events,
-                        include_approved_events,
+                        scope=scope,
+                        checkpoint_id=checkpoint,
+                        lineage=dbt_query,
+                        source_query=source_query,
+                        budget=budget,
+                        source_impact=impact,
+                        source_changes=changes,
+                        source_overview=overview,
+                        include_lifecycle_events=include_lifecycle_events,
+                        include_approved_events=include_approved_events,
                     )
                 ).to_dict()
             return self._service.get_context(

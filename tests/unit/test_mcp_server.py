@@ -110,6 +110,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
+    assert "source_overview" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
     assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
@@ -406,6 +407,50 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
     assert all(item.evidence_references for item in packet.structural_items)
 
 
+def test_durable_port_returns_bounded_scoped_source_overview(tmp_path: Path) -> None:
+    project = tmp_path / "Project Δ"
+    project.mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n", encoding="utf-8")
+    config = LocalConfig.defaults(tmp_path / "durable source overview")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config) as runtime:
+        repository = runtime.source_structure_repository
+        assert repository is not None
+        stored = repository.store_and_activate(
+            PythonSourceParser().parse(PythonSourceParseRequest(project_scope, project))
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, None, repository),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    source_overview={
+                        "maximum_modules": 1,
+                        "maximum_declarations": 1,
+                        "current_source_digest": stored.snapshot.source_digest,
+                        "require_current": True,
+                    }
+                )
+            )
+        )
+
+    overview = next(
+        item for item in packet.structural_items if item.item_id.startswith("source-overview:")
+    )
+    assert '"kind":"source_snapshot_overview"' in overview.content
+    assert '"currentness":"current"' in overview.content
+    assert str(project) not in overview.content
+    assert overview.evidence_references
+
+
 def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path) -> None:
     project = tmp_path / "Project Δ"
     project.mkdir()
@@ -466,6 +511,15 @@ def test_durable_port_rejects_a_non_string_source_change_path(tmp_path: Path) ->
         port = DurableMcpContextPort(runtime.checkpoint_service)
         with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
             port.get_context(context_payload(source_changes={"relative_path": 7}))
+
+
+def test_durable_port_rejects_a_non_object_source_overview(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(
+        LocalConfig.defaults(tmp_path / "invalid source overview")
+    ) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(context_payload(source_overview="not-an-object"))
 
 
 def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: Path) -> None:

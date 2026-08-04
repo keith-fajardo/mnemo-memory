@@ -354,6 +354,14 @@ a second query. Mnemo stores a SHA-256 fingerprint for that purpose—not source
 does not guess **why** it changed: the agent records that decision, failed approach, and
 verification in the checkpoint it saves.
 
+Even when there is **no recent change**, a fresh enabled session receives a tiny source overview:
+the exact immutable source-snapshot ID, file/symbol/relationship counts, and a deterministic
+sample of saved module and declaration identities. This is the agent's starting map of the
+repository—not a replay of the checkout. Every included item is cited; source bodies, prompts,
+terminal output, and absolute local paths remain out of the packet. When the map is too large for
+the automatic-session budget, Mnemo records a structured omission instead of silently trimming an
+identifier or pretending the rest was read.
+
 After an agent changes a project file, Mnemo batches that work and refreshes at the **next user-turn
 boundary**, not after every keystroke. The agent therefore receives the same small change and impact
 cue while it is still working, before it needs to make another historical claim.

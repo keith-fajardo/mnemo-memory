@@ -12,6 +12,7 @@ from mnemo_memory.packages.application.checkpoints import (
 from mnemo_memory.packages.application.unified_context import (
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
+    ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
 )
@@ -901,3 +902,158 @@ def test_source_impact_currentness_requires_an_exact_source_digest(tmp_path: Pat
     assert all('"currentness":"current"' in item.content for item in current.structural_items)
     assert stale.structural_items == ()
     assert stale.omissions[-1].detail == "source snapshot is not proven current"
+
+
+def test_source_overview_is_scoped_deterministic_bounded_and_provenance_bearing(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source directory with ünicode"
+    root.mkdir()
+    (root / "app.py").write_text(
+        "from helpers import normalize\n\ndef run():\n    return normalize(1)\n",
+        encoding="utf-8",
+    )
+    (root / "helpers.py").write_text("def normalize(value):\n    return value\n", encoding="utf-8")
+    source = ReferenceSourceStructureRepository()
+    stored = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+    query = ContextSourceOverviewQuery(
+        maximum_modules=2,
+        maximum_declarations=2,
+        current_source_digest=stored.snapshot.source_digest,
+    )
+
+    first = service.get_context(GetUnifiedContext(task_scope, source_overview=query))
+    second = service.get_context(GetUnifiedContext(task_scope, source_overview=query))
+
+    first_payload = first.to_dict()
+    second_payload = second.to_dict()
+    first_payload.pop("request_id")
+    second_payload.pop("request_id")
+    assert first_payload == second_payload
+    overview = next(
+        item for item in first.structural_items if item.item_id.startswith("source-overview:")
+    )
+    assert '"kind":"source_snapshot_overview"' in overview.content
+    assert '"file_count":2' in overview.content
+    assert '"currentness":"current"' in overview.content
+    assert str(root) not in overview.content
+    assert overview.evidence_references[0].content_hash == stored.snapshot.source_digest
+    assert any(item.item_id.startswith("source:") for item in first.structural_items)
+    assert all(item.evidence_references for item in first.structural_items)
+    assert all(str(root) not in item.content for item in first.structural_items)
+
+    wrong_scope = MemoryScope(
+        task_scope.owner_id,
+        ScopeLevel.TASK,
+        task_scope.visibility,
+        task_scope.workspace_id,
+        ProjectId.new(),
+        task_scope.session_id,
+        task_scope.task_id,
+    )
+    cross_scope = service.get_context(
+        GetUnifiedContext(wrong_scope, source_overview=ContextSourceOverviewQuery())
+    )
+    assert cross_scope.structural_items == ()
+    assert cross_scope.omissions[-1].detail == "no source snapshot"
+
+
+def test_source_overview_currentness_and_budget_omissions_are_explicit(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "module.py").write_text("def stable():\n    return 1\n", encoding="utf-8")
+    source = ReferenceSourceStructureRepository()
+    stored = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    stale = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_overview=ContextSourceOverviewQuery(
+                current_source_digest="sha256:" + "0" * 64, require_current=True
+            ),
+        )
+    )
+    exhausted = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            budget=ContextBudget(structural=0),
+            source_overview=ContextSourceOverviewQuery(
+                current_source_digest=stored.snapshot.source_digest
+            ),
+        )
+    )
+
+    assert stale.structural_items == ()
+    assert stale.omissions[-1].detail == "source snapshot is not proven current"
+    assert exhausted.structural_items == ()
+    assert (
+        exhausted.omissions[-1].detail
+        == "source overview summary exceeds remaining structural budget"
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"maximum_modules": 0},
+        {"maximum_declarations": 0},
+        {"maximum_modules": 33},
+        {"maximum_declarations": 65},
+        {"current_source_digest": "not-a-digest"},
+    ),
+)
+def test_source_overview_query_rejects_unbounded_or_invalid_inputs(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        ContextSourceOverviewQuery(**kwargs)  # type: ignore[arg-type]
