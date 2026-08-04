@@ -23,6 +23,8 @@ from .contracts import (
     ProjectIndexRepository,
     ProjectProcedureRegistry,
     SourceStructureRepository,
+    SupplementalArtifactConflict,
+    SupplementalArtifactStoreResult,
 )
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
@@ -76,4 +78,6 @@ __all__ = [
     "SQLiteSchemaTooNewError",
     "SQLiteSourceStructureRepository",
     "SourceStructureRepository",
+    "SupplementalArtifactConflict",
+    "SupplementalArtifactStoreResult",
 ]

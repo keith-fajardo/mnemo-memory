@@ -45,9 +45,15 @@ environment values, adapter responses, messages, compiled code, relation SQL, ar
 arguments, and thread identifiers are validated only where required for schema safety and then
 discarded. These supplemental artifacts do not alter manifest lineage authority.
 
-Persistence, manifest-to-supplemental consistency checks, incremental ingestion, freshness
-artifacts, context-packet retrieval, general code graphs, and model-assisted behavior remain
-deferred to later bounded issues.
+Issue 15B persists those minimized projections as immutable content-digest versions attached to
+one exact authorized manifest snapshot. A supplemental relation or result is accepted only when
+its `unique_id` exists in that snapshot. One version per manifest and artifact kind is selected as
+current; an identical retry reselects the retained version without duplicating rows. Foreign keys
+prevent detached catalog relations, columns, results, or timing rows. The raw artifact remains
+outside canonical storage.
+
+Incremental command-hook ingestion, freshness artifacts, context-packet retrieval, general code
+graphs, and model-assisted behavior remain deferred to later bounded issues.
 
 ## References reviewed
 

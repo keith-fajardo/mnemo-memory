@@ -41,7 +41,16 @@ from mnemo_memory.packages.domain import (
     CodeSymbolId,
     CodeSymbolKind,
     CurrentKnowledgeDocumentSection,
+    DbtCatalogArtifact,
+    DbtCatalogCollection,
+    DbtCatalogColumn,
+    DbtCatalogRelation,
+    DbtNodeRunResult,
+    DbtRunResultsArtifact,
+    DbtRunStatus,
+    DbtRunTiming,
     DbtSnapshotId,
+    DbtSupplementalArtifactMetadata,
     EventId,
     EvidenceReference,
     KnowledgeDocument,
@@ -125,12 +134,14 @@ from .contracts import (
     SourceIndexStorageFailure,
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
+    SupplementalArtifactConflict,
+    SupplementalArtifactStoreResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 14
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -376,6 +387,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 13:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 13
+            if version < 14:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0014_dbt_supplemental_artifacts.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (14, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 14:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 14
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1330,6 +1353,254 @@ class SQLiteCheckpointRepository:
             raise ProjectIndexStorageFailure("project index storage operation failed") from error
         return None if row is None else self._snapshot_from_row(row, scope)
 
+    def store_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact
+    ) -> SupplementalArtifactStoreResult:
+        self._validate_supplemental_scope(scope, artifact.scope)
+        try:
+            with self._transaction() as connection:
+                self._require_supplemental_manifest(
+                    connection,
+                    scope,
+                    snapshot_id,
+                    tuple(item.unique_id for item in artifact.relations),
+                )
+                idempotent = self._store_supplemental_header(
+                    connection,
+                    snapshot_id,
+                    "catalog",
+                    artifact.metadata,
+                    catalog_error_count=artifact.error_count,
+                    elapsed_time_seconds=None,
+                    command_name=None,
+                )
+                if not idempotent:
+                    connection.executemany(
+                        "INSERT INTO dbt_catalog_relations VALUES "
+                        "(?, 'catalog', ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(snapshot_id),
+                                artifact.metadata.content_digest,
+                                str(item.unique_id),
+                                item.collection.value,
+                                item.relation_type,
+                                item.database,
+                                item.schema_name,
+                                item.name,
+                                _json(item.evidence.to_dict()),
+                            )
+                            for item in artifact.relations
+                        ],
+                    )
+                    connection.executemany(
+                        "INSERT INTO dbt_catalog_columns VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(snapshot_id),
+                                artifact.metadata.content_digest,
+                                str(item.unique_id),
+                                column.index,
+                                column.name,
+                                column.data_type,
+                            )
+                            for item in artifact.relations
+                            for column in item.columns
+                        ],
+                    )
+                self._activate_supplemental(
+                    connection, snapshot_id, "catalog", artifact.metadata.content_digest
+                )
+                return SupplementalArtifactStoreResult(
+                    snapshot_id, artifact.metadata.content_digest, idempotent
+                )
+        except (ManifestSnapshotNotFound, SupplementalArtifactConflict):
+            raise
+        except (TypeError, ValueError):
+            raise
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure(
+                "supplemental dbt catalog storage operation failed"
+            ) from error
+
+    def store_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtRunResultsArtifact
+    ) -> SupplementalArtifactStoreResult:
+        self._validate_supplemental_scope(scope, artifact.scope)
+        try:
+            with self._transaction() as connection:
+                self._require_supplemental_manifest(
+                    connection,
+                    scope,
+                    snapshot_id,
+                    tuple(item.unique_id for item in artifact.results),
+                )
+                idempotent = self._store_supplemental_header(
+                    connection,
+                    snapshot_id,
+                    "run_results",
+                    artifact.metadata,
+                    catalog_error_count=None,
+                    elapsed_time_seconds=artifact.elapsed_time_seconds,
+                    command_name=artifact.command,
+                )
+                if not idempotent:
+                    connection.executemany(
+                        "INSERT INTO dbt_run_results VALUES (?, 'run_results', ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(snapshot_id),
+                                artifact.metadata.content_digest,
+                                str(item.unique_id),
+                                item.status.value,
+                                item.execution_time_seconds,
+                                item.failures,
+                                _json(item.evidence.to_dict()),
+                            )
+                            for item in artifact.results
+                        ],
+                    )
+                    connection.executemany(
+                        "INSERT INTO dbt_run_result_timings VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(snapshot_id),
+                                artifact.metadata.content_digest,
+                                str(item.unique_id),
+                                timing.name,
+                                None
+                                if timing.started_at is None
+                                else timing.started_at.isoformat(),
+                                None
+                                if timing.completed_at is None
+                                else timing.completed_at.isoformat(),
+                            )
+                            for item in artifact.results
+                            for timing in item.timing
+                        ],
+                    )
+                self._activate_supplemental(
+                    connection, snapshot_id, "run_results", artifact.metadata.content_digest
+                )
+                return SupplementalArtifactStoreResult(
+                    snapshot_id, artifact.metadata.content_digest, idempotent
+                )
+        except (ManifestSnapshotNotFound, SupplementalArtifactConflict):
+            raise
+        except (TypeError, ValueError):
+            raise
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure(
+                "supplemental dbt run-results storage operation failed"
+            ) from error
+
+    def get_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtCatalogArtifact | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                self._require_supplemental_manifest(connection, scope, snapshot_id, ())
+                header = self._active_supplemental_row(connection, snapshot_id, "catalog")
+                if header is None:
+                    return None
+                relations = connection.execute(
+                    "SELECT * FROM dbt_catalog_relations WHERE manifest_snapshot_id = ? "
+                    "AND content_digest = ? ORDER BY unique_id ASC",
+                    (str(snapshot_id), header["content_digest"]),
+                ).fetchall()
+                columns = connection.execute(
+                    "SELECT * FROM dbt_catalog_columns WHERE manifest_snapshot_id = ? "
+                    "AND content_digest = ? ORDER BY unique_id ASC, column_index ASC",
+                    (str(snapshot_id), header["content_digest"]),
+                ).fetchall()
+                by_relation: dict[str, list[DbtCatalogColumn]] = {}
+                for row in columns:
+                    by_relation.setdefault(row["unique_id"], []).append(
+                        DbtCatalogColumn(
+                            int(row["column_index"]), row["column_name"], row["data_type"]
+                        )
+                    )
+                return DbtCatalogArtifact(
+                    self._supplemental_metadata_from_row(header),
+                    scope,
+                    tuple(
+                        DbtCatalogRelation(
+                            DbtNodeId(row["unique_id"]),
+                            DbtCatalogCollection(row["collection_kind"]),
+                            row["relation_type"],
+                            row["database_name"],
+                            row["schema_name"],
+                            row["relation_name"],
+                            tuple(by_relation.get(row["unique_id"], ())),
+                            EvidenceReference.from_dict(json.loads(row["evidence_json"])),
+                        )
+                        for row in relations
+                    ),
+                    int(header["catalog_error_count"]),
+                )
+        except ManifestSnapshotNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ProjectIndexStorageFailure("supplemental dbt catalog retrieval failed") from error
+
+    def get_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtRunResultsArtifact | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                self._require_supplemental_manifest(connection, scope, snapshot_id, ())
+                header = self._active_supplemental_row(connection, snapshot_id, "run_results")
+                if header is None:
+                    return None
+                results = connection.execute(
+                    "SELECT * FROM dbt_run_results WHERE manifest_snapshot_id = ? "
+                    "AND content_digest = ? ORDER BY unique_id ASC",
+                    (str(snapshot_id), header["content_digest"]),
+                ).fetchall()
+                timings = connection.execute(
+                    "SELECT * FROM dbt_run_result_timings WHERE manifest_snapshot_id = ? "
+                    "AND content_digest = ? ORDER BY unique_id ASC, timing_name ASC",
+                    (str(snapshot_id), header["content_digest"]),
+                ).fetchall()
+                by_result: dict[str, list[DbtRunTiming]] = {}
+                for row in timings:
+                    by_result.setdefault(row["unique_id"], []).append(
+                        DbtRunTiming(
+                            row["timing_name"],
+                            None
+                            if row["started_at"] is None
+                            else datetime.fromisoformat(row["started_at"]),
+                            None
+                            if row["completed_at"] is None
+                            else datetime.fromisoformat(row["completed_at"]),
+                        )
+                    )
+                return DbtRunResultsArtifact(
+                    self._supplemental_metadata_from_row(header),
+                    scope,
+                    float(header["elapsed_time_seconds"]),
+                    header["command_name"],
+                    tuple(
+                        DbtNodeRunResult(
+                            DbtNodeId(row["unique_id"]),
+                            DbtRunStatus(row["status"]),
+                            float(row["execution_time_seconds"]),
+                            None if row["failures"] is None else int(row["failures"]),
+                            tuple(by_result.get(row["unique_id"], ())),
+                            EvidenceReference.from_dict(json.loads(row["evidence_json"])),
+                        )
+                        for row in results
+                    ),
+                )
+        except ManifestSnapshotNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ProjectIndexStorageFailure(
+                "supplemental dbt run-results retrieval failed"
+            ) from error
+
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
     ) -> DbtManifestNode:
@@ -1733,6 +2004,133 @@ class SQLiteCheckpointRepository:
                     str(scope.project_id),
                 ),
             ).fetchone(),
+        )
+
+    def _validate_supplemental_scope(self, scope: MemoryScope, artifact_scope: MemoryScope) -> None:
+        self._require_project_scope(scope)
+        if artifact_scope != scope:
+            raise InvalidManifestSnapshotScope(
+                "supplemental dbt artifact requires exact manifest scope"
+            )
+
+    def _require_supplemental_manifest(
+        self,
+        connection: sqlite3.Connection,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        resource_ids: tuple[DbtNodeId, ...],
+    ) -> None:
+        if self._scoped_snapshot_row(connection, scope, snapshot_id) is None:
+            raise ManifestSnapshotNotFound("manifest snapshot was not found")
+        found: set[str] = set()
+        requested = tuple(sorted({str(item) for item in resource_ids}))
+        for index in range(0, len(requested), 500):
+            batch = requested[index : index + 500]
+            placeholders = ",".join("?" for _ in batch)
+            rows = connection.execute(
+                "SELECT unique_id FROM dbt_manifest_nodes WHERE snapshot_id = ? "
+                f"AND unique_id IN ({placeholders})",
+                (str(snapshot_id), *batch),
+            ).fetchall()
+            found.update(row["unique_id"] for row in rows)
+        if found != set(requested):
+            raise SupplementalArtifactConflict(
+                "supplemental dbt artifact references a node absent from the manifest snapshot"
+            )
+
+    @staticmethod
+    def _store_supplemental_header(
+        connection: sqlite3.Connection,
+        snapshot_id: DbtSnapshotId,
+        artifact_kind: str,
+        metadata: DbtSupplementalArtifactMetadata,
+        *,
+        catalog_error_count: int | None,
+        elapsed_time_seconds: float | None,
+        command_name: str | None,
+    ) -> bool:
+        existing = connection.execute(
+            "SELECT * FROM dbt_supplemental_artifacts WHERE manifest_snapshot_id = ? "
+            "AND artifact_kind = ? AND content_digest = ?",
+            (str(snapshot_id), artifact_kind, metadata.content_digest),
+        ).fetchone()
+        if existing is not None:
+            if (
+                existing["normalized_digest"] != metadata.normalized_digest
+                or existing["source_identity"] != metadata.source_identity
+                or existing["schema_version"] != metadata.schema_version
+            ):
+                raise SupplementalArtifactConflict(
+                    "supplemental dbt artifact digest conflicts with retained metadata"
+                )
+            return True
+        connection.execute(
+            "INSERT INTO dbt_supplemental_artifacts VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (
+                str(snapshot_id),
+                artifact_kind,
+                metadata.content_digest,
+                metadata.schema_version,
+                metadata.dbt_version,
+                None if metadata.generated_at is None else metadata.generated_at.isoformat(),
+                metadata.invocation_id,
+                metadata.normalized_digest,
+                metadata.source_identity,
+                metadata.ingested_at.isoformat(),
+                catalog_error_count,
+                elapsed_time_seconds,
+                command_name,
+            ),
+        )
+        return False
+
+    @staticmethod
+    def _activate_supplemental(
+        connection: sqlite3.Connection,
+        snapshot_id: DbtSnapshotId,
+        artifact_kind: str,
+        content_digest: str,
+    ) -> None:
+        connection.execute(
+            "UPDATE dbt_supplemental_artifacts SET is_active = 0 "
+            "WHERE manifest_snapshot_id = ? AND artifact_kind = ? AND is_active = 1",
+            (str(snapshot_id), artifact_kind),
+        )
+        updated = connection.execute(
+            "UPDATE dbt_supplemental_artifacts SET is_active = 1 "
+            "WHERE manifest_snapshot_id = ? AND artifact_kind = ? AND content_digest = ?",
+            (str(snapshot_id), artifact_kind, content_digest),
+        )
+        if updated.rowcount != 1:
+            raise SupplementalArtifactConflict("supplemental dbt artifact could not be activated")
+
+    @staticmethod
+    def _active_supplemental_row(
+        connection: sqlite3.Connection, snapshot_id: DbtSnapshotId, artifact_kind: str
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM dbt_supplemental_artifacts WHERE manifest_snapshot_id = ? "
+                "AND artifact_kind = ? AND is_active = 1",
+                (str(snapshot_id), artifact_kind),
+            ).fetchone(),
+        )
+
+    @staticmethod
+    def _supplemental_metadata_from_row(
+        row: sqlite3.Row,
+    ) -> DbtSupplementalArtifactMetadata:
+        return DbtSupplementalArtifactMetadata(
+            row["schema_version"],
+            row["dbt_version"],
+            None if row["generated_at"] is None else datetime.fromisoformat(row["generated_at"]),
+            row["invocation_id"],
+            row["content_digest"],
+            row["normalized_digest"],
+            row["source_identity"],
+            datetime.fromisoformat(row["ingested_at"]),
         )
 
     def _scoped_nodes(

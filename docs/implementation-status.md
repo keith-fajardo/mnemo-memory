@@ -918,3 +918,25 @@ boundary, and hostile-input verification. Focused parser/manifest tests passed; 
 passed with 548 tests, strict typing for 146 source files, schema validation, dependency/provenance
 validation for 86 entries, and architecture validation for 72 product Python files. No dependency
 was added.
+
+#### Issue 15B — Complete
+
+The current bounded issue persists the minimized catalog and run-results projections against one
+exact authorized manifest snapshot. Reference and SQLite repositories must reject any supplemental
+resource identity absent from that manifest snapshot, reject cross-scope attachment, store
+immutable digest-addressed artifact versions, select one current projection per manifest and kind,
+and make identical retries idempotent. SQLite migration 0014 must preserve transactional rollback
+and use foreign keys to prevent detached catalog relations, columns, results, or timing rows. No raw
+artifact, warehouse/comment/statistics payload, compiled SQL, message, adapter response, model call,
+new MCP tool, or dependency may be stored or introduced.
+
+Implemented matching reference and SQLite repository contracts plus migration 0014. Catalog and
+run-results versions are immutable and content-digest addressed; identical retries are idempotent,
+new versions atomically replace only the current pointer for their manifest/kind, and reads require
+the exact project scope and manifest snapshot. Supplemental identities must already exist in that
+manifest. Composite foreign keys bind every retained child row, and failure injection proves a
+rejected child insert leaves neither a header nor partial projection. SQLite reopen tests verify
+durability and confirm excluded warehouse comments, owners, adapter payloads, and compiled SQL are
+absent from the database dump. The complete gate passed with 554 tests, strict typing for 147 source
+files, schema validation, dependency/provenance validation for 86 entries, and architecture
+validation for 72 product Python files. No dependency was added.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
@@ -28,6 +29,8 @@ from mnemo_memory.packages.domain import (
     CodeSymbolId,
     CodeSymbolKind,
     CurrentKnowledgeDocumentSection,
+    DbtCatalogArtifact,
+    DbtRunResultsArtifact,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -93,10 +96,16 @@ from .contracts import (
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
     SourceStructureRepository,
+    SupplementalArtifactConflict,
+    SupplementalArtifactStoreResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
+
+_SupplementalArtifactT = TypeVar(
+    "_SupplementalArtifactT", DbtCatalogArtifact, DbtRunResultsArtifact
+)
 
 
 class ReferenceKnowledgeDocumentRepository:
@@ -1033,6 +1042,10 @@ class ReferenceProjectIndexRepository:
         self._artifacts: dict[DbtSnapshotId, DbtManifestArtifact] = {}
         self._snapshots: dict[DbtSnapshotId, DbtManifestSnapshot] = {}
         self._active: dict[MemoryScope, DbtSnapshotId] = {}
+        self._catalogs: dict[tuple[DbtSnapshotId, str], DbtCatalogArtifact] = {}
+        self._run_results: dict[tuple[DbtSnapshotId, str], DbtRunResultsArtifact] = {}
+        self._active_catalog: dict[DbtSnapshotId, str] = {}
+        self._active_run_results: dict[DbtSnapshotId, str] = {}
 
     def store_and_activate(
         self,
@@ -1099,6 +1112,44 @@ class ReferenceProjectIndexRepository:
         self._require_scope(scope)
         snapshot_id = self._active.get(scope)
         return None if snapshot_id is None else self._snapshots[snapshot_id]
+
+    def store_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact
+    ) -> SupplementalArtifactStoreResult:
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            artifact,
+            self._catalogs,
+            self._active_catalog,
+            tuple(item.unique_id for item in artifact.relations),
+        )
+
+    def store_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtRunResultsArtifact
+    ) -> SupplementalArtifactStoreResult:
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            artifact,
+            self._run_results,
+            self._active_run_results,
+            tuple(item.unique_id for item in artifact.results),
+        )
+
+    def get_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtCatalogArtifact | None:
+        self.get_snapshot(scope, snapshot_id)
+        digest = self._active_catalog.get(snapshot_id)
+        return None if digest is None else self._catalogs[(snapshot_id, digest)]
+
+    def get_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtRunResultsArtifact | None:
+        self.get_snapshot(scope, snapshot_id)
+        digest = self._active_run_results.get(snapshot_id)
+        return None if digest is None else self._run_results[(snapshot_id, digest)]
 
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
@@ -1190,6 +1241,42 @@ class ReferenceProjectIndexRepository:
     def _artifact(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestArtifact:
         self.get_snapshot(scope, snapshot_id)
         return self._artifacts[snapshot_id]
+
+    def _store_supplemental(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        artifact: _SupplementalArtifactT,
+        stored: dict[tuple[DbtSnapshotId, str], _SupplementalArtifactT],
+        active: dict[DbtSnapshotId, str],
+        resource_ids: tuple[DbtNodeId, ...],
+    ) -> SupplementalArtifactStoreResult:
+        manifest = self._artifact(scope, snapshot_id)
+        if artifact.scope != scope:
+            raise InvalidManifestSnapshotScope(
+                "supplemental dbt artifact requires exact manifest scope"
+            )
+        manifest_ids = {item.unique_id for item in manifest.nodes}
+        if set(resource_ids) - manifest_ids:
+            raise SupplementalArtifactConflict(
+                "supplemental dbt artifact references a node absent from the manifest snapshot"
+            )
+        digest = artifact.metadata.content_digest
+        key = (snapshot_id, digest)
+        existing = stored.get(key)
+        if existing is not None:
+            if (
+                existing.metadata.normalized_digest != artifact.metadata.normalized_digest
+                or existing.metadata.source_identity != artifact.metadata.source_identity
+            ):
+                raise SupplementalArtifactConflict(
+                    "supplemental dbt artifact digest conflicts with retained metadata"
+                )
+            active[snapshot_id] = digest
+            return SupplementalArtifactStoreResult(snapshot_id, digest, True)
+        stored[key] = artifact
+        active[snapshot_id] = digest
+        return SupplementalArtifactStoreResult(snapshot_id, digest, False)
 
     @staticmethod
     def _require_scope(scope: MemoryScope) -> None:

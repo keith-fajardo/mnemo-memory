@@ -26,6 +26,8 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CurrentKnowledgeDocumentSection,
+    DbtCatalogArtifact,
+    DbtRunResultsArtifact,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -381,6 +383,10 @@ class InvalidManifestGraph(ProjectIndexRepositoryError):
     pass
 
 
+class SupplementalArtifactConflict(ProjectIndexRepositoryError):
+    pass
+
+
 class ProjectIndexStorageFailure(ProjectIndexRepositoryError):
     pass
 
@@ -514,6 +520,13 @@ class ManifestSnapshotPage:
 
 
 @dataclass(frozen=True, slots=True)
+class SupplementalArtifactStoreResult:
+    manifest_snapshot_id: DbtSnapshotId
+    content_digest: str
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSnapshotStoreResult:
     snapshot: CodeSnapshot
     idempotent: bool
@@ -533,6 +546,22 @@ class ProjectIndexRepository(Protocol):
     ) -> DbtManifestSnapshot: ...
 
     def get_active_snapshot(self, scope: MemoryScope) -> DbtManifestSnapshot | None: ...
+
+    def store_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact
+    ) -> SupplementalArtifactStoreResult: ...
+
+    def store_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtRunResultsArtifact
+    ) -> SupplementalArtifactStoreResult: ...
+
+    def get_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtCatalogArtifact | None: ...
+
+    def get_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtRunResultsArtifact | None: ...
 
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId

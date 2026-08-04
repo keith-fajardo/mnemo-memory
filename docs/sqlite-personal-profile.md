@@ -22,6 +22,15 @@ transaction, not a schema migration; it removes one approved event payload and i
 links only after inserting the scoped tombstone. Restore the pre-upgrade database backup to return
 to schema 12; no down-migration is provided because schema-12 code cannot enforce governance state.
 
+Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
+projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
+result, and timing row to both its digest-addressed supplemental artifact and an existing manifest
+node. Only one projection per manifest/artifact kind is current, while older projections remain
+rebuildable structural history. The migration is additive, forward-only, and transactional;
+restore the pre-upgrade schema-13 backup for rollback. Runtime writes insert a complete inactive
+projection before atomically switching its current pointer, and a failed child insert rolls back
+the header and all rows.
+
 Scope/principal records are retained with `RESTRICT`. Checkpoints, revisions, evidence, and their
 links also use `RESTRICT`, so evidence supporting a durable checkpoint cannot disappear silently.
 The repository contract suite exercises the same public contract intended for a later PostgreSQL

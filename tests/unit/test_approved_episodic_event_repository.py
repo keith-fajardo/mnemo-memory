@@ -458,6 +458,11 @@ def test_approved_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_run_result_timings")
+        connection.execute("DROP TABLE dbt_run_results")
+        connection.execute("DROP TABLE dbt_catalog_columns")
+        connection.execute("DROP TABLE dbt_catalog_relations")
+        connection.execute("DROP TABLE dbt_supplemental_artifacts")
         connection.execute("DROP TABLE approved_episodic_event_governance_evidence")
         connection.execute("DROP TABLE approved_episodic_event_governance")
         connection.execute("DROP TRIGGER checkpoint_source_observation_snapshot_scope_match")
@@ -487,9 +492,14 @@ def test_approved_event_governance_migration_rolls_back_as_one_step(tmp_path: Pa
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_run_result_timings")
+        connection.execute("DROP TABLE dbt_run_results")
+        connection.execute("DROP TABLE dbt_catalog_columns")
+        connection.execute("DROP TABLE dbt_catalog_relations")
+        connection.execute("DROP TABLE dbt_supplemental_artifacts")
         connection.execute("DROP TABLE approved_episodic_event_governance_evidence")
         connection.execute("DROP TABLE approved_episodic_event_governance")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 13")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=13)
