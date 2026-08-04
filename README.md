@@ -223,6 +223,11 @@ Use `memory impact --path RELATIVE_PATH` when the question is “what proven sta
 this exact file?” It includes all saved declarations in that file and never substitutes a similarly
 named path.
 
+An agent can also request an exact file identity through `get_context` with `source_query`, such
+as `package.json`, `uv.lock`, or `Dockerfile`. Mnemo returns only the relative path, immutable
+snapshot, and citation—not the file contents—and does not invent symbols or dependencies for a
+file it has not parsed.
+
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.
 

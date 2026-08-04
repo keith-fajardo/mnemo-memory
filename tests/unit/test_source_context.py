@@ -124,6 +124,53 @@ def test_source_query_returns_scoped_provenance_bearing_structural_facts(tmp_pat
     assert str(root) not in item.content
 
 
+def test_exact_file_only_source_query_returns_cited_file_identity_without_contents(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    secret_manifest_value = "private-registry-value"
+    (root / "package.json").write_text(
+        f'{{"registry":"{secret_manifest_value}"}}\n', encoding="utf-8"
+    )
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+
+    context = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(GetUnifiedContext(task_scope, source_query="package.json"))
+
+    assert len(context.structural_items) == 1
+    item = context.structural_items[0]
+    assert item.item_id.startswith("source-file:")
+    assert '"path":"package.json"' in item.content
+    assert item.evidence_references
+    assert secret_manifest_value not in item.content
+    assert secret_manifest_value not in repr(context)
+
+
 def test_context_attaches_an_exact_checkpoint_source_observation_without_claiming_cause(
     tmp_path: Path,
 ) -> None:

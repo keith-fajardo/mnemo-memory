@@ -84,6 +84,10 @@ file. It is still deliberately not a source-code copy, a runtime trace, or a gue
 A saved snapshot is labeled **unknown currentness** unless a later source-state comparison can prove
 it matches the files being worked on.
 
+An exact safe file name such as `package.json`, `uv.lock`, or `Dockerfile` is useful too. Mnemo
+returns its cited relative-file identity even when it does not parse that file's language. It never
+returns the file contents or turns a configuration file into guessed symbols or dependencies.
+
 You can inspect the same proven static impact map yourself from an enabled repository:
 
 ```bash

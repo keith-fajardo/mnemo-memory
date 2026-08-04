@@ -832,6 +832,18 @@ class ReferenceSourceStructureRepository:
     def iter_files(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeFile, ...]:
         return self._artifact(scope, snapshot_id).files
 
+    def get_file(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_path: str
+    ) -> CodeFile | None:
+        return next(
+            (
+                item
+                for item in self._artifact(scope, snapshot_id).files
+                if item.relative_path == relative_path
+            ),
+            None,
+        )
+
     def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:
         return self._artifact(scope, snapshot_id).edges
 

@@ -697,6 +697,9 @@ class UnifiedContextService:
             return _with_omission(
                 packet, "source-structure", OmissionReason.LOWER_RANK, "no source snapshot"
             )
+        exact_file = _exact_scoped_source_file(
+            self._source, project_scope, snapshot.snapshot_id, request.source_query
+        )
         query = request.source_query.casefold()
         symbols = self._source.find_symbols(project_scope, snapshot.snapshot_id, query, limit=256)
         modules = self._source.module_symbols_for_paths(
@@ -725,8 +728,17 @@ class UnifiedContextService:
         selected_symbols = tuple(
             {symbol.symbol_id: symbol for symbol in (*symbols, *resolved_symbols)}.values()
         )
+        result = packet
+        if exact_file is not None:
+            result = _append_source_file_items(
+                result,
+                request.scope,
+                snapshot,
+                (exact_file,),
+                currentness=ValidityState.UNKNOWN,
+            )
         return _append_source_items(
-            packet, request.scope, snapshot, selected_symbols, edges, module_symbols
+            result, request.scope, snapshot, selected_symbols, edges, module_symbols
         )
 
     def _with_source_impact_facts(
@@ -1211,6 +1223,25 @@ def _checkpoint_reference_from_context_item(
 
 
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")
+
+
+def _exact_scoped_source_file(
+    repository: SourceStructureRepository,
+    scope: MemoryScope,
+    snapshot_id: CodeSnapshotId,
+    query: str,
+) -> CodeFile | None:
+    """Resolve a query as one exact safe relative file, without broad path matching.
+
+    Free-text symbol matching remains available to ``source_query``. This narrow additional path
+    treats an exact canonical relative identity as a file request, which makes file-only snapshot
+    evidence (for example a dependency manifest) retrievable without inventing symbols.
+    """
+    try:
+        _validate_source_relative_path(query)
+    except ValueError:
+        return None
+    return repository.get_file(scope, snapshot_id, query)
 
 
 def _validate_source_relative_path(value: str) -> None:

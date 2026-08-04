@@ -385,6 +385,12 @@ class SourceStructureRepository(Protocol):
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeFile, ...]: ...
 
+    def get_file(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_path: str
+    ) -> CodeFile | None:
+        """Return one exact scoped file projection without exposing other paths."""
+        ...
+
     def iter_edges(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeEdge, ...]: ...

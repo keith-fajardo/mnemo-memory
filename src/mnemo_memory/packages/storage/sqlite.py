@@ -2162,6 +2162,35 @@ class SQLiteSourceStructureRepository:
             CodeFile(snapshot_id, row["relative_path"], row["content_digest"]) for row in rows
         )
 
+    def get_file(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_path: str
+    ) -> CodeFile | None:
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        try:
+            with self._backend._connect() as connection:
+                row = connection.execute(
+                    "SELECT file.* FROM source_structure_files AS file JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = file.snapshot_id "
+                    "WHERE file.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND file.relative_path = ?",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        relative_path,
+                    ),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return (
+            None
+            if row is None
+            else CodeFile(snapshot_id, row["relative_path"], row["content_digest"])
+        )
+
     def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:
         self._backend.get_source_snapshot(scope, snapshot_id)
         try:

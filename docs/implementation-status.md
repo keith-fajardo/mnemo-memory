@@ -606,6 +606,10 @@ fingerprints. They make a path/body change visible in a source transition withou
 text or claiming parsed declarations, dependencies, or calls. dbt dependency authority remains the
 manifest projection.
 
+An exact safe `source_query` can now retrieve one of those file-only projections (for example
+`package.json`, `uv.lock`, or `Dockerfile`) with snapshot provenance. The result contains only its
+relative identity and digest-backed citation, never its contents or invented structural links.
+
 Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful
 "previous structural state → current structural state" sequence without treating random snapshot
 UUIDs as timestamps.

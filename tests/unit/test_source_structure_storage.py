@@ -335,6 +335,33 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
 
 
 @pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_exact_scoped_file_projection_is_available_without_parsing_source(
+    tmp_path: Path, adapter: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    package_manifest = root / "package.json"
+    package_manifest.write_text('{"private":"not-retained"}\n', encoding="utf-8")
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    repository = (
+        ReferenceSourceStructureRepository()
+        if adapter == "reference"
+        else SQLiteSourceStructureRepository(tmp_path / "memory" / "mnemo.sqlite3")
+    )
+    if adapter == "sqlite":
+        repository.migrate()  # type: ignore[union-attr]
+    stored = repository.store_and_activate(artifact)
+
+    file = repository.get_file(scope(), stored.snapshot.snapshot_id, "package.json")
+
+    assert file is not None
+    assert file.relative_path == "package.json"
+    assert file.content_digest.startswith("sha256:")
+    assert repository.get_file(scope(), stored.snapshot.snapshot_id, "missing.json") is None
+    assert "not-retained" not in repr(file)
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
 def test_source_snapshot_activation_history_is_scoped_and_uses_explicit_order(
     tmp_path: Path, adapter: str
 ) -> None:
