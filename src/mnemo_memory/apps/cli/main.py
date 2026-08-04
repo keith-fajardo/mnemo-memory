@@ -133,11 +133,11 @@ memory_app.add_typer(memory_vault_app, name="vault", help="Manage an optional Ob
 _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
     episodic_memories=300,
-    knowledge=0,
+    knowledge=250,
     structural=400,
     skills_and_procedures=0,
     provenance_and_conflicts=0,
-    total_limit=1_200,
+    total_limit=1_450,
 )
 
 
@@ -195,6 +195,7 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                     checkpoint_source_impact=ContextCheckpointSourceImpact(
                         current_source_digest=source_digest,
                     ),
+                    include_checkpoint_file_knowledge=True,
                 )
             )
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):

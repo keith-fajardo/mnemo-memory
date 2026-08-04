@@ -247,6 +247,7 @@ class GetUnifiedContext:
     source_overview: ContextSourceOverviewQuery | None = None
     checkpoint_source_impact: ContextCheckpointSourceImpact | None = None
     knowledge_query: str | None = None
+    include_checkpoint_file_knowledge: bool = False
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
 
@@ -304,13 +305,16 @@ class UnifiedContextService:
         revision does not prove that its filesystem source is current, so items label that fact as
         unknown rather than presenting a note as present-day structural authority.
         """
-        if request.knowledge_query is None:
+        query = request.knowledge_query
+        if query is None and request.include_checkpoint_file_knowledge:
+            query = _checkpoint_file_knowledge_query(packet)
+        if query is None:
             return packet
         if self._knowledge is None:
             return _with_omission(
                 packet, "knowledge", OmissionReason.LOWER_RANK, "knowledge index is unavailable"
             )
-        terms = normalize_knowledge_query(request.knowledge_query)
+        terms = normalize_knowledge_query(query)
         if not terms:
             raise ValueError("knowledge query requires at least one searchable term")
         matches = self._knowledge.search_current_sections(
@@ -1441,6 +1445,41 @@ def _knowledge_context_item(
             (evidence,),
         ),
     )
+
+
+def _checkpoint_file_knowledge_query(packet: ContextPacket) -> str | None:
+    """Derive a tiny literal note query from explicit checkpoint file identities only.
+
+    This never inspects a user's current prompt, source bodies, note bodies, or environment.  A
+    checkpoint's relevant-files field is durable task evidence already authorized for this packet;
+    extracting literal file stems only selects same-scope untrusted note candidates.
+    """
+    checkpoint = packet.active_task_checkpoint
+    if checkpoint is None:
+        return None
+    try:
+        content = json.loads(checkpoint.content)
+    except (TypeError, ValueError):
+        return None
+    files = content.get("relevant_files") if isinstance(content, dict) else None
+    if not isinstance(files, list):
+        return None
+    terms: list[str] = []
+    for value in files:
+        if not isinstance(value, str) or len(value) > 512 or value.startswith("/"):
+            continue
+        path = PurePosixPath(value)
+        if any(part in {"", ".", ".."} for part in path.parts):
+            continue
+        name = path.name.rsplit(".", maxsplit=1)[0]
+        for term in normalize_knowledge_query(name):
+            if term not in terms:
+                terms.append(term)
+            if len(terms) == 12:
+                break
+        if len(terms) == 12:
+            break
+    return " ".join(terms) or None
 
 
 def _source_snapshot_difference(

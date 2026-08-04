@@ -277,6 +277,12 @@ is available and how to request it with a short `knowledge_query`; it does not a
 read the user’s prompt to guess a query. That makes the capability discoverable without making you
 maintain an additional agent instruction file.
 
+If the saved task checkpoint already lists a relevant file such as `models/reconciliation.sql`, the
+fresh-session packet automatically uses its file stem (`reconciliation`) to select a small current
+same-project note section. This is a bounded 250-token convenience, not prompt snooping or a full
+notes replay. The returned section still has exact revision provenance and remains untrusted. For a
+new topic with no saved relevant file, the agent uses the normal short `knowledge_query` instead.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,

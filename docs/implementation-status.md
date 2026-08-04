@@ -724,9 +724,12 @@ future source-state comparison can prove otherwise. This is an explicit, scope-f
 ambient retrieval. For a repository already enrolled through the explicit automatic-memory opt-in,
 Mnemo now synchronizes bounded in-project Markdown at lifecycle refresh boundaries; the hook emits
 no document text, but reports only a bounded document count and retrieval guidance to a fresh
-enabled agent. An optional explicit local Obsidian vault binding can add one external vault to
+enabled agent. When the current durable checkpoint names relevant files, its bounded automatic
+session attachment also performs same-scope literal note selection from at most four file stems,
+with a 250-token note allowance; it never reads the new prompt, replays a notes directory, or
+treats that selection as semantic authority. An optional explicit local Obsidian vault binding can add one external vault to
 that same project scope with a generated source prefix, and disabling it first performs an atomic
 sync that removes its retained content-bearing revisions before removing the binding. Current scoped document navigation
 now resolves only declared direct Markdown/Obsidian links and backlinks; ambiguous, external, and
 unresolvable links are omitted rather than guessed, with both endpoint revision IDs retained as
-evidence. Embeddings and automatic context selection remain in progress.
+evidence. Embeddings remain in progress.

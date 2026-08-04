@@ -377,6 +377,13 @@ text—how many current scoped knowledge documents are available and to use a sh
 when the task needs a documented decision, architecture note, or policy. You do not need to keep a
 separate reminder in every `CLAUDE.md` or `AGENTS.md`.
 
+When the durable checkpoint already names relevant files, the small automatic session packet also
+looks up current same-project notes using those **file stems** (for example, `reconciliation` from
+`models/reconciliation.sql`). That gives a fresh agent a cited note about the file it is resuming
+without reading the new user prompt or replaying every note. The automatic note allowance is 250
+estimated tokens; unrelated notes stay out. For a different topic, the agent can still use an
+explicit short `knowledge_query`.
+
 **When does it get saved?** In automatic mode, Mnemo asks the connected agent to call
 `save_checkpoint` at a stop or compaction boundary. You can still ask explicitly at any point.
 The code structure refresh happens locally at session start, checkpoint save, and an unsaved stop;

@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
+from mnemo_memory.packages.application.checkpoints import (
+    CheckpointApplicationService,
+    CreateCheckpoint,
+)
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
 )
 from mnemo_memory.packages.domain import (
+    CheckpointContent,
     ContextBudget,
     ContextPacket,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
     MemoryScope,
@@ -18,7 +26,10 @@ from mnemo_memory.packages.domain import (
     ProjectId,
     ScopeLevel,
     SessionId,
+    SourceId,
+    SourceTrustClass,
     TaskId,
+    VerificationStatus,
     Visibility,
     WorkspaceId,
 )
@@ -164,3 +175,100 @@ def test_durable_mcp_port_routes_explicit_knowledge_query_to_unified_context() -
     packet = ContextPacket.from_dict(raw_packet)
     assert len(packet.knowledge_items) == 1
     assert packet.knowledge_items[0].validity.value == "unknown"
+
+
+def test_unified_context_can_select_cited_knowledge_from_checkpoint_file_identity() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "docs/reconciliation.md"),
+        "# Reconciliation\nThe reconciliation model uses the documented business-date grain.",
+    )
+    repository.apply_sync(
+        project_scope(),
+        (KnowledgeDocumentRevision(KnowledgeDocumentRevisionId.new(), document, 1, None, NOW),),
+        (),
+    )
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
+    scope = task_scope()
+    checkpoints.create(
+        CreateCheckpoint(
+            scope,
+            CheckpointContent(
+                task_objective="Resume reconciliation",
+                completed_work=(),
+                current_state="A file-specific note may help.",
+                remaining_work=("Review the model.",),
+                decisions=(),
+                failures=(),
+                blockers=(),
+                relevant_files=("models/reconciliation.sql",),
+                relevant_artifacts=(),
+                verification_performed=(),
+                token_estimate=20,
+            ),
+            (
+                EvidenceReference(
+                    EvidenceId.new(),
+                    SourceId.new(),
+                    EvidenceSourceType.USER_DOCUMENT,
+                    SourceTrustClass.USER_AUTHORED,
+                    "fixture://checkpoint/reconciliation",
+                    "sha256:" + "a" * 64,
+                    EvidenceLocation("fixture://checkpoint/reconciliation"),
+                    NOW,
+                    VerificationStatus.VERIFIED,
+                ),
+            ),
+        )
+    )
+    context = UnifiedContextService(checkpoints, None, knowledge=repository).get_context(
+        GetUnifiedContext(scope, include_checkpoint_file_knowledge=True)
+    )
+
+    assert len(context.knowledge_items) == 1
+    assert "reconciliation model" in context.knowledge_items[0].content
+    assert context.knowledge_items[0].ranking is not None
+    assert context.knowledge_items[0].ranking.retrieval_method == "scoped-literal-knowledge"
+
+
+def test_checkpoint_file_knowledge_selection_ignores_unsafe_or_unsearchable_identities() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
+    scope = task_scope()
+    checkpoints.create(
+        CreateCheckpoint(
+            scope,
+            CheckpointContent(
+                task_objective="Resume safely",
+                completed_work=(),
+                current_state="No automatic note query should be derived.",
+                remaining_work=(),
+                decisions=(),
+                failures=(),
+                blockers=(),
+                relevant_files=("/private/secret.md", "../../--.py"),
+                relevant_artifacts=(),
+                verification_performed=(),
+                token_estimate=10,
+            ),
+            (
+                EvidenceReference(
+                    EvidenceId.new(),
+                    SourceId.new(),
+                    EvidenceSourceType.USER_DOCUMENT,
+                    SourceTrustClass.USER_AUTHORED,
+                    "fixture://checkpoint/safe",
+                    "sha256:" + "b" * 64,
+                    EvidenceLocation("fixture://checkpoint/safe"),
+                    NOW,
+                    VerificationStatus.VERIFIED,
+                ),
+            ),
+        )
+    )
+
+    context = UnifiedContextService(checkpoints, None, knowledge=repository).get_context(
+        GetUnifiedContext(scope, include_checkpoint_file_knowledge=True)
+    )
+
+    assert context.knowledge_items == ()

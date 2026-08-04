@@ -433,6 +433,10 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
 ) -> None:
     project = tmp_path / "repo"
     project.mkdir()
+    (project / "docs").mkdir()
+    (project / "docs" / "reconciliation.md").write_text(
+        "# Reconciliation\nUse the documented business-date grain.", encoding="utf-8"
+    )
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     content = CheckpointContent(
@@ -463,16 +467,19 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
         runtime.checkpoint_service.create(
             CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
         )
+    cli._refresh_project_knowledge(data, binding)
 
     attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
 
     assert attached is not None
     packet = json.loads(attached)
-    assert packet["declared_total_tokens"] <= 1_200
+    assert packet["declared_total_tokens"] <= 1_450
     assert packet["active_task_checkpoint"]["content"] == json.dumps(
         content.to_dict(), sort_keys=True, separators=(",", ":")
     )
     assert packet["episodic_memories"] == []
+    assert len(packet["knowledge_items"]) == 1
+    assert "documented business-date grain" in packet["knowledge_items"][0]["content"]
 
 
 def test_checkpoint_save_observes_the_bound_source_snapshot_without_affecting_checkpoint_success(
@@ -564,7 +571,7 @@ def test_automatic_context_attachment_includes_the_latest_bounded_source_transit
     assert attached is not None
     packet = json.loads(attached)
     assert packet["active_task_checkpoint"] is None
-    assert packet["declared_total_tokens"] <= 1_200
+    assert packet["declared_total_tokens"] <= 1_450
     change = next(
         item for item in packet["structural_items"] if item["item_id"].startswith("source-change:")
     )
@@ -603,7 +610,7 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     assert summary["file_count"] == 1
     assert summary["currentness"] == "current"
     assert any(item["item_id"].startswith("source-file:") for item in packet["structural_items"])
-    assert packet["declared_total_tokens"] <= 1_200
+    assert packet["declared_total_tokens"] <= 1_450
     assert "return True" not in attached
     assert str(project) not in attached
 
@@ -666,7 +673,7 @@ def test_automatic_context_attaches_checkpoint_relevant_static_impact(tmp_path: 
     assert any(item["path"] == "core.py" for item in impact)
     assert any(item["path"] == "service.py" for item in impact)
     assert all(item["currentness"] == "current" for item in impact)
-    assert packet["declared_total_tokens"] <= 1_200
+    assert packet["declared_total_tokens"] <= 1_450
     assert "return core.calculate" not in attached
 
 
