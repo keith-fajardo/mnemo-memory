@@ -2221,6 +2221,38 @@ class _KnowledgeOperations:
             raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
 
     @staticmethod
+    def get_current_knowledge_revision_by_path(
+        backend: SQLiteCheckpointRepository, scope: MemoryScope, relative_path: str
+    ) -> KnowledgeDocumentRevision:
+        """Resolve one exact current source path through complete SQL scope predicates."""
+        backend._require_project_scope(scope)
+        if not relative_path or relative_path.startswith("/") or ".." in relative_path.split("/"):
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        try:
+            with backend._connect() as connection:
+                row = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
+                    "knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.relative_path = ? AND source.owner_id = ? "
+                    "AND source.workspace_id IS ? AND source.project_id = ? "
+                    "AND source.is_deleted = 0",
+                    (
+                        relative_path,
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise KnowledgeDocumentNotFound("knowledge document was not found")
+                return _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+        except KnowledgeDocumentNotFound:
+            raise
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
     def get_knowledge_revision(
         backend: SQLiteCheckpointRepository,
         scope: MemoryScope,
@@ -2826,6 +2858,13 @@ class SQLiteKnowledgeDocumentRepository:
     ) -> KnowledgeDocumentRevision:
         return _KnowledgeOperations.get_current_knowledge_revision(
             self._backend, scope, document_id
+        )
+
+    def get_current_revision_by_path(
+        self, scope: MemoryScope, relative_path: str
+    ) -> KnowledgeDocumentRevision:
+        return _KnowledgeOperations.get_current_knowledge_revision_by_path(
+            self._backend, scope, relative_path
         )
 
     def get_revision(

@@ -25,6 +25,7 @@ from mnemo_memory.packages.knowledge import (
     SemanticKnowledgeSearchRequest,
 )
 from mnemo_memory.packages.storage import (
+    KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
     ReferenceKnowledgeDocumentRepository,
     SQLiteKnowledgeDocumentRepository,
@@ -160,3 +161,15 @@ def test_unindexed_semantic_request_does_not_initialize_the_local_runtime(
     assert result.matches == ()
     assert result.indexed_section_count == 0
     assert result.unindexed_section_count == 1
+
+
+def test_current_document_path_lookup_is_scope_first(
+    repository: KnowledgeDocumentRepository,
+) -> None:
+    repo = repository
+    document = revision("docs/reconciliation.md", "# Reconciliation\nCurrent procedure.")
+    repo.apply_sync(scope(), (document,), ())
+
+    assert repo.get_current_revision_by_path(scope(), "docs/reconciliation.md") == document
+    with pytest.raises(KnowledgeDocumentNotFound):
+        repo.get_current_revision_by_path(scope(2), "docs/reconciliation.md")

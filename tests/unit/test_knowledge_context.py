@@ -151,6 +151,38 @@ def test_unified_context_can_attach_explicit_local_semantic_knowledge() -> None:
     assert packet.knowledge_items[0].evidence_references
 
 
+def test_explicit_knowledge_conflict_is_preserved_without_inference() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    declared = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "docs/current-policy.md"),
+        "---\nmnemo_conflicts_with: docs/legacy-policy.md\n---\n"
+        "# Current policy\nUse the current policy during reconciliation.",
+    )
+    declared_revision = KnowledgeDocumentRevision(
+        KnowledgeDocumentRevisionId.new(), declared, 1, None, NOW
+    )
+    other = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "docs/legacy-policy.md"),
+        "# Legacy policy\nThis retained note has a different documented procedure.",
+    )
+    other_revision = KnowledgeDocumentRevision(
+        KnowledgeDocumentRevisionId.new(), other, 1, None, NOW
+    )
+    repository.apply_sync(project_scope(), (declared_revision, other_revision), ())
+
+    packet = service(repository).get_context(
+        GetUnifiedContext(task_scope(), knowledge_query="current policy")
+    )
+
+    assert {item.item_id for item in packet.knowledge_items} == {
+        f"knowledge:{declared.document_id}:revision:{declared_revision.revision_id}:section:0",
+        f"knowledge:{other.document_id}:revision:{other_revision.revision_id}:section:0",
+    }
+    assert len(packet.conflicts) == 1
+    assert packet.conflicts[0].state.value == "unresolved"
+    assert set(packet.conflicts[0].item_ids) == {item.item_id for item in packet.knowledge_items}
+
+
 def test_unified_context_omits_whole_knowledge_sections_that_do_not_fit_budget() -> None:
     repository = ReferenceKnowledgeDocumentRepository()
     document = KnowledgeDocumentParser().parse(

@@ -30,6 +30,7 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    ConflictNotice,
     ConflictState,
     ContentRepresentation,
     ContextBudget,
@@ -63,6 +64,7 @@ from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, Sourc
 from mnemo_memory.packages.storage.contracts import (
     CheckpointSourceObservationNotFound,
     CheckpointSourceObservationRepository,
+    KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
     SourceStructureRepository,
 )
@@ -361,10 +363,38 @@ class UnifiedContextService:
             )
         selected: dict[tuple[object, int], KnowledgeDocumentSectionMatch] = {}
         for match in matches:
-            key = (match.revision.revision_id, match.section_index)
-            previous = selected.get(key)
+            section_key = (match.revision.revision_id, match.section_index)
+            previous = selected.get(section_key)
             if previous is None or match.score > previous.score:
-                selected[key] = match
+                selected[section_key] = match
+        conflict_pairs: list[tuple[tuple[object, int], tuple[object, int]]] = []
+        conflict_documents: set[tuple[object, object]] = set()
+        if self._knowledge is not None:
+            for selected_key, match in tuple(selected.items()):
+                target_path = _knowledge_conflict_target(match)
+                if target_path is None:
+                    continue
+                try:
+                    target = self._knowledge.get_current_revision_by_path(
+                        _project_scope(request.scope), target_path
+                    )
+                except KnowledgeDocumentNotFound:
+                    continue
+                if not target.document.sections:
+                    continue
+                target_key: tuple[object, int] = (target.revision_id, 0)
+                selected.setdefault(
+                    target_key,
+                    KnowledgeDocumentSectionMatch(target, 0, target.document.sections[0], 1),
+                )
+                document_pair = (match.revision.document.document_id, target.document.document_id)
+                if (
+                    target_key != selected_key
+                    and document_pair not in conflict_documents
+                    and len(conflict_pairs) < 4
+                ):
+                    conflict_pairs.append((selected_key, target_key))
+                    conflict_documents.add(document_pair)
         matches = sorted(
             selected.values(),
             key=lambda item: (
@@ -379,6 +409,7 @@ class UnifiedContextService:
         )
         items: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
+        item_ids: dict[tuple[object, int], ContextItem] = {}
         for rank, match in enumerate(matches, start=1):
             item, notice = _knowledge_context_item(packet, request.scope, match, rank)
             if item.token_estimate > remaining:
@@ -390,10 +421,24 @@ class UnifiedContextService:
                 )
                 continue
             items.append(item)
+            item_ids[(match.revision.revision_id, match.section_index)] = item
             notices.append(notice)
             remaining -= item.token_estimate
         if not items and matches:
             return packet
+        conflicts = list(packet.conflicts)
+        for left_key, right_key in conflict_pairs:
+            left, right = item_ids.get(left_key), item_ids.get(right_key)
+            if left is None or right is None:
+                continue
+            conflicts.append(
+                ConflictNotice(
+                    f"knowledge-conflict:{left.item_id}:{right.item_id}",
+                    (left.item_id, right.item_id),
+                    (*left.evidence_references, *right.evidence_references),
+                    ConflictState.UNRESOLVED,
+                )
+            )
         return ContextPacket(
             packet.schema_version,
             packet.request_id,
@@ -412,7 +457,7 @@ class UnifiedContextService:
             skills_and_procedures=packet.skills_and_procedures,
             provenance=tuple(notices),
             omissions=packet.omissions,
-            conflicts=packet.conflicts,
+            conflicts=tuple(conflicts),
         )
 
     def _with_dbt_lineage(self, packet: ContextPacket, request: GetUnifiedContext) -> ContextPacket:
@@ -1498,6 +1543,33 @@ def _knowledge_context_item(
             (evidence,),
         ),
     )
+
+
+def _knowledge_conflict_target(match: KnowledgeDocumentSectionMatch) -> str | None:
+    """Read one explicit, safe user-authored conflict declaration without interpreting prose.
+
+    The declaration is intentionally narrow: a note can say ``mnemo_conflicts_with:
+    docs/other-note.md``.  Mnemo does not infer disagreement from note text.  It simply preserves
+    the two cited current revisions as unresolved evidence when both are in the same scope.
+    """
+    value = next(
+        (
+            frontmatter_value
+            for key, frontmatter_value in match.revision.document.frontmatter
+            if key == "mnemo_conflicts_with"
+        ),
+        None,
+    )
+    if (
+        value is None
+        or not value
+        or len(value) > 512
+        or value.startswith("/")
+        or "\\" in value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+    ):
+        return None
+    return value
 
 
 def _checkpoint_file_knowledge_query(packet: ContextPacket) -> str | None:

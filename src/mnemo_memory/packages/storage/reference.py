@@ -122,6 +122,21 @@ class ReferenceKnowledgeDocumentRepository:
             raise KnowledgeDocumentNotFound("knowledge document was not found")
         return self._revisions[state.current_revision_id]
 
+    def get_current_revision_by_path(
+        self, scope: MemoryScope, relative_path: str
+    ) -> KnowledgeDocumentRevision:
+        self._require_scope(scope)
+        if not relative_path or relative_path.startswith("/") or ".." in relative_path.split("/"):
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        matching = tuple(
+            item
+            for item in self._active.values()
+            if item.scope == scope and item.relative_path == relative_path
+        )
+        if len(matching) != 1:
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        return self._revisions[matching[0].current_revision_id]
+
     def get_revision(
         self,
         scope: MemoryScope,

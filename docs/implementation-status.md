@@ -744,3 +744,10 @@ scope-first, hidden when a revision is superseded, deleted with a tombstoned not
 the same bounded cited untrusted evidence through an explicit `semantic_knowledge_query`. Hosted
 embedding providers, broad ambient semantic retrieval, and semantic authority over current dbt or
 source facts remain out of scope.
+
+Knowledge corrections remain revision-based: editing a note creates its next immutable revision,
+and only that current revision is searchable. An author may also declare one exact same-project
+`mnemo_conflicts_with` relative path in frontmatter. When the declaring note is selected, Mnemo
+retrieves both scoped current revisions and preserves an unresolved cited conflict; it does not
+infer disagreement from prose, leak another scope, or choose a winner over authoritative structural
+evidence.

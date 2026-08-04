@@ -386,6 +386,11 @@ the current, cited note revision; it never stores a second text copy, and it rem
 the note is deleted. Agents can request this same bounded evidence through `get_context` with
 `semantic_knowledge_query`; literal `knowledge_query` remains available and unchanged.
 
+When two notes disagree, Mnemo does not decide from prose. Update the corrected note so the old
+revision is no longer current, or declare one explicit same-project counterpart with
+`mnemo_conflicts_with: docs/other-note.md` in Markdown frontmatter. A retrieval then preserves both
+cited notes as an unresolved conflict; it never lets a note override verified source or dbt facts.
+
 If two note sections have the same literal search score, a checked-in repository Markdown note is
 shown before an opted-in Obsidian note. That is only a predictable tie-breaker: Mnemo does not
 silently overwrite one note with another or present either as verified current code structure.

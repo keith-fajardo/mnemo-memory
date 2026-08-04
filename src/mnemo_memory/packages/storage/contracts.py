@@ -184,6 +184,11 @@ class KnowledgeDocumentRepository(Protocol):
         self, scope: MemoryScope, document_id: KnowledgeDocumentId
     ) -> KnowledgeDocumentRevision: ...
 
+    def get_current_revision_by_path(
+        self, scope: MemoryScope, relative_path: str
+    ) -> KnowledgeDocumentRevision:
+        """Resolve one current document by its exact safe path inside the supplied scope."""
+
     def get_revision(
         self,
         scope: MemoryScope,

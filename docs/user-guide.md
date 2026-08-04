@@ -287,6 +287,25 @@ not activate automatically, inspect every prompt, or change the authority of ret
 remain bounded, cited, untrusted evidence. An MCP client can request it with
 `semantic_knowledge_query` when it needs this kind of match.
 
+### Correcting or flagging a note disagreement
+
+Edit a note when its guidance changes. Mnemo creates a new immutable revision and searches only
+the new current revision; it does not silently present the old wording as current knowledge.
+
+If two current notes genuinely disagree, do not expect Mnemo to guess which prose is correct. Put
+one explicit, relative-path declaration in the note that raises the disagreement:
+
+```markdown
+---
+mnemo_conflicts_with: docs/legacy-reconciliation.md
+---
+```
+
+When that note is retrieved, Mnemo includes both cited current revisions and marks the pair as an
+**unresolved conflict**. Both remain untrusted user-authored evidence; verified dbt and source
+facts still take priority for current repository structure. A missing, cross-project, or unsafe
+path is ignored rather than disclosing another project or guessing a conflict.
+
 When equally matching repository and optional-vault notes are returned, repository Markdown appears
 first as a predictable tie-breaker. Both are still separate, untrusted, cited evidence—not facts
 that can silently override current dbt or source-structure evidence.
