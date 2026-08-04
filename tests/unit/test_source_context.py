@@ -663,6 +663,7 @@ def test_source_query_does_not_disclose_another_projects_snapshot(tmp_path: Path
     root = tmp_path / "private-source"
     root.mkdir()
     (root / "service.py").write_text("def private_operation():\n    return 1\n")
+    (root / "package.json").write_text('{"private":"do-not-disclose"}\n', encoding="utf-8")
     source = ReferenceSourceStructureRepository()
     source.store_and_activate(
         PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
@@ -673,7 +674,7 @@ def test_source_query_does_not_disclose_another_projects_snapshot(tmp_path: Path
         ),
         None,
         source,
-    ).get_context(GetUnifiedContext(wrong_task_scope, source_query="private_operation"))
+    ).get_context(GetUnifiedContext(wrong_task_scope, source_query="package.json"))
 
     assert packet.structural_items == ()
     assert packet.provenance == ()

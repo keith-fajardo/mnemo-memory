@@ -359,6 +359,12 @@ def test_exact_scoped_file_projection_is_available_without_parsing_source(
     assert file.content_digest.startswith("sha256:")
     assert repository.get_file(scope(), stored.snapshot.snapshot_id, "missing.json") is None
     assert "not-retained" not in repr(file)
+    with pytest.raises(SourceSnapshotNotFound):
+        repository.get_file(
+            scope("44444444-4444-4444-8444-444444444444"),
+            stored.snapshot.snapshot_id,
+            "package.json",
+        )
 
 
 @pytest.mark.parametrize("adapter", ["reference", "sqlite"])
