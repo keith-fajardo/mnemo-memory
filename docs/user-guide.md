@@ -259,6 +259,11 @@ relevant saved structure when a task names a symbol or file. This is a
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
 
+You also do not supply or guess owner/workspace/project/session/task UUIDs. When the local MCP
+server starts inside an enabled repository, it resolves that repository's saved internal scope.
+Calling `get_context` with no scope fields is therefore valid there; supplying only part of a scope
+is rejected rather than mixed with another project's identity.
+
 There is one additional timely cue: when the agent has edited a project file, Mnemo adds a short
 memory reminder before the next user turn. With your explicit `--auto-memory` consent, Mnemo may
 use at most 512 characters of that prompt transiently to select already-saved, same-project memory.

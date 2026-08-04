@@ -67,14 +67,16 @@ class DurableMcpContextPort:
         service: CheckpointApplicationService,
         context_service: UnifiedContextService | None = None,
         after_checkpoint_save: Callable[[CheckpointView], object] | None = None,
+        default_scope: MemoryScope | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
         self._after_checkpoint_save = after_checkpoint_save
+        self._default_scope = default_scope
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         try:
-            scope = _scope(request)
+            scope = _scope(request, self._default_scope)
             checkpoint = _optional_id(request, "checkpoint_id", CheckpointId)
             budget = ContextBudget(
                 active_task_checkpoint=_integer(request.get("active_task_checkpoint_tokens", 600)),
@@ -271,7 +273,7 @@ class DurableMcpContextPort:
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         try:
             operation = _string(request, "operation")
-            scope = _scope(request)
+            scope = _scope(request, self._default_scope)
             evidence = _evidence(request)
             if operation == "record_event":
                 event = self._service.record_approved_event(
@@ -369,7 +371,13 @@ class DurableMcpContextPort:
             return
 
 
-def _scope(request: Mapping[str, object]) -> MemoryScope:
+def _scope(request: Mapping[str, object], default: MemoryScope | None = None) -> MemoryScope:
+    names = ("owner_id", "workspace_id", "project_id", "session_id", "task_id")
+    supplied = tuple(request.get(name) is not None for name in names)
+    if not any(supplied) and default is not None:
+        return default
+    if any(supplied) and not all(supplied):
+        raise ValueError("scope identifiers must be supplied together")
     return MemoryScope(
         owner_id=_required_id(request, "owner_id", OwnerId),
         level=ScopeLevel.TASK,

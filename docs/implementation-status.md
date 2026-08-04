@@ -506,6 +506,9 @@ repository-read failure cannot clear pending work. With the same explicit consen
 prompt is used transiently to select already-persisted same-project checkpoint and Markdown
 context. The prompt is never stored, and the automatic prompt packet is capped at 1,300 estimated
 tokens with scope-first retrieval. Fresh-process and token-reduction tests cover this path.
+The two MCP tools now resolve an omitted scope only from the current directory's explicit local
+auto-memory binding. This removes UUID handling from normal personal-mode agent use while retaining
+complete explicit scope for advanced callers; partial or unregistered implicit scopes fail closed.
 Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
 Publishing workflow after source-independent artifact verification. Machine-local project bindings
 and lifecycle session markers now use symlink-safe, process-serialized atomic updates so concurrent

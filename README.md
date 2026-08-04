@@ -355,6 +355,10 @@ subcommands. `--auto-memory` is the recommended one-time project opt-in. After r
 restart the relevant client. Each client sees exactly the same two Mnemo MCP tools:
 `save_checkpoint` and `get_context`.
 
+Inside the enabled repository, those tools resolve its private generated scope automatically. You
+do not copy UUIDs into prompts or environment variables, and an agent must not invent friendly
+labels in their place. Explicit UUID scope remains available only for advanced isolated calls.
+
 Both clients start the same installed `mnemo-memory` launcher and therefore share memory **when
 they use the same Mnemo data directory and the same scope**. If you set different `MNEMO_DATA_DIR`
 values, you have deliberately created isolated stores. Registration does not change model
@@ -660,8 +664,10 @@ structural projection, not raw SQL, compiled SQL, macro bodies, credentials, or 
 Mnemo exposes exactly two local stdio MCP tools:
 
 - `save_checkpoint` creates, revises, completes, or abandons an explicit task checkpoint.
-- `get_context` returns a bounded packet for an explicit scope, optionally including a structured
-  dbt upstream/downstream request.
+- `get_context` returns a bounded packet, optionally including a structured dbt
+  upstream/downstream request. In an auto-memory-enabled repository both tools use the registered
+  project/task scope when all UUID fields are omitted; advanced callers may supply the complete
+  explicit scope.
 
 A checkpoint has a stable logical ID and immutable revisions. Revision, completion, and
 abandonment requests include the current revision ID, so two clients cannot silently overwrite one

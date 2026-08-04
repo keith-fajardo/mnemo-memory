@@ -22,7 +22,10 @@ from mnemo_memory.packages.application import (
     build_checkpoint_runtime,
     resolve_local_config,
 )
-from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.application.automatic_memory import (
+    AutomaticMemoryBindingError,
+    LocalMemoryProjectBindingStore,
+)
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -38,15 +41,20 @@ def create_server(port: McpContextPort) -> FastMCP:
 
     @server.tool(
         name="get_context",
-        description="Return a bounded context packet for an explicit task scope.",
+        description=(
+            "Return a bounded context packet. In an auto-memory-enabled project, omit all five "
+            "scope IDs to use that registered project's stable internal scope."
+        ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     )
     def get_context(
-        owner_id: Annotated[str, Field(min_length=36, max_length=36)],
-        workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
-        project_id: Annotated[str, Field(min_length=36, max_length=36)],
-        session_id: Annotated[str, Field(min_length=36, max_length=36)],
-        task_id: Annotated[str, Field(min_length=36, max_length=36)],
+        owner_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        workspace_id: Annotated[
+            str | None, Field(default=None, min_length=36, max_length=36)
+        ] = None,
+        project_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        session_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
         checkpoint_id: Annotated[
             str | None, Field(default=None, min_length=36, max_length=36)
         ] = None,
@@ -163,11 +171,13 @@ def create_server(port: McpContextPort) -> FastMCP:
                 ),
             ),
         ],
-        owner_id: Annotated[str, Field(min_length=36, max_length=36)],
-        workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
-        project_id: Annotated[str, Field(min_length=36, max_length=36)],
-        session_id: Annotated[str, Field(min_length=36, max_length=36)],
-        task_id: Annotated[str, Field(min_length=36, max_length=36)],
+        owner_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        workspace_id: Annotated[
+            str | None, Field(default=None, min_length=36, max_length=36)
+        ] = None,
+        project_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        session_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
         task_objective: Annotated[
             str | None,
             Field(
@@ -299,8 +309,13 @@ def main(data_directory: Path | None = None) -> None:
         assert runtime.dbt_manifest_service is not None
         assert runtime.source_structure_repository is not None
         assert runtime.knowledge_document_repository is not None
+        binding_store = LocalMemoryProjectBindingStore(runtime.config.data_directory)
+        try:
+            binding = binding_store.get(Path.cwd())
+        except AutomaticMemoryBindingError:
+            binding = None
         observer = CheckpointSourceObserver(
-            LocalMemoryProjectBindingStore(runtime.config.data_directory),
+            binding_store,
             runtime.source_structure_repository,
             runtime.repository,
             lambda: datetime.now(UTC),
@@ -327,6 +342,7 @@ def main(data_directory: Path | None = None) -> None:
                     KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
                 ),
                 observer.observe,
+                None if binding is None else binding.checkpoint_scope,
             )
         ).run(transport="stdio")
 

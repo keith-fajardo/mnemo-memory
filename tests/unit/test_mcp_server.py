@@ -18,6 +18,7 @@ from mnemo_memory.packages.application import (
     LocalConfig,
     build_checkpoint_runtime,
 )
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -27,6 +28,8 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    SessionId,
+    TaskId,
     Visibility,
     WorkspaceId,
 )
@@ -116,6 +119,9 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "include_approved_events" in tools[0].inputSchema["properties"]
     assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
     assert "event_summary" in tools[1].inputSchema["properties"]
+    for name in IDS:
+        assert name not in tools[0].inputSchema.get("required", [])
+        assert name not in tools[1].inputSchema.get("required", [])
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -185,6 +191,30 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_resolves_omitted_scope_only_from_registered_default(tmp_path: Path) -> None:
+    scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.TASK,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+        SessionId.from_string(IDS["session_id"]),
+        TaskId.from_string(IDS["task_id"]),
+    )
+    payload = save_payload()
+    for name in IDS:
+        payload.pop(name)
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "default-scope")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service, default_scope=scope)
+        created = port.save_checkpoint(payload)
+        packet = ContextPacket.from_dict(port.get_context({}))
+        assert packet.active_task_checkpoint is not None
+        assert packet.owner_scope == scope
+        assert str(created["checkpoint_revision_id"]) in packet.provenance[0].source_reference
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context({"owner_id": IDS["owner_id"]})
 
 
 def test_optional_checkpoint_observation_failure_never_changes_a_successful_save(
@@ -604,6 +634,35 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert invalid.isError is True
             still_valid = await session.call_tool("get_context", IDS)
             assert still_valid.isError is False
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+
+
+def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        project = tmp_path / "registered project Ω"
+        project.mkdir()
+        data = tmp_path / "registered data Ω"
+        binding = LocalMemoryProjectBindingStore(data).enable(project)
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "mnemo_memory.apps.mcp.server", "--data-dir", str(data)],
+            cwd=project,
+        )
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            payload = save_payload()
+            for name in IDS:
+                payload.pop(name)
+            created = await session.call_tool("save_checkpoint", payload)
+            assert created.isError is False
+            context = await session.call_tool("get_context", {})
+            assert context.isError is False
+            packet = ContextPacket.from_dict(context.structuredContent or {})
+            assert packet.owner_scope == binding.checkpoint_scope
+            assert packet.active_task_checkpoint is not None
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 

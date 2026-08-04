@@ -13,9 +13,12 @@ or transcript capture.
 
 ## Tools
 
-Exactly two tools are exposed. `get_context` is read-only and accepts the explicit task scope
-(`owner_id`, `workspace_id`, `project_id`, `session_id`, and `task_id`), optional `checkpoint_id`,
-and optional `active_task_checkpoint_tokens` / `total_tokens` budgets. It returns the canonical
+Exactly two tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context` may
+omit all scope fields: the local MCP process resolves the repository's registered stable scope from
+its working directory. Users and agents must not guess UUIDs. Advanced callers may instead provide
+all five explicit task-scope fields (`owner_id`, `workspace_id`, `project_id`, `session_id`, and
+`task_id`); a partial scope is rejected. The tool also accepts an optional `checkpoint_id` and
+optional `active_task_checkpoint_tokens` / `total_tokens` budgets. It returns the canonical
 versioned context packet. With no active checkpoint it returns a valid empty packet. Completed and
 abandoned checkpoints are excluded from automatic selection. The active-checkpoint section is hard
 limited to 600 tokens by default and structured token-budget omissions are preserved.
@@ -29,7 +32,8 @@ contains source bodies, prompts, terminal output, or absolute paths, and budget 
 structured omission. Its summary reports counts outside the bounded sample. Connected automatic sessions request this small overview themselves, so an
 agent begins with a map even when no recent source transition exists.
 
-`save_checkpoint` is mutating but non-destructive. It requires a tagged `operation` of `create`,
+`save_checkpoint` uses the same registered-scope default. It is mutating but non-destructive and
+requires a tagged `operation` of `create`,
 `revise`, `complete`, `abandon`, `record_lesson`, or `record_event`; the explicit task scope; and structurally
 valid evidence references. `create`, `revise`, `complete`, and `abandon` require the complete
 canonical checkpoint payload. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
