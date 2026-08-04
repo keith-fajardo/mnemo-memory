@@ -22,7 +22,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
     exclusive_local_file_lock,
 )
-from mnemo_memory.packages.domain import CodeSymbol, MemoryScope
+from mnemo_memory.packages.domain import CodeFile, CodeSymbol, MemoryScope
 from mnemo_memory.packages.project_index import (
     SourceImpactService,
     SourceSnapshotDiff,
@@ -193,8 +193,14 @@ class _SourceChangeSummary:
 
     added_symbol_count: int
     removed_symbol_count: int
+    added_file_count: int
+    removed_file_count: int
+    modified_file_count: int
     added_edge_count: int
     removed_edge_count: int
+    added_files: tuple[str, ...]
+    removed_files: tuple[str, ...]
+    modified_files: tuple[str, ...]
     added_symbols: tuple[str, ...]
     removed_symbols: tuple[str, ...]
 
@@ -205,8 +211,14 @@ class _SourceChangeSummary:
         return cls(
             len(diff.added_symbols),
             len(diff.removed_symbols),
+            len(diff.added_files),
+            len(diff.removed_files),
+            len(diff.modified_files),
             len(diff.added_edges),
             len(diff.removed_edges),
+            _summary_paths(diff.added_files),
+            _summary_paths(diff.removed_files),
+            _summary_paths(diff.modified_files),
             _summary_symbols(diff.added_symbols),
             _summary_symbols(diff.removed_symbols),
         )
@@ -217,6 +229,9 @@ class _SourceChangeSummary:
             (
                 self.added_symbol_count,
                 self.removed_symbol_count,
+                self.added_file_count,
+                self.removed_file_count,
+                self.modified_file_count,
                 self.added_edge_count,
                 self.removed_edge_count,
             )
@@ -236,6 +251,16 @@ def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
         for symbol in symbols
         if len(symbol.relative_path) + len(symbol.qualified_name) + 1
         <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
+    )
+    return labels[:_MAX_CHANGE_SYMBOLS]
+
+
+def _summary_paths(files: tuple[CodeFile, ...]) -> tuple[str, ...]:
+    """Return whole, bounded relative paths from trusted structural file projections."""
+    labels = tuple(
+        item.relative_path
+        for item in files
+        if len(item.relative_path) <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
     )
     return labels[:_MAX_CHANGE_SYMBOLS]
 
@@ -360,6 +385,8 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
         )
     instruction = (
         " Mnemo observed a structural change in its most recent saved transition: "
+        f"{changes.added_file_count} file(s) added, {changes.removed_file_count} removed, and "
+        f"{changes.modified_file_count} modified; "
         f"{changes.added_symbol_count} declaration(s) added, "
         f"{changes.removed_symbol_count} removed, "
         f"{changes.added_edge_count} resolved relationship(s) added, and "
@@ -369,6 +396,12 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
         instruction += f" Added declarations: {', '.join(changes.added_symbols)}."
     if changes.removed_symbols:
         instruction += f" Removed declarations: {', '.join(changes.removed_symbols)}."
+    if changes.added_files:
+        instruction += f" Added files: {', '.join(changes.added_files)}."
+    if changes.removed_files:
+        instruction += f" Removed files: {', '.join(changes.removed_files)}."
+    if changes.modified_files:
+        instruction += f" Modified files: {', '.join(changes.modified_files)}."
     return instruction
 
 

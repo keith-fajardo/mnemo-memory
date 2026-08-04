@@ -175,8 +175,8 @@ reasoning. The option is off by default, so ordinary resume context remains as s
 
 For an enabled source project, `get_context` can also request the latest recorded structural
 transition. This is useful when a new agent needs to know what changed before it makes a historical
-or impact claim. It is **not** source-code replay: Mnemo returns only bounded declaration and
-proven import/call relationship identities, citing both immutable snapshots.
+or impact claim. It is **not** source-code replay: Mnemo returns only bounded relative-file,
+declaration, and proven import/call relationship identities, citing both immutable snapshots.
 
 ```json
 {
@@ -188,6 +188,7 @@ proven import/call relationship identities, citing both immutable snapshots.
   "source_changes": {
     "maximum_declarations": 24,
     "maximum_relationships": 24,
+    "maximum_files": 24,
     "current_source_digest": "sha256:<exact-current-source-digest>",
     "require_current": false
   }
@@ -199,6 +200,11 @@ one snapshot exists, it returns a structured omission rather than fabricating a 
 the caller supplies no comparable current digest, the facts are explicitly `unknown`; with
 `require_current: true`, unknown or stale facts are omitted. A small structural or total packet
 budget likewise produces a structured omission rather than truncating an identifier.
+
+For snapshots recorded by the current version, a relative file is marked `modified` when its
+SHA-256 fingerprint changed even if the parser found no declaration or relationship change. Mnemo
+stores that fingerprint, not the file body. A transition involving a pre-fingerprint legacy
+snapshot reports that file-level history is unavailable instead of guessing.
 
 For an older audit, provide **both** `before_snapshot_id` and `after_snapshot_id` inside
 `source_changes`. Get their IDs from `mnemo-memory memory history`. Mnemo requires both IDs to be

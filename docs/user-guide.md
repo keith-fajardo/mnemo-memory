@@ -69,11 +69,12 @@ unsaved changed session is stopped. It rebuilds the bounded structural snapshot 
 syntax and preserves the previous snapshot for comparison.
 
 With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
-fresh session, the connected agent receives a short list of its added/removed declarations and
-resolved relationships, tied to the source snapshot Mnemo just refreshed. This is a useful factual
-cue that a model or file changed; Mnemo does not pretend it can infer the reason from source text.
-The checkpoint is where the agent records why the change was made, what failed, and what was
-verified. When it corrects a reasoning mistake, it should also save a compact
+fresh session, the connected agent receives a short list of added/removed/modified **relative
+files**, declarations, and resolved relationships, tied to the source snapshot Mnemo just
+refreshed. That includes a body-only edit even when a file kept the same functions. Mnemo stores a
+SHA-256 fingerprint for this purpose—not source bodies—and does not pretend it can infer the
+reason from a diff. The checkpoint is where the agent records why the change was made, what failed,
+and what was verified. When it corrects a reasoning mistake, it should also save a compact
 **lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to
 avoid it next time. A later agent receives that lesson with the task handoff. Mnemo does not guess
 private reasoning from a diff or a failed test; it preserves a correction only when the agent

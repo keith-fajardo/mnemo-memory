@@ -18,6 +18,7 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.project_index import (
     PythonSourceParser,
     PythonSourceParseRequest,
+    SourceImpactService,
     SourceStructureParser,
     SourceStructureParseRequest,
 )
@@ -64,6 +65,7 @@ def test_source_snapshot_is_immutable_scoped_and_idempotent(tmp_path: Path, adap
     assert first.idempotent is False
     assert second.idempotent is True
     assert active == original.snapshot
+    assert repository.iter_files(scope(), original.snapshot.snapshot_id) == original.files
     assert repository.iter_symbols(scope(), original.snapshot.snapshot_id) == original.symbols
     assert repository.iter_edges(scope(), original.snapshot.snapshot_id) == original.edges
     with pytest.raises(SourceSnapshotNotFound):
@@ -89,6 +91,7 @@ def test_sqlite_source_snapshot_survives_reopen(tmp_path: Path) -> None:
 
     reopened = SQLiteSourceStructureRepository(database)
     assert reopened.get_active_snapshot(scope()) == parsed.snapshot
+    assert reopened.iter_files(scope(), parsed.snapshot.snapshot_id) == parsed.files
     assert reopened.iter_symbols(scope(), parsed.snapshot.snapshot_id) == parsed.symbols
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
@@ -113,6 +116,7 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
         connection.execute("DROP TABLE checkpoint_lifecycle_events")
         connection.execute("DROP TABLE approved_episodic_event_evidence")
         connection.execute("DROP TABLE approved_episodic_events")
+        connection.execute("DROP TABLE source_structure_files")
         connection.execute("DROP TRIGGER source_snapshot_activation_scope_match")
         connection.execute("DROP TABLE source_snapshot_activations")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
@@ -136,6 +140,78 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
         connection.execute("PRAGMA foreign_keys = ON")
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_file_fingerprint_migration_is_atomic_and_legacy_snapshots_make_no_false_file_claim(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "source"
+    parsed = artifact(root, scope())
+    database = tmp_path / "data" / "mnemo.sqlite3"
+    repository = SQLiteSourceStructureRepository(database)
+    repository.migrate()
+    repository.store_and_activate(parsed)
+
+    # Reproduce an existing v7 database. Its old snapshot has no path/digest rows,
+    # so a later comparison must report file-level history as unavailable, not claim
+    # every file was newly added.
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE source_structure_files")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 8")
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        repository.migrate(fail_after_version=8)
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'source_structure_files'"
+            ).fetchone()
+            is None
+        )
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (7,)
+
+    repository.migrate()
+    assert repository.iter_files(scope(), parsed.snapshot.snapshot_id) == ()
+    (root / "pkg" / "main.py").write_text("import pkg.dependency\n\ndef run():\n    return 2\n")
+    changed = PythonSourceParser().parse(PythonSourceParseRequest(scope(), root.resolve()))
+    repository.store_and_activate(changed)
+    diff = SourceImpactService(repository).diff(
+        scope(), parsed.snapshot.snapshot_id, changed.snapshot.snapshot_id
+    )
+    assert diff.file_fingerprints_available is False
+    assert diff.added_files == ()
+    assert diff.removed_files == ()
+    assert diff.modified_files == ()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_sqlite_file_fingerprint_projection_excludes_source_bodies(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    secret_source_body = "private implementation detail must not persist"
+    (root / "service.py").write_text(f"def run():\n    return '{secret_source_body}'\n")
+    parsed = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    database = tmp_path / "data" / "mnemo.sqlite3"
+    repository = SQLiteSourceStructureRepository(database)
+    repository.migrate()
+    repository.store_and_activate(parsed)
+
+    with sqlite3.connect(database) as connection:
+        columns = tuple(
+            row[1]
+            for row in connection.execute("PRAGMA table_info(source_structure_files)").fetchall()
+        )
+        row = connection.execute(
+            "SELECT snapshot_id, relative_path, content_digest FROM source_structure_files"
+        ).fetchone()
+
+    assert columns == ("snapshot_id", "relative_path", "content_digest")
+    assert row is not None
+    assert row[1] == "service.py"
+    assert str(row[2]).startswith("sha256:")
+    assert secret_source_body not in str(row)
 
 
 @pytest.mark.parametrize("adapter", ["reference", "sqlite"])

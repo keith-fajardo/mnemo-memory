@@ -149,8 +149,8 @@ for the enabled project: modules, imports, declarations, and explicit syntactic 
 development branch currently supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++,
 C#, Java, and PHP. Mnemo does not claim an unproven runtime call graph.
 
-At a fresh session, Mnemo also shows the bounded added/removed declarations and resolved
-relationships from the most recent proved structural transition. It is a cue to investigate a
+At a fresh session, Mnemo also shows bounded added/removed/modified relative files, declarations,
+and resolved relationships from the most recent proved structural transition. It is a cue to investigate a
 recent code change, not a claim about why the change was made; the saved checkpoint supplies that
 task reasoning and evidence.
 

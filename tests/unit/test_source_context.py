@@ -130,6 +130,7 @@ def test_recent_source_changes_are_scoped_bounded_and_evidenced(tmp_path: Path) 
     )
     assert '"currentness":"current"' in item.content
     assert "reconcile_orders" in item.content
+    assert '"modified_files":["orders.py"]' in item.content
     assert len(item.evidence_references) == 2
     assert all(
         reference.content_hash.startswith("sha256:") for reference in item.evidence_references

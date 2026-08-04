@@ -21,6 +21,7 @@ from mnemo_memory.packages.domain import (
     CheckpointId,
     CodeEdge,
     CodeEdgeKind,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeSymbol,
@@ -101,20 +102,29 @@ class ContextSourceChangeQuery:
     """Request the latest explicitly recorded source-snapshot transition.
 
     This is intentionally a transition summary rather than a source-file replay:
-    only bounded declaration and relationship identities are rendered.
+    only bounded relative file paths plus declaration and relationship identities are rendered.
     """
 
     maximum_declarations: int = 24
     maximum_relationships: int = 24
+    maximum_files: int = 24
     current_source_digest: str | None = None
     require_current: bool = False
     before_snapshot_id: CodeSnapshotId | None = None
     after_snapshot_id: CodeSnapshotId | None = None
 
     def __post_init__(self) -> None:
-        if self.maximum_declarations < 1 or self.maximum_relationships < 1:
+        if (
+            self.maximum_declarations < 1
+            or self.maximum_relationships < 1
+            or self.maximum_files < 1
+        ):
             raise ValueError("source change limits must be positive")
-        if self.maximum_declarations > 100 or self.maximum_relationships > 100:
+        if (
+            self.maximum_declarations > 100
+            or self.maximum_relationships > 100
+            or self.maximum_files > 100
+        ):
             raise ValueError("source change limits must not exceed 100")
         if self.current_source_digest is not None and (
             not self.current_source_digest.startswith("sha256:")
@@ -500,11 +510,22 @@ class UnifiedContextService:
                 "source transition is not proven current",
             )
         (
+            files_available,
+            added_files,
+            removed_files,
+            modified_files,
             added_symbols,
             removed_symbols,
             added_edges,
             removed_edges,
         ) = _source_snapshot_difference(self._source, scope, before, after)
+        added_file_paths = tuple(item.relative_path for item in added_files)[: query.maximum_files]
+        removed_file_paths = tuple(item.relative_path for item in removed_files)[
+            : query.maximum_files
+        ]
+        modified_file_paths = tuple(item.relative_path for item in modified_files)[
+            : query.maximum_files
+        ]
         added_declarations = tuple(
             f"{item.relative_path}:{item.qualified_name}" for item in added_symbols
         )[: query.maximum_declarations]
@@ -529,17 +550,30 @@ class UnifiedContextService:
             - len(added_relationships)
             - len(removed_relationships)
         )
+        omitted_file_count = (
+            len(added_files)
+            + len(removed_files)
+            + len(modified_files)
+            - len(added_file_paths)
+            - len(removed_file_paths)
+            - len(modified_file_paths)
+        )
         content = json.dumps(
             {
                 "after_snapshot_id": str(after.snapshot_id),
                 "before_snapshot_id": str(before.snapshot_id),
                 "currentness": currentness.value,
+                "file_fingerprints_available": files_available,
+                "added_files": added_file_paths,
+                "removed_files": removed_file_paths,
+                "modified_files": modified_file_paths,
                 "added_declarations": added_declarations,
                 "removed_declarations": removed_declarations,
                 "added_relationships": added_relationships,
                 "removed_relationships": removed_relationships,
                 "omitted_declaration_count": omitted_declaration_count,
                 "omitted_relationship_count": omitted_relationship_count,
+                "omitted_file_count": omitted_file_count,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -604,7 +638,7 @@ class UnifiedContextService:
         )
         return (
             result
-            if not (omitted_declaration_count or omitted_relationship_count)
+            if not (omitted_file_count or omitted_declaration_count or omitted_relationship_count)
             else _with_omission(
                 result,
                 "source-changes",
@@ -683,7 +717,14 @@ def _source_snapshot_difference(
     before: CodeSnapshot,
     after: CodeSnapshot,
 ) -> tuple[
-    tuple[CodeSymbol, ...], tuple[CodeSymbol, ...], tuple[CodeEdge, ...], tuple[CodeEdge, ...]
+    bool,
+    tuple[CodeFile, ...],
+    tuple[CodeFile, ...],
+    tuple[CodeFile, ...],
+    tuple[CodeSymbol, ...],
+    tuple[CodeSymbol, ...],
+    tuple[CodeEdge, ...],
+    tuple[CodeEdge, ...],
 ]:
     """Compare two immutable projections using only the storage-neutral source port."""
     before_symbols = {
@@ -699,7 +740,36 @@ def _source_snapshot_difference(
     after_edges = {
         _source_edge_key(item): item for item in repository.iter_edges(scope, after.snapshot_id)
     }
+    before_files = {
+        item.relative_path: item for item in repository.iter_files(scope, before.snapshot_id)
+    }
+    after_files = {
+        item.relative_path: item for item in repository.iter_files(scope, after.snapshot_id)
+    }
+    files_available = (
+        len(before_files) == before.file_count and len(after_files) == after.file_count
+    )
     return (
+        files_available,
+        (
+            tuple(after_files[key] for key in sorted(after_files.keys() - before_files.keys()))
+            if files_available
+            else ()
+        ),
+        (
+            tuple(before_files[key] for key in sorted(before_files.keys() - after_files.keys()))
+            if files_available
+            else ()
+        ),
+        (
+            tuple(
+                after_files[key]
+                for key in sorted(after_files.keys() & before_files.keys())
+                if after_files[key].content_digest != before_files[key].content_digest
+            )
+            if files_available
+            else ()
+        ),
         tuple(after_symbols[key] for key in sorted(after_symbols.keys() - before_symbols.keys())),
         tuple(before_symbols[key] for key in sorted(before_symbols.keys() - after_symbols.keys())),
         tuple(after_edges[key] for key in sorted(after_edges.keys() - before_edges.keys())),

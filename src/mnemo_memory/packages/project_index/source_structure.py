@@ -30,6 +30,7 @@ from tree_sitter import Language, Node, Parser
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeEdgeKind,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeStructureArtifact,
@@ -280,6 +281,7 @@ class SourceStructureParser:
         paths = self._paths(request)
         digest = sha256()
         pending: list[_PendingSymbol] = []
+        files: list[tuple[str, str]] = []
         imports: list[tuple[str, str]] = []
         bindings: list[tuple[str, str, str]] = []
         calls: list[tuple[str, str, str]] = []
@@ -293,6 +295,7 @@ class SourceStructureParser:
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
             digest.update(raw)
+            files.append((relative, f"sha256:{sha256(raw).hexdigest()}"))
             language = self._suffixes[path.suffix.lower()]
             module = self._module_name(relative, language)
             pending.append(_PendingSymbol(relative, module, CodeSymbolKind.MODULE, 1))
@@ -383,7 +386,15 @@ class SourceStructureParser:
         snapshot = CodeSnapshot(
             snapshot_id, request.scope, source_digest, len(paths), len(symbols), len(edges)
         )
-        return CodeStructureArtifact(snapshot, symbols, edges)
+        return CodeStructureArtifact(
+            snapshot,
+            symbols,
+            edges,
+            tuple(
+                CodeFile(snapshot_id, relative_path, content_digest)
+                for relative_path, content_digest in files
+            ),
+        )
 
     def _suffix_rules(self) -> dict[str, str]:
         suffixes: dict[str, str] = {}

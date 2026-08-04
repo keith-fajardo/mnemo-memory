@@ -4,6 +4,7 @@ from .approved_episodic_events import ApprovedEpisodicEvent, ApprovedEventKind
 from .code_structure import (
     CodeEdge,
     CodeEdgeKind,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeStructureArtifact,
@@ -107,6 +108,7 @@ __all__ = [
     "CheckpointStatus",
     "CodeEdge",
     "CodeEdgeKind",
+    "CodeFile",
     "CodeSnapshot",
     "CodeSnapshotId",
     "CodeStructureArtifact",

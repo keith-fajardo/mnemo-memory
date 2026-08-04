@@ -16,6 +16,7 @@ from mnemo_memory.packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CodeEdge,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeStructureArtifact,
@@ -360,6 +361,10 @@ class SourceStructureRepository(Protocol):
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]: ...
+
+    def iter_files(
+        self, scope: MemoryScope, snapshot_id: CodeSnapshotId
+    ) -> tuple[CodeFile, ...]: ...
 
     def iter_edges(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId

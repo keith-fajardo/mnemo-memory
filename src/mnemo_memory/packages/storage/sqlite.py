@@ -28,6 +28,7 @@ from mnemo_memory.packages.domain import (
     CheckpointStatus,
     CodeEdge,
     CodeEdgeKind,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeStructureArtifact,
@@ -91,7 +92,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -242,6 +243,17 @@ class SQLiteCheckpointRepository:
                     (_timestamp(),),
                 )
                 if fail_after_version == 7:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 7
+            if version < 8:
+                _execute_sql_script(
+                    connection, _migration_text("0008_source_file_fingerprints.sql")
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (8, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 8:
                     raise SQLiteMigrationError("injected migration failure")
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
@@ -1044,6 +1056,17 @@ class SQLiteCheckpointRepository:
                     ),
                 )
                 connection.executemany(
+                    "INSERT INTO source_structure_files VALUES (?, ?, ?)",
+                    [
+                        (
+                            str(artifact.snapshot.snapshot_id),
+                            item.relative_path,
+                            item.content_digest,
+                        )
+                        for item in artifact.files
+                    ],
+                )
+                connection.executemany(
                     "INSERT INTO source_structure_symbols VALUES (?, ?, ?, ?, ?, ?)",
                     [
                         (
@@ -1073,14 +1096,19 @@ class SQLiteCheckpointRepository:
                     ],
                 )
                 counts = connection.execute(
-                    "SELECT (SELECT COUNT(*) FROM source_structure_symbols WHERE snapshot_id = ?) "
-                    "AS symbols, (SELECT COUNT(*) FROM source_structure_edges "
-                    "WHERE snapshot_id = ?) "
-                    "AS edges",
-                    (str(artifact.snapshot.snapshot_id), str(artifact.snapshot.snapshot_id)),
+                    "SELECT (SELECT COUNT(*) FROM source_structure_files WHERE snapshot_id = ?) "
+                    "AS files, (SELECT COUNT(*) FROM source_structure_symbols "
+                    "WHERE snapshot_id = ?) AS symbols, (SELECT COUNT(*) FROM "
+                    "source_structure_edges WHERE snapshot_id = ?) AS edges",
+                    (
+                        str(artifact.snapshot.snapshot_id),
+                        str(artifact.snapshot.snapshot_id),
+                        str(artifact.snapshot.snapshot_id),
+                    ),
                 ).fetchone()
                 if (
                     counts is None
+                    or int(counts["files"]) != len(artifact.files)
                     or int(counts["symbols"]) != len(artifact.symbols)
                     or int(counts["edges"]) != len(artifact.edges)
                 ):
@@ -1967,6 +1995,30 @@ class SQLiteSourceStructureRepository:
                 int(row["line_number"]),
             )
             for row in rows
+        )
+
+    def iter_files(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeFile, ...]:
+        self._backend.get_source_snapshot(scope, snapshot_id)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT file.* FROM source_structure_files AS file JOIN "
+                    "source_structure_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = file.snapshot_id "
+                    "WHERE file.snapshot_id = ? AND snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "ORDER BY file.relative_path ASC",
+                    (
+                        str(snapshot_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            CodeFile(snapshot_id, row["relative_path"], row["content_digest"]) for row in rows
         )
 
     def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:

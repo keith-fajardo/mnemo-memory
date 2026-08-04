@@ -513,8 +513,9 @@ to that project scope only for structural lookups, so a checkpoint handoff and a
 lineage can appear together without weakening cross-project isolation.
 
 Lifecycle source refresh now compares immutable structural snapshots and provides a bounded,
-metadata-only added/removed declaration and relationship summary from the most recent persisted
-transition to the connected agent at session start and in its checkpoint reminder. It stores no
+metadata-only added/removed/modified relative-file, declaration, and relationship summary from the
+most recent persisted transition to the connected agent at session start and in its checkpoint
+reminder. Immutable per-file SHA-256 fingerprints make a body-only change visible without storing
 source bodies or transcript; intent remains explicit checkpoint evidence rather than an inference
 from a diff.
 

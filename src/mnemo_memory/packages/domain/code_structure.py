@@ -55,6 +55,30 @@ class CodeSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeFile:
+    """A privacy-safe fingerprint of one source file in an immutable snapshot.
+
+    The digest proves that the bytes changed without retaining or exposing those bytes.
+    ``relative_path`` is scoped to the caller-selected project root and never an absolute
+    workstation path.
+    """
+
+    snapshot_id: CodeSnapshotId
+    relative_path: str
+    content_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.relative_path
+            or self.relative_path.startswith("/")
+            or ".." in self.relative_path.split("/")
+        ):
+            raise ValueError("source file path must be a safe relative path")
+        if not self.content_digest.startswith("sha256:") or len(self.content_digest) != 71:
+            raise ValueError("source file requires a sha256 digest")
+
+
+@dataclass(frozen=True, slots=True)
 class CodeSymbol:
     snapshot_id: CodeSnapshotId
     symbol_id: CodeSymbolId
@@ -98,8 +122,15 @@ class CodeStructureArtifact:
     snapshot: CodeSnapshot
     symbols: tuple[CodeSymbol, ...]
     edges: tuple[CodeEdge, ...]
+    files: tuple[CodeFile, ...] = ()
 
     def __post_init__(self) -> None:
+        if any(item.snapshot_id != self.snapshot.snapshot_id for item in self.files):
+            raise ValueError("source files must belong to their snapshot")
+        if len({item.relative_path for item in self.files}) != len(self.files):
+            raise ValueError("source file paths must be unique in a snapshot")
+        if len(self.files) != self.snapshot.file_count:
+            raise ValueError("source snapshot file count must match its projections")
         if any(symbol.snapshot_id != self.snapshot.snapshot_id for symbol in self.symbols):
             raise ValueError("code symbols must belong to their snapshot")
         if any(edge.snapshot_id != self.snapshot.snapshot_id for edge in self.edges):

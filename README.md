@@ -296,17 +296,19 @@ specific earlier state. A source map is called current only when its exact fresh
 matches; “active” alone is never treated as proof that files have not changed.
 
 When Mnemo observes a supported structural change between snapshots, it gives the connected agent
-a short factual summary of added/removed declarations and proven relationships at session start
-and when it asks for a checkpoint. That helps the agent notice that work changed. It still does
-not guess **why** it changed: the agent records that decision, failed approach, and verification in
-the checkpoint it saves.
+a short factual summary of added/removed/modified **relative files**, declarations, and proven
+relationships at session start and when it asks for a checkpoint. A body-only edit is therefore
+visible even when a file keeps the same functions. Mnemo stores a SHA-256 fingerprint for that
+purpose—not source bodies—and still does not guess **why** it changed: the agent records that
+decision, failed approach, and verification in the checkpoint it saves.
 
 When an agent needs the durable version of that question in a later session, it can ask for
 `source_changes` with `get_context`. Mnemo compares the two most recently recorded structural
-snapshots in their actual activation order and returns a bounded list of added/removed declaration
-and relationship identities, with evidence for both snapshots. It never guesses chronology from a
-snapshot UUID and never returns source text. The result is labeled `current`, `stale`, or `unknown`
-only from an exact supplied source digest; “active” alone is not called current.
+snapshots in their actual activation order and returns a bounded list of added/removed/modified
+relative-file, declaration, and relationship identities, with evidence for both snapshots. It never
+guesses chronology from a snapshot UUID and never returns source text. The result is labeled
+`current`, `stale`, or `unknown` only from an exact supplied source digest; “active” alone is not
+called current.
 
 **Must I teach every agent to use Mnemo?** Not for the supported `--auto-memory` setup. Mnemo
 injects a session-start instruction telling Codex or Claude Code to check context before claiming

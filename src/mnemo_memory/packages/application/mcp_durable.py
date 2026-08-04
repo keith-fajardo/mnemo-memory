@@ -112,14 +112,19 @@ class DurableMcpContextPort:
                 None
                 if source_changes is None
                 else ContextSourceChangeQuery(
-                    int(source_changes.get("maximum_declarations", 24)),
-                    int(source_changes.get("maximum_relationships", 24)),
-                    source_changes.get("current_source_digest")
+                    maximum_declarations=int(source_changes.get("maximum_declarations", 24)),
+                    maximum_relationships=int(source_changes.get("maximum_relationships", 24)),
+                    maximum_files=int(source_changes.get("maximum_files", 24)),
+                    current_source_digest=source_changes.get("current_source_digest")
                     if isinstance(source_changes.get("current_source_digest"), str)
                     else None,
-                    bool(source_changes.get("require_current", False)),
-                    _optional_id(source_changes, "before_snapshot_id", CodeSnapshotId),
-                    _optional_id(source_changes, "after_snapshot_id", CodeSnapshotId),
+                    require_current=bool(source_changes.get("require_current", False)),
+                    before_snapshot_id=_optional_id(
+                        source_changes, "before_snapshot_id", CodeSnapshotId
+                    ),
+                    after_snapshot_id=_optional_id(
+                        source_changes, "after_snapshot_id", CodeSnapshotId
+                    ),
                 )
             )
             if (

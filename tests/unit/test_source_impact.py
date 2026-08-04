@@ -123,6 +123,43 @@ def test_snapshot_diff_preserves_immutable_history(tmp_path: Path) -> None:
     assert repository.iter_symbols(item_scope, first.snapshot.snapshot_id) == first.symbols
 
 
+@pytest.mark.parametrize("adapter", ("reference", "sqlite"))
+def test_snapshot_diff_reports_a_body_only_file_change_without_source_text(
+    tmp_path: Path, adapter: str
+) -> None:
+    """A durable source history must not miss a changed function body."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "orders.py"
+    path.write_text("def calculate_total():\n    return 1\n")
+    first = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = (
+        ReferenceSourceStructureRepository()
+        if adapter == "reference"
+        else SQLiteSourceStructureRepository(tmp_path / "data" / "mnemo.sqlite3")
+    )
+    if adapter == "sqlite":
+        repository.migrate()  # type: ignore[union-attr]
+    repository.store_and_activate(first)
+
+    path.write_text("def calculate_total():\n    return 2\n")
+    second = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository.store_and_activate(second)
+    diff = SourceImpactService(repository).diff(
+        item_scope, first.snapshot.snapshot_id, second.snapshot.snapshot_id
+    )
+
+    assert diff.file_fingerprints_available is True
+    assert [item.relative_path for item in diff.modified_files] == ["orders.py"]
+    assert diff.added_files == ()
+    assert diff.removed_files == ()
+    assert diff.added_symbols == ()
+    assert diff.removed_symbols == ()
+    assert "return 1" not in str(diff)
+    assert "return 2" not in str(diff)
+
+
 def test_cross_scope_source_impact_does_not_disclose_snapshot(tmp_path: Path) -> None:
     artifact = graph(tmp_path / "source", scope())
     repository = ReferenceSourceStructureRepository()

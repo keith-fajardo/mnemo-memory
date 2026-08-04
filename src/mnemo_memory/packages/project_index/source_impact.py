@@ -13,6 +13,7 @@ from enum import StrEnum
 
 from mnemo_memory.packages.domain import (
     CodeEdge,
+    CodeFile,
     CodeSnapshot,
     CodeSnapshotId,
     CodeSymbol,
@@ -78,6 +79,10 @@ class SourceSnapshotDiff:
 
     before: CodeSnapshot
     after: CodeSnapshot
+    file_fingerprints_available: bool
+    added_files: tuple[CodeFile, ...]
+    removed_files: tuple[CodeFile, ...]
+    modified_files: tuple[CodeFile, ...]
     added_symbols: tuple[CodeSymbol, ...]
     removed_symbols: tuple[CodeSymbol, ...]
     added_edges: tuple[CodeEdge, ...]
@@ -187,6 +192,15 @@ class SourceImpactService:
     ) -> SourceSnapshotDiff:
         before = self._repository.get_snapshot(scope, before_snapshot_id)
         after = self._repository.get_snapshot(scope, after_snapshot_id)
+        before_files = self._repository.iter_files(scope, before_snapshot_id)
+        after_files = self._repository.iter_files(scope, after_snapshot_id)
+        # Snapshots made before migration 0008 intentionally have no file-level projection.
+        # Do not claim every file was added merely because its historical fingerprint is absent.
+        file_fingerprints_available = (
+            len(before_files) == before.file_count and len(after_files) == after.file_count
+        )
+        before_files_by_path = {item.relative_path: item for item in before_files}
+        after_files_by_path = {item.relative_path: item for item in after_files}
         before_symbols = self._repository.iter_symbols(scope, before_snapshot_id)
         after_symbols = self._repository.iter_symbols(scope, after_snapshot_id)
         before_by_key = {_symbol_key(item): item for item in before_symbols}
@@ -198,6 +212,33 @@ class SourceImpactService:
         return SourceSnapshotDiff(
             before,
             after,
+            file_fingerprints_available,
+            (
+                tuple(
+                    after_files_by_path[path]
+                    for path in sorted(after_files_by_path.keys() - before_files_by_path.keys())
+                )
+                if file_fingerprints_available
+                else ()
+            ),
+            (
+                tuple(
+                    before_files_by_path[path]
+                    for path in sorted(before_files_by_path.keys() - after_files_by_path.keys())
+                )
+                if file_fingerprints_available
+                else ()
+            ),
+            (
+                tuple(
+                    after_files_by_path[path]
+                    for path in sorted(before_files_by_path.keys() & after_files_by_path.keys())
+                    if before_files_by_path[path].content_digest
+                    != after_files_by_path[path].content_digest
+                )
+                if file_fingerprints_available
+                else ()
+            ),
             tuple(
                 sorted(
                     (after_by_key[key] for key in after_by_key.keys() - before_by_key.keys()),

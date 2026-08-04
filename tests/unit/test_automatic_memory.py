@@ -668,6 +668,33 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     assert "private changed body" not in later_instruction
 
 
+def test_session_start_reports_a_body_only_file_transition_without_source_text(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    source_file = project / "pricing.py"
+    source_file.write_text("def price():\n    return 'private first implementation'\n")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
+
+    source_file.write_text("def price():\n    return 'private corrected implementation'\n")
+    result = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    instruction = str(output["additionalContext"])
+    assert "1 modified" in instruction
+    assert "Modified files: pricing.py." in instruction
+    assert "private first implementation" not in instruction
+    assert "private corrected implementation" not in instruction
+    assert str(project) not in instruction
+
+
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:
     project = tmp_path / "private repo"
     project.mkdir()
