@@ -613,7 +613,8 @@ snapshot exists, even if no latest transition is available. The overview contain
 snapshot identity, file/symbol/edge counts, and a deterministic bounded sample of relative-file,
 module, and declaration identities. This keeps the map useful even for intentionally file-only
 inputs without claiming an unparsed file has declarations or dependencies. It is subject to the same current/stale/unknown policy and records a
-structured budget omission rather than dropping identifiers silently. It does not add a source
+structured budget omission rather than dropping identifiers silently; the summary also records the
+counts outside its bounded file/module/declaration sample. It does not add a source
 replay, automatic reasoning, or a runtime call-graph claim.
 
 The automatic session-start path passes the exact freshly activated source digest into its bounded

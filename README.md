@@ -360,7 +360,8 @@ sample of saved relative file, module, and declaration identities. This is the a
 repository—not a replay of the checkout. Every included item is cited; source bodies, prompts,
 terminal output, and absolute local paths remain out of the packet. When the map is too large for
 the automatic-session budget, Mnemo records a structured omission instead of silently trimming an
-identifier or pretending the rest was read.
+identifier or pretending the rest was read. Its summary also states the counts outside the chosen
+file/module/declaration sample, so a small map is never mistaken for the full repository.
 
 At automatic session start, Mnemo has just rebuilt that snapshot. Its attached overview and
 transition facts therefore carry the matching snapshot digest and are labeled **current** for that

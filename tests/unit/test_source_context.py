@@ -1115,3 +1115,54 @@ def test_source_overview_includes_file_only_inputs_without_claiming_structure(
     assert '"path":"models/orders.sql"' in file_item.content
     assert not any(item.item_id.startswith("source:") for item in packet.structural_items)
     assert "select 1" not in file_item.content
+
+
+def test_source_overview_discloses_bounded_sample_counts(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    for name in ("a", "b", "c"):
+        (root / f"{name}.py").write_text(f"def {name}():\n    return 1\n", encoding="utf-8")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_overview=ContextSourceOverviewQuery(
+                maximum_files=1, maximum_modules=1, maximum_declarations=1
+            ),
+        )
+    )
+
+    overview = next(
+        item for item in packet.structural_items if item.item_id.startswith("source-overview:")
+    )
+    assert '"selected_file_count":1' in overview.content
+    assert '"omitted_file_count":2' in overview.content
+    assert '"selected_module_count":1' in overview.content
+    assert '"omitted_module_count":2' in overview.content
+    assert '"selected_declaration_count":1' in overview.content
+    assert '"omitted_declaration_count":2' in overview.content

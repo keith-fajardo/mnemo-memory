@@ -539,6 +539,9 @@ class UnifiedContextService:
             len(files),
             len(modules),
             len(declarations),
+            snapshot.file_count - len(files),
+            sum(item.kind is CodeSymbolKind.MODULE for item in all_symbols) - len(modules),
+            sum(item.kind is not CodeSymbolKind.MODULE for item in all_symbols) - len(declarations),
         )
         if not packet.structural_items or not any(
             item.item_id == f"source-overview:{snapshot.snapshot_id}"
@@ -1206,6 +1209,9 @@ def _with_source_overview_summary(
     selected_file_count: int,
     selected_module_count: int,
     selected_declaration_count: int,
+    omitted_file_count: int,
+    omitted_module_count: int,
+    omitted_declaration_count: int,
 ) -> ContextPacket:
     """Attach a bounded snapshot-level inventory before individual declaration facts.
 
@@ -1219,6 +1225,9 @@ def _with_source_overview_summary(
             "edge_count": snapshot.edge_count,
             "file_count": snapshot.file_count,
             "kind": "source_snapshot_overview",
+            "omitted_declaration_count": omitted_declaration_count,
+            "omitted_file_count": omitted_file_count,
+            "omitted_module_count": omitted_module_count,
             "selected_declaration_count": selected_declaration_count,
             "selected_file_count": selected_file_count,
             "selected_module_count": selected_module_count,

@@ -134,7 +134,8 @@ the cited immutable snapshot ID, counts of indexed files/symbols/relationships, 
 sample of saved relative files, modules, and declarations. It is a compact map of the registered repository, not a
 copy of its source code. The packet never includes source bodies, chat prompts, terminal output, or
 absolute local paths. A budget-constrained packet says exactly what it omitted rather than silently
-altering structural identities.
+altering structural identities. The overview also reports how many file/module/declaration
+identities remain outside its bounded sample.
 
 At session start, Mnemo has just refreshed the snapshot it attaches, so that attached source map
 is explicitly labeled **current** for the captured digest. Later manual requests still require

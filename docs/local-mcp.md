@@ -26,7 +26,7 @@ source snapshot and returns a cited inventory of its snapshot identity, file/sym
 and deterministic saved relative-file/module/declaration identities. Optional `current_source_digest` and
 `require_current` use exact digest matching; active does not mean current. The overview never
 contains source bodies, prompts, terminal output, or absolute paths, and budget pressure becomes a
-structured omission. Connected automatic sessions request this small overview themselves, so an
+structured omission. Its summary reports counts outside the bounded sample. Connected automatic sessions request this small overview themselves, so an
 agent begins with a map even when no recent source transition exists.
 
 `save_checkpoint` is mutating but non-destructive. It requires a tagged `operation` of `create`,
