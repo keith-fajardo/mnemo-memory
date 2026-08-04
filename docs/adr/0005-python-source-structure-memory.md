@@ -28,7 +28,7 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   named `export default function` or `export default class`, and one exact named local barrel export
   such as `export { member as alias } from "./module"`. A local wildcard barrel can resolve a requested
   non-default member only when exactly one saved local declaration is proven; anonymous defaults,
-  ambiguous re-exports, and `export default existingName` require value-flow semantics and remain unresolved. A default
+  ambiguous/indirect re-exports, and `export default existingName` require value-flow semantics and remain unresolved. A default
   class member call resolves only for an explicitly declared static method. The current
   adapters resolve simple Python/ES-module aliases, exact Python package-initializer re-exports,
   plus direct Java class imports, Rust
