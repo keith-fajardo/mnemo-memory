@@ -54,7 +54,10 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteSourceStructureRepository,
 )
-from mnemo_memory.packages.storage.contracts import ProjectIndexRepositoryError
+from mnemo_memory.packages.storage.contracts import (
+    CheckpointRepositoryError,
+    ProjectIndexRepositoryError,
+)
 
 ClientName = Literal["codex", "claude-code"]
 
@@ -71,7 +74,9 @@ _MAX_IMPACT_CUE_DEPENDENTS = 6
 _MAX_DBT_IMPACT_CUES = 3
 _MAX_DBT_IMPACT_CUE_NODES = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
+_CHECKPOINT_MARKER_UNAVAILABLE = "unavailable"
 _ContextLoader = Callable[[MemoryScope], str | None]
+_PromptContextLoader = Callable[[MemoryScope, str], str | None]
 _KnowledgeRefresher = Callable[[MemoryProjectBinding], None]
 _KnowledgeStatusLoader = Callable[[MemoryProjectBinding], int]
 
@@ -83,6 +88,7 @@ class AutomaticMemoryHook:
     data_directory: Path
     client: ClientName
     context_loader: _ContextLoader | None = None
+    prompt_context_loader: _PromptContextLoader | None = None
     knowledge_refresher: _KnowledgeRefresher | None = None
     knowledge_status_loader: _KnowledgeStatusLoader | None = None
     git_observer: GitSourceObserver | None = None
@@ -108,6 +114,18 @@ class AutomaticMemoryHook:
         tool_name = event.get("tool_name")
         if event_name == "PostToolUse" and isinstance(tool_name, str):
             if _is_durable_checkpoint_save(event, tool_name):
+                current_marker = self._current_checkpoint_marker(binding.checkpoint_scope)
+                if (
+                    current_marker == _CHECKPOINT_MARKER_UNAVAILABLE
+                    or state.checkpoint_marker == _CHECKPOINT_MARKER_UNAVAILABLE
+                ):
+                    # Never mistake a repository read failure for proof of a durable handoff.
+                    return self._safe_output("MNEMO_MEMORY_CHECKPOINT_VERIFICATION_UNAVAILABLE")
+                if state.dirty and current_marker == state.checkpoint_marker:
+                    # A tool name is not proof that durable memory changed. Keep the handoff
+                    # pending until the scoped repository exposes a different current revision
+                    # (or a terminal transition removes the previously active checkpoint).
+                    return self._safe_output("MNEMO_MEMORY_CHECKPOINT_NOT_PERSISTED")
                 # A checkpoint is the trusted lifecycle boundary at which an agent says its
                 # current work is durable. Refresh the syntax-only map here as well as at a
                 # later stop/session start, so the newly saved handoff can immediately be paired
@@ -115,13 +133,34 @@ class AutomaticMemoryHook:
                 # tool bodies/output or source text into hook state.
                 self._refresh_project_knowledge(binding)
                 self._refresh_source_structure(binding)
-                _SessionStateStore(self.data_directory).save(session_id, dirty=False, saved=True)
+                _SessionStateStore(self.data_directory).save(
+                    session_id,
+                    dirty=False,
+                    saved=True,
+                    checkpoint_marker=current_marker,
+                )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
-                _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
+                marker = (
+                    state.checkpoint_marker
+                    if state.dirty
+                    else self._current_checkpoint_marker(binding.checkpoint_scope)
+                )
+                _SessionStateStore(self.data_directory).save(
+                    session_id,
+                    dirty=True,
+                    saved=False,
+                    checkpoint_marker=marker,
+                )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
         if event_name == "SessionStart":
+            _SessionStateStore(self.data_directory).save(
+                session_id,
+                dirty=False,
+                saved=False,
+                checkpoint_marker=self._current_checkpoint_marker(binding.checkpoint_scope),
+            )
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
             return self._context_output(
@@ -135,15 +174,25 @@ class AutomaticMemoryHook:
                 ),
                 attached_context=self._attached_context(binding.checkpoint_scope),
             )
-        if event_name == "UserPromptSubmit" and state.dirty and not state.saved:
-            # Do not inspect ``prompt``. Refresh once at this prompt boundary rather than for
-            # every editor tool event, so the agent gets bounded structural/impact facts while it
-            # is still working without a source scan on every keystroke.
-            self._refresh_project_knowledge(binding)
-            refreshed = self._refresh_source_structure(binding)
-            return self._context_output(
-                _dirty_session_instruction(refreshed), event_name="UserPromptSubmit"
-            )
+        if event_name == "UserPromptSubmit":
+            # Explicit automatic-memory consent permits transient local retrieval from the current
+            # user prompt. The prompt is never written to hook state, logs, or durable memory.
+            prompt_context = self._attached_prompt_context(binding.checkpoint_scope, event)
+            if state.dirty and not state.saved:
+                self._refresh_project_knowledge(binding)
+                refreshed = self._refresh_source_structure(binding)
+                return self._context_output(
+                    _dirty_session_instruction(refreshed),
+                    event_name="UserPromptSubmit",
+                    attached_context=prompt_context,
+                )
+            if prompt_context is not None:
+                return self._context_output(
+                    "Mnemo attached bounded project memory relevant to this request.",
+                    event_name="UserPromptSubmit",
+                    attached_context=prompt_context,
+                )
+            return {}
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
@@ -163,6 +212,22 @@ class AutomaticMemoryHook:
                 )
             return self._checkpoint_output(instruction)
         return {}
+
+    def _current_checkpoint_marker(self, scope: MemoryScope) -> str | None:
+        """Read one scoped durable revision identity without exposing checkpoint content."""
+        database_path = self.data_directory / "mnemo.sqlite3"
+        if not database_path.exists():
+            return None
+        try:
+            repository = SQLiteCheckpointRepository(
+                database_path, base_directory=self.data_directory
+            )
+            aggregate = repository.select_current_checkpoint(scope)
+            if aggregate is None:
+                return None
+            return f"{aggregate.checkpoint_id}:{aggregate.current_revision_id}"
+        except (CheckpointRepositoryError, OSError, ValueError, RuntimeError):
+            return _CHECKPOINT_MARKER_UNAVAILABLE
 
     def _context_output(
         self,
@@ -200,6 +265,23 @@ class AutomaticMemoryHook:
         try:
             value = self.context_loader(scope)
         except Exception:  # The hook must never block an enabled client session.
+            return None
+        if not isinstance(value, str) or not value or len(value) > _MAX_ATTACHED_CONTEXT_CHARACTERS:
+            return None
+        return value
+
+    def _attached_prompt_context(
+        self, scope: MemoryScope, event: Mapping[str, object]
+    ) -> str | None:
+        """Use one bounded prompt transiently; never persist or report its text."""
+        if self.prompt_context_loader is None:
+            return None
+        prompt = event.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
+            return None
+        try:
+            value = self.prompt_context_loader(scope, prompt)
+        except Exception:
             return None
         if not isinstance(value, str) or not value or len(value) > _MAX_ATTACHED_CONTEXT_CHARACTERS:
             return None
@@ -423,6 +505,7 @@ def _summary_renamed_after_paths(diff: SourceSnapshotDiff) -> tuple[str, ...]:
 class _SessionState:
     dirty: bool = False
     saved: bool = False
+    checkpoint_marker: str | None = None
 
 
 class _SessionStateStore:
@@ -439,13 +522,29 @@ class _SessionStateStore:
         value = values.get(session_id)
         if not isinstance(value, dict):
             return _SessionState()
-        return _SessionState(value.get("dirty") is True, value.get("saved") is True)
+        marker = value.get("checkpoint_marker")
+        return _SessionState(
+            value.get("dirty") is True,
+            value.get("saved") is True,
+            marker if isinstance(marker, str) and len(marker) <= 80 else None,
+        )
 
-    def save(self, session_id: str, *, dirty: bool, saved: bool) -> None:
+    def save(
+        self,
+        session_id: str,
+        *,
+        dirty: bool,
+        saved: bool,
+        checkpoint_marker: str | None = None,
+    ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
                 values = self._read()
-                values[session_id] = {"dirty": dirty, "saved": saved}
+                values[session_id] = {
+                    "dirty": dirty,
+                    "saved": saved,
+                    "checkpoint_marker": checkpoint_marker,
+                }
                 # Bounded state avoids making lifecycle metadata a long-term activity log.
                 if len(values) > 128:
                     values = {session_id: values[session_id]}

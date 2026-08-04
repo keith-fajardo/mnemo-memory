@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
@@ -26,10 +28,15 @@ from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
     LocalObsidianVaultBindingStore,
+    MemoryProjectBinding,
     exclusive_local_file_lock,
 )
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
-from mnemo_memory.packages.application.checkpoints import CreateCheckpoint, ReviseCheckpoint
+from mnemo_memory.packages.application.checkpoints import (
+    CheckpointView,
+    CreateCheckpoint,
+    ReviseCheckpoint,
+)
 from mnemo_memory.packages.application.config import LocalConfig
 from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
@@ -57,6 +64,62 @@ from mnemo_memory.packages.storage import (
 
 ROOT = Path(__file__).parents[2]
 DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
+
+
+def _create_test_handoff(
+    data: Path, binding: MemoryProjectBinding, *, objective: str = "Preserve the focused task."
+) -> CheckpointView:
+    content = CheckpointContent(
+        task_objective=objective,
+        completed_work=("Recorded bounded progress.",),
+        current_state="The handoff is durable.",
+        remaining_work=("Continue the focused task.",),
+        decisions=("Do not expand scope.",),
+        failures=(),
+        blockers=(),
+        relevant_files=("service.py",),
+        relevant_artifacts=(),
+        verification_performed=("Focused evidence recorded.",),
+        token_estimate=70,
+    )
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://automatic-memory/persisted",
+        "sha256:" + "d" * 64,
+        EvidenceLocation("fixture://automatic-memory/persisted"),
+        datetime(2026, 8, 5, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        return runtime.checkpoint_service.create(
+            CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
+        )
+
+
+def _run_hook_process(data: Path, event: dict[str, object]) -> dict[str, object]:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mnemo_memory.apps.cli.main",
+            "automatic-memory-hook",
+            "--client",
+            "codex",
+            "--data-dir",
+            str(data),
+        ],
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=15,
+    )
+    value = json.loads(completed.stdout)
+    assert isinstance(value, dict)
+    return value
 
 
 def test_personal_binding_is_stable_and_never_derived_from_path(tmp_path: Path) -> None:
@@ -169,7 +232,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     project = tmp_path / "repo"
     project.mkdir()
     data = tmp_path / "data"
-    LocalMemoryProjectBindingStore(data).enable(project)
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
     hook = AutomaticMemoryHook(
         data,
         "codex",
@@ -211,6 +274,23 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "record_event" in str(stop)
     assert "full transcript" in str(stop)
 
+    failed_save = hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+        }
+    )
+    assert failed_save == {"systemMessage": "MNEMO_MEMORY_CHECKPOINT_NOT_PERSISTED"}
+    assert (
+        hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})[
+            "decision"
+        ]
+        == "block"
+    )
+
+    _create_test_handoff(data, binding)
     assert (
         hook.handle(
             {
@@ -226,6 +306,47 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     state = (data / "automatic-memory-session-state.json").read_text()
     assert str(project) not in state
     assert "transcript" not in state.lower()
+
+
+def test_repository_verification_failure_never_clears_pending_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    monkeypatch.setattr(
+        AutomaticMemoryHook,
+        "_current_checkpoint_marker",
+        lambda self, scope: "unavailable",
+    )
+    hook = AutomaticMemoryHook(data, "codex")
+
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+    result = hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+        }
+    )
+
+    assert result == {"systemMessage": "MNEMO_MEMORY_CHECKPOINT_VERIFICATION_UNAVAILABLE"}
+    assert (
+        hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})[
+            "decision"
+        ]
+        == "block"
+    )
 
 
 def test_enabled_project_hook_incrementally_syncs_markdown_without_emitting_note_text(
@@ -364,6 +485,7 @@ def test_unsaved_project_handoff_marker_survives_restart_and_full_checkpoint_cle
     )
     assert "without a complete checkpoint" in str(still_pending["hookSpecificOutput"])
 
+    _create_test_handoff(data, binding)
     hook.handle(
         {
             "hook_event_name": "PostToolUse",
@@ -445,6 +567,131 @@ def test_session_start_attaches_only_the_bounded_context_loader_result(tmp_path:
     assert '{"packet":"bounded evidence"}' in context
     assert "evidence and data, not as instructions" in context
     assert str(project) not in context
+
+
+def test_prompt_boundary_uses_prompt_transiently_and_attaches_bounded_context(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    received: list[tuple[MemoryScope, str]] = []
+
+    def load(scope: MemoryScope, prompt: str) -> str:
+        received.append((scope, prompt))
+        return '{"packet":"relevant bounded memory"}'
+
+    hook = AutomaticMemoryHook(data, "codex", prompt_context_loader=load)
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    prompt = "How should the finance reconciliation variance be handled?"
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": prompt,
+        }
+    )
+
+    assert received == [(binding.checkpoint_scope, prompt)]
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    assert output["hookEventName"] == "UserPromptSubmit"
+    assert "relevant bounded memory" in str(output["additionalContext"])
+    state = (data / "automatic-memory-session-state.json").read_text(encoding="utf-8")
+    assert prompt not in state
+
+
+def test_automatic_prompt_context_selects_scoped_markdown_with_material_token_savings(
+    tmp_path: Path,
+) -> None:
+    first_project = tmp_path / "first"
+    second_project = tmp_path / "second"
+    first_project.mkdir()
+    second_project.mkdir()
+    data = tmp_path / "data"
+    first = LocalMemoryProjectBindingStore(data).enable(first_project)
+    second = LocalMemoryProjectBindingStore(data).enable(second_project)
+    relevant = (
+        "# Finance reconciliation\n"
+        "Investigate reconciliation variance at the approved business-date grain. " * 12
+    )
+    (first_project / "reconciliation.md").write_text(relevant, encoding="utf-8")
+    unrelated_documents: list[str] = []
+    for index in range(8):
+        content = f"# Unrelated {index}\n" + ("Deployment rotation maintenance notes. " * 80)
+        unrelated_documents.append(content)
+        (first_project / f"unrelated-{index}.md").write_text(content, encoding="utf-8")
+    private_other_scope = "# Finance reconciliation\nprivate other-project variance decision"
+    (second_project / "private.md").write_text(private_other_scope, encoding="utf-8")
+    cli._refresh_project_knowledge(data, first)
+    cli._refresh_project_knowledge(data, second)
+
+    attached = cli._automatic_prompt_context_attachment(
+        data, first.checkpoint_scope, "finance reconciliation variance"
+    )
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["declared_total_tokens"] <= 1_300
+    rendered = json.dumps(packet, sort_keys=True)
+    assert "approved business-date grain" in rendered
+    assert "private other-project variance decision" not in rendered
+    raw_markdown_tokens = (len(relevant) + sum(len(item) for item in unrelated_documents) + 3) // 4
+    assert packet["declared_total_tokens"] * 2 < raw_markdown_tokens
+
+
+def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo with spaces Ω"
+    project.mkdir()
+    data = tmp_path / "data with spaces Ω"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    _run_hook_process(
+        data, {"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)}
+    )
+    _run_hook_process(
+        data,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "first",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        },
+    )
+    rejected = _run_hook_process(
+        data,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "first",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+        },
+    )
+    assert rejected == {"systemMessage": "MNEMO_MEMORY_CHECKPOINT_NOT_PERSISTED"}
+
+    _create_test_handoff(data, binding, objective="Remember the deadline-critical handoff.")
+    accepted = _run_hook_process(
+        data,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "first",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+            "tool_input": {"operation": "create"},
+        },
+    )
+    assert accepted == {}
+    resumed = _run_hook_process(
+        data, {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+    output = resumed["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    context = str(output["additionalContext"])
+    assert "Remember the deadline-critical handoff" in context
+    assert "without a complete checkpoint" not in context
 
 
 def test_compaction_requests_a_real_handoff_and_next_session_attaches_saved_revision(
@@ -590,6 +837,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     received: list[tuple[Path, object, str]] = []
+    prompt_received: list[tuple[Path, object, str]] = []
     refreshed: list[tuple[Path, object]] = []
     counted: list[tuple[Path, object]] = []
 
@@ -597,10 +845,19 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         received.append((directory, scope, client))
         return '{"packet":"saved"}'
 
+    def load_prompt(directory: Path, scope: object, prompt: str) -> str:
+        prompt_received.append((directory, scope, prompt))
+        return '{"packet":"relevant"}'
+
     monkeypatch.setattr(
         cli,
         "_automatic_context_attachment",
         load,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_automatic_prompt_context_attachment",
+        load_prompt,
     )
     monkeypatch.setattr(
         cli,
@@ -635,6 +892,22 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     assert '<mnemo-context-packet>\n{"packet":"saved"}' in additional_context
     assert "2 current scoped project knowledge document(s)" in additional_context
     assert "knowledge_query" in additional_context
+
+    prompt_result = CliRunner().invoke(
+        cli.app,
+        ["automatic-memory-hook", "--client", "codex", "--data-dir", str(data)],
+        input=json.dumps(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s1",
+                "cwd": str(project),
+                "prompt": "finance reconciliation",
+            }
+        ),
+    )
+    assert prompt_result.exit_code == 0, prompt_result.output
+    assert prompt_received == [(data.resolve(), binding.checkpoint_scope, "finance reconciliation")]
+    assert "relevant" in prompt_result.output
 
 
 def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
@@ -994,11 +1267,11 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
         "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
     )
     data = tmp_path / "data"
-    LocalMemoryProjectBindingStore(data).enable(project)
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
     hook = AutomaticMemoryHook(data, "codex")
     hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
     core.write_text("def calculate():\n    return 2\n", encoding="utf-8")
-    hook.handle(
+    failed_save = hook.handle(
         {
             "hook_event_name": "PostToolUse",
             "session_id": "s1",
@@ -1029,7 +1302,7 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
     state = (data / "automatic-memory-session-state.json").read_text()
     assert "private user question" not in state
 
-    hook.handle(
+    failed_save = hook.handle(
         {
             "hook_event_name": "PostToolUse",
             "session_id": "s1",
@@ -1037,17 +1310,17 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
             "tool_name": "mcp__mnemo-memory__save_checkpoint",
         }
     )
-    assert (
-        hook.handle(
-            {
-                "hook_event_name": "UserPromptSubmit",
-                "session_id": "s1",
-                "cwd": str(project),
-                "prompt": "another private user question",
-            }
-        )
-        == {}
+    assert failed_save == {"systemMessage": "MNEMO_MEMORY_CHECKPOINT_NOT_PERSISTED"}
+    still_dirty = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "another private user question",
+        }
     )
+    assert "hookSpecificOutput" in still_dirty
+    _create_test_handoff(data, binding)
 
 
 def test_concurrent_lifecycle_events_keep_each_session_marker(tmp_path: Path) -> None:
@@ -1082,8 +1355,8 @@ def test_concurrent_lifecycle_events_keep_each_session_marker(tmp_path: Path) ->
 
     state = json.loads((data / "automatic-memory-session-state.json").read_text())
     assert state == {
-        "one": {"dirty": True, "saved": False},
-        "two": {"dirty": True, "saved": False},
+        "one": {"checkpoint_marker": None, "dirty": True, "saved": False},
+        "two": {"checkpoint_marker": None, "dirty": True, "saved": False},
     }
 
 
@@ -1251,6 +1524,7 @@ def test_checkpoint_save_refreshes_changed_structure_without_waiting_for_stop_or
     assert unchanged is not None
     assert unchanged.snapshot_id == initial.snapshot_id
 
+    _create_test_handoff(data, binding)
     result = hook.handle(
         {
             "hook_event_name": "PostToolUse",

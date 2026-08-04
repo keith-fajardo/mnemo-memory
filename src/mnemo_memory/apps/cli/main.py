@@ -92,6 +92,7 @@ from mnemo_memory.packages.domain import (
     WorkspaceId,
 )
 from mnemo_memory.packages.knowledge import (
+    LocalEmbeddingError,
     LocalSemanticKnowledgeIndexer,
     LocalSemanticKnowledgeRetriever,
     SemanticKnowledgeIndexRequest,
@@ -155,6 +156,16 @@ _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     skills_and_procedures=300,
     provenance_and_conflicts=0,
     total_limit=1_750,
+)
+
+_AUTOMATIC_PROMPT_CONTEXT_BUDGET = ContextBudget(
+    active_task_checkpoint=600,
+    episodic_memories=200,
+    knowledge=500,
+    structural=0,
+    skills_and_procedures=0,
+    provenance_and_conflicts=0,
+    total_limit=1_300,
 )
 
 
@@ -235,6 +246,66 @@ def _automatic_context_attachment(
         and not packet.episodic_memories
         and not packet.structural_items
         and not packet.skills_and_procedures
+    ):
+        return None
+    return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _automatic_prompt_context_attachment(
+    data_directory: Path, scope: MemoryScope, prompt: str
+) -> str | None:
+    """Retrieve a small scoped packet from one transient prompt without persisting the prompt."""
+    if not prompt.strip() or len(prompt) > 512:
+        return None
+    try:
+        with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+            assert runtime.knowledge_document_repository is not None
+            semantic = LocalSemanticKnowledgeRetriever(
+                runtime.knowledge_document_repository,
+                FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
+            )
+            service = UnifiedContextService(
+                runtime.checkpoint_service,
+                runtime.dbt_manifest_service,
+                runtime.source_structure_repository,
+                runtime.repository,
+                runtime.knowledge_document_repository,
+                semantic_knowledge=semantic,
+            )
+            request = GetUnifiedContext(
+                scope,
+                budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
+                include_lifecycle_events=True,
+                include_approved_events=True,
+                knowledge_query=prompt,
+                semantic_knowledge_query=prompt,
+            )
+            try:
+                packet = service.get_context(request)
+            except LocalEmbeddingError:
+                # Semantic search is optional. Existing lexical memory remains available when
+                # the local model runtime or its projection is unavailable.
+                packet = UnifiedContextService(
+                    runtime.checkpoint_service,
+                    runtime.dbt_manifest_service,
+                    runtime.source_structure_repository,
+                    runtime.repository,
+                    runtime.knowledge_document_repository,
+                ).get_context(
+                    GetUnifiedContext(
+                        scope,
+                        budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
+                        include_lifecycle_events=True,
+                        include_approved_events=True,
+                        knowledge_query=prompt,
+                    )
+                )
+    except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
+        return None
+    if (
+        packet.active_task_checkpoint is None
+        and not packet.episodic_memories
+        and not packet.knowledge_items
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -1440,6 +1511,9 @@ def automatic_memory_hook(
             cast(ClientName, client),
             context_loader=lambda scope: _automatic_context_attachment(
                 config.data_directory, scope, cast(ClientName, client)
+            ),
+            prompt_context_loader=lambda scope, prompt: _automatic_prompt_context_attachment(
+                config.data_directory, scope, prompt
             ),
             knowledge_refresher=lambda binding: _refresh_project_knowledge(
                 config.data_directory, binding

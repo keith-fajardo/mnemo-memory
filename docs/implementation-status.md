@@ -500,6 +500,12 @@ changed unsaved work-stop boundary, and asks the
 connected agent to retrieve bounded context at session start and write a typed checkpoint at a
 work-stop or compaction boundary. It does not ingest transcripts, source text, or credentials.
 No dbt-core dependency, warehouse call, or automatic shell-profile modification was introduced.
+The lifecycle boundary now accepts a completed handoff only after the scoped SQLite repository
+shows a changed checkpoint revision (or a verified terminal transition); a reported tool name or
+repository-read failure cannot clear pending work. With the same explicit consent, a bounded user
+prompt is used transiently to select already-persisted same-project checkpoint and Markdown
+context. The prompt is never stored, and the automatic prompt packet is capped at 1,300 estimated
+tokens with scope-first retrieval. Fresh-process and token-reduction tests cover this path.
 Version `0.1.0a2` was published to production PyPI through the checksum-bound, OIDC Trusted
 Publishing workflow after source-independent artifact verification. Machine-local project bindings
 and lifecycle session markers now use symlink-safe, process-serialized atomic updates so concurrent

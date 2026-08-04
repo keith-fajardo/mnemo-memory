@@ -260,10 +260,12 @@ reliable reminder at a fresh-session boundary, not hidden transcript monitoring 
 Mnemo can read a model's private reasoning.
 
 There is one additional timely cue: when the agent has edited a project file, Mnemo adds a short
-memory reminder before the next user turn. It does **not** inspect that user prompt. The reminder
-only says that project work changed and that history/impact claims should use Mnemo evidence; it
-stops once the agent saves its checkpoint. This makes memory use a normal part of supported
-Codex/Claude Code work without making you maintain a parallel instruction file.
+memory reminder before the next user turn. With your explicit `--auto-memory` consent, Mnemo may
+use at most 512 characters of that prompt transiently to select already-saved, same-project memory.
+It never writes the prompt to its database, hook state, or logs. The reminder stops only after
+Mnemo verifies that the scoped checkpoint revision actually changed—not merely because a tool name
+was observed. This makes memory use a normal part of supported Codex/Claude Code work without
+making you maintain a parallel instruction file.
 
 The short manual equivalent is:
 
@@ -288,9 +290,11 @@ clear credential-like values before a batch can be stored. It does not promise t
 possible secret, so keep secrets out of project documentation as usual.
 
 Mnemo searches current scoped notes through a local rebuildable SQLite full-text index. It does not
-send your notes to a model or silently include every note in an agent request. Deleted note bodies
-and old note revisions are removed from the index; every selected section still cites its exact
-document revision.
+send your notes to a hosted model or silently include every note in an agent request. At a prompt
+boundary it builds a deterministic packet capped at 1,300 estimated tokens from the active
+checkpoint and relevant saved notes; unrelated and cross-project notes stay out. Deleted note
+bodies and old note revisions are removed from the index; every selected section still cites its
+exact document revision.
 
 ### Optional local semantic note search
 
@@ -307,9 +311,10 @@ mnemo-memory memory semantic search "billing variance"
 This is an explicit personal-machine choice. The first index can download public embedding-model
 weights; the note text and later query text are processed only by the local runtime. Mnemo stores
 a vector attached to the note's current immutable revision, not another copy of the note. It does
-not activate automatically, inspect every prompt, or change the authority of returned notes: they
-remain bounded, cited, untrusted evidence. An MCP client can request it with
-`semantic_knowledge_query` when it needs this kind of match.
+not build the index automatically or change the authority of returned notes: they remain bounded,
+cited, untrusted evidence. Once you explicitly build the index, automatic-memory prompt retrieval
+may use it locally and falls back to literal search if the optional runtime is unavailable. An MCP
+client can also request it explicitly with `semantic_knowledge_query`.
 
 ### Correcting or flagging a note disagreement
 
@@ -335,15 +340,17 @@ first as a predictable tie-breaker. Both are still separate, untrusted, cited ev
 that can silently override current dbt or source-structure evidence.
 
 At the next supported client session start, Mnemo tells the agent only that scoped project knowledge
-is available and how to request it with a short `knowledge_query`; it does not attach every note or
-read the user’s prompt to guess a query. That makes the capability discoverable without making you
-maintain an additional agent instruction file.
+is available and attaches only bounded selected context, never every note. At later prompt
+boundaries, the explicit automatic-memory opt-in permits transient local selection from the bounded
+prompt; prompt text is not persisted. This makes the capability useful without making you maintain
+an additional agent instruction file.
 
 If the saved task checkpoint already lists a relevant file such as `models/reconciliation.sql`, the
 fresh-session packet automatically uses its file stem (`reconciliation`) to select a small current
-same-project note section. This is a bounded 250-token convenience, not prompt snooping or a full
-notes replay. The returned section still has exact revision provenance and remains untrusted. For a
-new topic with no saved relevant file, the agent uses the normal short `knowledge_query` instead.
+same-project note section. This is a bounded 250-token convenience, not a full notes replay. The
+returned section still has exact revision provenance and remains untrusted. For a new topic with no
+saved relevant file, transient automatic retrieval or an explicit `knowledge_query` selects a
+bounded same-project result.
 
 ### Reusable project playbooks
 

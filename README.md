@@ -64,8 +64,11 @@ structure map will have a different bounded size.
 It is not a general memory of everything you type. Mnemo does not capture chats, terminal output,
 or source text, and it does not call a model. Opting a repository into automatic memory is an
 explicit local action: Mnemo then reads supported-language syntax only to refresh a bounded
-structure map. A client lifecycle hook prompts the agent to write a bounded handoff through
-Mnemo's MCP tool.
+structure map. At each user-prompt boundary it may use at most 512 characters of that prompt
+transiently to select already-saved, same-project memory; the prompt is never written to Mnemo's
+database or hook state. A client lifecycle hook also requires the agent to write a bounded handoff
+through Mnemo's MCP tool before an edited task stops, and verifies that the scoped durable revision
+actually changed before accepting the handoff.
 
 - a **task checkpoint**: objective, progress, decisions, a failed approach, evidence, tests run,
   and the next action; and
@@ -126,8 +129,9 @@ If an enabled client changes a project and reaches a stop or compaction boundary
 complete checkpoint, Mnemo keeps a tiny local **handoff needed** marker for that project. The next
 fresh session is reminded to review the cited recent-work context and save an actual handoff. The
 marker contains only a hashed local scope and a boolean—never a prompt, transcript, terminal
-output, source body, or inferred explanation—and an ordinary checkpoint create/revise/terminal
-save clears it. A standalone `record_event` or `record_lesson` deliberately does not clear it,
+output, source body, or inferred explanation—and only a repository-verified checkpoint
+create/revise/terminal save clears it. Merely reporting that the tool was called does not clear the
+marker. A standalone `record_event` or `record_lesson` deliberately does not clear it,
 because neither is a complete task handoff.
 The automatic attachment has a 1,750-token total budget and happens only at a fresh supported
 client session, not continuously while you work.
@@ -487,9 +491,11 @@ to its normal coding agent without a repeated prompt or an extra `CLAUDE.md`/`AG
 When the durable checkpoint already names relevant files, the small automatic session packet also
 looks up current same-project notes using those **file stems** (for example, `reconciliation` from
 `models/reconciliation.sql`). That gives a fresh agent a cited note about the file it is resuming
-without reading the new user prompt or replaying every note. The automatic note allowance is 250
-estimated tokens; unrelated notes stay out. For a different topic, the agent can still use an
-explicit short `knowledge_query`.
+without replaying every note. On later user turns, Mnemo may transiently use a bounded prompt to
+select relevant saved notes and the active checkpoint into a packet capped at 1,300 estimated
+tokens. The prompt itself is not stored, logged, or returned. Selection is scope-first, so another
+project's note cannot be included. For a different topic, the agent can still use an explicit short
+`knowledge_query`.
 
 **When does it get saved?** In automatic mode, Mnemo asks the connected agent to call
 `save_checkpoint` at a stop or compaction boundary. You can still ask explicitly at any point.
@@ -569,8 +575,9 @@ from a similarly named file elsewhere. For dbt models, use the same `relative_pa
 injects a session-start instruction telling Codex or Claude Code to check context before claiming
 knowledge of earlier work or impact, and how to request saved structure for a named symbol/file.
 After the agent changes a project file, Mnemo also adds one short reminder before the next user
-turn. It does not read the submitted prompt or a model's private reasoning, so this is transparent
-timely guidance—not surveillance or a hidden automatic transcript recorder.
+turn. With the explicit `--auto-memory` opt-in, it may use a bounded submitted prompt transiently
+to select already-saved same-project context, but it never persists the prompt or reads a model's
+private reasoning. This is timely guidance—not surveillance or a hidden transcript recorder.
 
 **Will it read every Markdown file on my computer?** No. The `--auto-memory` consent applies only
 to the repository you enabled. Mnemo reads bounded `.md` files under that project root, skips
