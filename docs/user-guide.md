@@ -172,6 +172,14 @@ small list of proven **static dependent candidates** and the immutable source sn
 them. This is a practical “what might be affected?” starting point, not a runtime promise: the
 agent should still inspect the cited structure and run the appropriate verification.
 
+For a JavaScript or TypeScript monorepo with a strict JSON root `package.json` and local
+`workspaces`, Mnemo also recognizes a narrow package-level relationship: a local package's runtime
+`dependencies` entry with a `workspace:` specifier can point to another proven local workspace
+package. This lets the same impact cue say that a saved local package depends on another saved
+local package. Mnemo does not run npm, pnpm, or Yarn; inspect a lockfile; or guess package
+resolution. External packages and ordinary version ranges, plus development, peer, and optional
+dependencies, remain outside this evidence boundary.
+
 The same help is available when there was no new edit yet: if the current saved checkpoint lists
 supported relative files under `relevant_files`, Mnemo uses up to two matching files in checkpoint
 order as small static-impact starting points in the next automatic handoff. For example, a

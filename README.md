@@ -247,6 +247,13 @@ file it has not parsed.
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.
 
+For a JavaScript or TypeScript monorepo, Mnemo can also retain one narrow, useful kind of package
+relationship: a local workspace package declaring a runtime dependency on another local workspace
+package with `"workspace:"`. That means a later impact query can say that a saved local package
+depends on another saved local package. It does **not** run npm/pnpm/Yarn, read lockfiles, infer
+runtime resolution, or treat external, development, optional, or peer dependencies as proven
+relationships.
+
 > Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
 > project intentionally does not yet provide automatic transcript capture, catalog/run-results ingestion,
 > semantic cross-language call graphs, embeddings, a UI, or team workspaces.

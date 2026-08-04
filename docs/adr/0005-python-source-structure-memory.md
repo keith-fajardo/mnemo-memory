@@ -50,7 +50,11 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   workspace-package import only when a root strict-JSON `workspaces` array declares the package
   directory and exactly one local package declares an exact string `exports` (or `main`) entry to
   a saved source file; conditional exports, nested globs, duplicate package names, and external
-  packages remain unresolved. It excludes source text,
+  packages remain unresolved. The same proof can record a directed local package dependency only
+  for a literal runtime `dependencies` declaration whose value begins `workspace:` and whose
+  package entry is already proven local. Ordinary version ranges, external packages, lockfiles,
+  peer/optional/development dependencies, scripts, and package-manager resolution are excluded.
+  It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.

@@ -983,7 +983,8 @@ class UnifiedContextService:
             for edge in self._source.edges_from_symbols(
                 project_scope, snapshot.snapshot_id, source_ids
             )
-            if edge.kind in {CodeEdgeKind.IMPORTS, CodeEdgeKind.CALLS}
+            if edge.kind
+            in {CodeEdgeKind.IMPORTS, CodeEdgeKind.CALLS, CodeEdgeKind.PACKAGE_DEPENDENCY}
         )
         resolved_symbols = self._source.symbols_by_ids(
             project_scope,

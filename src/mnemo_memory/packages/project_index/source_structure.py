@@ -462,6 +462,9 @@ class SourceStructureParser:
         javascript_workspace_modules = self._javascript_workspace_modules(
             package_json_documents, modules
         )
+        workspace_dependency_edges = self._javascript_workspace_dependency_edges(
+            package_json_documents, javascript_workspace_modules
+        )
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]] = {}
@@ -559,6 +562,16 @@ class SourceStructureParser:
                         for path, target in sorted(set(imports))
                     ),
                     *call_edges,
+                    *(
+                        CodeEdge(
+                            snapshot_id,
+                            source.symbol_id,
+                            target_name,
+                            CodeEdgeKind.PACKAGE_DEPENDENCY,
+                            target.symbol_id,
+                        )
+                        for source, target_name, target in workspace_dependency_edges
+                    ),
                 ),
                 key=lambda edge: (str(edge.source_symbol_id), edge.kind.value, edge.target),
             )
@@ -779,6 +792,49 @@ class SourceStructureParser:
             for name, entries in candidates.items()
             if len({item.symbol_id for item in entries}) == 1
         }
+
+    @staticmethod
+    def _javascript_workspace_dependency_edges(
+        package_json_documents: dict[str, bytes], workspace_modules: dict[str, CodeSymbol]
+    ) -> tuple[tuple[CodeSymbol, str, CodeSymbol], ...]:
+        """Return exact local ``workspace:`` runtime dependency declarations.
+
+        A matching package name alone is not enough: ordinary npm ranges may resolve outside the
+        checkout. Mnemo therefore accepts only a literal ``dependencies`` entry with a
+        ``workspace:`` specifier and an already-proven local workspace entry module. It does not
+        execute package-manager resolution, inspect lockfiles, or model dev/build dependencies.
+        """
+        edges: set[tuple[str, str, str]] = set()
+        values: list[tuple[CodeSymbol, str, CodeSymbol]] = []
+        for relative_path, raw in sorted(package_json_documents.items()):
+            if relative_path == "package.json":
+                continue
+            try:
+                document = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(document, dict):
+                continue
+            name = document.get("name")
+            dependencies = document.get("dependencies")
+            source = workspace_modules.get(name) if isinstance(name, str) else None
+            if source is None or not isinstance(dependencies, dict):
+                continue
+            for target_name, version in sorted(dependencies.items()):
+                target = (
+                    workspace_modules.get(target_name) if isinstance(target_name, str) else None
+                )
+                if (
+                    target is None
+                    or not isinstance(version, str)
+                    or not version.startswith("workspace:")
+                ):
+                    continue
+                key = (str(source.symbol_id), target_name, str(target.symbol_id))
+                if key not in edges:
+                    edges.add(key)
+                    values.append((source, target_name, target))
+        return tuple(values)
 
     @staticmethod
     def _javascript_workspace_patterns(raw: bytes | None) -> tuple[str, ...]:

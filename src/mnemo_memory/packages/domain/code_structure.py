@@ -36,6 +36,7 @@ class CodeSymbolKind(StrEnum):
 class CodeEdgeKind(StrEnum):
     IMPORTS = "imports"
     CALLS = "calls"
+    PACKAGE_DEPENDENCY = "package_dependency"
     DEFINES = "defines"
 
 

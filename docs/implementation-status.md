@@ -538,6 +538,11 @@ JavaScript/TypeScript source structure now resolves a workspace-package import o
 an exact string `exports` (or fallback `main`) entry to a saved source file. Conditional exports,
 duplicate names, nested globs, and external packages remain unresolved rather than guessed.
 
+The same strict JavaScript/TypeScript workspace proof now records a local package dependency only
+for a runtime `dependencies` entry with a literal `workspace:` specifier. This lets source-impact
+queries identify a proven dependent workspace package without executing a package manager or
+claiming lockfile, build, development, peer, optional, or runtime-resolution behavior.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and
