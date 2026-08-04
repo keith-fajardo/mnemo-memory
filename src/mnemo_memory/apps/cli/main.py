@@ -877,7 +877,12 @@ def memory_history(
     "impact", help="Show proven static dependencies or dependents for this project."
 )
 def memory_impact(
-    symbol: str = typer.Argument(..., help="Saved symbol name or relative source path."),
+    symbol: str | None = typer.Argument(None, help="Saved symbol name."),
+    relative_path: str | None = typer.Option(
+        None,
+        "--path",
+        help="Exact relative source-file path; never matched fuzzily.",
+    ),
     direction: SourceImpactDirection = SourceImpactDirection.DEPENDENTS,
     direct: bool = typer.Option(False, "--direct", help="Return only one relationship hop."),
     maximum_depth: int | None = typer.Option(None, "--maximum-depth", min=0),
@@ -900,6 +905,7 @@ def memory_impact(
                 direction,
                 not direct,
                 maximum_depth,
+                relative_path=relative_path,
             )
         )
     except (AutomaticMemoryBindingError, ValueError) as error:

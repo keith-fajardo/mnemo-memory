@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 from mnemo_memory.packages.domain import (
     CodeEdge,
@@ -35,20 +36,25 @@ class SourceImpactDirection(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SourceImpactQuery:
-    """A scoped impact request; ``symbol`` must identify a saved structural fact."""
+    """A scoped impact request for one saved symbol or one exact source-file identity."""
 
     scope: MemoryScope
-    symbol: str
+    symbol: str | None
     direction: SourceImpactDirection = SourceImpactDirection.DEPENDENTS
     transitive: bool = True
     maximum_depth: int | None = None
     maximum_symbols: int = 200
     maximum_edges: int = 500
     snapshot_id: CodeSnapshotId | None = None
+    relative_path: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.symbol.strip() or len(self.symbol) > 512:
-            raise ValueError("source impact requires a bounded symbol or relative path")
+        if (self.symbol is None) == (self.relative_path is None):
+            raise ValueError("source impact requires exactly one symbol or relative path")
+        if self.symbol is not None and (not self.symbol.strip() or len(self.symbol) > 512):
+            raise ValueError("source impact requires a bounded symbol")
+        if self.relative_path is not None:
+            _validate_relative_path(self.relative_path)
         if self.maximum_depth is not None and self.maximum_depth < 0:
             raise ValueError("source impact maximum depth cannot be negative")
         if self.maximum_symbols < 1 or self.maximum_edges < 1:
@@ -274,6 +280,17 @@ class SourceImpactService:
     def _starts(
         self, request: SourceImpactQuery, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]:
+        if request.relative_path is not None:
+            # A file identity is exact by contract.  In particular, do not fall back to a
+            # same-named file elsewhere in a project: an impact claim would otherwise be wrong.
+            return tuple(
+                item
+                for item in self._repository.find_symbols(
+                    request.scope, snapshot_id, request.relative_path, limit=256
+                )
+                if item.relative_path == request.relative_path
+            )
+        assert request.symbol is not None
         candidates = self._repository.find_symbols(
             request.scope, snapshot_id, request.symbol, limit=64
         )
@@ -322,3 +339,11 @@ def _stable_edge_key(
         (key for key, value in symbols.items() if value.symbol_id == edge.target_symbol_id), None
     )
     return (source, edge.kind.value, edge.target, target)
+
+
+def _validate_relative_path(value: str) -> None:
+    if not value or len(value) > 512 or "\\" in value:
+        raise ValueError("source impact path must be a bounded relative POSIX path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or value != path.as_posix():
+        raise ValueError("source impact path must be a canonical relative path")

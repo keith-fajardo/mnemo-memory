@@ -93,6 +93,13 @@ class DurableMcpContextPort:
                 raise ValueError("source_query must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
                 raise ValueError("source_impact must be an object")
+            if source_impact is not None:
+                has_symbol = "symbol" in source_impact
+                has_relative_path = "relative_path" in source_impact
+                if has_symbol == has_relative_path:
+                    raise ValueError("source_impact requires exactly one symbol or relative_path")
+                if has_relative_path and not isinstance(source_impact["relative_path"], str):
+                    raise ValueError("source_impact.relative_path must be a string")
             if source_changes is not None and not isinstance(source_changes, Mapping):
                 raise ValueError("source_changes must be an object")
             if source_changes is not None and (
@@ -104,7 +111,7 @@ class DurableMcpContextPort:
                 None
                 if source_impact is None
                 else ContextSourceImpactQuery(
-                    _string(source_impact, "symbol"),
+                    _string(source_impact, "symbol") if "symbol" in source_impact else None,
                     str(source_impact.get("direction", "dependents")),
                     bool(source_impact.get("transitive", True)),
                     source_impact.get("maximum_depth"),
@@ -115,6 +122,9 @@ class DurableMcpContextPort:
                     if isinstance(source_impact.get("current_source_digest"), str)
                     else None,
                     bool(source_impact.get("require_current", False)),
+                    cast(str, source_impact["relative_path"])
+                    if "relative_path" in source_impact
+                    else None,
                 )
             )
             changes = (

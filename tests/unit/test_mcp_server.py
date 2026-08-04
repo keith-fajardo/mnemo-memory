@@ -508,6 +508,15 @@ def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: 
     )
 
 
+def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "runtime")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        request = context_payload(source_impact={"symbol": "core", "relative_path": "core.py"})
+
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(request)
+
+
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:
     async def exercise() -> None:
         parameters = StdioServerParameters(

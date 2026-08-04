@@ -752,6 +752,51 @@ def test_source_impact_context_returns_bounded_dependents_with_provenance(tmp_pa
     assert len(packet.provenance) == len(packet.structural_items)
 
 
+def test_source_impact_context_resolves_a_relative_path_exactly(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "core.py").write_text("def calculate():\n    return 1\n")
+    (root / "other_core.py").write_text("def calculate():\n    return 2\n")
+    (root / "service.py").write_text("import core\n\ndef serve():\n    return core.calculate()\n")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_impact=ContextSourceImpactQuery(None, relative_path="core.py"),
+        )
+    )
+
+    assert any('"path":"core.py"' in item.content for item in packet.structural_items)
+    assert any('"path":"service.py"' in item.content for item in packet.structural_items)
+    assert not any('"path":"other_core.py"' in item.content for item in packet.structural_items)
+
+
 def test_source_impact_can_select_an_immutable_historical_snapshot(tmp_path: Path) -> None:
     project_scope = MemoryScope(
         OwnerId.from_string("11111111-1111-4111-8111-111111111111"),

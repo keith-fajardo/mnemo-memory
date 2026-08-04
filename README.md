@@ -337,6 +337,11 @@ guesses chronology from a snapshot UUID and never returns source text. The resul
 `current`, `stale`, or `unknown` only from an exact supplied source digest; “active” alone is not
 called current.
 
+For static code impact, an agent can name either a saved declaration or an **exact relative file
+path**. A file-path request starts from declarations in that exact file only; Mnemo will not guess
+from a similarly named file elsewhere. For dbt models, use the same `relative_path` concept under
+`dbt_lineage`; Mnemo resolves the single manifest node and follows manifest-authoritative edges.
+
 **Must I teach every agent to use Mnemo?** Not for the supported `--auto-memory` setup. Mnemo
 injects a session-start instruction telling Codex or Claude Code to check context before claiming
 knowledge of earlier work or impact, and how to request saved structure for a named symbol/file.

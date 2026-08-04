@@ -85,7 +85,7 @@ class ContextLineageQuery:
 class ContextSourceImpactQuery:
     """A bounded static impact request; dynamic behavior is intentionally excluded."""
 
-    symbol: str
+    symbol: str | None
     direction: str = "dependents"
     transitive: bool = True
     maximum_depth: int | None = None
@@ -94,10 +94,15 @@ class ContextSourceImpactQuery:
     snapshot_id: CodeSnapshotId | None = None
     current_source_digest: str | None = None
     require_current: bool = False
+    relative_path: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.symbol.strip() or len(self.symbol) > 512:
-            raise ValueError("source impact requires a bounded symbol or relative path")
+        if (self.symbol is None) == (self.relative_path is None):
+            raise ValueError("source impact requires exactly one symbol or relative path")
+        if self.symbol is not None and (not self.symbol.strip() or len(self.symbol) > 512):
+            raise ValueError("source impact requires a bounded symbol")
+        if self.relative_path is not None:
+            _validate_source_relative_path(self.relative_path)
         if self.direction not in {"dependents", "dependencies"}:
             raise ValueError("source impact direction must be dependents or dependencies")
         if self.maximum_depth is not None and self.maximum_depth < 0:
@@ -520,15 +525,27 @@ class UnifiedContextService:
                 OmissionReason.STALE,
                 "source snapshot is not proven current",
             )
-        candidates = self._source.find_symbols(scope, snapshot.snapshot_id, query.symbol, limit=64)
-        starts = (
-            tuple(
+        if query.relative_path is not None:
+            starts = tuple(
                 item
-                for item in candidates
-                if item.qualified_name == query.symbol or item.relative_path == query.symbol
+                for item in self._source.find_symbols(
+                    scope, snapshot.snapshot_id, query.relative_path, limit=256
+                )
+                if item.relative_path == query.relative_path
             )
-            or candidates
-        )
+        else:
+            assert query.symbol is not None
+            candidates = self._source.find_symbols(
+                scope, snapshot.snapshot_id, query.symbol, limit=64
+            )
+            starts = (
+                tuple(
+                    item
+                    for item in candidates
+                    if item.qualified_name == query.symbol or item.relative_path == query.symbol
+                )
+                or candidates
+            )
         if not starts:
             return _with_omission(
                 packet, "source-impact", OmissionReason.LOWER_RANK, "source symbol was not found"

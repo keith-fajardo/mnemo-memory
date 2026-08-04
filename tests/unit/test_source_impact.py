@@ -102,6 +102,33 @@ def test_dependencies_have_shortest_depth_and_explicit_limits(tmp_path: Path) ->
     assert limited.truncation_reason == "maximum depth reached"
 
 
+def test_exact_relative_path_starts_from_only_that_file_without_fuzzy_fallback(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "core.py").write_text("def calculate():\n    return 1\n")
+    (root / "other_core.py").write_text("def calculate():\n    return 2\n")
+    (root / "service.py").write_text("import core\n\ndef serve():\n    return core.calculate()\n")
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    )
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, None, relative_path="core.py")
+    )
+
+    assert [item.relative_path for item in result.start_symbols] == ["core.py", "core.py"]
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service", "service.serve"]
+    assert {item.symbol.relative_path for item in result.symbols} == {"service.py"}
+    with pytest.raises(ValueError, match="exactly one"):
+        SourceImpactQuery(item_scope, "core", relative_path="core.py")
+    with pytest.raises(ValueError, match="canonical"):
+        SourceImpactQuery(item_scope, None, relative_path="../core.py")
+
+
 def test_snapshot_diff_preserves_immutable_history(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"
