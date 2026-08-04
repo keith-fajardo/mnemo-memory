@@ -600,3 +600,9 @@ does not need to remember a second query merely to see recent changed files. It 
 provenance-bearing file, declaration, and relationship identities, preserves current/stale/unknown
 labeling from an exact supplied source digest, and emits structured omissions for missing history
 or budget pressure. It does not replay source text or infer why a change was made.
+
+`source_changes` can now also request up to sixteen recent immutable transitions for one canonical
+relative path. Results are newest-first, scoped, bounded, and cited to each before/after snapshot;
+unrelated project changes and source bodies remain excluded. This lets a later agent investigate
+what was recorded for a particular model or file while relying on the checkpoint, lesson, or
+approved fact—not a diff—as evidence for why it changed.

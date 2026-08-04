@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from mnemo_memory.packages.application.checkpoints import (
     CheckpointApplicationService,
     CreateCheckpoint,
@@ -16,6 +18,7 @@ from mnemo_memory.packages.application.unified_context import (
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointSourceObservation,
+    CodeSnapshotId,
     ContextBudget,
     EvidenceId,
     EvidenceLocation,
@@ -424,6 +427,125 @@ def test_source_changes_can_select_a_scoped_historical_snapshot_pair(tmp_path: P
     )
     assert "second" in packet.structural_items[0].content
     assert "third" not in packet.structural_items[0].content
+
+
+def test_source_change_history_can_be_bounded_to_one_relative_path(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source history Ω"
+    root.mkdir()
+    tracked = root / "orders.py"
+    unrelated = root / "private.py"
+    tracked.write_text("def orders():\n    return 1\n")
+    unrelated.write_text("def private():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    parser = PythonSourceParser()
+    first = parser.parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(first)
+    tracked.write_text("def orders():\n    return 2\n")
+    second = parser.parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(second)
+    unrelated.write_text("def private():\n    return 2\n")
+    third = parser.parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(third)
+    tracked.write_text("def orders():\n    return 3\n")
+    fourth = parser.parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(fourth)
+    service = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    )
+
+    packet = service.get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_changes=ContextSourceChangeQuery(
+                relative_path="orders.py", maximum_transitions=3
+            ),
+        )
+    )
+
+    assert [item.item_id for item in packet.structural_items] == [
+        f"source-change:{third.snapshot.snapshot_id}:{fourth.snapshot.snapshot_id}",
+        f"source-change:{first.snapshot.snapshot_id}:{second.snapshot.snapshot_id}",
+    ]
+    assert all(
+        '"requested_relative_path":"orders.py"' in item.content for item in packet.structural_items
+    )
+    assert all("private.py" not in item.content for item in packet.structural_items)
+    assert all(len(item.evidence_references) == 2 for item in packet.structural_items)
+    assert len(packet.provenance) == 2
+
+
+def test_source_change_history_rejects_unsafe_path_and_reports_no_matching_path(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="canonical relative path"):
+        ContextSourceChangeQuery(relative_path="../private.py")
+    with pytest.raises(ValueError, match="cannot request history"):
+        ContextSourceChangeQuery(
+            maximum_transitions=2,
+            before_snapshot_id=CodeSnapshotId.new(),
+            after_snapshot_id=CodeSnapshotId.new(),
+        )
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "orders.py"
+    source = ReferenceSourceStructureRepository()
+    path.write_text("def one():\n    return 1\n")
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    path.write_text("def two():\n    return 2\n")
+    source.store_and_activate(
+        PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            MemoryScope(
+                project_scope.owner_id,
+                ScopeLevel.TASK,
+                project_scope.visibility,
+                project_scope.workspace_id,
+                project_scope.project_id,
+                SessionId.new(),
+                TaskId.new(),
+            ),
+            source_changes=ContextSourceChangeQuery(relative_path="not-recorded.py"),
+        )
+    )
+    assert packet.structural_items == ()
+    assert packet.omissions[-1].detail == "no recorded source changes for requested relative path"
 
 
 def test_source_query_does_not_disclose_another_projects_snapshot(tmp_path: Path) -> None:

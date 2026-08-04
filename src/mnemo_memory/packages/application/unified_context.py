@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import cast
 from uuid import UUID, uuid5
 
@@ -104,7 +105,7 @@ class ContextSourceImpactQuery:
 
 @dataclass(frozen=True, slots=True)
 class ContextSourceChangeQuery:
-    """Request the latest explicitly recorded source-snapshot transition.
+    """Request bounded explicitly recorded source-snapshot transitions.
 
     This is intentionally a transition summary rather than a source-file replay:
     only bounded relative file paths plus declaration and relationship identities are rendered.
@@ -113,6 +114,8 @@ class ContextSourceChangeQuery:
     maximum_declarations: int = 24
     maximum_relationships: int = 24
     maximum_files: int = 24
+    maximum_transitions: int = 1
+    relative_path: str | None = None
     current_source_digest: str | None = None
     require_current: bool = False
     before_snapshot_id: CodeSnapshotId | None = None
@@ -131,6 +134,10 @@ class ContextSourceChangeQuery:
             or self.maximum_files > 100
         ):
             raise ValueError("source change limits must not exceed 100")
+        if self.maximum_transitions < 1 or self.maximum_transitions > 16:
+            raise ValueError("source change transition limit must be between 1 and 16")
+        if self.relative_path is not None:
+            _validate_source_relative_path(self.relative_path)
         if self.current_source_digest is not None and (
             not self.current_source_digest.startswith("sha256:")
             or len(self.current_source_digest) != 71
@@ -143,6 +150,8 @@ class ContextSourceChangeQuery:
             and self.before_snapshot_id == self.after_snapshot_id
         ):
             raise ValueError("source changes require distinct historical snapshot IDs")
+        if self.before_snapshot_id is not None and self.maximum_transitions != 1:
+            raise ValueError("an explicit source transition cannot request history")
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,157 +610,74 @@ class UnifiedContextService:
                 packet, "source-changes", OmissionReason.LOWER_RANK, "no source snapshot"
             )
         scope = _project_scope(request.scope)
+        transitions: tuple[tuple[CodeSnapshot, CodeSnapshot], ...]
         if query.before_snapshot_id is not None and query.after_snapshot_id is not None:
-            before = self._source.get_snapshot(scope, query.before_snapshot_id)
-            after = self._source.get_snapshot(scope, query.after_snapshot_id)
+            transitions = (
+                (
+                    self._source.get_snapshot(scope, query.before_snapshot_id),
+                    self._source.get_snapshot(scope, query.after_snapshot_id),
+                ),
+            )
         else:
-            transition = self._source.latest_transition(scope)
-            if transition is None:
+            history = self._source.list_activation_history(
+                scope, limit=query.maximum_transitions + 1
+            )
+            if len(history) < 2:
                 return _with_omission(
                     packet,
                     "source-changes",
                     OmissionReason.LOWER_RANK,
                     "no prior source transition",
                 )
-            before, after = transition
-        currentness = _source_currentness(after, query.current_source_digest)
-        if query.require_current and currentness is not ValidityState.CURRENT:
-            return _with_omission(
-                packet,
-                "source-changes",
-                OmissionReason.STALE,
-                "source transition is not proven current",
+            transitions = tuple(
+                (history[index + 1], history[index]) for index in range(len(history) - 1)
             )
-        (
-            files_available,
-            added_files,
-            removed_files,
-            modified_files,
-            added_symbols,
-            removed_symbols,
-            added_edges,
-            removed_edges,
-        ) = _source_snapshot_difference(self._source, scope, before, after)
-        added_file_paths = tuple(item.relative_path for item in added_files)[: query.maximum_files]
-        removed_file_paths = tuple(item.relative_path for item in removed_files)[
-            : query.maximum_files
-        ]
-        modified_file_paths = tuple(item.relative_path for item in modified_files)[
-            : query.maximum_files
-        ]
-        added_declarations = tuple(
-            f"{item.relative_path}:{item.qualified_name}" for item in added_symbols
-        )[: query.maximum_declarations]
-        removed_declarations = tuple(
-            f"{item.relative_path}:{item.qualified_name}" for item in removed_symbols
-        )[: query.maximum_declarations]
-        added_relationships = tuple(f"{item.kind.value}:{item.target}" for item in added_edges)[
-            : query.maximum_relationships
-        ]
-        removed_relationships = tuple(f"{item.kind.value}:{item.target}" for item in removed_edges)[
-            : query.maximum_relationships
-        ]
-        omitted_declaration_count = (
-            len(added_symbols)
-            + len(removed_symbols)
-            - len(added_declarations)
-            - len(removed_declarations)
-        )
-        omitted_relationship_count = (
-            len(added_edges)
-            + len(removed_edges)
-            - len(added_relationships)
-            - len(removed_relationships)
-        )
-        omitted_file_count = (
-            len(added_files)
-            + len(removed_files)
-            + len(modified_files)
-            - len(added_file_paths)
-            - len(removed_file_paths)
-            - len(modified_file_paths)
-        )
-        content = json.dumps(
-            {
-                "after_snapshot_id": str(after.snapshot_id),
-                "before_snapshot_id": str(before.snapshot_id),
-                "currentness": currentness.value,
-                "file_fingerprints_available": files_available,
-                "added_files": added_file_paths,
-                "removed_files": removed_file_paths,
-                "modified_files": modified_file_paths,
-                "added_declarations": added_declarations,
-                "removed_declarations": removed_declarations,
-                "added_relationships": added_relationships,
-                "removed_relationships": removed_relationships,
-                "omitted_declaration_count": omitted_declaration_count,
-                "omitted_relationship_count": omitted_relationship_count,
-                "omitted_file_count": omitted_file_count,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        tokens = (len(content) + 3) // 4
-        remaining = min(
-            packet.budget.structural,
-            packet.budget.total_limit - packet.declared_total_tokens,
-        ) - sum(item.token_estimate for item in packet.structural_items)
-        if tokens > remaining:
-            return _with_omission(
-                packet,
-                "source-changes",
-                OmissionReason.TOKEN_BUDGET,
-                "source transition summary exceeds remaining structural budget",
+
+        result = packet
+        appended = 0
+        bounded = False
+        rejected_as_not_current = False
+        for before, after in transitions:
+            currentness = _source_currentness(after, query.current_source_digest)
+            if query.require_current and currentness is not ValidityState.CURRENT:
+                rejected_as_not_current = True
+                continue
+            result, included, transition_bounded = _append_source_change_transition(
+                result,
+                request.scope,
+                self._source,
+                scope,
+                before,
+                after,
+                query,
+                currentness,
             )
-        evidence = (
-            _source_snapshot_evidence(packet, before),
-            _source_snapshot_evidence(packet, after),
-        )
-        context_item = ContextItem(
-            f"source-change:{before.snapshot_id}:{after.snapshot_id}",
-            ContextItemType.STRUCTURAL_FACT,
-            request.scope,
-            content,
-            ContentRepresentation.UNTRUSTED_EVIDENCE,
-            tokens,
-            evidence,
-            SourceTrustClass.CURRENT_STRUCTURAL,
-            Sensitivity.NORMAL,
-            currentness,
-            None,
-            ConflictState.NONE,
-            packet.created_at,
-        )
-        notice = ProvenanceNotice(
-            f"provenance:{context_item.item_id}",
-            context_item.item_id,
-            f"mnemo:source-transition/{before.snapshot_id}/{after.snapshot_id}",
-            hashlib.sha256(content.encode()).hexdigest(),
-            evidence,
-        )
-        result = ContextPacket(
-            packet.schema_version,
-            packet.request_id,
-            packet.owner_scope,
-            packet.query_id,
-            packet.task_id,
-            packet.created_at,
-            packet.expires_at,
-            packet.declared_total_tokens + tokens,
-            packet.budget,
-            packet.producer_version,
-            active_task_checkpoint=packet.active_task_checkpoint,
-            episodic_memories=packet.episodic_memories,
-            knowledge_items=packet.knowledge_items,
-            structural_items=(*packet.structural_items, context_item),
-            skills_and_procedures=packet.skills_and_procedures,
-            provenance=(*packet.provenance, notice),
-            omissions=packet.omissions,
-            conflicts=packet.conflicts,
-        )
+            appended += int(included)
+            bounded = bounded or transition_bounded
+        if appended == 0:
+            if rejected_as_not_current:
+                return _with_omission(
+                    result,
+                    "source-changes",
+                    OmissionReason.STALE,
+                    "source transition is not proven current",
+                )
+            if bounded:
+                return _with_omission(
+                    result,
+                    "source-changes",
+                    OmissionReason.TOKEN_BUDGET,
+                    "source transition summary exceeds remaining structural budget",
+                )
+            detail = (
+                "no recorded source changes for requested relative path"
+                if query.relative_path is not None
+                else "no source transition entries fit the requested bounds"
+            )
+            return _with_omission(result, "source-changes", OmissionReason.LOWER_RANK, detail)
         return (
             result
-            if not (omitted_file_count or omitted_declaration_count or omitted_relationship_count)
+            if not bounded
             else _with_omission(
                 result,
                 "source-changes",
@@ -759,6 +685,182 @@ class UnifiedContextService:
                 "source transition entries were bounded",
             )
         )
+
+
+def _append_source_change_transition(
+    packet: ContextPacket,
+    task_scope: MemoryScope,
+    repository: SourceStructureRepository,
+    project_scope: MemoryScope,
+    before: CodeSnapshot,
+    after: CodeSnapshot,
+    query: ContextSourceChangeQuery,
+    currentness: ValidityState,
+) -> tuple[ContextPacket, bool, bool]:
+    """Add one immutable transition summary, with optional safe file-path filtering."""
+    (
+        files_available,
+        added_files,
+        removed_files,
+        modified_files,
+        added_symbols,
+        removed_symbols,
+        added_edges,
+        removed_edges,
+    ) = _source_snapshot_difference(repository, project_scope, before, after)
+    if query.relative_path is not None:
+        path = query.relative_path
+        before_paths = {
+            item.symbol_id: item.relative_path
+            for item in repository.iter_symbols(project_scope, before.snapshot_id)
+        }
+        after_paths = {
+            item.symbol_id: item.relative_path
+            for item in repository.iter_symbols(project_scope, after.snapshot_id)
+        }
+        added_files = tuple(item for item in added_files if item.relative_path == path)
+        removed_files = tuple(item for item in removed_files if item.relative_path == path)
+        modified_files = tuple(item for item in modified_files if item.relative_path == path)
+        added_symbols = tuple(item for item in added_symbols if item.relative_path == path)
+        removed_symbols = tuple(item for item in removed_symbols if item.relative_path == path)
+        added_edges = tuple(
+            item for item in added_edges if after_paths.get(item.source_symbol_id) == path
+        )
+        removed_edges = tuple(
+            item for item in removed_edges if before_paths.get(item.source_symbol_id) == path
+        )
+    if not any(
+        (
+            added_files,
+            removed_files,
+            modified_files,
+            added_symbols,
+            removed_symbols,
+            added_edges,
+            removed_edges,
+        )
+    ):
+        return packet, False, False
+    added_file_paths = tuple(item.relative_path for item in added_files)[: query.maximum_files]
+    removed_file_paths = tuple(item.relative_path for item in removed_files)[: query.maximum_files]
+    modified_file_paths = tuple(item.relative_path for item in modified_files)[
+        : query.maximum_files
+    ]
+    added_declarations = tuple(
+        f"{item.relative_path}:{item.qualified_name}" for item in added_symbols
+    )[: query.maximum_declarations]
+    removed_declarations = tuple(
+        f"{item.relative_path}:{item.qualified_name}" for item in removed_symbols
+    )[: query.maximum_declarations]
+    added_relationships = tuple(f"{item.kind.value}:{item.target}" for item in added_edges)[
+        : query.maximum_relationships
+    ]
+    removed_relationships = tuple(f"{item.kind.value}:{item.target}" for item in removed_edges)[
+        : query.maximum_relationships
+    ]
+    omitted_declaration_count = (
+        len(added_symbols)
+        + len(removed_symbols)
+        - len(added_declarations)
+        - len(removed_declarations)
+    )
+    omitted_relationship_count = (
+        len(added_edges)
+        + len(removed_edges)
+        - len(added_relationships)
+        - len(removed_relationships)
+    )
+    omitted_file_count = (
+        len(added_files)
+        + len(removed_files)
+        + len(modified_files)
+        - len(added_file_paths)
+        - len(removed_file_paths)
+        - len(modified_file_paths)
+    )
+    content = json.dumps(
+        {
+            "after_snapshot_id": str(after.snapshot_id),
+            "before_snapshot_id": str(before.snapshot_id),
+            "currentness": currentness.value,
+            "file_fingerprints_available": files_available,
+            "added_files": added_file_paths,
+            "removed_files": removed_file_paths,
+            "modified_files": modified_file_paths,
+            "added_declarations": added_declarations,
+            "removed_declarations": removed_declarations,
+            "added_relationships": added_relationships,
+            "removed_relationships": removed_relationships,
+            "omitted_declaration_count": omitted_declaration_count,
+            "omitted_relationship_count": omitted_relationship_count,
+            "omitted_file_count": omitted_file_count,
+            **(
+                {"requested_relative_path": query.relative_path}
+                if query.relative_path is not None
+                else {}
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    tokens = (len(content) + 3) // 4
+    remaining = min(
+        packet.budget.structural,
+        packet.budget.total_limit - packet.declared_total_tokens,
+    ) - sum(item.token_estimate for item in packet.structural_items)
+    if tokens > remaining:
+        return packet, False, True
+    evidence = (
+        _source_snapshot_evidence(packet, before),
+        _source_snapshot_evidence(packet, after),
+    )
+    context_item = ContextItem(
+        f"source-change:{before.snapshot_id}:{after.snapshot_id}",
+        ContextItemType.STRUCTURAL_FACT,
+        task_scope,
+        content,
+        ContentRepresentation.UNTRUSTED_EVIDENCE,
+        tokens,
+        evidence,
+        SourceTrustClass.CURRENT_STRUCTURAL,
+        Sensitivity.NORMAL,
+        currentness,
+        None,
+        ConflictState.NONE,
+        packet.created_at,
+    )
+    notice = ProvenanceNotice(
+        f"provenance:{context_item.item_id}",
+        context_item.item_id,
+        f"mnemo:source-transition/{before.snapshot_id}/{after.snapshot_id}",
+        hashlib.sha256(content.encode()).hexdigest(),
+        evidence,
+    )
+    result = ContextPacket(
+        packet.schema_version,
+        packet.request_id,
+        packet.owner_scope,
+        packet.query_id,
+        packet.task_id,
+        packet.created_at,
+        packet.expires_at,
+        packet.declared_total_tokens + tokens,
+        packet.budget,
+        packet.producer_version,
+        active_task_checkpoint=packet.active_task_checkpoint,
+        episodic_memories=packet.episodic_memories,
+        knowledge_items=packet.knowledge_items,
+        structural_items=(*packet.structural_items, context_item),
+        skills_and_procedures=packet.skills_and_procedures,
+        provenance=(*packet.provenance, notice),
+        omissions=packet.omissions,
+        conflicts=packet.conflicts,
+    )
+    return (
+        result,
+        True,
+        bool(omitted_file_count or omitted_declaration_count or omitted_relationship_count),
+    )
 
 
 def _with_omission(
@@ -815,6 +917,15 @@ def _checkpoint_reference_from_context_item(
 
 
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")
+
+
+def _validate_source_relative_path(value: str) -> None:
+    """Accept only a canonical, bounded, repository-relative POSIX identity."""
+    if not value or len(value) > 512 or "\\" in value:
+        raise ValueError("source change path must be a bounded relative POSIX path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or value != path.as_posix():
+        raise ValueError("source change path must be a canonical relative path")
 
 
 def _source_currentness(snapshot: CodeSnapshot, supplied_digest: str | None) -> ValidityState:

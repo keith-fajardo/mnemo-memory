@@ -167,7 +167,10 @@ mnemo-memory memory refresh
 
 `memory changes` uses the latest two recorded structural refreshes. The explicit
 `--from SNAPSHOT_ID --to SNAPSHOT_ID` form remains available for an advanced historical audit.
-`memory history` lists recent snapshots when you need to select an older pair.
+`memory history` lists recent snapshots when you need to select an older pair. An agent can ask
+`get_context` for a bounded `source_changes` history for one relative path such as
+`models/orders.sql`; Mnemo returns only saved file/declaration/relationship identities for that
+path, newest transition first, with snapshot citations. It never returns the SQL or source body.
 
 Mnemo is local-first. It does **not** proxy your provider, execute dbt, run SQL, render Jinja,
 contact a warehouse, or send the local database anywhere.

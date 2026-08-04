@@ -77,6 +77,12 @@ automatic memory enabled, Mnemo refreshes at session start, after a checkpoint s
 unsaved changed session is stopped. It rebuilds the bounded structural snapshot from current local
 syntax and preserves the previous snapshot for comparison.
 
+When the question is specifically “what changed in this model or file?”, an agent can request a
+small `source_changes` history for a path such as `models/orders.sql`. Mnemo returns the newest
+matching saved transitions first, with snapshot citations. It shows only file/declaration/
+relationship identities and fingerprints—never the SQL or source body—and the checkpoint or a
+recorded lesson remains the evidence for **why** a change was made.
+
 With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
 fresh session, the connected agent receives a short list of added/removed/modified **relative
 files**, declarations, and resolved relationships, tied to the source snapshot Mnemo just

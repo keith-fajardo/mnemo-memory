@@ -211,6 +211,28 @@ For an older audit, provide **both** `before_snapshot_id` and `after_snapshot_id
 in the same explicit project scope and returns the selected immutable difference; one ID alone or
 an ID from another project is rejected without disclosing whether it exists.
 
+To investigate one model or source file without getting an unrelated project-wide diff, add a
+canonical relative path and a small history limit. The newest matching transition is returned
+first. This reports only saved structural identities and fingerprints—not the file body, SQL, or
+chat history.
+
+```json
+{
+  "source_changes": {
+    "relative_path": "models/orders.sql",
+    "maximum_transitions": 4,
+    "maximum_files": 8,
+    "maximum_declarations": 8,
+    "maximum_relationships": 8
+  }
+}
+```
+
+`relative_path` must be a bounded canonical repository-relative POSIX path: no absolute path,
+parent traversal, or backslashes. A path with no recorded changes returns a structured omission;
+it does not reveal another project’s history. An explicit `before_snapshot_id`/`after_snapshot_id`
+pair always selects exactly one transition and cannot be combined with a history limit above one.
+
 ## Durability and recovery
 
 Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain

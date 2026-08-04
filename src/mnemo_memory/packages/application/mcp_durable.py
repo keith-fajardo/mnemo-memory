@@ -118,6 +118,10 @@ class DurableMcpContextPort:
                     maximum_declarations=int(source_changes.get("maximum_declarations", 24)),
                     maximum_relationships=int(source_changes.get("maximum_relationships", 24)),
                     maximum_files=int(source_changes.get("maximum_files", 24)),
+                    maximum_transitions=int(source_changes.get("maximum_transitions", 1)),
+                    relative_path=source_changes.get("relative_path")
+                    if isinstance(source_changes.get("relative_path"), str)
+                    else None,
                     current_source_digest=source_changes.get("current_source_digest")
                     if isinstance(source_changes.get("current_source_digest"), str)
                     else None,

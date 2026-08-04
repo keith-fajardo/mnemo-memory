@@ -435,6 +435,8 @@ def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path
                     source_changes={
                         "maximum_declarations": 4,
                         "maximum_relationships": 4,
+                        "maximum_transitions": 1,
+                        "relative_path": "orders.py",
                         "current_source_digest": latest.snapshot.source_digest,
                         "require_current": True,
                     }
@@ -445,6 +447,7 @@ def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path
     assert len(packet.structural_items) == 1
     item = packet.structural_items[0]
     assert "reconcile" in item.content
+    assert '"requested_relative_path":"orders.py"' in item.content
     assert '"currentness":"current"' in item.content
     assert len(item.evidence_references) == 2
 
