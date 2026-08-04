@@ -77,6 +77,17 @@ def create_server(port: McpContextPort) -> FastMCP:
                 ),
             ),
         ] = None,
+        procedure_tags: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                max_length=8,
+                description=(
+                    "Optional explicit project-procedure tags. Mnemo matches literal checked-in "
+                    "Markdown procedure metadata only; it does not infer tags from a prompt."
+                ),
+            ),
+        ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
@@ -112,6 +123,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "source_query": source_query,
                 "knowledge_query": knowledge_query,
                 "semantic_knowledge_query": semantic_knowledge_query,
+                "procedure_tags": [] if procedure_tags is None else procedure_tags,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
                 "source_overview": source_overview,
@@ -287,6 +299,7 @@ def main(data_directory: Path | None = None) -> None:
         # Construction is inert: FastEmbed is imported and model weights are requested only when
         # a caller explicitly sends semantic_knowledge_query after local semantic indexing.
         from mnemo_memory.packages.knowledge import LocalSemanticKnowledgeRetriever
+        from mnemo_memory.packages.skills_registry import KnowledgeDocumentProcedureRegistry
 
         semantic_knowledge = LocalSemanticKnowledgeRetriever(
             runtime.knowledge_document_repository,
@@ -302,6 +315,7 @@ def main(data_directory: Path | None = None) -> None:
                     runtime.repository,
                     runtime.knowledge_document_repository,
                     semantic_knowledge,
+                    KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
                 ),
                 observer.observe,
             )

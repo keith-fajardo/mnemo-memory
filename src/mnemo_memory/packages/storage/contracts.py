@@ -34,6 +34,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
+    ProjectProcedure,
     knowledge_search_tokens,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -229,6 +230,18 @@ class KnowledgeDocumentRepository(Protocol):
     ) -> KnowledgeDocumentSyncStoreResult:
         """Apply an all-or-nothing source reconciliation; deletions erase document payload rows."""
         ...
+
+
+class ProjectProcedureRegistry(Protocol):
+    """Scoped read port for versioned checked-in procedures.
+
+    The registry is a selection projection over durable knowledge revisions, not a second source
+    of procedure truth. Callers must supply explicit applicability tags.
+    """
+
+    def find_current_procedures(
+        self, scope: MemoryScope, tags: tuple[str, ...], maximum_procedures: int
+    ) -> tuple[ProjectProcedure, ...]: ...
 
 
 def validate_knowledge_search(terms: tuple[str, ...], limit: int, maximum_documents: int) -> None:

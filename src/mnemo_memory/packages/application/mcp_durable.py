@@ -87,6 +87,7 @@ class DurableMcpContextPort:
             source_overview = request.get("source_overview")
             knowledge_query = request.get("knowledge_query")
             semantic_knowledge_query = request.get("semantic_knowledge_query")
+            procedure_tags = request.get("procedure_tags", [])
             include_lifecycle_events = request.get("include_lifecycle_events", False)
             include_approved_events = request.get("include_approved_events", False)
             if not isinstance(include_lifecycle_events, bool):
@@ -101,6 +102,12 @@ class DurableMcpContextPort:
                 semantic_knowledge_query, str
             ):
                 raise ValueError("semantic_knowledge_query must be a string")
+            if (
+                not isinstance(procedure_tags, list)
+                or len(procedure_tags) > 8
+                or any(not isinstance(tag, str) for tag in procedure_tags)
+            ):
+                raise ValueError("procedure_tags must be an array of at most 8 strings")
             if source_impact is not None and not isinstance(source_impact, Mapping):
                 raise ValueError("source_impact must be an object")
             if source_impact is not None:
@@ -186,6 +193,7 @@ class DurableMcpContextPort:
                 or overview is not None
                 or knowledge_query is not None
                 or semantic_knowledge_query is not None
+                or procedure_tags
             ):
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
@@ -203,6 +211,7 @@ class DurableMcpContextPort:
                             source_overview=overview,
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
+                            procedure_tags=tuple(cast(list[str], procedure_tags)),
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -241,6 +250,7 @@ class DurableMcpContextPort:
                         source_overview=overview,
                         knowledge_query=knowledge_query,
                         semantic_knowledge_query=semantic_knowledge_query,
+                        procedure_tags=tuple(cast(list[str], procedure_tags)),
                         include_lifecycle_events=include_lifecycle_events,
                         include_approved_events=include_approved_events,
                     )

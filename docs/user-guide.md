@@ -321,6 +321,34 @@ same-project note section. This is a bounded 250-token convenience, not prompt s
 notes replay. The returned section still has exact revision provenance and remains untrusted. For a
 new topic with no saved relevant file, the agent uses the normal short `knowledge_query` instead.
 
+### Reusable project playbooks
+
+For a repeatable project workflow, keep the instructions in ordinary checked-in Markdown and mark
+them explicitly. This is useful for a reconciliation analyst, an incident triage checklist, or a
+safe release process:
+
+```markdown
+---
+mnemo_kind: procedure
+mnemo_tags: reconciliation, dbt
+mnemo_mandatory: true
+---
+
+# Reconciliation workflow
+
+Confirm the cited input grain, inspect the current manifest impact, and record the verified result.
+```
+
+An agent requests a known playbook through `get_context` with
+`"procedure_tags":["reconciliation"]`. Mnemo returns only a matching **current immutable
+revision** in the packet's procedures section. It includes exact revision and digest provenance,
+and it observes the existing 1,200-token procedures budget and overall packet budget.
+
+This is intentionally explicit. Mnemo does not guess a tag from your prompt, load every Markdown
+file, execute the playbook, or treat it as a higher authority than system/user instructions,
+scope policy, or verified current structural evidence. `mnemo_mandatory: true` prioritizes that
+checked-in project rule among matching project procedures; it is not an authorization mechanism.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,

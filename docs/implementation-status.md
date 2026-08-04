@@ -770,3 +770,16 @@ and only that current revision is searchable. An author may also declare one exa
 retrieves both scoped current revisions and preserves an unresolved cited conflict; it does not
 infer disagreement from prose, leak another scope, or choose a winner over authoritative structural
 evidence.
+
+### Procedural memory — In progress
+
+The first procedural-memory slice reuses the immutable checked-in Markdown revision store rather
+than creating a second procedure source of truth. A document is eligible only when strict scalar
+frontmatter marks `mnemo_kind: procedure` and gives bounded literal `mnemo_tags`; callers must
+request matching tags explicitly. Scoped matching returns a deterministic bounded set in the
+existing `skills_and_procedures` packet section with immutable revision/digest provenance and
+structured token-budget omissions. Optional `mnemo_mandatory: true` prioritizes a checked-in
+project playbook over matching optional playbooks; it cannot override scope policy, user/system
+instructions, or verified current dbt/source facts. Markdown remains untrusted evidence and is
+never executed. Discovery of third-party skills, agent definitions, and automatic applicability
+classification remain future work.

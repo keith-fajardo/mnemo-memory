@@ -116,6 +116,7 @@ from .models import (
     VerificationStatus,
     Visibility,
 )
+from .procedures import ProjectProcedure, normalize_procedure_tags
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
@@ -199,6 +200,7 @@ __all__ = [
     "OwnerId",
     "PacketSchemaVersion",
     "ProjectId",
+    "ProjectProcedure",
     "ProvenanceNotice",
     "RankingMetadata",
     "RequestId",
@@ -221,5 +223,6 @@ __all__ = [
     "knowledge_search_tokens",
     "knowledge_section_digest",
     "normalize_knowledge_query",
+    "normalize_procedure_tags",
     "unique_file_renames",
 ]

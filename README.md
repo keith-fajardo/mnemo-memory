@@ -400,6 +400,33 @@ text—how many current scoped knowledge documents are available and to use a sh
 when the task needs a documented decision, architecture note, or policy. You do not need to keep a
 separate reminder in every `CLAUDE.md` or `AGENTS.md`.
 
+### Reusable project procedures (an opt-in playbook)
+
+If your project has a repeated workflow—for example, investigating a reconciliation mismatch—put
+the short playbook in normal, version-controlled Markdown. After automatic memory has synced the
+repository, an agent can request it by a **literal tag** rather than rereading every note:
+
+```markdown
+---
+mnemo_kind: procedure
+mnemo_tags: reconciliation, dbt
+mnemo_mandatory: true
+---
+
+# Reconciliation workflow
+
+1. Confirm the business-date grain in the cited Finance input.
+2. Compare the current dbt manifest impact before changing a model.
+3. Record the verified outcome in the task checkpoint.
+```
+
+The matching `get_context` request uses `"procedure_tags":["reconciliation"]`. Mnemo returns
+only matching checked-in Markdown revisions in the packet’s procedures section, with the relative
+path, immutable revision ID, digest, and evidence. It does **not** scan every note, execute the
+Markdown, infer tags from the agent's prompt, or let the procedure override system/user rules or
+verified current dbt/source facts. `mnemo_mandatory: true` means “prioritize this project playbook
+over an optional project playbook”; it is not a security permission.
+
 When the durable checkpoint already names relevant files, the small automatic session packet also
 looks up current same-project notes using those **file stems** (for example, `reconciliation` from
 `models/reconciliation.sql`). That gives a fresh agent a cited note about the file it is resuming

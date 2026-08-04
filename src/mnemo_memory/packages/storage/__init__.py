@@ -19,6 +19,7 @@ from .contracts import (
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ProjectIndexRepository,
+    ProjectProcedureRegistry,
     SourceStructureRepository,
 )
 from .reference import (
@@ -57,6 +58,7 @@ __all__ = [
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
     "ProjectIndexRepository",
+    "ProjectProcedureRegistry",
     "ReferenceApprovedEpisodicEventRepository",
     "ReferenceCheckpointLifecycleEventRepository",
     "ReferenceCheckpointRepository",

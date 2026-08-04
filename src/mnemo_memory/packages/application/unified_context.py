@@ -48,6 +48,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OmissionNotice,
     OmissionReason,
+    ProjectProcedure,
     ProvenanceNotice,
     RankingMetadata,
     ScopeLevel,
@@ -58,6 +59,7 @@ from mnemo_memory.packages.domain import (
     ValidityState,
     VerificationStatus,
     normalize_knowledge_query,
+    normalize_procedure_tags,
     unique_file_renames,
 )
 from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, SourceStateFingerprint
@@ -66,6 +68,7 @@ from mnemo_memory.packages.storage.contracts import (
     CheckpointSourceObservationRepository,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
+    ProjectProcedureRegistry,
     SourceStructureRepository,
 )
 
@@ -262,6 +265,13 @@ class GetUnifiedContext:
     include_checkpoint_file_knowledge: bool = False
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
+    procedure_tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.procedure_tags:
+            object.__setattr__(
+                self, "procedure_tags", normalize_procedure_tags(self.procedure_tags)
+            )
 
 
 class UnifiedContextService:
@@ -275,6 +285,7 @@ class UnifiedContextService:
         checkpoint_source_observations: CheckpointSourceObservationRepository | None = None,
         knowledge: KnowledgeDocumentRepository | None = None,
         semantic_knowledge: SemanticKnowledgeRetrieverPort | None = None,
+        procedures: ProjectProcedureRegistry | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
@@ -282,6 +293,7 @@ class UnifiedContextService:
         self._checkpoint_source_observations = checkpoint_source_observations
         self._knowledge = knowledge
         self._semantic_knowledge = semantic_knowledge
+        self._procedures = procedures
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -296,6 +308,7 @@ class UnifiedContextService:
         )
         packet = self._with_checkpoint_source_observation(packet, request)
         packet = self._with_requested_knowledge(packet, request)
+        packet = self._with_requested_procedures(packet, request)
         if (
             request.lineage is None
             and request.source_query is None
@@ -305,11 +318,76 @@ class UnifiedContextService:
             and request.checkpoint_source_impact is None
             and request.knowledge_query is None
             and request.semantic_knowledge_query is None
+            and not request.procedure_tags
         ):
             return packet
         if request.lineage is None:
             return self._with_requested_source_facts(packet, request)
         return self._with_dbt_lineage(packet, request)
+
+    def _with_requested_procedures(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach explicitly requested checked-in procedures as bounded cited evidence.
+
+        A tag selects a procedure; Mnemo never derives tags from a prompt, task name, agent, or
+        source body. The Markdown body remains untrusted evidence even when its frontmatter marks
+        it mandatory relative to other project procedures.
+        """
+        if not request.procedure_tags:
+            return packet
+        if self._procedures is None:
+            return _with_omission(
+                packet,
+                "procedures",
+                OmissionReason.LOWER_RANK,
+                "procedure registry is unavailable",
+            )
+        procedures = self._procedures.find_current_procedures(
+            _project_scope(request.scope), request.procedure_tags, 8
+        )
+        remaining = min(
+            request.budget.skills_and_procedures
+            - sum(item.token_estimate for item in packet.skills_and_procedures),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = list(packet.provenance)
+        for rank, procedure in enumerate(procedures, start=1):
+            item, notice = _procedure_context_item(request.scope, procedure, rank)
+            if item.token_estimate > remaining:
+                packet = _with_omission(
+                    packet,
+                    item.item_id,
+                    OmissionReason.TOKEN_BUDGET,
+                    "procedure exceeds the remaining skills and procedures budget",
+                )
+                continue
+            items.append(item)
+            notices.append(notice)
+            remaining -= item.token_estimate
+        if not items:
+            return packet
+        return ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + sum(item.token_estimate for item in items),
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=packet.structural_items,
+            skills_and_procedures=(*packet.skills_and_procedures, *items),
+            provenance=tuple(notices),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
 
     def _with_requested_knowledge(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -1475,6 +1553,68 @@ def _source_snapshot_evidence(packet: ContextPacket, snapshot: CodeSnapshot) -> 
         EvidenceLocation(f"mnemo:source/{snapshot.snapshot_id}"),
         packet.created_at,
         VerificationStatus.VERIFIED,
+    )
+
+
+def _procedure_context_item(
+    task_scope: MemoryScope,
+    procedure: ProjectProcedure,
+    rank: int,
+) -> tuple[ContextItem, ProvenanceNotice]:
+    """Render one exact procedure revision without granting Markdown execution authority."""
+    revision, document = procedure.revision, procedure.revision.document
+    item_id = f"procedure:{document.document_id}:revision:{revision.revision_id}"
+    content = json.dumps(
+        {
+            "document_path": document.relative_path,
+            "mandatory": procedure.mandatory,
+            "procedure_tags": procedure.tags,
+            "revision_id": str(revision.revision_id),
+            "sections": tuple(
+                {"heading": section.heading, "content": section.content}
+                for section in document.sections
+            ),
+            "title": document.title,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    reference = f"procedure:{document.document_id}/revision/{revision.revision_id}"
+    evidence = EvidenceReference(
+        EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),
+        EvidenceSourceType.REPOSITORY,
+        SourceTrustClass.USER_AUTHORED,
+        reference,
+        document.content_digest,
+        EvidenceLocation(f"mnemo:{reference}"),
+        revision.created_at,
+        VerificationStatus.UNVERIFIED,
+    )
+    item = ContextItem(
+        item_id,
+        ContextItemType.MANDATORY_PROCEDURE if procedure.mandatory else ContextItemType.SKILL,
+        task_scope,
+        content,
+        ContentRepresentation.UNTRUSTED_EVIDENCE,
+        (len(content) + 3) // 4,
+        (evidence,),
+        SourceTrustClass.USER_AUTHORED,
+        Sensitivity.NORMAL,
+        ValidityState.UNKNOWN,
+        RankingMetadata(rank, float(len(procedure.tags)), "scoped-procedure-tags"),
+        ConflictState.NONE,
+        revision.created_at,
+    )
+    return (
+        item,
+        ProvenanceNotice(
+            f"provenance:{item_id}",
+            item_id,
+            f"mnemo:procedure/{document.document_id}/revision/{revision.revision_id}",
+            document.content_digest.removeprefix("sha256:"),
+            (evidence,),
+        ),
     )
 
 
