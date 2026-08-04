@@ -34,7 +34,8 @@ statically depends on a selected file or symbol. It can also resolve a small saf
 calls (same-module, fully-qualified, or unique imported members). Duplicate candidates across
 files or languages remain unresolved rather than being guessed. A JavaScript/TypeScript local
 default import is resolved only for one named `export default function` or `export default class`;
-anonymous, re-exported, and value-flow defaults remain deliberately unresolved. For a default
+an exact local named barrel export such as `export { validate as check } from "./helpers"` is also
+resolved. Anonymous, wildcard, ambiguous, and value-flow defaults remain deliberately unresolved. For a default
 class, `Class.method()` is linked only when `method` is explicitly static; Mnemo does not turn an
 instance method into a guessed class call. More adapters and safely
 resolvable call edges use the same graph contract. That subset now includes exact local C++

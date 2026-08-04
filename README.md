@@ -143,7 +143,9 @@ Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. Jav
 TypeScript also recognize direct top-level literal CommonJS `require("./local")` bindings and a
 deliberately narrow default-import form: `import local from "./module"` only when that module
 explicitly declares one named `export default function Name` or `export default class Name`.
-Anonymous defaults, re-exports, and `export default existingName` remain unresolved rather than guessed.
+It also follows an exact local named barrel export such as
+`export { validate as check } from "./helpers"`. Anonymous defaults, wildcard exports,
+ambiguous re-exports, and `export default existingName` remain unresolved rather than guessed.
 For a default class, Mnemo follows `Class.staticMethod()` only when that method is explicitly
 declared `static`; it never pretends an instance method is a class call. These forms sit alongside
 ES-module imports, while Python recognizes direct local `from .module import member` and parent-package

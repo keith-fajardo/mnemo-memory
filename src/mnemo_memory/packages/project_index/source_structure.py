@@ -336,6 +336,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]] = []
         bindings: list[tuple[str, str, str]] = []
         default_exports: list[tuple[str, str]] = []
+        re_exports: list[tuple[str, str, str]] = []
         static_methods: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
         total_bytes = 0
@@ -368,6 +369,7 @@ class SourceStructureParser:
                     imports,
                     bindings,
                     default_exports,
+                    re_exports,
                     static_methods,
                     calls,
                 )
@@ -415,6 +417,10 @@ class SourceStructureParser:
                 *default_exports_by_path.get(default_path, ()),
                 *symbols_by_name.get(qualified_name, ()),
             )
+        re_exports_by_path: dict[str, dict[str, tuple[str, ...]]] = {}
+        for export_path, exported_name, encoded_target in re_exports:
+            exports = re_exports_by_path.setdefault(export_path, {})
+            exports[exported_name] = (*exports.get(exported_name, ()), encoded_target)
         static_method_ids = frozenset(
             item.symbol_id
             for static_path, qualified_name in static_methods
@@ -445,6 +451,7 @@ class SourceStructureParser:
                         imports,
                         bindings,
                         default_exports_by_path,
+                        re_exports_by_path,
                         static_method_ids,
                     ),
                 )
@@ -660,6 +667,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
+        re_exports_by_path: dict[str, dict[str, tuple[str, ...]]],
         static_method_ids: frozenset[CodeSymbolId],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
@@ -750,6 +758,29 @@ class SourceStructureParser:
                 if module is None:
                     continue
                 member = remainder if separator else imported_member
+                re_exported = SourceStructureParser._resolve_re_export_target(
+                    module,
+                    imported_member,
+                    modules_by_name,
+                    modules_by_path,
+                    symbols_by_name,
+                    default_exports_by_path,
+                    re_exports_by_path,
+                    static_method_ids,
+                )
+                if re_exported is not None:
+                    if not separator:
+                        candidates.append(re_exported)
+                    elif re_exported.kind is CodeSymbolKind.CLASS:
+                        resolved_static_member = _single_symbol(
+                            symbols_by_name.get(f"{re_exported.qualified_name}.{remainder}", ())
+                        )
+                        if (
+                            resolved_static_member is not None
+                            and resolved_static_member.symbol_id in static_method_ids
+                        ):
+                            candidates.append(resolved_static_member)
+                    continue
                 if imported_member == "default":
                     default_export = _single_symbol(
                         default_exports_by_path.get(module.relative_path, ())
@@ -929,6 +960,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
         default_exports: list[tuple[str, str]],
+        re_exports: list[tuple[str, str, str]],
         static_methods: list[tuple[str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
@@ -951,6 +983,7 @@ class SourceStructureParser:
                 default_export = self._explicit_default_export(node, raw, module)
                 if default_export is not None:
                     default_exports.append((relative, default_export))
+                re_exports.extend(self._tree_re_export_bindings(node, raw, relative))
             if (
                 language in {"javascript", "typescript", "tsx"}
                 and node.type == "method_definition"
@@ -1245,6 +1278,93 @@ class SourceStructureParser:
                 if binding is not None:
                     result.append((binding, f"{target}|"))
         return tuple(result)
+
+    @staticmethod
+    def _tree_re_export_bindings(
+        node: Node, raw: bytes, relative: str
+    ) -> tuple[tuple[str, str, str], ...]:
+        """Return only explicit local ES-module re-export aliases.
+
+        ``export { member as alias } from './module'`` is a useful, syntactically
+        complete barrel relationship.  Wildcard exports, local-value re-exports,
+        and non-local package references require module/value-flow semantics and
+        remain unresolved.  The encoded target shares the proven import binding
+        representation; it never becomes a public symbol or edge by itself.
+        """
+        source = _string_literal(node.child_by_field_name("source"), raw)
+        clause = next(
+            (child for child in node.named_children if child.type == "export_clause"), None
+        )
+        if source is None or clause is None or not source.startswith(("./", "../")):
+            return ()
+        result: list[tuple[str, str, str]] = []
+        for specifier in clause.named_children:
+            if specifier.type != "export_specifier":
+                continue
+            name = _safe_tree_text(specifier.child_by_field_name("name"), raw)
+            alias = _safe_tree_text(specifier.child_by_field_name("alias"), raw)
+            exported_name = alias or name
+            if (
+                name is None
+                or exported_name is None
+                or not _is_safe_symbol_name(exported_name)
+                or (name != "default" and not _is_safe_symbol_name(name))
+            ):
+                continue
+            result.append((relative, exported_name, f"{source}|{name}"))
+        return tuple(result)
+
+    @staticmethod
+    def _resolve_re_export_target(
+        module: CodeSymbol,
+        member: str,
+        modules_by_name: dict[str, tuple[CodeSymbol, ...]],
+        modules_by_path: dict[str, CodeSymbol],
+        symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
+        default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
+        re_exports_by_path: dict[str, dict[str, tuple[str, ...]]],
+        static_method_ids: frozenset[CodeSymbolId],
+    ) -> CodeSymbol | None:
+        """Follow one unambiguous, explicit local barrel-export chain.
+
+        Bounded iteration prevents a malformed export cycle from becoming a
+        parser loop.  Every hop remains a literal relative module and exact
+        exported member; ambiguity intentionally produces no claimed call edge.
+        """
+        current_module = module
+        current_member = member
+        visited: set[tuple[str, str]] = set()
+        for _ in range(8):
+            key = (current_module.relative_path, current_member)
+            if key in visited:
+                return None
+            visited.add(key)
+            encoded_targets = re_exports_by_path.get(current_module.relative_path, {}).get(
+                current_member, ()
+            )
+            if len(set(encoded_targets)) != 1:
+                return None
+            import_target, marker, exported_member = encoded_targets[0].partition("|")
+            if not marker:
+                return None
+            target_id = SourceStructureParser._resolve_import_target(
+                current_module.relative_path, import_target, modules_by_name, modules_by_path
+            )
+            target_module = next(
+                (item for item in modules_by_path.values() if item.symbol_id == target_id), None
+            )
+            if target_module is None:
+                return None
+            if exported_member == "default":
+                return _single_symbol(default_exports_by_path.get(target_module.relative_path, ()))
+            direct = _single_symbol(
+                symbols_by_name.get(f"{target_module.qualified_name}.{exported_member}", ())
+            )
+            if direct is not None:
+                return direct
+            current_module = target_module
+            current_member = exported_member
+        return None
 
     @staticmethod
     def _explicit_default_export(node: Node, raw: bytes, module: str) -> str | None:

@@ -430,6 +430,75 @@ def test_default_class_import_never_treats_an_instance_method_as_static(tmp_path
     assert calls[0].target_symbol_id is None
 
 
+def test_typescript_explicit_local_barrel_re_exports_resolve_exact_calls(tmp_path: Path) -> None:
+    """A literal named re-export is safe without treating wildcard barrels as evidence."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.ts").write_text(
+        "export function validate() { return true }\n"
+        "export default class Formatter { static format() { return true } }\n",
+        encoding="utf-8",
+    )
+    (root / "barrel.ts").write_text(
+        "export { validate as check, default as Format } from './helpers';\n",
+        encoding="utf-8",
+    )
+    (root / "service.ts").write_text(
+        "import { check, Format } from './barrel';\n"
+        "export function process() { check(); return Format.format(); }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    assert [
+        item.symbol.qualified_name
+        for item in service.query(
+            SourceImpactQuery(item_scope, "helpers.validate", SourceImpactDirection.DEPENDENTS)
+        ).symbols
+    ] == ["service.process"]
+    assert [
+        item.symbol.qualified_name
+        for item in service.query(
+            SourceImpactQuery(
+                item_scope, "helpers.Formatter.format", SourceImpactDirection.DEPENDENTS
+            )
+        ).symbols
+    ] == ["service.process"]
+
+
+def test_typescript_wildcard_and_ambiguous_barrel_exports_stay_unresolved(tmp_path: Path) -> None:
+    """Mnemo keeps barrel support literal: wildcard and duplicate aliases are not guessed."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "first.ts").write_text("export function validate() { return true }\n", encoding="utf-8")
+    (root / "second.ts").write_text(
+        "export function validate() { return true }\n", encoding="utf-8"
+    )
+    (root / "barrel.ts").write_text(
+        "export * from './first';\n"
+        "export { validate as check } from './first';\n"
+        "export { validate as check } from './second';\n",
+        encoding="utf-8",
+    )
+    (root / "service.ts").write_text(
+        "import { check } from './barrel';\nexport function process() { return check(); }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert len(calls) == 1
+    assert calls[0].target == "check"
+    assert calls[0].target_symbol_id is None
+
+
 def test_commonjs_literal_require_bindings_resolve_safe_internal_calls(tmp_path: Path) -> None:
     """Direct CommonJS imports have the same bounded static certainty as ES imports."""
     item_scope = scope()
