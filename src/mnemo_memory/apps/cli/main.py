@@ -77,6 +77,7 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    SourceFileRename,
     Visibility,
     WorkspaceId,
 )
@@ -1070,6 +1071,14 @@ def memory_changes(
         def selected_file(item: object) -> bool:
             return relative_path is None or cast(CodeFile, item).relative_path == relative_path
 
+        def selected_rename(rename: SourceFileRename) -> bool:
+            before = rename.before
+            after = rename.after
+            return relative_path is None or relative_path in {
+                before.relative_path,
+                after.relative_path,
+            }
+
         def selected_added_edge(item: object) -> bool:
             return (
                 relative_path is None
@@ -1088,6 +1097,11 @@ def memory_changes(
             "file_fingerprints_available": diff.file_fingerprints_available,
             "added_files": [file(item) for item in diff.added_files if selected_file(item)],
             "removed_files": [file(item) for item in diff.removed_files if selected_file(item)],
+            "renamed_files": [
+                {"from": file(item.before), "to": file(item.after)}
+                for item in diff.renamed_files
+                if selected_rename(item)
+            ],
             "modified_files": [file(item) for item in diff.modified_files if selected_file(item)],
             "added_symbols": [symbol(item) for item in diff.added_symbols if selected_file(item)],
             "removed_symbols": [

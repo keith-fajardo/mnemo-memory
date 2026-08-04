@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -246,6 +247,51 @@ def test_recent_source_changes_are_scoped_bounded_and_evidenced(tmp_path: Path) 
     )
     assert str(root) not in item.content
     assert context.provenance[-1].item_id == item.item_id
+
+
+def test_recent_source_changes_cite_a_digest_proven_rename_without_source_text(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    old_path = root / "legacy.py"
+    old_path.write_text("def calculate():\n    return 1\n")
+    source = ReferenceSourceStructureRepository()
+    first = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(first)
+    old_path.rename(root / "current.py")
+    second = PythonSourceParser().parse(PythonSourceParseRequest(project_scope, root))
+    source.store_and_activate(second)
+
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(GetUnifiedContext(task_scope, source_changes=ContextSourceChangeQuery()))
+
+    assert len(packet.structural_items) == 1
+    assert json.loads(packet.structural_items[0].content)["renamed_files"] == [
+        "legacy.py → current.py"
+    ]
+    assert "return 1" not in packet.structural_items[0].content
 
 
 def test_recent_source_changes_do_not_disclose_scope_or_claim_unknown_is_current(

@@ -150,6 +150,55 @@ def test_snapshot_diff_preserves_immutable_history(tmp_path: Path) -> None:
     assert repository.iter_symbols(item_scope, first.snapshot.snapshot_id) == first.symbols
 
 
+def test_snapshot_diff_reports_one_unique_content_identical_file_move_as_a_rename(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    original = root / "legacy.py"
+    original.write_text("def calculate():\n    return 1\n")
+    repository = ReferenceSourceStructureRepository()
+    first = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository.store_and_activate(first)
+    original.rename(root / "current.py")
+    second = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository.store_and_activate(second)
+
+    diff = SourceImpactService(repository).diff(
+        item_scope, first.snapshot.snapshot_id, second.snapshot.snapshot_id
+    )
+
+    assert diff.added_files == ()
+    assert diff.removed_files == ()
+    assert [
+        (item.before.relative_path, item.after.relative_path) for item in diff.renamed_files
+    ] == [("legacy.py", "current.py")]
+
+
+def test_snapshot_diff_never_guesses_a_rename_for_duplicated_content(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "first.py").write_text("def same():\n    return 1\n")
+    (root / "second.py").write_text("def same():\n    return 1\n")
+    repository = ReferenceSourceStructureRepository()
+    first = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository.store_and_activate(first)
+    (root / "first.py").rename(root / "renamed.py")
+    (root / "second.py").unlink()
+    second = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository.store_and_activate(second)
+
+    diff = SourceImpactService(repository).diff(
+        item_scope, first.snapshot.snapshot_id, second.snapshot.snapshot_id
+    )
+
+    assert diff.renamed_files == ()
+    assert [item.relative_path for item in diff.added_files] == ["renamed.py"]
+    assert [item.relative_path for item in diff.removed_files] == ["first.py", "second.py"]
+
+
 @pytest.mark.parametrize("adapter", ("reference", "sqlite"))
 def test_snapshot_diff_reports_a_body_only_file_change_without_source_text(
     tmp_path: Path, adapter: str

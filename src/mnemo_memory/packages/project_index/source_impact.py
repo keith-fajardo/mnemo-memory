@@ -20,6 +20,8 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     MemoryScope,
+    SourceFileRename,
+    unique_file_renames,
 )
 from mnemo_memory.packages.storage.contracts import (
     SourceSnapshotNotFound,
@@ -88,6 +90,7 @@ class SourceSnapshotDiff:
     file_fingerprints_available: bool
     added_files: tuple[CodeFile, ...]
     removed_files: tuple[CodeFile, ...]
+    renamed_files: tuple[SourceFileRename, ...]
     modified_files: tuple[CodeFile, ...]
     added_symbols: tuple[CodeSymbol, ...]
     removed_symbols: tuple[CodeSymbol, ...]
@@ -207,6 +210,18 @@ class SourceImpactService:
         )
         before_files_by_path = {item.relative_path: item for item in before_files}
         after_files_by_path = {item.relative_path: item for item in after_files}
+        added_paths = after_files_by_path.keys() - before_files_by_path.keys()
+        removed_paths = before_files_by_path.keys() - after_files_by_path.keys()
+        renamed_files = (
+            unique_file_renames(
+                tuple(after_files_by_path[path] for path in sorted(added_paths)),
+                tuple(before_files_by_path[path] for path in sorted(removed_paths)),
+            )
+            if file_fingerprints_available
+            else ()
+        )
+        renamed_after_paths = {item.after.relative_path for item in renamed_files}
+        renamed_before_paths = {item.before.relative_path for item in renamed_files}
         before_symbols = self._repository.iter_symbols(scope, before_snapshot_id)
         after_symbols = self._repository.iter_symbols(scope, after_snapshot_id)
         before_by_key = {_symbol_key(item): item for item in before_symbols}
@@ -221,8 +236,7 @@ class SourceImpactService:
             file_fingerprints_available,
             (
                 tuple(
-                    after_files_by_path[path]
-                    for path in sorted(after_files_by_path.keys() - before_files_by_path.keys())
+                    after_files_by_path[path] for path in sorted(added_paths - renamed_after_paths)
                 )
                 if file_fingerprints_available
                 else ()
@@ -230,11 +244,12 @@ class SourceImpactService:
             (
                 tuple(
                     before_files_by_path[path]
-                    for path in sorted(before_files_by_path.keys() - after_files_by_path.keys())
+                    for path in sorted(removed_paths - renamed_before_paths)
                 )
                 if file_fingerprints_available
                 else ()
             ),
+            renamed_files,
             (
                 tuple(
                     after_files_by_path[path]

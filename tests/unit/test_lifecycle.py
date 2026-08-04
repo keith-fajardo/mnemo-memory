@@ -256,7 +256,53 @@ def test_memory_changes_compares_scoped_immutable_source_snapshots(tmp_path: Pat
     assert value["file_fingerprints_available"] is True
     assert value["added_files"] == ["worker.py"]
     assert value["removed_files"] == []
+    assert value["renamed_files"] == []
     assert value["modified_files"] == []
+
+
+def test_memory_changes_reports_a_digest_proven_file_rename_without_source_text(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    old_path = project / "legacy.py"
+    old_path.write_text("def calculate():\n    return 1\n")
+    data_dir = tmp_path / "memory"
+    config = LocalConfig.defaults(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    repository = SQLiteSourceStructureRepository(config.database_path, base_directory=data_dir)
+    repository.migrate()
+    before = repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+    old_path.rename(project / "current.py")
+    after = repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    ).snapshot
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "changes",
+            "--from",
+            str(before.snapshot_id),
+            "--to",
+            str(after.snapshot_id),
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    value = json.loads(result.output)
+    assert value["added_files"] == []
+    assert value["removed_files"] == []
+    assert value["renamed_files"] == [{"from": "legacy.py", "to": "current.py"}]
+    assert str(project) not in result.output
 
     latest = CliRunner().invoke(
         app,

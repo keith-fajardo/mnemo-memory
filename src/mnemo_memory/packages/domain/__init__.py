@@ -12,6 +12,8 @@ from .code_structure import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    SourceFileRename,
+    unique_file_renames,
 )
 from .context_packet import (
     DEFAULT_CONTEXT_BUDGET,
@@ -162,6 +164,7 @@ __all__ = [
     "ScopeLevel",
     "Sensitivity",
     "SessionId",
+    "SourceFileRename",
     "SourceId",
     "SourceStateFingerprint",
     "SourceTrustClass",
@@ -172,4 +175,5 @@ __all__ = [
     "VerificationStatus",
     "Visibility",
     "WorkspaceId",
+    "unique_file_renames",
 ]

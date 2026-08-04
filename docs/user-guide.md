@@ -124,10 +124,12 @@ The path is relative to the enabled repository. Mnemo rejects absolute paths and
 and it returns no other project’s history.
 
 With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
-fresh session, the connected agent receives a short list of added/removed/modified **relative
+fresh session, the connected agent receives a short list of added/removed/renamed/modified **relative
 files**, declarations, and resolved relationships, tied to the source snapshot Mnemo just
 refreshed. That includes a body-only edit even when a file kept the same functions. Mnemo stores a
-SHA-256 fingerprint for this purpose—not source bodies—and does not pretend it can infer the
+SHA-256 fingerprint for this purpose—not source bodies. When exactly one removed and one added path
+share that fingerprint, it reports a rename; copied or ambiguous content remains add/remove rather
+than a guessed move. Mnemo does not pretend it can infer the
 reason from a diff. The checkpoint is where the agent records why the change was made, what failed,
 and what was verified. When it corrects a reasoning mistake, it should also save a compact
 **lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to

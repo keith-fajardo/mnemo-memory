@@ -48,10 +48,12 @@ from mnemo_memory.packages.domain import (
     ProvenanceNotice,
     ScopeLevel,
     Sensitivity,
+    SourceFileRename,
     SourceId,
     SourceTrustClass,
     ValidityState,
     VerificationStatus,
+    unique_file_renames,
 )
 from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, SourceStateFingerprint
 from mnemo_memory.packages.storage.contracts import (
@@ -972,6 +974,7 @@ def _append_source_change_transition(
         files_available,
         added_files,
         removed_files,
+        renamed_files,
         modified_files,
         added_symbols,
         removed_symbols,
@@ -990,6 +993,11 @@ def _append_source_change_transition(
         }
         added_files = tuple(item for item in added_files if item.relative_path == path)
         removed_files = tuple(item for item in removed_files if item.relative_path == path)
+        renamed_files = tuple(
+            item
+            for item in renamed_files
+            if path in {item.before.relative_path, item.after.relative_path}
+        )
         modified_files = tuple(item for item in modified_files if item.relative_path == path)
         added_symbols = tuple(item for item in added_symbols if item.relative_path == path)
         removed_symbols = tuple(item for item in removed_symbols if item.relative_path == path)
@@ -1003,6 +1011,7 @@ def _append_source_change_transition(
         (
             added_files,
             removed_files,
+            renamed_files,
             modified_files,
             added_symbols,
             removed_symbols,
@@ -1013,6 +1022,9 @@ def _append_source_change_transition(
         return packet, False, False
     added_file_paths = tuple(item.relative_path for item in added_files)[: query.maximum_files]
     removed_file_paths = tuple(item.relative_path for item in removed_files)[: query.maximum_files]
+    renamed_file_paths = tuple(
+        f"{item.before.relative_path} → {item.after.relative_path}" for item in renamed_files
+    )[: query.maximum_files]
     modified_file_paths = tuple(item.relative_path for item in modified_files)[
         : query.maximum_files
     ]
@@ -1043,9 +1055,11 @@ def _append_source_change_transition(
     omitted_file_count = (
         len(added_files)
         + len(removed_files)
+        + len(renamed_files)
         + len(modified_files)
         - len(added_file_paths)
         - len(removed_file_paths)
+        - len(renamed_file_paths)
         - len(modified_file_paths)
     )
     content = json.dumps(
@@ -1056,6 +1070,7 @@ def _append_source_change_transition(
             "file_fingerprints_available": files_available,
             "added_files": added_file_paths,
             "removed_files": removed_file_paths,
+            "renamed_files": renamed_file_paths,
             "modified_files": modified_file_paths,
             "added_declarations": added_declarations,
             "removed_declarations": removed_declarations,
@@ -1252,6 +1267,7 @@ def _source_snapshot_difference(
     bool,
     tuple[CodeFile, ...],
     tuple[CodeFile, ...],
+    tuple[SourceFileRename, ...],
     tuple[CodeFile, ...],
     tuple[CodeSymbol, ...],
     tuple[CodeSymbol, ...],
@@ -1281,18 +1297,31 @@ def _source_snapshot_difference(
     files_available = (
         len(before_files) == before.file_count and len(after_files) == after.file_count
     )
+    added_paths = after_files.keys() - before_files.keys()
+    removed_paths = before_files.keys() - after_files.keys()
+    renamed_files = (
+        unique_file_renames(
+            tuple(after_files[key] for key in sorted(added_paths)),
+            tuple(before_files[key] for key in sorted(removed_paths)),
+        )
+        if files_available
+        else ()
+    )
+    renamed_after_paths = {item.after.relative_path for item in renamed_files}
+    renamed_before_paths = {item.before.relative_path for item in renamed_files}
     return (
         files_available,
         (
-            tuple(after_files[key] for key in sorted(after_files.keys() - before_files.keys()))
+            tuple(after_files[key] for key in sorted(added_paths - renamed_after_paths))
             if files_available
             else ()
         ),
         (
-            tuple(before_files[key] for key in sorted(before_files.keys() - after_files.keys()))
+            tuple(before_files[key] for key in sorted(removed_paths - renamed_before_paths))
             if files_available
             else ()
         ),
+        renamed_files,
         (
             tuple(
                 after_files[key]

@@ -656,6 +656,11 @@ unrelated project changes and source bodies remain excluded. This lets a later a
 what was recorded for a particular model or file while relying on the checkpoint, lesson, or
 approved fact—not a diff—as evidence for why it changed.
 
+An immutable source transition now labels a file rename only when exactly one removed path and one
+added path share the same saved SHA-256 body fingerprint. The bounded CLI, automatic session cue,
+and `source_changes` packet preserve both relative identities with snapshot evidence. Duplicate or
+copied bodies deliberately remain separate add/remove records rather than a guessed move.
+
 The same personal audit is available without MCP through `mnemo-memory memory changes --path
 RELATIVE_PATH --history-limit N`; unrelated transitions are omitted from a path-filtered history.
 

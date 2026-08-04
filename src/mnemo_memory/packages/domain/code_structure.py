@@ -79,6 +79,37 @@ class CodeFile:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceFileRename:
+    """A privacy-safe file move proven by one unique content-fingerprint pair."""
+
+    before: CodeFile
+    after: CodeFile
+
+    def __post_init__(self) -> None:
+        if self.before.snapshot_id == self.after.snapshot_id:
+            raise ValueError("source file rename requires two distinct snapshots")
+        if self.before.content_digest != self.after.content_digest:
+            raise ValueError("source file rename requires identical content digests")
+
+
+def unique_file_renames(
+    added_files: tuple[CodeFile, ...], removed_files: tuple[CodeFile, ...]
+) -> tuple[SourceFileRename, ...]:
+    """Pair only unique content-identical paths; copied content never becomes a guessed move."""
+    added_by_digest: dict[str, list[CodeFile]] = {}
+    removed_by_digest: dict[str, list[CodeFile]] = {}
+    for item in added_files:
+        added_by_digest.setdefault(item.content_digest, []).append(item)
+    for item in removed_files:
+        removed_by_digest.setdefault(item.content_digest, []).append(item)
+    return tuple(
+        SourceFileRename(next(iter(removed)), next(iter(added)))
+        for digest, added in sorted(added_by_digest.items())
+        if len(added) == 1 and len(removed := removed_by_digest.get(digest, ())) == 1
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class CodeSymbol:
     snapshot_id: CodeSnapshotId
     symbol_id: CodeSymbolId
