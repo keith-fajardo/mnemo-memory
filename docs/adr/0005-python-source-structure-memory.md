@@ -40,7 +40,10 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   local module prefix; it targets Mnemo's explicit local package-directory symbol, never an
   arbitrary source file. Imported-package member calls use that same local-module proof before
   linking one exact local declaration. Malformed or absent `go.mod`, external imports, and
-  ambiguous member declarations remain unresolved rather than being guessed. It excludes source text,
+  ambiguous member declarations remain unresolved rather than being guessed. TypeScript may also
+  resolve an import or exact imported member through a root `tsconfig.json` alias only when strict
+  JSON gives one local `baseUrl`/`paths` mapping; comments, `extends`, multiple fallback targets,
+  escaping paths, and package imports remain unresolved. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.

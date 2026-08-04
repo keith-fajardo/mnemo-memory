@@ -524,6 +524,10 @@ local-module import targets an explicit package-directory symbol, never an arbit
 External or malformed/absent-module imports remain unresolved, and member calls still require one
 exact saved declaration in that package.
 
+TypeScript source structure now also recognizes one strict-JSON, root `tsconfig.json` local path
+alias mapping. It resolves only an exact local `baseUrl`/single-`paths` target; inherited, commented,
+multi-target, escaping, malformed, and package mappings remain deliberately unresolved.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and

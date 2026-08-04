@@ -455,6 +455,64 @@ def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_
     )
 
 
+def test_typescript_strict_local_tsconfig_alias_resolves_import_and_call(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "src" / "shared").mkdir(parents=True)
+    (root / "tsconfig.json").write_text(
+        '{"compilerOptions":{"baseUrl":".","paths":{"@shared/*":["src/shared/*"]}}}',
+        encoding="utf-8",
+    )
+    (root / "src" / "shared" / "validate.ts").write_text(
+        "export function validate() { return true }\n", encoding="utf-8"
+    )
+    (root / "service.ts").write_text(
+        "import { validate } from '@shared/validate';\n"
+        "export function process() { return validate() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(
+            item_scope, "src.shared.validate.validate", SourceImpactDirection.DEPENDENTS
+        )
+    )
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.process"]
+    assert any(
+        item.target == "@shared/validate" and item.target_symbol_id is not None for item in imports
+    )
+
+
+def test_typescript_malformed_or_escaping_alias_never_creates_a_local_link(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "src").mkdir(parents=True)
+    (root / "tsconfig.json").write_text(
+        '{"compilerOptions":{"paths":{"@/*":["../src/*"]}}}', encoding="utf-8"
+    )
+    (root / "src" / "validate.ts").write_text(
+        "export function validate() { return true }\n", encoding="utf-8"
+    )
+    (root / "service.ts").write_text(
+        "import { validate } from '@/validate';\nexport function process() { return validate() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert imports[0].target_symbol_id is None
+    assert any(item.target == "validate" and item.target_symbol_id is None for item in calls)
+
+
 def test_typescript_top_level_const_function_exports_are_indexed_and_resolve_calls(
     tmp_path: Path,
 ) -> None:

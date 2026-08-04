@@ -9,6 +9,7 @@ only declarations plus syntactically explicit import and call targets.
 from __future__ import annotations
 
 import ast
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -367,6 +368,7 @@ class SourceStructureParser:
         static_methods: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
         go_module_path: str | None = None
+        typescript_path_aliases: dict[str, str] = {}
         total_bytes = 0
         for path in paths:
             raw = self._read(path, request.limits)
@@ -383,6 +385,10 @@ class SourceStructureParser:
                 # lets us prove that an import belongs to this local checkout; we neither retain
                 # nor execute the file's contents.
                 go_module_path = self._go_module_path(raw)
+            elif relative == "tsconfig.json":
+                # Strict JSON only.  Config inheritance, comments, package resolution, and
+                # every non-local/ambiguous mapping stay outside this static projection.
+                typescript_path_aliases = self._typescript_path_aliases(raw)
             language = self._suffixes.get(path.suffix.lower())
             if language is None:
                 # Keep only the path/digest projection for a deliberately file-only extension.
@@ -513,6 +519,7 @@ class SourceStructureParser:
                         python_package_re_exports_by_name,
                         static_method_ids,
                         go_module_path,
+                        typescript_path_aliases,
                     ),
                 )
             )
@@ -532,6 +539,7 @@ class SourceStructureParser:
                                 modules,
                                 go_module_path,
                                 go_packages_by_directory,
+                                typescript_path_aliases,
                             ),
                         )
                         for path, target in sorted(set(imports))
@@ -635,6 +643,65 @@ class SourceStructureParser:
         return None
 
     @staticmethod
+    def _typescript_path_aliases(raw: bytes) -> dict[str, str]:
+        """Return conservative local TypeScript path aliases from root ``tsconfig.json``.
+
+        The TypeScript configuration language allows inheritance and JSON-with-comments.  Mnemo
+        deliberately accepts only a bounded strict-JSON subset: one literal local base URL and
+        one literal local target for each exact or single-wildcard alias.  Invalid configuration
+        leaves aliases unresolved; it never becomes a parser failure or a guessed module link.
+        """
+        try:
+            document = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(document, dict):
+            return {}
+        options = document.get("compilerOptions")
+        if not isinstance(options, dict):
+            return {}
+        base_url = options.get("baseUrl", ".")
+        base = SourceStructureParser._safe_typescript_path(base_url, allow_current=True)
+        paths = options.get("paths")
+        if base is None or not isinstance(paths, dict):
+            return {}
+        aliases: dict[str, str] = {}
+        for alias, targets in paths.items():
+            if (
+                not isinstance(alias, str)
+                or not alias
+                or len(alias) > 256
+                or alias.count("*") > 1
+                or not isinstance(targets, list)
+                or len(targets) != 1
+                or not isinstance(targets[0], str)
+            ):
+                continue
+            target = targets[0]
+            if target.count("*") != alias.count("*"):
+                continue
+            local_target = SourceStructureParser._safe_typescript_path(target)
+            if local_target is None:
+                continue
+            joined = "/".join(part for part in (base, local_target) if part)
+            # A wildcard remains only as a path-component marker here; a concrete import is
+            # normalized below before it ever reaches the normal local-path resolver.
+            aliases[alias] = joined
+        return aliases
+
+    @staticmethod
+    def _safe_typescript_path(value: object, *, allow_current: bool = False) -> str | None:
+        if not isinstance(value, str) or not value or len(value) > 512 or "\\" in value:
+            return None
+        if allow_current and value in {".", "./"}:
+            return ""
+        if value.startswith("/") or value.endswith("/"):
+            return None
+        if any(part in {"", ".", ".."} for part in value.split("/")):
+            return None
+        return value
+
+    @staticmethod
     def _go_package_symbols(
         pending: list[_PendingSymbol], go_module_path: str
     ) -> tuple[_PendingSymbol, ...]:
@@ -688,6 +755,7 @@ class SourceStructureParser:
         modules_by_path: dict[str, CodeSymbol],
         go_module_path: str | None = None,
         go_packages_by_directory: dict[str, CodeSymbol] | None = None,
+        typescript_path_aliases: dict[str, str] | None = None,
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
 
@@ -705,6 +773,12 @@ class SourceStructureParser:
             # and exact package projection, do not fall through to a coincidental dotted/path
             # spelling elsewhere in the snapshot.
             return None
+        if source_path.endswith((".ts", ".tsx", ".mts", ".cts")):
+            local_target = SourceStructureParser._typescript_alias_target(
+                target, typescript_path_aliases or {}
+            )
+            if local_target is not None:
+                target = local_target
         direct = _single_symbol(modules_by_name.get(target, ()))
         if direct is not None:
             return direct.symbol_id
@@ -740,6 +814,28 @@ class SourceStructureParser:
             return None
         normalized = SourceStructureParser._normal_relative_path(import_target.removeprefix(prefix))
         return normalized
+
+    @staticmethod
+    def _typescript_alias_target(target: str, aliases: dict[str, str]) -> str | None:
+        """Resolve one exact configured alias to a safe local path, never an npm package."""
+        candidates: set[str] = set()
+        for alias, replacement in aliases.items():
+            if "*" not in alias:
+                if target == alias:
+                    candidates.add(replacement)
+                continue
+            prefix, suffix = alias.split("*", maxsplit=1)
+            if not target.startswith(prefix) or not target.endswith(suffix):
+                continue
+            end = len(target) - len(suffix) if suffix else len(target)
+            wildcard = target[len(prefix) : end]
+            if not wildcard:
+                continue
+            candidate = replacement.replace("*", wildcard)
+            normalized = SourceStructureParser._normal_relative_path(candidate)
+            if normalized is not None:
+                candidates.add(normalized)
+        return next(iter(candidates)) if len(candidates) == 1 else None
 
     @staticmethod
     def _relative_python_import_reference(
@@ -890,6 +986,7 @@ class SourceStructureParser:
         python_package_re_exports_by_name: dict[str, dict[str, tuple[str, ...]]],
         static_method_ids: frozenset[CodeSymbolId],
         go_module_path: str | None,
+        typescript_path_aliases: dict[str, str],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -974,7 +1071,11 @@ class SourceStructureParser:
                     )
                     continue
                 module_id = SourceStructureParser._resolve_import_target(
-                    source_path, import_target, modules_by_name, modules_by_path
+                    source_path,
+                    import_target,
+                    modules_by_name,
+                    modules_by_path,
+                    typescript_path_aliases=typescript_path_aliases,
                 )
                 module = next(
                     (item for item in modules_by_path.values() if item.symbol_id == module_id), None
