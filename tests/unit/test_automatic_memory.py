@@ -799,6 +799,36 @@ def test_session_start_reports_a_body_only_file_transition_without_source_text(
     assert str(project) not in instruction
 
 
+def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_file(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    core = project / "core.py"
+    core.write_text("def calculate():\n    return 1\n", encoding="utf-8")
+    (project / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
+    )
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
+
+    core.write_text("def calculate():\n    return 2\n", encoding="utf-8")
+    result = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    instruction = str(output["additionalContext"])
+    assert "static dependent candidates" in instruction
+    assert "core.py" in instruction
+    assert "service.py:service" in instruction
+    assert "return 1" not in instruction
+    assert "return 2" not in instruction
+
+
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:
     project = tmp_path / "private repo"
     project.mkdir()

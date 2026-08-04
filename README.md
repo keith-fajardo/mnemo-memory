@@ -339,6 +339,11 @@ a second query. Mnemo stores a SHA-256 fingerprint for that purpose—not source
 does not guess **why** it changed: the agent records that decision, failed approach, and
 verification in the checkpoint it saves.
 
+For a changed file in a supported parsed language, Mnemo also includes a very small list of
+**static dependent candidates** from that exact file. This saves the agent from first asking “what
+could be affected?” after a fresh session. They are syntax-derived, bounded, and cited—not proof of
+runtime behavior, and not a substitute for tests or current verification.
+
 When an agent needs the durable version of that question in a later session, it can ask for
 `source_changes` with `get_context`. Mnemo compares the two most recently recorded structural
 snapshots in their actual activation order and returns a bounded list of added/removed/modified

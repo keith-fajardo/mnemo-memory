@@ -601,6 +601,11 @@ provenance-bearing file, declaration, and relationship identities, preserves cur
 labeling from an exact supplied source digest, and emits structured omissions for missing history
 or budget pressure. It does not replay source text or infer why a change was made.
 
+For each bounded exact changed file that has saved parsed declarations, the lifecycle cue also
+includes up to six static dependent candidates through resolved in-snapshot relationships. It is
+explicitly a syntax-derived impact candidate—not a runtime call-graph claim—and omits unparsed,
+ambiguous, or unresolved files rather than guessing.
+
 `source_changes` can now also request up to sixteen recent immutable transitions for one canonical
 relative path. Results are newest-first, scoped, bounded, and cited to each before/after snapshot;
 unrelated project changes and source bodies remain excluded. This lets a later agent investigate

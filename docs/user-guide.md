@@ -115,6 +115,11 @@ records it explicitly. If a later revision focuses on fresh progress and omits a
 Mnemo still returns the bounded lesson as historical episodic evidence, with the exact original
 revision and evidence references.
 
+For an exact changed file in a supported parsed language, that fresh-session cue also includes a
+small list of proven **static dependent candidates**. This is a practical “what might be affected?”
+starting point, not a runtime promise: the agent should still inspect the cited structure and run
+the appropriate verification.
+
 After a checkpoint is saved for an enabled project, Mnemo may add one small citation saying which
 immutable source snapshot it observed immediately afterward. Think of it as a timestamped bookmark
 between the handoff and the saved source map. It helps a later agent compare the handoff with the

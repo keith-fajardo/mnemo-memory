@@ -24,12 +24,15 @@ from mnemo_memory.packages.application.automatic_memory import (
 )
 from mnemo_memory.packages.domain import CodeFile, CodeSymbol, MemoryScope
 from mnemo_memory.packages.project_index import (
+    SourceImpactDirection,
+    SourceImpactQuery,
     SourceImpactService,
     SourceSnapshotDiff,
     SourceStructureParser,
     SourceStructureParseRequest,
 )
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
+from mnemo_memory.packages.storage.contracts import ProjectIndexRepositoryError
 
 ClientName = Literal["codex", "claude-code"]
 
@@ -41,6 +44,8 @@ _MUTATING_TOOLS = {"Bash", "apply_patch", "Edit", "Write"}
 _INCREMENTAL_CHECKPOINT_OPERATIONS = frozenset({"record_event", "record_lesson"})
 _MAX_CHANGE_SYMBOLS = 12
 _MAX_CHANGE_SYMBOL_LABEL_LENGTH = 256
+_MAX_IMPACT_CUES = 3
+_MAX_IMPACT_CUE_DEPENDENTS = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
 _ContextLoader = Callable[[MemoryScope], str | None]
 
@@ -179,9 +184,11 @@ class AutomaticMemoryHook:
             diff = SourceImpactService(repository).diff(
                 binding.scope, before.snapshot_id, after.snapshot_id
             )
+            changes = _SourceChangeSummary.from_diff(diff)
             return _SourceRefresh(
                 stored.snapshot.source_digest,
-                _SourceChangeSummary.from_diff(diff),
+                changes,
+                _dependent_impact_cues(repository, binding.scope, diff, changes),
             )
         except (OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
@@ -239,9 +246,18 @@ class _SourceChangeSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class _SourceImpactCue:
+    """A bounded, static dependent cue for one exact changed source file."""
+
+    relative_path: str
+    dependents: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceRefresh:
     digest: str | None
     changes: _SourceChangeSummary | None = None
+    impact_cues: tuple[_SourceImpactCue, ...] = ()
 
 
 def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
@@ -354,6 +370,8 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)
+    if refreshed.impact_cues:
+        instruction += _source_impact_instruction(refreshed.impact_cues)
     return instruction
 
 
@@ -374,6 +392,8 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)
+    if refreshed.impact_cues:
+        instruction += _source_impact_instruction(refreshed.impact_cues)
     return instruction
 
 
@@ -404,6 +424,69 @@ def _source_change_instruction(changes: _SourceChangeSummary) -> str:
     if changes.modified_files:
         instruction += f" Modified files: {', '.join(changes.modified_files)}."
     return instruction
+
+
+def _source_impact_instruction(cues: tuple[_SourceImpactCue, ...]) -> str:
+    """Phrase bounded static impact candidates without elevating them to runtime facts."""
+    rendered = "; ".join(f"{cue.relative_path} → {', '.join(cue.dependents)}" for cue in cues)
+    return (
+        " Mnemo also found these bounded static dependent candidates from exact changed files: "
+        f"{rendered}. They are syntax-derived impact candidates, not proof of runtime behavior; "
+        "check the cited context before relying on them."
+    )
+
+
+def _dependent_impact_cues(
+    repository: SQLiteSourceStructureRepository,
+    scope: MemoryScope,
+    diff: SourceSnapshotDiff,
+    changes: _SourceChangeSummary,
+) -> tuple[_SourceImpactCue, ...]:
+    """Return only bounded static dependents for exact changed, currently present files.
+
+    A lifecycle hook must not turn a changed file into a broad repository scan or claim dynamic
+    impact.  The source-impact service starts from the exact post-transition file projection and
+    traverses only stored, resolved edges.  Unparsed files and files with no saved dependents simply
+    receive no cue; the normal metadata-only change summary remains available.
+    """
+    if not changes.changed:
+        return ()
+    paths = tuple(
+        sorted(
+            {
+                item.relative_path
+                for item in (*diff.added_files, *diff.modified_files)
+                if len(item.relative_path) <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
+            }
+        )
+    )[:_MAX_IMPACT_CUES]
+    service = SourceImpactService(repository)
+    cues: list[_SourceImpactCue] = []
+    for relative_path in paths:
+        try:
+            result = service.query(
+                SourceImpactQuery(
+                    scope,
+                    None,
+                    SourceImpactDirection.DEPENDENTS,
+                    maximum_depth=2,
+                    maximum_symbols=_MAX_IMPACT_CUE_DEPENDENTS,
+                    maximum_edges=16,
+                    snapshot_id=diff.after.snapshot_id,
+                    relative_path=relative_path,
+                )
+            )
+        except (ProjectIndexRepositoryError, ValueError):
+            continue
+        dependents = tuple(
+            f"{item.symbol.relative_path}:{item.symbol.qualified_name}"
+            for item in result.symbols
+            if len(item.symbol.relative_path) + len(item.symbol.qualified_name) + 1
+            <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
+        )[:_MAX_IMPACT_CUE_DEPENDENTS]
+        if dependents:
+            cues.append(_SourceImpactCue(relative_path, dependents))
+    return tuple(cues)
 
 
 def _dirty_session_instruction() -> str:
