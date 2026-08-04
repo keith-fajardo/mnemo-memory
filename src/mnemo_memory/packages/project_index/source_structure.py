@@ -371,6 +371,7 @@ class SourceStructureParser:
         go_module_path: str | None = None
         typescript_path_aliases: dict[str, str] = {}
         python_source_roots: tuple[str, ...] = ()
+        package_json_documents: dict[str, bytes] = {}
         total_bytes = 0
         for path in paths:
             raw = self._read(path, request.limits)
@@ -393,6 +394,8 @@ class SourceStructureParser:
                 typescript_path_aliases = self._typescript_path_aliases(raw)
             elif relative == "pyproject.toml":
                 python_source_roots = self._python_source_roots(raw)
+            elif path.name == "package.json":
+                package_json_documents[relative] = raw
             language = self._suffixes.get(path.suffix.lower())
             if language is None:
                 # Keep only the path/digest projection for a deliberately file-only extension.
@@ -456,6 +459,9 @@ class SourceStructureParser:
         }
         module_names = _symbols_by_name(modules.values())
         go_packages_by_directory = self._go_packages_by_directory(symbols, go_module_path)
+        javascript_workspace_modules = self._javascript_workspace_modules(
+            package_json_documents, modules
+        )
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]] = {}
@@ -525,6 +531,7 @@ class SourceStructureParser:
                         go_module_path,
                         typescript_path_aliases,
                         python_source_roots,
+                        javascript_workspace_modules,
                     ),
                 )
             )
@@ -546,6 +553,7 @@ class SourceStructureParser:
                                 go_packages_by_directory,
                                 typescript_path_aliases,
                                 python_source_roots,
+                                javascript_workspace_modules,
                             ),
                         )
                         for path, target in sorted(set(imports))
@@ -718,6 +726,116 @@ class SourceStructureParser:
         return () if normalized is None else (normalized,)
 
     @staticmethod
+    def _javascript_workspace_modules(
+        package_json_documents: dict[str, bytes], modules_by_path: dict[str, CodeSymbol]
+    ) -> dict[str, CodeSymbol]:
+        """Map one explicit local workspace package name to its literal source entry module.
+
+        This recognizes only a root JSON ``workspaces`` array, literal package names, and one
+        string ``exports`` (or ``main`` when exports is absent).  It does not implement Node's
+        conditional exports, package-manager rules, package installation, or external lookup.
+        """
+        root = package_json_documents.get("package.json")
+        patterns = SourceStructureParser._javascript_workspace_patterns(root)
+        if not patterns:
+            return {}
+        candidates: dict[str, list[CodeSymbol]] = {}
+        for relative_path, raw in package_json_documents.items():
+            if relative_path == "package.json":
+                continue
+            parent = PurePosixPath(relative_path).parent
+            directory = "" if parent == PurePosixPath(".") else parent.as_posix()
+            if not SourceStructureParser._javascript_workspace_contains(directory, patterns):
+                continue
+            try:
+                package = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(package, dict):
+                continue
+            name = package.get("name")
+            entry = package.get("exports")
+            if entry is None:
+                entry = package.get("main")
+            if (
+                not SourceStructureParser._safe_javascript_package_name(name)
+                or not isinstance(entry, str)
+                or not entry.startswith("./")
+            ):
+                continue
+            assert isinstance(name, str)
+            entry_path = SourceStructureParser._safe_local_source_root(entry.removeprefix("./"))
+            if entry_path is None:
+                continue
+            target = "/".join((directory, entry_path))
+            module_id = SourceStructureParser._path_import_target(target, modules_by_path)
+            module = next(
+                (item for item in modules_by_path.values() if item.symbol_id == module_id), None
+            )
+            if module is not None:
+                candidates.setdefault(name, []).append(module)
+        return {
+            name: entries[0]
+            for name, entries in candidates.items()
+            if len({item.symbol_id for item in entries}) == 1
+        }
+
+    @staticmethod
+    def _javascript_workspace_patterns(raw: bytes | None) -> tuple[str, ...]:
+        if raw is None:
+            return ()
+        try:
+            document = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return ()
+        workspaces = document.get("workspaces") if isinstance(document, dict) else None
+        if not isinstance(workspaces, list):
+            return ()
+        return tuple(
+            pattern
+            for item in workspaces
+            if isinstance(item, str)
+            and (pattern := SourceStructureParser._safe_javascript_workspace_pattern(item))
+            is not None
+        )
+
+    @staticmethod
+    def _safe_javascript_workspace_pattern(value: str) -> str | None:
+        if not value or len(value) > 256 or value.startswith("/") or "\\" in value:
+            return None
+        if value.endswith("/*"):
+            prefix = value.removesuffix("/*")
+            return value if SourceStructureParser._safe_local_source_root(prefix) else None
+        return value if SourceStructureParser._safe_local_source_root(value) else None
+
+    @staticmethod
+    def _javascript_workspace_contains(directory: str, patterns: tuple[str, ...]) -> bool:
+        for pattern in patterns:
+            if pattern.endswith("/*"):
+                prefix = f"{pattern.removesuffix('/*')}/"
+                if directory.startswith(prefix) and "/" not in directory.removeprefix(prefix):
+                    return True
+            elif directory == pattern:
+                return True
+        return False
+
+    @staticmethod
+    def _safe_javascript_package_name(value: object) -> bool:
+        if not isinstance(value, str) or not value or len(value) > 214:
+            return False
+        segments = value.removeprefix("@").split("/")
+        if value.startswith("@"):
+            if len(segments) != 2:
+                return False
+        elif len(segments) != 1:
+            return False
+        return all(
+            segment
+            and all(character.isalnum() or character in {"-", "_", "."} for character in segment)
+            for segment in segments
+        )
+
+    @staticmethod
     def _safe_local_source_root(value: str) -> str | None:
         if (
             not value
@@ -798,6 +916,7 @@ class SourceStructureParser:
         go_packages_by_directory: dict[str, CodeSymbol] | None = None,
         typescript_path_aliases: dict[str, str] | None = None,
         python_source_roots: tuple[str, ...] = (),
+        javascript_workspace_modules: dict[str, CodeSymbol] | None = None,
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
 
@@ -815,6 +934,10 @@ class SourceStructureParser:
             # and exact package projection, do not fall through to a coincidental dotted/path
             # spelling elsewhere in the snapshot.
             return None
+        if source_path.endswith((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")):
+            workspace_module = (javascript_workspace_modules or {}).get(target)
+            if workspace_module is not None:
+                return workspace_module.symbol_id
         if source_path.endswith((".ts", ".tsx", ".mts", ".cts")):
             local_target = SourceStructureParser._typescript_alias_target(
                 target, typescript_path_aliases or {}
@@ -1043,6 +1166,7 @@ class SourceStructureParser:
         go_module_path: str | None,
         typescript_path_aliases: dict[str, str],
         python_source_roots: tuple[str, ...],
+        javascript_workspace_modules: dict[str, CodeSymbol],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -1136,6 +1260,7 @@ class SourceStructureParser:
                     modules_by_path,
                     typescript_path_aliases=typescript_path_aliases,
                     python_source_roots=python_source_roots,
+                    javascript_workspace_modules=javascript_workspace_modules,
                 )
                 module = next(
                     (item for item in modules_by_path.values() if item.symbol_id == module_id), None

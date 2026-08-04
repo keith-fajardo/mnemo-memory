@@ -513,6 +513,74 @@ def test_typescript_malformed_or_escaping_alias_never_creates_a_local_link(tmp_p
     assert any(item.target == "validate" and item.target_symbol_id is None for item in calls)
 
 
+def test_typescript_workspace_package_resolves_exact_local_export_and_call(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "packages" / "shared" / "src").mkdir(parents=True)
+    (root / "packages" / "app" / "src").mkdir(parents=True)
+    (root / "package.json").write_text('{"workspaces":["packages/*"]}', encoding="utf-8")
+    (root / "packages" / "shared" / "package.json").write_text(
+        '{"name":"@mnemo/shared","exports":"./src/index.ts"}', encoding="utf-8"
+    )
+    (root / "packages" / "app" / "package.json").write_text(
+        '{"name":"@mnemo/app"}', encoding="utf-8"
+    )
+    (root / "packages" / "shared" / "src" / "index.ts").write_text(
+        "export function validate() { return true }\n", encoding="utf-8"
+    )
+    (root / "packages" / "app" / "src" / "service.ts").write_text(
+        "import { validate } from '@mnemo/shared';\n"
+        "export function process() { return validate() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(
+            item_scope,
+            "packages.shared.src.index.validate",
+            SourceImpactDirection.DEPENDENTS,
+        )
+    )
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+
+    assert [item.symbol.qualified_name for item in result.symbols] == [
+        "packages.app.src.service.process"
+    ]
+    assert any(
+        item.target == "@mnemo/shared" and item.target_symbol_id is not None for item in imports
+    )
+
+
+def test_typescript_duplicate_workspace_package_name_stays_unresolved(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    for package in ("first", "second"):
+        (root / "packages" / package / "src").mkdir(parents=True)
+        (root / "packages" / package / "package.json").write_text(
+            '{"name":"@mnemo/shared","exports":"./src/index.ts"}', encoding="utf-8"
+        )
+        (root / "packages" / package / "src" / "index.ts").write_text(
+            "export function validate() { return true }\n", encoding="utf-8"
+        )
+    (root / "packages" / "app" / "src").mkdir(parents=True)
+    (root / "package.json").write_text('{"workspaces":["packages/*"]}', encoding="utf-8")
+    (root / "packages" / "app" / "src" / "service.ts").write_text(
+        "import { validate } from '@mnemo/shared';\n"
+        "export function process() { return validate() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert imports[0].target_symbol_id is None
+    assert any(item.target == "validate" and item.target_symbol_id is None for item in calls)
+
+
 def test_typescript_top_level_const_function_exports_are_indexed_and_resolve_calls(
     tmp_path: Path,
 ) -> None:

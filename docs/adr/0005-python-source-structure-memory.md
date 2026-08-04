@@ -46,7 +46,11 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   escaping paths, and package imports remain unresolved. Python may resolve an absolute import
   below an explicitly declared root only for strict `pyproject.toml` setuptools
   `package-dir = {"" = "src"}` metadata; a bare `src/` directory, other build systems, and
-  malformed/escaping package roots remain unresolved. It excludes source text,
+  malformed/escaping package roots remain unresolved. JavaScript/TypeScript may resolve one
+  workspace-package import only when a root strict-JSON `workspaces` array declares the package
+  directory and exactly one local package declares an exact string `exports` (or `main`) entry to
+  a saved source file; conditional exports, nested globs, duplicate package names, and external
+  packages remain unresolved. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.

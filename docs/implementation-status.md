@@ -533,6 +533,11 @@ declaration: `package-dir = {"" = "src"}`. That mapping may resolve exact import
 below `src/`; Mnemo does not infer a source root from a directory name or interpret other packaging
 systems in this static slice.
 
+JavaScript/TypeScript source structure now resolves a workspace-package import only when root
+`package.json` contains a strict literal `workspaces` array and one matching local package declares
+an exact string `exports` (or fallback `main`) entry to a saved source file. Conditional exports,
+duplicate names, nested globs, and external packages remain unresolved rather than guessed.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and
