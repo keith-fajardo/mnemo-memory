@@ -583,7 +583,7 @@ are both unambiguous. Direct local Python `from .module import member` and paren
 imports now resolve when their path remains inside the registered project. Direct top-level literal
 CommonJS `require("./local")` bindings in JavaScript/TypeScript now also resolve exact local members;
 computed/dynamic or nested requires remain deliberately unresolved. Explicit Rust `use crate::path::member as local_name` aliases now resolve only to unique local members. Exact C++ namespace calls, C#
-`using Namespace.Type` and explicit `using Local = Namespace.Type` calls, and PHP
+`using Namespace.Type`, explicit `using Local = Namespace.Type`, and `using static Namespace.Type` calls, and PHP
 `use Namespace\\Type` and explicit `use Namespace\\Type as Alias` static calls now join when their saved target is unique. Direct Java
 `import static package.Type.member` calls now join when their local class and method target are
 unique; namespace-only imports, aliases that do not name a unique target, and duplicate candidates

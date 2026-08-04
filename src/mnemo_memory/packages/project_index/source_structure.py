@@ -745,6 +745,26 @@ class SourceStructureParser:
                 imported = _single_symbol(symbols_by_name.get(candidate_name, ()))
                 if imported is not None:
                     candidates.append(imported)
+        # C# ``using static Namespace.Type;`` exposes a named member without an alias. Treat it
+        # as a candidate only for a simple syntactic call and only when its module, class, and
+        # member are each unique in the immutable snapshot. This intentionally does not model
+        # overload resolution, extension methods, inherited members, or runtime dispatch.
+        if not separator and _is_safe_symbol_name(target):
+            for _, _binding, imported_target in (
+                item
+                for item in bindings
+                if item[0] == source_path and item[2].startswith("csharp-static:")
+            ):
+                owner_path = imported_target.removeprefix("csharp-static:")
+                module = _single_symbol(modules_by_name.get(owner_path, ()))
+                if module is None:
+                    continue
+                type_name = owner_path.rsplit(".", maxsplit=1)[-1]
+                imported = _single_symbol(
+                    symbols_by_name.get(f"{module.qualified_name}.{type_name}.{target}", ())
+                )
+                if imported is not None:
+                    candidates.append(imported)
         unique = {item.symbol_id: item for item in candidates}
         return next(iter(unique)) if len(unique) == 1 else None
 
@@ -997,6 +1017,11 @@ class SourceStructureParser:
             parts = target.split(".")
             if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
                 return ()
+            if any(child.type == "static" for child in node.children):
+                # ``using static Namespace.Type;`` imports the statically named members of one
+                # exact type. The wildcard is private parser state, never a public symbol or
+                # edge; resolution below still requires one exact local class and member.
+                return (("*", f"csharp-static:{target}"),)
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
             return ((alias or parts[-1], target),)
         if language == "php":
