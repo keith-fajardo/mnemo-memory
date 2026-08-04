@@ -38,7 +38,7 @@ hook attaches the bounded saved checkpoint, lessons, approved facts, and latest 
 transition automatically, then asks
 the agent to create a compact checkpoint at a stop/compaction boundary. It refreshes Mnemo's
 syntax-only source map at session start, after a checkpoint save, and before an unsaved changed
-session stops. The attachment has a 1,200-token content budget; it does not read or store a raw
+session stops. The attachment has a 1,750-token total budget; it does not read or store a raw
 transcript or source body.
 
 By default, Codex and Claude Code launched normally will use the same personal Mnemo store. To use

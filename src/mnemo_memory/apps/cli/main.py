@@ -168,10 +168,10 @@ def _automatic_context_attachment(
     """Return a small canonical handoff for an explicitly enabled session-start hook.
 
     This runs only after the hook has found a local project binding. The packet is deliberately
-    smaller than the normal 5,700-token request. It contains the active task handoff, bounded
-    approved facts, and the latest structural transition when one exists. This lets a fresh agent
-    see the immediately relevant durable history without replaying a transcript or guessing a
-    change reason from a file name.
+    smaller than the normal 5,700-token request. It contains the active task handoff, a bounded
+    recent-work ledger (checkpoint lifecycle and explicit approved facts), and the latest
+    structural transition when one exists. This lets a fresh agent see the immediately relevant
+    durable history without replaying a transcript or guessing a change reason from a file name.
     """
     try:
         with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
@@ -206,6 +206,7 @@ def _automatic_context_attachment(
                 GetUnifiedContext(
                     scope,
                     budget=_AUTOMATIC_SESSION_CONTEXT_BUDGET,
+                    include_lifecycle_events=True,
                     include_approved_events=True,
                     source_changes=ContextSourceChangeQuery(
                         maximum_declarations=8,

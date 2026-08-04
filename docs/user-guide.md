@@ -402,8 +402,9 @@ project checkpoint, structural memory, and repository documentation remain.
 ## Use task memory while working
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
-bounded saved handoff, lessons, approved facts, and latest bounded source-change summary
-automatically. This automatic attachment has a 1,200-token content budget and happens only when a
+bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),
+and the latest bounded source-change summary
+automatically. This automatic attachment has a 1,750-token total budget and happens only when a
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
 needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw

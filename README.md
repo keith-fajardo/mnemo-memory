@@ -115,11 +115,13 @@ rewriting the handoff: for example, “the Finance seed was stale,” “use bus
 “the validation command passed.” The existing `save_checkpoint` MCP tool can record one of these
 as an explicit `decision`, `failure`, or `tool_outcome`, with evidence and a stable source key.
 Mnemo returns it only when `get_context` explicitly asks for approved episodic facts. When Codex
-or Claude Code is connected with `--auto-memory`, Mnemo includes that option in the private
-session-start context attachment. The agent therefore receives the compact handoff, prior lessons,
-and these bounded verified facts before it claims to know why prior work happened. Mnemo does not
-record your chat automatically; it only attaches facts that were explicitly saved with evidence.
-The automatic attachment has a 1,200-token content budget and happens only at a fresh supported
+or Claude Code is connected with `--auto-memory`, Mnemo automatically includes a small **recent
+work ledger** in the private session-start attachment: checkpoint revisions in their actual order,
+prior lessons, and these bounded verified facts. It tells the agent *what was saved or verified*
+and cites the exact revision or evidence. The checkpoint remains the place that explains *why*;
+Mnemo never guesses a reason from a filename or test result. Mnemo does not record your chat
+automatically; it only attaches facts that were explicitly saved with evidence.
+The automatic attachment has a 1,750-token total budget and happens only at a fresh supported
 client session, not continuously while you work.
 
 This is intentionally **not automatic conversation capture**. Mnemo never turns a terminal log,

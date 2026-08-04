@@ -583,6 +583,14 @@ attaches those approved facts and the bounded current task handoff before a supp
 work. It does not mistake a small `record_event` for a complete task handoff; the agent remains
 prompted to save the full checkpoint before it stops.
 
+The automatic fresh-session attachment now composes those existing immutable records into a small
+recent-work ledger: bounded checkpoint lifecycle chronology, lessons, explicit approved
+decision/failure/tool-outcome facts, and a separate cited source transition when present. It reuses
+the existing scoped stores rather than creating another mutable event history. The ledger states
+what was saved or verified and where its evidence lives; the checkpoint or lesson remains the
+evidence for why the work happened. It stores no transcript, terminal output, source body, SQL,
+environment, or inferred reasoning.
+
 ### Source-structure memory — In progress
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,

@@ -476,11 +476,21 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
 
     assert attached is not None
     packet = json.loads(attached)
-    assert packet["declared_total_tokens"] <= 1_450
+    assert packet["declared_total_tokens"] <= 1_750
     assert packet["active_task_checkpoint"]["content"] == json.dumps(
         content.to_dict(), sort_keys=True, separators=(",", ":")
     )
-    assert packet["episodic_memories"] == []
+    lifecycle = [
+        json.loads(item["content"])
+        for item in packet["episodic_memories"]
+        if item["item_id"].startswith("checkpoint-lifecycle:")
+    ]
+    assert len(lifecycle) == 1
+    assert lifecycle[0]["event_kind"] == "checkpoint_created"
+    assert lifecycle[0]["revision_number"] == 1
+    assert lifecycle[0]["revision_id"]
+    assert lifecycle[0]["occurred_at"]
+    assert all(item["evidence_references"] for item in packet["episodic_memories"])
     assert len(packet["knowledge_items"]) == 1
     assert "documented business-date grain" in packet["knowledge_items"][0]["content"]
 
@@ -625,7 +635,7 @@ def test_automatic_context_attachment_includes_the_latest_bounded_source_transit
     assert attached is not None
     packet = json.loads(attached)
     assert packet["active_task_checkpoint"] is None
-    assert packet["declared_total_tokens"] <= 1_450
+    assert packet["declared_total_tokens"] <= 1_750
     change = next(
         item for item in packet["structural_items"] if item["item_id"].startswith("source-change:")
     )
@@ -664,7 +674,7 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     assert summary["file_count"] == 1
     assert summary["currentness"] == "current"
     assert any(item["item_id"].startswith("source-file:") for item in packet["structural_items"])
-    assert packet["declared_total_tokens"] <= 1_450
+    assert packet["declared_total_tokens"] <= 1_750
     assert "return True" not in attached
     assert str(project) not in attached
 
