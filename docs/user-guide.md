@@ -33,8 +33,10 @@ saved target, and follows those proven links to show a bounded list of code that
 statically depends on a selected file or symbol. It can also resolve a small safe subset of direct
 calls (same-module, fully-qualified, or unique imported members). Duplicate candidates across
 files or languages remain unresolved rather than being guessed. More adapters and safely
-resolvable call edges use the same graph contract; no unproven runtime relationship is presented
-as fact.
+resolvable call edges use the same graph contract. That subset now includes exact local C++
+namespace calls, C# `using Namespace.Type` calls, and PHP `use Namespace\\Type` static calls;
+namespace-only imports and aliases remain unresolved. No unproven runtime relationship is
+presented as fact.
 
 When an agent needs orientation, it can request a symbol or relative-path match through Mnemo's
 existing `get_context` tool. Mnemo returns matching modules/classes/functions, declared module

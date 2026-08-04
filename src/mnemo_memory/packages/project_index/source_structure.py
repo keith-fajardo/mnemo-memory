@@ -250,7 +250,11 @@ _TREE_SITTER_RULES: Final = (
             ("method_declaration", CodeSymbolKind.FUNCTION),
         ),
         frozenset({"namespace_use_declaration"}),
-        (("function_call_expression", "function"), ("member_call_expression", None)),
+        (
+            ("function_call_expression", "function"),
+            ("member_call_expression", None),
+            ("scoped_call_expression", None),
+        ),
     ),
 )
 
@@ -793,6 +797,20 @@ class SourceStructureParser:
             # package spelling. Dot/blank imports deliberately stay unresolved.
             binding_name = alias or target.rsplit("/", maxsplit=1)[-1]
             return ((binding_name, f"go:{target}|"),) if _is_safe_symbol_name(binding_name) else ()
+        if language == "csharp":
+            # ``using Namespace.Type;`` gives one explicit type spelling. Namespace-only
+            # imports and aliases deliberately remain unresolved: they need type inference.
+            parts = target.split(".")
+            if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
+                return ()
+            return ((parts[-1], target),)
+        if language == "php":
+            # ``use Namespace\\Type;`` imports exactly one class-like spelling. PHP aliases,
+            # grouped imports, and namespace-only imports are outside this static subset.
+            parts = target.split("\\")
+            if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
+                return ()
+            return ((parts[-1], ".".join(parts)),)
         if language not in {"javascript", "typescript", "tsx"}:
             return ()
         clause = next(
@@ -857,9 +875,10 @@ class SourceStructureParser:
     def _call_target(node: Node, raw: bytes, field: str | None) -> str | None:
         if field is not None:
             return SourceStructureParser._tree_static_target(node.child_by_field_name(field), raw)
-        if node.type in {"method_invocation", "member_call_expression"}:
+        if node.type in {"method_invocation", "member_call_expression", "scoped_call_expression"}:
+            object_field = "scope" if node.type == "scoped_call_expression" else "object"
             object_name = SourceStructureParser._tree_static_target(
-                node.child_by_field_name("object"), raw
+                node.child_by_field_name(object_field), raw
             )
             method_name = SourceStructureParser._tree_static_target(
                 node.child_by_field_name("name"), raw
@@ -878,6 +897,7 @@ class SourceStructureParser:
             "property_identifier",
             "field_identifier",
             "type_identifier",
+            "namespace_identifier",
             "crate",
             "self",
             "super",
@@ -893,6 +913,7 @@ class SourceStructureParser:
             "selector_expression": ("operand", "field"),
             "member_access_expression": ("expression", "name"),
             "qualified_name": ("qualifier", "name"),
+            "qualified_identifier": ("scope", "name"),
         }.get(node.type)
         if node.type == "field_expression":
             fields = ("value", "field")
@@ -1015,3 +1036,8 @@ def _first_identifier(node: Node | None) -> Node | None:
 
 def _is_safe_symbol_name(value: str) -> bool:
     return bool(value) and len(value) <= 512 and "\x00" not in value and "\n" not in value
+
+
+def _is_identifier_part(value: str) -> bool:
+    """Keep binding names to ordinary static identifier components only."""
+    return bool(value) and len(value) <= 128 and value.isidentifier()

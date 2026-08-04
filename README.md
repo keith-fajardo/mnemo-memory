@@ -142,7 +142,9 @@ Mnemo stores no source-text copy and makes no network or model call. Its current
 Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. They record explicit
 syntactic calls separately from imports and can follow only **proven** internal links to show a
 bounded dependency/impact candidate. It does not guess runtime dispatch or claim a complete call
-graph. The storage and
+graph. That includes exact local C++ namespace calls, C# `using Namespace.Type` calls, and PHP
+`use Namespace\\Type` static calls when one saved target matches; namespace-only imports, aliases,
+and duplicate candidates stay unresolved. The storage and
 context contracts are language-neutral, so more language adapters and semantic resolution can be
 added without changing saved memory. The
 [practical user guide](docs/user-guide.md) shows exactly how to use Mnemo on a repository such as

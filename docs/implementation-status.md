@@ -579,7 +579,9 @@ Python/ES-module support. Exact Go imported-package member calls now also join w
 declaration exists in the same unique local package directory; imports themselves stay unresolved
 because they name directories while the projection names files. Explicit class-owned `self`/`this`
 sibling calls now resolve across supported adapters when the enclosing type and target declaration
-are both unambiguous. Broad multi-language semantic resolution, a complete call graph, and
+are both unambiguous. Exact C++ namespace calls, C# `using Namespace.Type` calls, and PHP
+`use Namespace\\Type` static calls now join when their saved target is unique; namespace-only
+imports, aliases, and duplicate candidates remain unresolved. Broad multi-language semantic resolution, a complete call graph, and
 automatic transcript capture remain separate follow-up work.
 
 Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful

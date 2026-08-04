@@ -223,6 +223,78 @@ def test_java_and_rust_imported_calls_resolve_only_to_local_unambiguous_symbols(
     assert calls[("engine.run", "callback")] is None
 
 
+def test_cpp_csharp_and_php_resolve_only_explicit_unambiguous_local_calls(tmp_path: Path) -> None:
+    root = tmp_path / "polyglot"
+    (root / "Tools").mkdir(parents=True)
+    (root / "main.cpp").write_text(
+        '#include "tools.hpp"\nvoid Run() { tools::go(); callback(); }\n', encoding="utf-8"
+    )
+    (root / "tools.hpp").write_text("namespace tools { void go(); }\n", encoding="utf-8")
+    (root / "tools.cpp").write_text("namespace tools { void go() {} }\n", encoding="utf-8")
+    (root / "Service.cs").write_text(
+        "using Tools.Helper; class Service { void Run() { Helper.Go(); } }\n",
+        encoding="utf-8",
+    )
+    (root / "Tools" / "Helper.cs").write_text(
+        "class Helper { static void Go() {} }\n", encoding="utf-8"
+    )
+    (root / "service.php").write_text(
+        "<?php use Tools\\Helper; class Service { function run() { Helper::go(); } }\n",
+        encoding="utf-8",
+    )
+    (root / "Tools" / "Helper.php").write_text(
+        "<?php class Helper { static function go() {} }\n", encoding="utf-8"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind is CodeEdgeKind.CALLS
+    }
+
+    assert calls[("main.Run", "tools.go")] is not None
+    assert calls[("main.Run", "callback")] is None
+    assert calls[("Service.Service.Run", "Helper.Go")] is not None
+    assert calls[("service.Service.run", "Helper.go")] is not None
+
+
+def test_cross_file_static_call_resolution_rejects_namespace_alias_and_duplicate_candidates(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ambiguous"
+    (root / "Tools").mkdir(parents=True)
+    (root / "main.cpp").write_text("void Run() { tools::go(); }\n", encoding="utf-8")
+    (root / "tools.cpp").write_text("namespace tools { void go() {} }\n", encoding="utf-8")
+    (root / "tools.cxx").write_text("namespace tools { void go() {} }\n", encoding="utf-8")
+    (root / "NamespaceOnly.cs").write_text(
+        "using Tools; class Service { void Run() { Helper.Go(); } }\n", encoding="utf-8"
+    )
+    (root / "Aliased.php").write_text(
+        "<?php use Tools\\Helper as H; class Service { function run() { H::go(); } }\n",
+        encoding="utf-8",
+    )
+    (root / "Tools" / "Helper.cs").write_text(
+        "class Helper { static void Go() {} }\n", encoding="utf-8"
+    )
+    (root / "Tools" / "Helper.php").write_text(
+        "<?php class Helper { static function go() {} }\n", encoding="utf-8"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    symbols = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (symbols[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind is CodeEdgeKind.CALLS
+    }
+
+    assert calls[("main.Run", "tools.go")] is None
+    assert calls[("NamespaceOnly.Service.Run", "Helper.Go")] is None
+    assert calls[("Aliased.Service.run", "H.go")] is None
+
+
 def test_typescript_this_call_resolves_only_with_an_explicit_class_owner(tmp_path: Path) -> None:
     root = tmp_path / "web"
     root.mkdir()
