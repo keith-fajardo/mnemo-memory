@@ -25,6 +25,11 @@ from mnemo_memory.packages.domain import (
     CodeSymbolId,
     EventId,
     EvidenceReference,
+    KnowledgeDocumentId,
+    KnowledgeDocumentRevision,
+    KnowledgeDocumentRevisionId,
+    KnowledgeDocumentTombstone,
+    KnownKnowledgeDocument,
     MemoryScope,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -105,6 +110,30 @@ class ApprovedEpisodicEventStorageFailure(ApprovedEpisodicEventRepositoryError):
     pass
 
 
+class KnowledgeDocumentRepositoryError(Exception):
+    """Expected storage-independent local-knowledge outcome."""
+
+
+class KnowledgeDocumentNotFound(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class KnowledgeDocumentConflict(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class InvalidKnowledgeDocumentScope(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class KnowledgeDocumentSecretRejected(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class KnowledgeDocumentStorageFailure(KnowledgeDocumentRepositoryError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovedEpisodicEventStoreResult:
     event: ApprovedEpisodicEvent
@@ -131,6 +160,42 @@ class ApprovedEpisodicEventRepository(Protocol):
     def list_approved_events(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventPage: ...
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentSyncStoreResult:
+    """The active metadata remaining after one atomic scoped synchronization."""
+
+    active_documents: tuple[KnownKnowledgeDocument, ...]
+    applied_revision_count: int
+    applied_tombstone_count: int
+
+
+class KnowledgeDocumentRepository(Protocol):
+    """Scoped durable storage for immutable, policy-approved local knowledge revisions."""
+
+    def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]: ...
+
+    def get_current_revision(
+        self, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> KnowledgeDocumentRevision: ...
+
+    def get_revision(
+        self,
+        scope: MemoryScope,
+        document_id: KnowledgeDocumentId,
+        revision_id: KnowledgeDocumentRevisionId,
+    ) -> KnowledgeDocumentRevision:
+        """Return one scoped retained historical revision, never an unscoped revision lookup."""
+
+    def apply_sync(
+        self,
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> KnowledgeDocumentSyncStoreResult:
+        """Apply an all-or-nothing source reconciliation; deletions erase document payload rows."""
+        ...
 
 
 class ProjectIndexRepositoryError(Exception):

@@ -106,6 +106,12 @@ class KnowledgeDocumentId(Identifier):
     __slots__ = ()
 
 
+class KnowledgeDocumentRevisionId(Identifier):
+    """Identity of one immutable knowledge-document revision."""
+
+    __slots__ = ()
+
+
 class RetentionPolicyId(Identifier):
     __slots__ = ()
 

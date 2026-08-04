@@ -39,6 +39,15 @@ from mnemo_memory.packages.domain import (
     DbtSnapshotId,
     EventId,
     EvidenceReference,
+    KnowledgeDocument,
+    KnowledgeDocumentId,
+    KnowledgeDocumentLink,
+    KnowledgeDocumentRevision,
+    KnowledgeDocumentRevisionId,
+    KnowledgeDocumentSection,
+    KnowledgeDocumentSourceKind,
+    KnowledgeDocumentTombstone,
+    KnownKnowledgeDocument,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -60,6 +69,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     LineageEdgeType,
     SourceStateFingerprint,
 )
+from mnemo_memory.packages.policy import KnowledgeDocumentSafetyPolicy
 
 from .contracts import (
     ActiveSnapshotConflict,
@@ -83,8 +93,14 @@ from .contracts import (
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
+    KnowledgeDocumentConflict,
+    KnowledgeDocumentNotFound,
+    KnowledgeDocumentSecretRejected,
+    KnowledgeDocumentStorageFailure,
+    KnowledgeDocumentSyncStoreResult,
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ManifestSnapshotPage,
@@ -97,7 +113,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
 )
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -262,15 +278,39 @@ class SQLiteCheckpointRepository:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 8
             if version < 9:
-                _execute_sql_script(
-                    connection, _migration_text("0009_checkpoint_source_observations.sql")
-                )
+                # Earlier local builds applied the unreleased script but did not record version 9.
+                # Detect that exact recoverable state instead of replaying CREATE TABLE statements.
+                observation_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'checkpoint_source_observations'"
+                ).fetchone()
+                if observation_table is None:
+                    _execute_sql_script(
+                        connection, _migration_text("0009_checkpoint_source_observations.sql")
+                    )
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (9, ?)",
                     (_timestamp(),),
                 )
                 if fail_after_version == 9:
                     raise SQLiteMigrationError("injected migration failure")
+                version = 9
+            if version < 10:
+                # Permit recovery from an interrupted unreleased local migration where the
+                # schema objects were created but the migration ledger was not recorded.
+                knowledge_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'knowledge_document_sources'"
+                ).fetchone()
+                if knowledge_table is None:
+                    _execute_sql_script(connection, _migration_text("0010_knowledge_documents.sql"))
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (10, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 10:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 10
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -2071,6 +2111,436 @@ def _execute_sql_script(connection: sqlite3.Connection, script: str) -> None:
 
 def _maybe(value: object | None) -> str | None:
     return None if value is None else str(value)
+
+
+class _KnowledgeOperations:
+    """SQLite-specific knowledge operations kept separate from checkpoint public methods."""
+
+    @staticmethod
+    def list_active_knowledge_documents(
+        backend: SQLiteCheckpointRepository, scope: MemoryScope
+    ) -> tuple[KnownKnowledgeDocument, ...]:
+        backend._require_project_scope(scope)
+        try:
+            with backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT source.document_id, source.relative_path, source.content_digest, "
+                    "source.current_revision_id, "
+                    "revision.revision_number FROM knowledge_document_sources AS source "
+                    "JOIN knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0 "
+                    "ORDER BY source.relative_path ASC, source.document_id ASC",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+        return tuple(_KnowledgeOperations._known_knowledge_document(row, scope) for row in rows)
+
+    @staticmethod
+    def get_current_knowledge_revision(
+        backend: SQLiteCheckpointRepository, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> KnowledgeDocumentRevision:
+        backend._require_project_scope(scope)
+        try:
+            with backend._connect() as connection:
+                row = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
+                    "knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.document_id = ? AND source.owner_id = ? "
+                    "AND source.workspace_id IS ? AND source.project_id = ? "
+                    "AND source.is_deleted = 0",
+                    (
+                        str(document_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise KnowledgeDocumentNotFound("knowledge document was not found")
+                return _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+        except KnowledgeDocumentNotFound:
+            raise
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def get_knowledge_revision(
+        backend: SQLiteCheckpointRepository,
+        scope: MemoryScope,
+        document_id: KnowledgeDocumentId,
+        revision_id: KnowledgeDocumentRevisionId,
+    ) -> KnowledgeDocumentRevision:
+        """Retrieve one retained revision through both explicit source and revision identity."""
+        backend._require_project_scope(scope)
+        try:
+            with backend._connect() as connection:
+                row = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
+                    "knowledge_document_revisions AS revision "
+                    "ON revision.document_id = source.document_id "
+                    "WHERE source.document_id = ? AND revision.revision_id = ? "
+                    "AND source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0",
+                    (
+                        str(document_id),
+                        str(revision_id),
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise KnowledgeDocumentNotFound("knowledge document was not found")
+                return _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+        except KnowledgeDocumentNotFound:
+            raise
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def apply_knowledge_sync(
+        backend: SQLiteCheckpointRepository,
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> KnowledgeDocumentSyncStoreResult:
+        """Atomically apply scoped revisions and destructive payload deletion tombstones."""
+        backend._require_project_scope(scope)
+        _KnowledgeOperations._validate_knowledge_sync(scope, revisions, tombstones)
+        try:
+            with backend._transaction() as connection:
+                backend._store_project_scope(connection, scope)
+                for tombstone in tombstones:
+                    current = _KnowledgeOperations._knowledge_source_row(
+                        connection, scope, tombstone.document_id
+                    )
+                    if (
+                        current is None
+                        or int(current["is_deleted"]) != 0
+                        or current["current_revision_id"] != str(tombstone.expected_revision_id)
+                        or current["content_digest"] != tombstone.content_digest
+                        or current["relative_path"] != tombstone.relative_path
+                    ):
+                        raise KnowledgeDocumentConflict("knowledge document deletion conflicts")
+                    connection.execute(
+                        "UPDATE knowledge_document_sources SET current_revision_id = NULL, "
+                        "is_deleted = 1, deleted_at = ? WHERE document_id = ? "
+                        "AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+                        (
+                            tombstone.deleted_at.isoformat(),
+                            str(tombstone.document_id),
+                            str(scope.owner_id),
+                            _maybe(scope.workspace_id),
+                            str(scope.project_id),
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT INTO knowledge_document_tombstones "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(document_id) DO UPDATE SET "
+                        "relative_path = excluded.relative_path, "
+                        "content_digest = excluded.content_digest, "
+                        "deleted_at = excluded.deleted_at",
+                        (
+                            str(tombstone.document_id),
+                            str(scope.owner_id),
+                            scope.visibility.value,
+                            _maybe(scope.workspace_id),
+                            str(scope.project_id),
+                            tombstone.relative_path,
+                            tombstone.content_digest,
+                            tombstone.deleted_at.isoformat(),
+                        ),
+                    )
+                    # The predecessor relationship deliberately uses RESTRICT so a
+                    # malformed write cannot erase history.  Payload erasure must
+                    # therefore remove the immutable chain newest-first; sections
+                    # and links cascade with each revision.
+                    revision_rows = connection.execute(
+                        "SELECT revision_id FROM knowledge_document_revisions "
+                        "WHERE document_id = ? ORDER BY revision_number DESC",
+                        (str(tombstone.document_id),),
+                    ).fetchall()
+                    for revision_row in revision_rows:
+                        connection.execute(
+                            "DELETE FROM knowledge_document_revisions WHERE revision_id = ?",
+                            (revision_row["revision_id"],),
+                        )
+                for revision in revisions:
+                    _KnowledgeOperations._store_knowledge_revision(connection, scope, revision)
+                rows = connection.execute(
+                    "SELECT source.document_id, source.relative_path, source.content_digest, "
+                    "source.current_revision_id, revision.revision_number "
+                    "FROM knowledge_document_sources AS source JOIN knowledge_document_revisions "
+                    "AS revision ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0 "
+                    "ORDER BY source.relative_path ASC, source.document_id ASC",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+                return KnowledgeDocumentSyncStoreResult(
+                    tuple(
+                        _KnowledgeOperations._known_knowledge_document(row, scope) for row in rows
+                    ),
+                    len(revisions),
+                    len(tombstones),
+                )
+        except (
+            KnowledgeDocumentConflict,
+            KnowledgeDocumentSecretRejected,
+            InvalidKnowledgeDocumentScope,
+        ):
+            raise
+        except sqlite3.IntegrityError as error:
+            raise KnowledgeDocumentConflict(
+                "knowledge document storage constraint conflicts"
+            ) from error
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def _store_knowledge_revision(
+        connection: sqlite3.Connection,
+        scope: MemoryScope,
+        revision: KnowledgeDocumentRevision,
+    ) -> None:
+        document = revision.document
+        safety = KnowledgeDocumentSafetyPolicy().assess(document)
+        if not safety.accepted:
+            raise KnowledgeDocumentSecretRejected(
+                "knowledge document was rejected by safety policy"
+            )
+        existing = _KnowledgeOperations._knowledge_source_row(
+            connection, scope, document.document_id
+        )
+        if existing is None:
+            if revision.revision_number != 1 or revision.predecessor_revision_id is not None:
+                raise KnowledgeDocumentConflict("knowledge document creation revision conflicts")
+            connection.execute(
+                "INSERT INTO knowledge_document_sources "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(document.document_id),
+                    str(scope.owner_id),
+                    scope.visibility.value,
+                    _maybe(scope.workspace_id),
+                    str(scope.project_id),
+                    scope.level.value,
+                    document.relative_path,
+                    document.content_digest,
+                    None,
+                    0,
+                    revision.created_at.isoformat(),
+                    None,
+                ),
+            )
+        elif (
+            int(existing["is_deleted"]) != 0
+            or existing["current_revision_id"] != str(revision.predecessor_revision_id)
+            or revision.revision_number
+            != _KnowledgeOperations._knowledge_revision_number(
+                connection, revision.predecessor_revision_id
+            )
+            + 1
+        ):
+            raise KnowledgeDocumentConflict("knowledge document current revision conflicts")
+        connection.execute(
+            "INSERT INTO knowledge_document_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ",
+            (
+                str(revision.revision_id),
+                str(document.document_id),
+                revision.revision_number,
+                _maybe(revision.predecessor_revision_id),
+                document.source_kind.value,
+                document.relative_path,
+                document.content_digest,
+                document.title,
+                json.dumps(document.frontmatter, separators=(",", ":")),
+                revision.created_at.isoformat(),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO knowledge_document_sections VALUES (?, ?, ?, ?, ?)",
+            [
+                (str(revision.revision_id), index, section.heading, section.level, section.content)
+                for index, section in enumerate(document.sections)
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO knowledge_document_links VALUES (?, ?, ?)",
+            [(str(revision.revision_id), link.target, link.kind) for link in document.links],
+        )
+        updated = connection.execute(
+            "UPDATE knowledge_document_sources SET relative_path = ?, content_digest = ?, "
+            "current_revision_id = ?, is_deleted = 0, deleted_at = NULL "
+            "WHERE document_id = ? AND owner_id = ? AND workspace_id IS ? AND project_id = ?",
+            (
+                document.relative_path,
+                document.content_digest,
+                str(revision.revision_id),
+                str(document.document_id),
+                str(scope.owner_id),
+                _maybe(scope.workspace_id),
+                str(scope.project_id),
+            ),
+        )
+        if updated.rowcount != 1:
+            raise KnowledgeDocumentConflict("knowledge document activation conflicts")
+
+    @staticmethod
+    def _knowledge_revision_number(
+        connection: sqlite3.Connection, revision_id: KnowledgeDocumentRevisionId | None
+    ) -> int:
+        if revision_id is None:
+            return 0
+        row = connection.execute(
+            "SELECT revision_number FROM knowledge_document_revisions WHERE revision_id = ?",
+            (str(revision_id),),
+        ).fetchone()
+        if row is None:
+            raise KnowledgeDocumentConflict("knowledge document predecessor was not found")
+        return int(row["revision_number"])
+
+    @staticmethod
+    def _known_knowledge_document(row: sqlite3.Row, scope: MemoryScope) -> KnownKnowledgeDocument:
+        return KnownKnowledgeDocument(
+            KnowledgeDocumentId.from_string(row["document_id"]),
+            scope,
+            row["relative_path"],
+            row["content_digest"],
+            KnowledgeDocumentRevisionId.from_string(row["current_revision_id"]),
+            int(row["revision_number"]),
+        )
+
+    @staticmethod
+    def _knowledge_source_row(
+        connection: sqlite3.Connection, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM knowledge_document_sources WHERE document_id = ? AND owner_id = ? "
+                "AND workspace_id IS ? AND project_id = ?",
+                (
+                    str(document_id),
+                    str(scope.owner_id),
+                    _maybe(scope.workspace_id),
+                    str(scope.project_id),
+                ),
+            ).fetchone(),
+        )
+
+    @staticmethod
+    def _knowledge_revision_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> KnowledgeDocumentRevision:
+        revision_id = KnowledgeDocumentRevisionId.from_string(row["revision_id"])
+        sections = tuple(
+            KnowledgeDocumentSection(item["heading"], int(item["heading_level"]), item["content"])
+            for item in connection.execute(
+                "SELECT heading, heading_level, content FROM knowledge_document_sections "
+                "WHERE revision_id = ? ORDER BY section_index ASC",
+                (str(revision_id),),
+            ).fetchall()
+        )
+        links = tuple(
+            KnowledgeDocumentLink(item["link_target"], item["link_kind"])
+            for item in connection.execute(
+                "SELECT link_target, link_kind FROM knowledge_document_links WHERE revision_id = ? "
+                "ORDER BY link_kind ASC, link_target ASC",
+                (str(revision_id),),
+            ).fetchall()
+        )
+        frontmatter_value = json.loads(row["frontmatter_json"])
+        if not isinstance(frontmatter_value, list) or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or not all(isinstance(value, str) for value in item)
+            for item in frontmatter_value
+        ):
+            raise KnowledgeDocumentStorageFailure("knowledge document stored payload is invalid")
+        return KnowledgeDocumentRevision(
+            revision_id,
+            KnowledgeDocument(
+                KnowledgeDocumentId.from_string(row["document_id"]),
+                scope,
+                row["relative_path"],
+                KnowledgeDocumentSourceKind(row["source_kind"]),
+                row["content_digest"],
+                row["title"],
+                tuple((item[0], item[1]) for item in frontmatter_value),
+                sections,
+                links,
+            ),
+            int(row["revision_number"]),
+            KnowledgeDocumentRevisionId.from_string(row["predecessor_revision_id"])
+            if row["predecessor_revision_id"] is not None
+            else None,
+            datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _validate_knowledge_sync(
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> None:
+        if any(item.document.scope != scope for item in revisions) or any(
+            item.scope != scope for item in tombstones
+        ):
+            raise InvalidKnowledgeDocumentScope("knowledge document scope is invalid")
+        document_ids = [item.document.document_id for item in revisions]
+        tombstone_ids = [item.document_id for item in tombstones]
+        if (
+            len(set(document_ids)) != len(document_ids)
+            or len(set(tombstone_ids)) != len(tombstone_ids)
+            or set(document_ids) & set(tombstone_ids)
+        ):
+            raise KnowledgeDocumentConflict("knowledge sync contains conflicting document actions")
+
+
+class SQLiteKnowledgeDocumentRepository:
+    """Scoped SQLite adapter for immutable local knowledge document revisions."""
+
+    def __init__(self, path: Path, *, base_directory: Path | None = None) -> None:
+        self._backend = SQLiteCheckpointRepository(path, base_directory=base_directory)
+
+    def migrate(self, *, fail_after_version: int | None = None) -> None:
+        self._backend.migrate(fail_after_version=fail_after_version)
+
+    def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]:
+        return _KnowledgeOperations.list_active_knowledge_documents(self._backend, scope)
+
+    def get_current_revision(
+        self, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> KnowledgeDocumentRevision:
+        return _KnowledgeOperations.get_current_knowledge_revision(
+            self._backend, scope, document_id
+        )
+
+    def get_revision(
+        self,
+        scope: MemoryScope,
+        document_id: KnowledgeDocumentId,
+        revision_id: KnowledgeDocumentRevisionId,
+    ) -> KnowledgeDocumentRevision:
+        return _KnowledgeOperations.get_knowledge_revision(
+            self._backend, scope, document_id, revision_id
+        )
+
+    def apply_sync(
+        self,
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> KnowledgeDocumentSyncStoreResult:
+        return _KnowledgeOperations.apply_knowledge_sync(
+            self._backend, scope, revisions, tombstones
+        )
 
 
 class SQLiteSourceStructureRepository:

@@ -1,21 +1,24 @@
 """Storage-independent, untrusted local-knowledge parsing contracts."""
 
-from .markdown import (
+from mnemo_memory.packages.domain import (
     KnowledgeDocument,
     KnowledgeDocumentLink,
+    KnowledgeDocumentSection,
+    KnowledgeDocumentSourceKind,
+    KnownKnowledgeDocument,
+)
+
+from .markdown import (
     KnowledgeDocumentParseError,
     KnowledgeDocumentParseLimits,
     KnowledgeDocumentParser,
     KnowledgeDocumentParseRequest,
-    KnowledgeDocumentSection,
-    KnowledgeDocumentSourceKind,
 )
 from .sync import (
     KnowledgeSyncAction,
     KnowledgeSyncActionKind,
     KnowledgeSyncPlan,
     KnowledgeSyncPlanner,
-    KnownKnowledgeDocument,
 )
 
 __all__ = [

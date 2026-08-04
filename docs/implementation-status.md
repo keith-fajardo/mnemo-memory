@@ -697,5 +697,16 @@ follow document links, discover a vault automatically, or add documents to agent
 A storage-independent incremental-sync planner now compares one scoped discovery result with
 known active document metadata. It deterministically produces unchanged, revised, added,
 uniquely digest-proven renamed, and payload-free tombstone actions. A duplicate-content copy is
-never guessed to be a rename. Applying that plan atomically to durable document revisions,
-including secret policy and retrieval, remains in progress.
+never guessed to be a rename.
+
+Durable synchronization is now implemented for the local SQLite profile and a matching reference
+adapter. It creates immutable, scoped document revisions; preserves the current revision pointer;
+atomically rejects invalid batches; and, after an explicit deletion, removes all content-bearing
+revision/section/link rows while retaining only a minimal scoped tombstone. A deterministic
+high-confidence secret policy rejects clear credential-like values before persistence; it does not
+claim to detect every secret. The application service composes planning, policy, revision identity,
+and atomic storage without filesystem access, and the local runtime now exposes that service.
+
+Lexical retrieval, Obsidian vault consent/bindings, links/backlinks, embeddings, and automatic
+context-packet integration remain in progress. Documents are still not discovered, synchronized,
+or injected into an agent context automatically.

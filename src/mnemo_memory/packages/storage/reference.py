@@ -26,6 +26,11 @@ from mnemo_memory.packages.domain import (
     CodeSymbolKind,
     EventId,
     EvidenceReference,
+    KnowledgeDocumentId,
+    KnowledgeDocumentRevision,
+    KnowledgeDocumentRevisionId,
+    KnowledgeDocumentTombstone,
+    KnownKnowledgeDocument,
     MemoryScope,
     ScopeLevel,
 )
@@ -37,6 +42,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     DbtNodeId,
 )
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
+from mnemo_memory.packages.policy import KnowledgeDocumentSafetyPolicy
 
 from .contracts import (
     ActiveSnapshotConflict,
@@ -58,8 +64,13 @@ from .contracts import (
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
+    KnowledgeDocumentConflict,
+    KnowledgeDocumentNotFound,
+    KnowledgeDocumentSecretRejected,
+    KnowledgeDocumentSyncStoreResult,
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ManifestSnapshotPage,
@@ -70,6 +81,165 @@ from .contracts import (
     SourceSnapshotStoreResult,
     SourceStructureRepository,
 )
+
+
+class ReferenceKnowledgeDocumentRepository:
+    """Atomic in-memory reference for scoped immutable knowledge revisions.
+
+    Explicit deletion removes every stored content-bearing revision and retains only a private
+    tombstone object.  This mirrors the intended SQLite deletion behavior.
+    """
+
+    def __init__(self, policy: KnowledgeDocumentSafetyPolicy | None = None) -> None:
+        self._policy = policy or KnowledgeDocumentSafetyPolicy()
+        self._active: dict[KnowledgeDocumentId, KnownKnowledgeDocument] = {}
+        self._revisions: dict[KnowledgeDocumentRevisionId, KnowledgeDocumentRevision] = {}
+        self._tombstones: dict[KnowledgeDocumentId, KnowledgeDocumentTombstone] = {}
+
+    def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]:
+        self._require_scope(scope)
+        return tuple(
+            sorted(
+                (item for item in self._active.values() if item.scope == scope),
+                key=lambda item: (item.relative_path, str(item.document_id)),
+            )
+        )
+
+    def get_current_revision(
+        self, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> KnowledgeDocumentRevision:
+        self._require_scope(scope)
+        state = self._active.get(document_id)
+        if state is None or state.scope != scope:
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        return self._revisions[state.current_revision_id]
+
+    def get_revision(
+        self,
+        scope: MemoryScope,
+        document_id: KnowledgeDocumentId,
+        revision_id: KnowledgeDocumentRevisionId,
+    ) -> KnowledgeDocumentRevision:
+        self._require_scope(scope)
+        state = self._active.get(document_id)
+        revision = self._revisions.get(revision_id)
+        if (
+            state is None
+            or state.scope != scope
+            or revision is None
+            or revision.document.document_id != document_id
+        ):
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        return revision
+
+    def apply_sync(
+        self,
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> KnowledgeDocumentSyncStoreResult:
+        self._require_scope(scope)
+        self._validate(scope, revisions, tombstones)
+        active, stored_revisions, stored_tombstones = (
+            dict(self._active),
+            dict(self._revisions),
+            dict(self._tombstones),
+        )
+        try:
+            for tombstone in tombstones:
+                state = active.pop(tombstone.document_id)
+                if state.current_revision_id != tombstone.expected_revision_id:
+                    raise KnowledgeDocumentConflict("knowledge document current revision conflicts")
+                for revision_id, revision in tuple(stored_revisions.items()):
+                    if revision.document.document_id == tombstone.document_id:
+                        del stored_revisions[revision_id]
+                stored_tombstones[tombstone.document_id] = tombstone
+            for revision in revisions:
+                document = revision.document
+                active[document.document_id] = KnownKnowledgeDocument(
+                    document.document_id,
+                    scope,
+                    document.relative_path,
+                    document.content_digest,
+                    revision.revision_id,
+                    revision.revision_number,
+                )
+                stored_revisions[revision.revision_id] = revision
+                stored_tombstones.pop(document.document_id, None)
+        except BaseException:
+            raise
+        self._active, self._revisions, self._tombstones = (
+            active,
+            stored_revisions,
+            stored_tombstones,
+        )
+        return KnowledgeDocumentSyncStoreResult(
+            self.list_active_documents(scope), len(revisions), len(tombstones)
+        )
+
+    def _validate(
+        self,
+        scope: MemoryScope,
+        revisions: tuple[KnowledgeDocumentRevision, ...],
+        tombstones: tuple[KnowledgeDocumentTombstone, ...],
+    ) -> None:
+        document_ids = [item.document.document_id for item in revisions]
+        tombstone_ids = [item.document_id for item in tombstones]
+        if (
+            len(set(document_ids)) != len(document_ids)
+            or len(set(tombstone_ids)) != len(tombstone_ids)
+            or set(document_ids) & set(tombstone_ids)
+        ):
+            raise KnowledgeDocumentConflict("knowledge sync contains conflicting document actions")
+        if any(item.document.scope != scope for item in revisions) or any(
+            item.scope != scope for item in tombstones
+        ):
+            raise InvalidKnowledgeDocumentScope("knowledge document scope is invalid")
+        for revision in revisions:
+            decision = self._policy.assess(revision.document)
+            if not decision.accepted:
+                raise KnowledgeDocumentSecretRejected(
+                    "knowledge document was rejected by safety policy"
+                )
+            current = self._active.get(revision.document.document_id)
+            if current is None:
+                if revision.revision_number != 1 or revision.predecessor_revision_id is not None:
+                    raise KnowledgeDocumentConflict(
+                        "knowledge document creation revision conflicts"
+                    )
+            elif (
+                current.scope != scope
+                or revision.revision_number != current.revision_number + 1
+                or revision.predecessor_revision_id != current.current_revision_id
+            ):
+                raise KnowledgeDocumentConflict("knowledge document current revision conflicts")
+        for tombstone in tombstones:
+            current = self._active.get(tombstone.document_id)
+            if (
+                current is None
+                or current.scope != scope
+                or current.current_revision_id != tombstone.expected_revision_id
+                or current.content_digest != tombstone.content_digest
+                or current.relative_path != tombstone.relative_path
+            ):
+                raise KnowledgeDocumentConflict("knowledge document deletion conflicts")
+        final_paths = {
+            item.relative_path: item.document_id
+            for item in self._active.values()
+            if item.scope == scope and item.document_id not in set(tombstone_ids)
+        }
+        for revision in revisions:
+            prior = final_paths.get(revision.document.relative_path)
+            if prior is not None and prior != revision.document.document_id:
+                raise KnowledgeDocumentConflict("knowledge document path conflicts")
+            final_paths[revision.document.relative_path] = revision.document.document_id
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise InvalidKnowledgeDocumentScope(
+                "knowledge documents require explicit project scope"
+            )
 
 
 class ReferenceApprovedEpisodicEventRepository:

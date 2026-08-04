@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from hashlib import sha256
 from uuid import UUID, uuid5
 
-from mnemo_memory.packages.domain import KnowledgeDocumentId, MemoryScope
+from mnemo_memory.packages.domain import (
+    KnowledgeDocument,
+    KnowledgeDocumentId,
+    KnowledgeDocumentLink,
+    KnowledgeDocumentSection,
+    KnowledgeDocumentSourceKind,
+    MemoryScope,
+)
 
 _DOCUMENT_NAMESPACE = UUID("193d4055-6458-4577-b1cf-1ae4a9458678")
 _HEADING_PATTERN = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -24,11 +30,6 @@ _WIKI_LINK_PATTERN = re.compile(
     r"\[\[([^\]|#\r\n]{1,512})(?:#[^\]|\r\n]{1,512})?(?:\|[^\]\r\n]{0,256})?\]\]"
 )
 _MAX_FRONTMATTER_VALUE = 512
-
-
-class KnowledgeDocumentSourceKind(StrEnum):
-    MARKDOWN = "markdown"
-    OBSIDIAN = "obsidian"
 
 
 class KnowledgeDocumentParseError(ValueError):
@@ -81,61 +82,6 @@ class KnowledgeDocumentParseRequest:
             raise KnowledgeDocumentParseError("MNEMO_KNOWLEDGE_PATH_INVALID")
         if not isinstance(self.source_kind, KnowledgeDocumentSourceKind):
             raise TypeError("knowledge source kind is invalid")
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocumentLink:
-    """One declared Markdown or Obsidian link, retained as untrusted text evidence."""
-
-    target: str
-    kind: str
-
-    def __post_init__(self) -> None:
-        if self.kind not in {"markdown", "wiki"} or not self.target or len(self.target) > 512:
-            raise ValueError("knowledge document link is invalid")
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocumentSection:
-    """A bounded literal section.  ``content`` remains untrusted data, never instructions."""
-
-    heading: str
-    level: int
-    content: str
-
-    def __post_init__(self) -> None:
-        if not self.heading or not 0 <= self.level <= 6:
-            raise ValueError("knowledge document section heading is invalid")
-        if len(self.content) > 12_000:
-            raise ValueError("knowledge document section exceeds the domain bound")
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocument:
-    """Parsed local document candidate with explicit provenance identity and untrusted payload."""
-
-    document_id: KnowledgeDocumentId
-    scope: MemoryScope
-    relative_path: str
-    source_kind: KnowledgeDocumentSourceKind
-    content_digest: str
-    title: str
-    frontmatter: tuple[tuple[str, str], ...]
-    sections: tuple[KnowledgeDocumentSection, ...]
-    links: tuple[KnowledgeDocumentLink, ...]
-    is_untrusted: bool = True
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.document_id, KnowledgeDocumentId):
-            raise TypeError("knowledge document identity is invalid")
-        if not self.content_digest.startswith("sha256:") or len(self.content_digest) != 71:
-            raise ValueError("knowledge document requires a sha256 digest")
-        if not self.relative_path or self.relative_path.startswith("/"):
-            raise ValueError("knowledge document path is invalid")
-        if not self.title or len(self.title) > 512:
-            raise ValueError("knowledge document title is invalid")
-        if not self.is_untrusted:
-            raise ValueError("parsed knowledge documents must remain untrusted")
 
 
 class KnowledgeDocumentParser:

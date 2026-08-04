@@ -53,6 +53,16 @@ from .dbt import (
     ResolvedManifestFile,
     ResolveManifestFile,
 )
+from .knowledge import (
+    KnowledgeApplicationConflict,
+    KnowledgeApplicationError,
+    KnowledgeApplicationInvalidScope,
+    KnowledgeApplicationRejected,
+    KnowledgeApplicationStorageFailure,
+    KnowledgeDocumentApplicationService,
+    KnowledgeSynchronizationResult,
+    SynchronizeKnowledgeDocuments,
+)
 from .services import LifecycleService
 
 __all__ = [
@@ -86,6 +96,13 @@ __all__ = [
     "GetCheckpointContext",
     "IngestManifest",
     "IngestManifestResult",
+    "KnowledgeApplicationConflict",
+    "KnowledgeApplicationError",
+    "KnowledgeApplicationInvalidScope",
+    "KnowledgeApplicationRejected",
+    "KnowledgeApplicationStorageFailure",
+    "KnowledgeDocumentApplicationService",
+    "KnowledgeSynchronizationResult",
     "LifecycleService",
     "LineageDirection",
     "LineageQueryResult",
@@ -98,6 +115,7 @@ __all__ = [
     "ResolveManifestFile",
     "ResolvedManifestFile",
     "ReviseCheckpoint",
+    "SynchronizeKnowledgeDocuments",
     "build_checkpoint_runtime",
     "build_lifecycle_service",
     "default_data_directory",

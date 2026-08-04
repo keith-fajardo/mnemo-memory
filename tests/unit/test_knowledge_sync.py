@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from mnemo_memory.packages.domain import (
     KnowledgeDocumentId,
+    KnowledgeDocumentRevisionId,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -35,7 +36,12 @@ def document(path: str, text: str):  # type: ignore[no-untyped-def]
 def known(identifier: str, path: str, text: str) -> KnownKnowledgeDocument:
     parsed = document(path, text)
     return KnownKnowledgeDocument(
-        KnowledgeDocumentId.from_string(identifier), scope(), path, parsed.content_digest
+        KnowledgeDocumentId.from_string(identifier),
+        scope(),
+        path,
+        parsed.content_digest,
+        KnowledgeDocumentRevisionId.from_string(identifier),
+        1,
     )
 
 

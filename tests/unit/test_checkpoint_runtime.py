@@ -17,6 +17,7 @@ from mnemo_memory.packages.application import (
     LocalConfigurationError,
     LocalRuntimeError,
     ReviseCheckpoint,
+    SynchronizeKnowledgeDocuments,
     build_checkpoint_runtime,
     resolve_local_config,
 )
@@ -39,6 +40,7 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
+from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 
 NOW = datetime(2026, 8, 2, 13, 0, tzinfo=UTC)
 HASH = "sha256:" + "c" * 64
@@ -136,7 +138,7 @@ def test_runtime_persists_checkpoint_across_instances_and_isolates_directories(
         created = runtime_a.checkpoint_service.create(
             CreateCheckpoint(scope_value, content(), (evidence(),))
         )
-        assert runtime_a.repository.schema_version() == 9
+        assert runtime_a.repository.schema_version() == 10
         assert runtime_a.repository.connection_settings()["foreign_keys"] == 1
     with build_checkpoint_runtime(configuration_a) as runtime_b:
         restored = runtime_b.checkpoint_service.get(
@@ -151,6 +153,33 @@ def test_runtime_persists_checkpoint_across_instances_and_isolates_directories(
         runtime_c.checkpoint_service.get(
             GetCheckpoint(scope_value, created.aggregate.checkpoint_id)
         )
+
+
+def test_runtime_composes_durable_scoped_knowledge_service(tmp_path: Path) -> None:
+    configuration = LocalConfig.defaults(tmp_path / "knowledge runtime")
+    knowledge_scope = MemoryScope(
+        OwnerId.new(),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.new(),
+        ProjectId.new(),
+    )
+    document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(knowledge_scope, "notes/decision.md"),
+        "# Decision\nKeep user-owned documents scoped and explicit.",
+    )
+    with build_checkpoint_runtime(configuration) as runtime:
+        assert runtime.knowledge_document_service is not None
+        result = runtime.knowledge_document_service.synchronize(
+            SynchronizeKnowledgeDocuments(knowledge_scope, (document,))
+        )
+        document_id = result.store_result.active_documents[0].document_id
+    with build_checkpoint_runtime(configuration) as runtime:
+        assert runtime.knowledge_document_repository is not None
+        restored = runtime.knowledge_document_repository.get_current_revision(
+            knowledge_scope, document_id
+        )
+    assert restored.document == document
 
 
 def test_runtime_preserves_reasoning_lesson_across_reopen(tmp_path: Path) -> None:
@@ -220,7 +249,7 @@ def test_runtime_rejects_corrupt_and_newer_databases_without_fallback(tmp_path: 
         sqlite3.connect(runtime.repository.path) as connection,
     ):
         connection.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (10, ?)",
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (11, ?)",
             (NOW.isoformat(),),
         )
     with pytest.raises(LocalRuntimeError, match="unavailable"):
