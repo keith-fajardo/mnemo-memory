@@ -477,6 +477,37 @@ def test_rust_explicit_use_alias_resolves_a_unique_local_member_call(tmp_path: P
     assert calls[("service.process", "local_validate")] is not None
 
 
+def test_rust_flat_grouped_imports_resolve_only_explicit_unique_members(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "helpers.rs").write_text(
+        "pub fn validate() {} pub fn normalize() {}\n", encoding="utf-8"
+    )
+    (root / "service.rs").write_text(
+        "use crate::tools::helpers::{validate as check, normalize}; "
+        "fn run() { check(); normalize(); }\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, "tools.helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.run"]
+    assert calls[("service.run", "check")] is not None
+    assert calls[("service.run", "normalize")] is not None
+
+
 def test_csharp_explicit_using_alias_resolves_a_unique_local_static_call(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"

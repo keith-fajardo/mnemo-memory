@@ -143,7 +143,7 @@ Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. Jav
 TypeScript also recognize direct top-level literal CommonJS `require("./local")` bindings alongside
 ES-module imports, while Python recognizes direct local `from .module import member` and parent-package
 relative imports that remain inside the registered project. Rust recognizes an explicit
-`use crate::path::member as local_name` spelling, and C# recognizes an explicit
+`use crate::path::member as local_name` spelling and flat `use crate::path::{member as local_name, member}` lists, and C# recognizes an explicit
 `using Local = Namespace.Type` spelling. Java recognizes direct
 `import static package.Type.member` imports. They record explicit syntactic calls separately from imports and can follow only **proven** internal links to show a
 bounded dependency/impact candidate. It does not guess runtime dispatch or claim a complete call

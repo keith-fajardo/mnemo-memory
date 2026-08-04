@@ -39,7 +39,7 @@ explicit `use Namespace\\Type as Alias`, and explicit `use function Namespace\\m
 direct top-level literal CommonJS `require("./local")` bindings in JavaScript and TypeScript.
 Python also resolves direct local `from .module import member` and parent-package relative imports
 that remain inside the registered project. Rust resolves an explicit
-`use crate::path::member as local_name` spelling when the saved target is unique. Namespace-only
+`use crate::path::member as local_name` spelling and flat `use crate::path::{member as local_name, member}` lists when each saved target is unique. Namespace-only
 imports, computed/dynamic `require` calls, relative imports that escape the registered project,
 and aliases that cannot be matched uniquely remain unresolved. C# also resolves an explicit
 `using Local = Namespace.Type` spelling when the target is unique. No unproven runtime relationship is

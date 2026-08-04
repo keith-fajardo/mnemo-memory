@@ -892,15 +892,20 @@ class SourceStructureParser:
                 symbols.append(_PendingSymbol(relative, qualified, kind, node.start_point.row + 1))
                 next_parent = qualified
             if node.type in rules.import_kinds:
-                target = self._import_target(language, node, raw)
-                if target is not None:
-                    imports.append((relative, target))
-                    bindings.extend(
-                        (relative, binding, encoded_target)
-                        for binding, encoded_target in self._tree_import_bindings(
-                            language, node, raw, target
+                if language == "rust":
+                    for rust_target, binding in self._rust_import_entries(node, raw):
+                        imports.append((relative, rust_target))
+                        bindings.append((relative, binding, rust_target.removeprefix("crate.")))
+                else:
+                    import_target = self._import_target(language, node, raw)
+                    if import_target is not None:
+                        imports.append((relative, import_target))
+                        bindings.extend(
+                            (relative, binding, encoded_target)
+                            for binding, encoded_target in self._tree_import_bindings(
+                                language, node, raw, import_target
+                            )
                         )
-                    )
             if (
                 language in {"javascript", "typescript", "tsx"}
                 and node.type == "variable_declarator"
@@ -914,17 +919,17 @@ class SourceStructureParser:
                 # of the existing ES-module bindings.
                 commonjs = self._commonjs_require_bindings(node, raw)
                 if commonjs is not None:
-                    target, commonjs_bindings = commonjs
-                    imports.append((relative, target))
+                    commonjs_target, commonjs_bindings = commonjs
+                    imports.append((relative, commonjs_target))
                     bindings.extend(
-                        (relative, binding, f"{target}|{member}")
+                        (relative, binding, f"{commonjs_target}|{member}")
                         for binding, member in commonjs_bindings
                     )
             call_fields = dict(rules.call_kinds)
             if node.type in call_fields and parent != module:
-                target = self._call_target(node, raw, call_fields[node.type])
-                if target is not None:
-                    calls.append((relative, parent, target))
+                call_target = self._call_target(node, raw, call_fields[node.type])
+                if call_target is not None:
+                    calls.append((relative, parent, call_target))
             for child in node.named_children:
                 visit(child, next_parent)
 
@@ -977,6 +982,65 @@ class SourceStructureParser:
         return (target, tuple(bindings)) if bindings else None
 
     @staticmethod
+    def _rust_import_entries(node: Node, raw: bytes) -> tuple[tuple[str, str], ...]:
+        """Return exact, explicit Rust import members and their local bindings.
+
+        This supports one direct member or a flat ``use crate::path::{member as alias, member}``
+        list. Wildcards, ``self``, nested groups, and non-``crate`` paths remain unresolved: they
+        need broader module visibility or import semantics that this static projection does not
+        model. Every returned item still needs one unique in-snapshot declaration before it can
+        form a call edge.
+        """
+        argument = node.child_by_field_name("argument")
+        if argument is None:
+            return ()
+        if argument.type == "use_as_clause":
+            path = SourceStructureParser._tree_static_target(
+                argument.child_by_field_name("path"), raw
+            )
+            alias = _safe_tree_text(argument.child_by_field_name("alias"), raw)
+            return SourceStructureParser._rust_import_entry(path, alias)
+        if argument.type == "scoped_identifier":
+            return SourceStructureParser._rust_import_entry(
+                SourceStructureParser._tree_static_target(argument, raw), None
+            )
+        if argument.type != "scoped_use_list":
+            return ()
+        prefix = SourceStructureParser._tree_static_target(
+            argument.child_by_field_name("path"), raw
+        )
+        use_list = argument.child_by_field_name("list")
+        if prefix is None or use_list is None or not prefix.startswith("crate."):
+            return ()
+        entries: list[tuple[str, str]] = []
+        for item in use_list.named_children:
+            if item.type == "identifier":
+                entries.extend(
+                    SourceStructureParser._rust_import_entry(
+                        f"{prefix}.{_safe_tree_text(item, raw) or ''}", None
+                    )
+                )
+            elif item.type == "use_as_clause":
+                member = _safe_tree_text(item.child_by_field_name("path"), raw)
+                alias = _safe_tree_text(item.child_by_field_name("alias"), raw)
+                if member is not None and "." not in member:
+                    entries.extend(
+                        SourceStructureParser._rust_import_entry(f"{prefix}.{member}", alias)
+                    )
+        return tuple(entries)
+
+    @staticmethod
+    def _rust_import_entry(target: str | None, alias: str | None) -> tuple[tuple[str, str], ...]:
+        if target is None or not target.startswith("crate."):
+            return ()
+        normalized = target.removeprefix("crate.")
+        parts = normalized.split(".")
+        if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
+            return ()
+        binding = alias or parts[-1]
+        return ((target, binding),) if _is_safe_symbol_name(binding) else ()
+
+    @staticmethod
     def _tree_import_bindings(
         language: str, node: Node, raw: bytes, target: str
     ) -> tuple[tuple[str, str], ...]:
@@ -993,16 +1057,6 @@ class SourceStructureParser:
             is_static = any(child.type == "static" for child in node.children)
             encoded_target = f"java-static:{target}" if is_static else target
             return ((binding_name, encoded_target),)
-        if language == "rust" and target.startswith("crate."):
-            normalized = target.removeprefix("crate.")
-            argument = node.child_by_field_name("argument")
-            alias = (
-                _safe_tree_text(argument.child_by_field_name("alias"), raw)
-                if argument is not None and argument.type == "use_as_clause"
-                else None
-            )
-            binding_name = alias or normalized.rsplit(".", maxsplit=1)[-1]
-            return ((binding_name, normalized),) if _is_safe_symbol_name(binding_name) else ()
         if language == "go":
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
             # A missing Go import alias means the final path component is the
