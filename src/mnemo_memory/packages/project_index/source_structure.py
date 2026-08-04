@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -369,6 +370,7 @@ class SourceStructureParser:
         calls: list[tuple[str, str, str]] = []
         go_module_path: str | None = None
         typescript_path_aliases: dict[str, str] = {}
+        python_source_roots: tuple[str, ...] = ()
         total_bytes = 0
         for path in paths:
             raw = self._read(path, request.limits)
@@ -389,6 +391,8 @@ class SourceStructureParser:
                 # Strict JSON only.  Config inheritance, comments, package resolution, and
                 # every non-local/ambiguous mapping stay outside this static projection.
                 typescript_path_aliases = self._typescript_path_aliases(raw)
+            elif relative == "pyproject.toml":
+                python_source_roots = self._python_source_roots(raw)
             language = self._suffixes.get(path.suffix.lower())
             if language is None:
                 # Keep only the path/digest projection for a deliberately file-only extension.
@@ -520,6 +524,7 @@ class SourceStructureParser:
                         static_method_ids,
                         go_module_path,
                         typescript_path_aliases,
+                        python_source_roots,
                     ),
                 )
             )
@@ -540,6 +545,7 @@ class SourceStructureParser:
                                 go_module_path,
                                 go_packages_by_directory,
                                 typescript_path_aliases,
+                                python_source_roots,
                             ),
                         )
                         for path, target in sorted(set(imports))
@@ -690,6 +696,41 @@ class SourceStructureParser:
         return aliases
 
     @staticmethod
+    def _python_source_roots(raw: bytes) -> tuple[str, ...]:
+        """Return the one explicit setuptools package root that Mnemo can prove is local.
+
+        Packaging tools have different semantics.  This initial static resolver intentionally
+        accepts only ``[tool.setuptools] package-dir = {"" = "src"}``-style strict TOML; it
+        does not execute build configuration, follow includes, or infer a source root from a
+        directory convention alone.
+        """
+        try:
+            document = tomllib.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+            return ()
+        tool = document.get("tool")
+        setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+        package_dir = setuptools.get("package-dir") if isinstance(setuptools, dict) else None
+        source_root = package_dir.get("") if isinstance(package_dir, dict) else None
+        if not isinstance(source_root, str):
+            return ()
+        normalized = SourceStructureParser._safe_local_source_root(source_root)
+        return () if normalized is None else (normalized,)
+
+    @staticmethod
+    def _safe_local_source_root(value: str) -> str | None:
+        if (
+            not value
+            or len(value) > 256
+            or value.startswith("/")
+            or value.endswith("/")
+            or "\\" in value
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+        ):
+            return None
+        return value
+
+    @staticmethod
     def _safe_typescript_path(value: object, *, allow_current: bool = False) -> str | None:
         if not isinstance(value, str) or not value or len(value) > 512 or "\\" in value:
             return None
@@ -756,6 +797,7 @@ class SourceStructureParser:
         go_module_path: str | None = None,
         go_packages_by_directory: dict[str, CodeSymbol] | None = None,
         typescript_path_aliases: dict[str, str] | None = None,
+        python_source_roots: tuple[str, ...] = (),
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
 
@@ -779,14 +821,17 @@ class SourceStructureParser:
             )
             if local_target is not None:
                 target = local_target
-        direct = _single_symbol(modules_by_name.get(target, ()))
-        if direct is not None:
-            return direct.symbol_id
-        parts = target.split(".")
-        for end in range(len(parts) - 1, 0, -1):
-            candidate = _single_symbol(modules_by_name.get(".".join(parts[:end]), ()))
-            if candidate is not None:
-                return candidate.symbol_id
+        for module_target in SourceStructureParser._python_rooted_module_targets(
+            target, source_path, python_source_roots
+        ):
+            direct = _single_symbol(modules_by_name.get(module_target, ()))
+            if direct is not None:
+                return direct.symbol_id
+            parts = module_target.split(".")
+            for end in range(len(parts) - 1, 0, -1):
+                candidate = _single_symbol(modules_by_name.get(".".join(parts[:end]), ()))
+                if candidate is not None:
+                    return candidate.symbol_id
         # Python relative imports use a dot prefix such as ``.helpers`` or
         # ``..helpers``. JavaScript/TypeScript use filesystem spellings such as
         # ``./helpers`` and must continue through the path resolver below.
@@ -801,6 +846,16 @@ class SourceStructureParser:
             if normalized is None
             else SourceStructureParser._path_import_target(normalized, modules_by_path)
         )
+
+    @staticmethod
+    def _python_rooted_module_targets(
+        target: str, source_path: str, source_roots: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Return direct then explicitly configured Python source-root spellings."""
+        if not source_path.endswith(".py") or target.startswith("."):
+            return (target,)
+        roots = tuple(root.replace("/", ".") for root in source_roots)
+        return (target, *(f"{root}.{target}" for root in roots))
 
     @staticmethod
     def _go_local_package_directory(import_target: str, go_module_path: str | None) -> str | None:
@@ -987,6 +1042,7 @@ class SourceStructureParser:
         static_method_ids: frozenset[CodeSymbolId],
         go_module_path: str | None,
         typescript_path_aliases: dict[str, str],
+        python_source_roots: tuple[str, ...],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -1037,9 +1093,12 @@ class SourceStructureParser:
                 candidates.append(sibling)
         for _, imported_target in (item for item in imports if item[0] == source_path):
             if imported_target.endswith(f".{target}"):
-                imported = _single_symbol(symbols_by_name.get(imported_target, ()))
-                if imported is not None:
-                    candidates.append(imported)
+                for candidate_name in SourceStructureParser._python_rooted_module_targets(
+                    imported_target, source_path, python_source_roots
+                ):
+                    imported = _single_symbol(symbols_by_name.get(candidate_name, ()))
+                    if imported is not None:
+                        candidates.append(imported)
         binding_name, separator, remainder = target.partition(".")
         for _, _binding, imported_target in (
             item for item in bindings if item[0] == source_path and item[1] == binding_name
@@ -1076,6 +1135,7 @@ class SourceStructureParser:
                     modules_by_name,
                     modules_by_path,
                     typescript_path_aliases=typescript_path_aliases,
+                    python_source_roots=python_source_roots,
                 )
                 module = next(
                     (item for item in modules_by_path.values() if item.symbol_id == module_id), None
@@ -1147,6 +1207,13 @@ class SourceStructureParser:
                 imported_names = [
                     imported_target if not separator else f"{imported_target}.{remainder}"
                 ]
+                imported_names.extend(
+                    candidate
+                    for candidate in SourceStructureParser._python_rooted_module_targets(
+                        imported_names[0], source_path, python_source_roots
+                    )
+                    if candidate != imported_names[0]
+                )
                 if separator and imported_target in modules_by_name:
                     imported_type = imported_target.rsplit(".", maxsplit=1)[-1]
                     if _is_safe_symbol_name(imported_type):

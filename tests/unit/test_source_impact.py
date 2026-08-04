@@ -962,6 +962,59 @@ def test_rust_explicit_use_alias_resolves_a_unique_local_member_call(tmp_path: P
     assert calls[("service.process", "local_validate")] is not None
 
 
+def test_python_setuptools_src_layout_resolves_explicit_import_and_call(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "src" / "acme").mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[tool.setuptools]\npackage-dir = {"" = "src"}\n', encoding="utf-8"
+    )
+    (root / "src" / "acme" / "orders.py").write_text(
+        "def validate():\n    return True\n", encoding="utf-8"
+    )
+    (root / "src" / "acme" / "service.py").write_text(
+        "from acme.orders import validate\n\ndef process():\n    return validate()\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, "src.acme.orders.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["src.acme.service.process"]
+    assert any(
+        item.target == "acme.orders.validate" and item.target_symbol_id is not None
+        for item in imports
+    )
+
+
+def test_python_src_layout_is_not_inferred_without_an_explicit_setuptools_mapping(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "src" / "acme").mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nname = "example"\n', encoding="utf-8")
+    (root / "src" / "acme" / "orders.py").write_text(
+        "def validate():\n    return True\n", encoding="utf-8"
+    )
+    (root / "src" / "acme" / "service.py").write_text(
+        "from acme.orders import validate\n\ndef process():\n    return validate()\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert imports[0].target_symbol_id is None
+    assert any(item.target == "validate" and item.target_symbol_id is None for item in calls)
+
+
 def test_rust_flat_grouped_imports_resolve_only_explicit_unique_members(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"

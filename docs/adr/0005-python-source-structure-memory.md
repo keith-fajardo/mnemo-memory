@@ -43,7 +43,10 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   ambiguous member declarations remain unresolved rather than being guessed. TypeScript may also
   resolve an import or exact imported member through a root `tsconfig.json` alias only when strict
   JSON gives one local `baseUrl`/`paths` mapping; comments, `extends`, multiple fallback targets,
-  escaping paths, and package imports remain unresolved. It excludes source text,
+  escaping paths, and package imports remain unresolved. Python may resolve an absolute import
+  below an explicitly declared root only for strict `pyproject.toml` setuptools
+  `package-dir = {"" = "src"}` metadata; a bare `src/` directory, other build systems, and
+  malformed/escaping package roots remain unresolved. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.

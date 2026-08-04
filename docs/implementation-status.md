@@ -528,6 +528,11 @@ TypeScript source structure now also recognizes one strict-JSON, root `tsconfig.
 alias mapping. It resolves only an exact local `baseUrl`/single-`paths` target; inherited, commented,
 multi-target, escaping, malformed, and package mappings remain deliberately unresolved.
 
+Python source structure now recognizes only one explicit setuptools `pyproject.toml` source-root
+declaration: `package-dir = {"" = "src"}`. That mapping may resolve exact import and call targets
+below `src/`; Mnemo does not infer a source root from a directory name or interpret other packaging
+systems in this static slice.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and
