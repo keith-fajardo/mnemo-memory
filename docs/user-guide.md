@@ -38,8 +38,9 @@ namespace calls, C# `using Namespace.Type` calls, and PHP `use Namespace\\Type` 
 namespace-only imports and aliases remain unresolved. No unproven runtime relationship is
 presented as fact.
 
-For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, Swift, Kotlin,
-Ruby, Scala, Elixir, Lua, and Dart—it still saves an immutable relative-path and byte fingerprint.
+For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt
+`schema.yml`/`schema.yaml` files, Swift, Kotlin, Ruby, Scala, Elixir, Lua, and Dart—it still saves
+an immutable relative-path and byte fingerprint.
 So a later source-change summary can honestly say that `models/orders.sql` changed without keeping
 or sending the SQL body. These files do not receive invented declarations, calls, or dependencies:
 for dbt structure, use the authoritative manifest; for another language, wait for a safe parser.

@@ -83,6 +83,8 @@ _FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
         ".swift",
         ".vb",
         ".vue",
+        ".yaml",
+        ".yml",
     }
 )
 
