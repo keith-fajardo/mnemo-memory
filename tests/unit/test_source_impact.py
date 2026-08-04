@@ -778,6 +778,8 @@ def test_dynamic_or_nested_commonjs_require_never_creates_a_guessed_binding(tmp_
 def test_go_import_aliases_resolve_only_unique_local_package_calls(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
     (root / "internal" / "orders").mkdir(parents=True)
     (root / "internal" / "orders" / "orders.go").write_text("package orders\nfunc Process() {}\n")
     (root / "service").mkdir()
@@ -804,6 +806,57 @@ def test_go_import_aliases_resolve_only_unique_local_package_calls(tmp_path: Pat
         edge.target == "local_orders.Process" and edge.target_symbol_id is not None
         for edge in calls
     )
+
+
+def test_go_local_import_links_only_one_exact_package_file(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
+    (root / "internal" / "orders").mkdir(parents=True)
+    (root / "internal" / "orders" / "orders.go").write_text(
+        "package orders\nfunc Process() {}\n", encoding="utf-8"
+    )
+    (root / "service").mkdir()
+    (root / "service" / "service.go").write_text(
+        "package service\n"
+        'import "example.com/demo/internal/orders"\n'
+        "func Run() { orders.Process() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item for item in artifact.symbols}
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+
+    assert len(imports) == 1
+    assert imports[0].target_symbol_id is not None
+    assert names[imports[0].target_symbol_id].relative_path == "internal/orders/orders.go"
+
+
+def test_go_external_suffix_match_never_becomes_a_local_edge(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/own\n", encoding="utf-8")
+    (root / "internal" / "orders").mkdir(parents=True)
+    (root / "internal" / "orders" / "orders.go").write_text(
+        "package orders\nfunc Process() {}\n", encoding="utf-8"
+    )
+    (root / "service").mkdir()
+    (root / "service" / "service.go").write_text(
+        "package service\n"
+        'import "example.com/other/internal/orders"\n'
+        "func Run() { orders.Process() }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert imports[0].target_symbol_id is None
+    assert any(item.target == "orders.Process" and item.target_symbol_id is None for item in calls)
 
 
 def test_rust_explicit_use_alias_resolves_a_unique_local_member_call(tmp_path: Path) -> None:
@@ -1042,6 +1095,8 @@ def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
 ) -> None:
     item_scope = scope()
     root = tmp_path / "source"
+    root.mkdir()
+    (root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
     (root / "internal" / "orders").mkdir(parents=True)
     (root / "internal" / "orders" / "first.go").write_text("package orders\nfunc Process() {}\n")
     (root / "internal" / "orders" / "second.go").write_text("package orders\nfunc Process() {}\n")
@@ -1054,7 +1109,9 @@ def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
 
     artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
     calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
+    imports = [edge for edge in artifact.edges if edge.kind.value == "imports"]
 
+    assert imports[0].target_symbol_id is None
     assert any(edge.target == "orders.Process" and edge.target_symbol_id is None for edge in calls)
 
 

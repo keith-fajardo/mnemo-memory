@@ -519,6 +519,10 @@ reminder. Immutable per-file SHA-256 fingerprints make a body-only change visibl
 source bodies or transcript; intent remains explicit checkpoint evidence rather than an inference
 from a diff.
 
+Go source structure now treats a root `go.mod` as file-only local-module evidence: an import edge
+is linked only for an exact declared local-module import whose package directory contains one saved
+Go file. External, malformed, absent, or multi-file-package imports remain deliberately unresolved.
+
 Each successful checkpoint save for an enabled local project can also record one immutable,
 scope-checked co-observation with the exact source snapshot parsed immediately afterward. The
 association is idempotent, survives restart, and appears in bounded context with checkpoint and

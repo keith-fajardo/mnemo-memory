@@ -110,6 +110,7 @@ _FILE_ONLY_SOURCE_FILENAMES: Final = frozenset(
         "containerfile",
         "dockerfile",
         "gemfile",
+        "go.mod",
         "justfile",
         "makefile",
         "pipfile",
@@ -365,6 +366,7 @@ class SourceStructureParser:
         wildcard_re_exports: list[tuple[str, str]] = []
         static_methods: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
+        go_module_path: str | None = None
         total_bytes = 0
         for path in paths:
             raw = self._read(path, request.limits)
@@ -376,6 +378,11 @@ class SourceStructureParser:
             digest.update(b"\0")
             digest.update(raw)
             files.append((relative, f"sha256:{sha256(raw).hexdigest()}"))
+            if relative == "go.mod":
+                # ``go.mod`` is treated as bounded, file-only evidence.  Its module directive
+                # lets us prove that an import belongs to this local checkout; we neither retain
+                # nor execute the file's contents.
+                go_module_path = self._go_module_path(raw)
             language = self._suffixes.get(path.suffix.lower())
             if language is None:
                 # Keep only the path/digest projection for a deliberately file-only extension.
@@ -436,6 +443,7 @@ class SourceStructureParser:
             if symbol.kind is CodeSymbolKind.MODULE
         }
         module_names = _symbols_by_name(modules.values())
+        go_modules_by_directory = self._go_modules_by_directory(modules)
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]] = {}
@@ -502,6 +510,7 @@ class SourceStructureParser:
                         wildcard_re_exports_by_path,
                         python_package_re_exports_by_name,
                         static_method_ids,
+                        go_module_path,
                     ),
                 )
             )
@@ -514,7 +523,14 @@ class SourceStructureParser:
                             modules[path].symbol_id,
                             target,
                             CodeEdgeKind.IMPORTS,
-                            self._resolve_import_target(path, target, module_names, modules),
+                            self._resolve_import_target(
+                                path,
+                                target,
+                                module_names,
+                                modules,
+                                go_module_path,
+                                go_modules_by_directory,
+                            ),
                         )
                         for path, target in sorted(set(imports))
                     ),
@@ -585,11 +601,62 @@ class SourceStructureParser:
         return ".".join(parts) or "__root__"
 
     @staticmethod
+    def _go_module_path(raw: bytes) -> str | None:
+        """Extract one conservative local module path from a file-only ``go.mod``.
+
+        This is deliberately not a Go configuration parser.  A malformed or unusual module
+        directive simply leaves Go imports unresolved instead of manufacturing an internal link.
+        """
+        try:
+            lines = raw.decode("utf-8").splitlines()
+        except UnicodeDecodeError:
+            return None
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            fields = stripped.split()
+            if len(fields) < 2 or fields[0] != "module":
+                continue
+            candidate = fields[1]
+            if (
+                candidate.startswith("/")
+                or candidate.endswith("/")
+                or any(part in {"", ".", ".."} for part in candidate.split("/"))
+                or any(
+                    not (character.isalnum() or character in {".", "-", "_", "~", "/"})
+                    for character in candidate
+                )
+            ):
+                return None
+            return candidate
+        return None
+
+    @staticmethod
+    def _go_modules_by_directory(
+        modules_by_path: dict[str, CodeSymbol],
+    ) -> dict[str, tuple[CodeSymbol, ...]]:
+        """Index Go file modules by their exact package directory, never by suffix."""
+        result: dict[str, list[CodeSymbol]] = {}
+        for relative_path, module in modules_by_path.items():
+            if PurePosixPath(relative_path).suffix != ".go":
+                continue
+            parent = PurePosixPath(relative_path).parent
+            directory = "" if parent == PurePosixPath(".") else parent.as_posix()
+            result.setdefault(directory, []).append(module)
+        return {
+            directory: tuple(sorted(symbols, key=lambda item: item.relative_path))
+            for directory, symbols in result.items()
+        }
+
+    @staticmethod
     def _resolve_import_target(
         source_path: str,
         target: str,
         modules_by_name: dict[str, tuple[CodeSymbol, ...]],
         modules_by_path: dict[str, CodeSymbol],
+        go_module_path: str | None = None,
+        go_modules_by_directory: dict[str, tuple[CodeSymbol, ...]] | None = None,
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
 
@@ -597,6 +664,16 @@ class SourceStructureParser:
         members are deliberately not guessed. An unresolved string target remains
         evidence, but is not represented as an internal graph link.
         """
+        if source_path.endswith(".go"):
+            directory = SourceStructureParser._go_local_package_directory(target, go_module_path)
+            if directory is not None:
+                module = _single_symbol((go_modules_by_directory or {}).get(directory, ()))
+                if module is not None:
+                    return module.symbol_id
+            # Go import strings identify packages, not source files.  Without a matching local
+            # module declaration and exactly one file module, do not fall through to a coincidental
+            # dotted/path spelling elsewhere in the snapshot.
+            return None
         direct = _single_symbol(modules_by_name.get(target, ()))
         if direct is not None:
             return direct.symbol_id
@@ -619,6 +696,19 @@ class SourceStructureParser:
             if normalized is None
             else SourceStructureParser._path_import_target(normalized, modules_by_path)
         )
+
+    @staticmethod
+    def _go_local_package_directory(import_target: str, go_module_path: str | None) -> str | None:
+        """Return an exact local Go package directory only for a declared module prefix."""
+        if go_module_path is None:
+            return None
+        if import_target == go_module_path:
+            return ""
+        prefix = f"{go_module_path}/"
+        if not import_target.startswith(prefix):
+            return None
+        normalized = SourceStructureParser._normal_relative_path(import_target.removeprefix(prefix))
+        return normalized
 
     @staticmethod
     def _relative_python_import_reference(
@@ -768,6 +858,7 @@ class SourceStructureParser:
         wildcard_re_exports_by_path: dict[str, tuple[str, ...]],
         python_package_re_exports_by_name: dict[str, dict[str, tuple[str, ...]]],
         static_method_ids: frozenset[CodeSymbolId],
+        go_module_path: str | None,
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -844,7 +935,10 @@ class SourceStructureParser:
                     member = remainder if separator else imported_member
                     candidates.extend(
                         SourceStructureParser._go_imported_member_candidates(
-                            import_target.removeprefix("go:"), member, symbols_by_name
+                            import_target.removeprefix("go:"),
+                            member,
+                            symbols_by_name,
+                            go_module_path,
                         )
                     )
                     continue
@@ -958,27 +1052,33 @@ class SourceStructureParser:
 
     @staticmethod
     def _go_imported_member_candidates(
-        import_target: str, member: str, symbols_by_name: dict[str, tuple[CodeSymbol, ...]]
+        import_target: str,
+        member: str,
+        symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
+        go_module_path: str | None,
     ) -> tuple[CodeSymbol, ...]:
         """Resolve an exact Go package member only when its local directory is unique.
 
-        Go imports identify directories, while Mnemo's immutable module symbols
-        identify files. This deliberately creates no import-to-file graph edge.
-        It may link ``alias.Member()`` only when exactly one saved declaration
-        named ``Member`` lives below the exact trailing local package directory.
+        Go imports identify directories, so a matching directory suffix alone is
+        insufficient evidence: an external package can use the same suffix.  This
+        resolves only an import below this checkout's declared ``go.mod`` module,
+        and only when exactly one saved declaration named ``Member`` lives in the
+        exact package directory.
         """
-        if not _is_safe_symbol_name(member):
+        directory = SourceStructureParser._go_local_package_directory(import_target, go_module_path)
+        if directory is None or not _is_safe_symbol_name(member):
             return ()
-        target_parts = PurePosixPath(import_target).parts
         candidates = [
             symbol
             for symbols in symbols_by_name.values()
             for symbol in symbols
             if symbol.qualified_name.endswith(f".{member}")
-            and len(PurePosixPath(symbol.relative_path).parent.parts) >= 2
-            and len(PurePosixPath(symbol.relative_path).parent.parts) <= len(target_parts)
-            and target_parts[-len(PurePosixPath(symbol.relative_path).parent.parts) :]
-            == PurePosixPath(symbol.relative_path).parent.parts
+            and (
+                ""
+                if PurePosixPath(symbol.relative_path).parent == PurePosixPath(".")
+                else PurePosixPath(symbol.relative_path).parent.as_posix()
+            )
+            == directory
         ]
         unique = {item.symbol_id: item for item in candidates}
         return tuple(unique.values()) if len(unique) == 1 else ()
