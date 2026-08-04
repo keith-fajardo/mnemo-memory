@@ -892,3 +892,29 @@ cover the lifecycle and its limits. Focused governance, CLI, application, and MC
 complete verification gate passed with 541 tests, schema validation, dependency/provenance validation
 for 86 registered entries, and architecture validation for 70 product Python files. No dependency or
 MCP tool was added.
+
+### Issue 15 — dbt artifact completeness — In progress
+
+#### Issue 15A — Complete
+
+The current bounded issue adds original, storage-independent parsers and domain contracts for the
+current public dbt `catalog.json` v1 and `run_results.json` v6 schemas. Parsing must remain offline,
+bounded, explicitly scoped, and evidence-bearing. Catalog output is limited to relation identity,
+relation type, and ordered column names/types; run-result output is limited to exact manifest node
+identity, normalized status, bounded timing, failure count, and invocation metadata. Warehouse
+comments, owners, statistics, adapter responses, messages, compiled code, relation SQL, arbitrary
+arguments, environment values, and thread identifiers must not be retained. Invalid schemas,
+non-finite timings, duplicate identities, malformed columns, and hostile-size inputs must fail
+closed. This issue does not add persistence, context retrieval, dbt execution, warehouse access, a
+model call, a dependency, or support for a later dbt artifact schema.
+
+Implemented pure domain contracts plus offline adapters for catalog v1 and run-results v6. Both
+adapters reject unsupported schemas, malformed identities, invalid or non-finite timing values,
+duplicate structural identities, non-standard JSON numeric constants, absolute source identities,
+and configured size limits. Digest-addressed evidence is retained for every relation or result,
+while the explicitly excluded warehouse and execution payloads are absent from normalized output.
+The dbt ADR and connector threat controls now record the public-schema provenance, retained-field
+boundary, and hostile-input verification. Focused parser/manifest tests passed; the complete gate
+passed with 548 tests, strict typing for 146 source files, schema validation, dependency/provenance
+validation for 86 entries, and architecture validation for 72 product Python files. No dependency
+was added.

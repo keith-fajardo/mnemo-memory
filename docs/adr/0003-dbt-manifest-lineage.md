@@ -36,9 +36,21 @@ repository evidence, currentness is explicitly `unknown`, never assumed current.
 
 ## Deferred work
 
-`catalog.json`, `run_results.json`, persistence, incremental ingestion, context-packet retrieval,
-structural token benchmarks, general code graphs, and model-assisted behavior are deferred.
+Issue 15A adds separate standard-library-only adapters for the current public catalog v1 and
+run-results v6 schemas. Catalog parsing retains only exact relation identity/type and ordered
+column name/type facts. Run-results parsing retains only exact node identity, normalized status,
+bounded phase timing, failure count, elapsed time, and the producing command name. Both retain
+digest-addressed evidence and explicit caller scope. Warehouse comments, owners, statistics,
+environment values, adapter responses, messages, compiled code, relation SQL, arbitrary command
+arguments, and thread identifiers are validated only where required for schema safety and then
+discarded. These supplemental artifacts do not alter manifest lineage authority.
+
+Persistence, manifest-to-supplemental consistency checks, incremental ingestion, freshness
+artifacts, context-packet retrieval, general code graphs, and model-assisted behavior remain
+deferred to later bounded issues.
 
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.
+
+Reviewed 2026-08-05: [dbt catalog documentation](https://docs.getdbt.com/reference/artifacts/catalog-json), [catalog v1 schema](https://schemas.getdbt.com/dbt/catalog/v1.json), [dbt run-results documentation](https://docs.getdbt.com/reference/artifacts/run-results-json), and [run-results v6 schema](https://schemas.getdbt.com/dbt/run-results/v6.json).

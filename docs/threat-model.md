@@ -107,7 +107,10 @@ diagnostics, or model responses and enter storage, embeddings, logs, or exports.
 **Required controls:** Bounded registered sources; denylisted files and patterns; deterministic
 secret detection before persistence or embedding; redaction in telemetry; no environment-wide
 capture; model classification only as supplemental defense; visible rejection events without the
-secret value.
+secret value. Supplemental dbt parsing uses a fixed data-minimizing projection: catalog comments,
+owners, and statistics plus run-result environment values, adapter responses, messages, compiled
+code, relation SQL, arbitrary arguments, and thread identifiers are never retained in its domain
+artifacts.
 
 **Verification:** Synthetic secret corpus across ingestion, job retry, logging, retrieval, export,
 and deletion paths. Confirm no raw value or reversible encoding appears.
@@ -194,6 +197,12 @@ never proxy or rewrite model endpoints.
 
 **Verification:** Forged metadata, traversal, symlink escape, malformed artifacts, oversized input,
 timeout, partial failure, and model-endpoint invariance tests for every connector.
+
+The supplemental dbt adapters accept only explicit caller scope and source identity, current
+reviewed schema versions, finite timings, unique resource identities, and configured byte/resource/
+string limits. Their tests include unsupported versions, mismatched and duplicate identities,
+malformed timing/status data, non-standard numeric constants, absolute source identities, and
+hostile size limits.
 
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
