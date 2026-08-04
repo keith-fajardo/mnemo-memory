@@ -34,8 +34,10 @@ statically depends on a selected file or symbol. It can also resolve a small saf
 calls (same-module, fully-qualified, or unique imported members). Duplicate candidates across
 files or languages remain unresolved rather than being guessed. More adapters and safely
 resolvable call edges use the same graph contract. That subset now includes exact local C++
-namespace calls, C# `using Namespace.Type` calls, and PHP `use Namespace\\Type` static calls;
-namespace-only imports and aliases remain unresolved. No unproven runtime relationship is
+namespace calls, C# `using Namespace.Type` calls, PHP `use Namespace\\Type` static calls, and
+direct top-level literal CommonJS `require("./local")` bindings in JavaScript and TypeScript.
+Namespace-only imports, computed/dynamic `require` calls, aliases that cannot be matched uniquely,
+and duplicate candidates remain unresolved. No unproven runtime relationship is
 presented as fact.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt

@@ -271,6 +271,85 @@ def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_
 
     assert [item.symbol.qualified_name for item in validation.symbols] == ["service.process"]
     assert [item.symbol.qualified_name for item in other.symbols] == ["service.process"]
+    module_ids = {
+        item.qualified_name: item.symbol_id
+        for item in artifact.symbols
+        if item.kind.value == "module"
+    }
+    assert any(
+        edge.kind.value == "imports"
+        and edge.target == "./helpers"
+        and edge.target_symbol_id == module_ids["helpers"]
+        for edge in artifact.edges
+    )
+
+
+def test_commonjs_literal_require_bindings_resolve_safe_internal_calls(tmp_path: Path) -> None:
+    """Direct CommonJS imports have the same bounded static certainty as ES imports."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.cjs").write_text(
+        "function validate() { return true }\nfunction other() { return true }\n"
+        "module.exports = { validate, other }\n"
+    )
+    (root / "service.cjs").write_text(
+        "const helpers = require('./helpers');\n"
+        "const { validate: check, other } = require('./helpers');\n"
+        "function process() { helpers.validate(); check(); other(); }\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    validation = service.query(
+        SourceImpactQuery(item_scope, "helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    other = service.query(
+        SourceImpactQuery(item_scope, "helpers.other", SourceImpactDirection.DEPENDENTS)
+    )
+
+    assert [item.symbol.qualified_name for item in validation.symbols] == ["service.process"]
+    assert [item.symbol.qualified_name for item in other.symbols] == ["service.process"]
+    module_ids = {
+        item.qualified_name: item.symbol_id
+        for item in artifact.symbols
+        if item.kind.value == "module"
+    }
+    assert any(
+        edge.kind.value == "imports"
+        and edge.target == "./helpers"
+        and edge.target_symbol_id == module_ids["helpers"]
+        for edge in artifact.edges
+    )
+
+
+def test_dynamic_or_nested_commonjs_require_never_creates_a_guessed_binding(tmp_path: Path) -> None:
+    """Only a literal top-level require is eligible for Mnemo's static graph."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.js").write_text("export function validate() { return true }\n")
+    (root / "service.js").write_text(
+        "const path = './helpers';\n"
+        "const dynamic = require(path);\n"
+        "function process() { const nested = require('./helpers'); "
+        "dynamic.validate(); nested.validate(); }\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+    imports = [edge for edge in artifact.edges if edge.kind.value == "imports"]
+
+    assert imports == []
+    assert calls[("service.process", "dynamic.validate")] is None
+    assert calls[("service.process", "nested.validate")] is None
 
 
 def test_go_import_aliases_resolve_only_unique_local_package_calls(tmp_path: Path) -> None:

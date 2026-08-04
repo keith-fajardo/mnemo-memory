@@ -537,8 +537,13 @@ class SourceStructureParser:
             suffixes = (
                 ".py",
                 ".js",
+                ".jsx",
+                ".mjs",
+                ".cjs",
                 ".ts",
                 ".tsx",
+                ".mts",
+                ".cts",
                 ".go",
                 ".rs",
                 ".c",
@@ -810,6 +815,25 @@ class SourceStructureParser:
                             language, node, raw, target
                         )
                     )
+            if (
+                language in {"javascript", "typescript", "tsx"}
+                and node.type == "variable_declarator"
+                and parent == module
+            ):
+                # Support only the direct, top-level CommonJS spelling
+                # ``const local = require('./local')`` and object destructuring from the
+                # same literal call.  A computed module name, reassigned variable, nested
+                # declaration, or any other dynamic module-loading pattern stays absent from
+                # this static projection.  This deliberately mirrors the scope and certainty
+                # of the existing ES-module bindings.
+                commonjs = self._commonjs_require_bindings(node, raw)
+                if commonjs is not None:
+                    target, commonjs_bindings = commonjs
+                    imports.append((relative, target))
+                    bindings.extend(
+                        (relative, binding, f"{target}|{member}")
+                        for binding, member in commonjs_bindings
+                    )
             call_fields = dict(rules.call_kinds)
             if node.type in call_fields and parent != module:
                 target = self._call_target(node, raw, call_fields[node.type])
@@ -819,6 +843,52 @@ class SourceStructureParser:
                 visit(child, next_parent)
 
         visit(root, module)
+
+    @staticmethod
+    def _commonjs_require_bindings(
+        node: Node, raw: bytes
+    ) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+        """Return only syntactically direct CommonJS bindings from one declaration.
+
+        A binding is intentionally accepted only when its initializer is exactly one literal
+        ``require`` call.  Mnemo does not evaluate a variable, follow a conditional require, or
+        attempt to model CommonJS export mutation.  The empty member marker represents the
+        imported module itself and is resolved by the existing module-binding path.
+        """
+        value = node.child_by_field_name("value")
+        if value is None or value.type != "call_expression":
+            return None
+        function = _safe_tree_text(value.child_by_field_name("function"), raw)
+        arguments = value.child_by_field_name("arguments")
+        if function != "require" or arguments is None or len(arguments.named_children) != 1:
+            return None
+        target = _string_literal(arguments.named_children[0], raw)
+        if target is None:
+            return None
+        name = node.child_by_field_name("name")
+        if name is None:
+            return None
+        if name.type == "identifier":
+            binding = _safe_tree_text(name, raw)
+            return None if binding is None else (target, ((binding, ""),))
+        if name.type != "object_pattern":
+            return None
+        bindings: list[tuple[str, str]] = []
+        for child in name.named_children:
+            if child.type == "shorthand_property_identifier_pattern":
+                member = _safe_tree_text(child, raw)
+                if member is None:
+                    return None
+                bindings.append((member, member))
+                continue
+            if child.type != "pair_pattern":
+                return None
+            member = _safe_tree_text(child.child_by_field_name("key"), raw)
+            binding = _safe_tree_text(child.child_by_field_name("value"), raw)
+            if member is None or binding is None:
+                return None
+            bindings.append((binding, member))
+        return (target, tuple(bindings)) if bindings else None
 
     @staticmethod
     def _tree_import_bindings(
