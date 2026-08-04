@@ -250,6 +250,19 @@ mnemo-memory connect claude-code --auto-memory  # or: mnemo-memory connect codex
 
 You can connect both clients. They share saved handoffs when they use the same Mnemo data directory.
 
+### Your repository notes are refreshed safely too
+
+The same explicit `--auto-memory` opt-in also keeps bounded Markdown notes inside that enabled
+repository current. This is useful for a repository's `README.md`, `docs/`, architecture notes, or
+decision records: a later agent can ask Mnemo for a relevant note section instead of rereading the
+whole documentation tree. Mnemo refreshes only at a session/work boundary, not on every keystroke.
+
+This does not mean Mnemo treats a note as a command. A returned note section is labelled untrusted,
+cited to its relative path, heading, digest, and immutable revision, and is placed within the
+knowledge budget. Mnemo scans no other folder, follows no symlink or Markdown link, and rejects
+clear credential-like values before a batch can be stored. It does not promise to detect every
+possible secret, so keep secrets out of project documentation as usual.
+
 ## Use task memory while working
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the

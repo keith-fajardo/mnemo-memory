@@ -718,6 +718,7 @@ An explicit `get_context` `knowledge_query` can now include matching current doc
 the same bounded packet as task and structural facts. Every included section is cited to its exact
 immutable document revision and remains labelled `unknown` for filesystem currentness until a
 future source-state comparison can prove otherwise. This is an explicit, scope-first request—not
-ambient retrieval: documents are still not discovered, synchronized, or injected automatically.
-Obsidian vault consent/bindings, links/backlinks, embeddings, and automatic context selection
-remain in progress.
+ambient retrieval. For a repository already enrolled through the explicit automatic-memory opt-in,
+Mnemo now synchronizes bounded in-project Markdown at lifecycle refresh boundaries; the hook emits
+no document text. Obsidian vault consent/bindings, links/backlinks, embeddings, and automatic
+context selection remain in progress.

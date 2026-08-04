@@ -347,14 +347,21 @@ to another project merely because both run on the same machine.
 database; it does not inspect or bind the current directory.
 
 **What is remembered long term?** Explicit checkpoint revisions, and—after you opt a repository
-into automatic memory—a static structure snapshot of its supported-language files. Mnemo currently
-supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. It stores
+into automatic memory—a static structure snapshot of its supported-language files plus bounded
+Markdown knowledge already inside that enabled repository. Mnemo currently supports Python,
+JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. It stores
 declarations plus explicit imports and calls, resolving a relationship only when exactly one saved
 target matches. If two files or languages define the same candidate name, Mnemo leaves the link
 unresolved rather than guessing. If you enable dbt, Mnemo also keeps its manifest projection. A
 checkpoint is
 a compact handoff record for one task—not a copy of your files, terminal history, or every chat
 message.
+
+Markdown notes are treated differently from code structure. Mnemo stores approved, bounded note
+sections as **untrusted evidence** with their relative path, heading, digest, and immutable revision.
+It never executes a note, follows a note link, or treats a note as an instruction. The automatic
+hook refreshes the enabled repository's Markdown at session and work boundaries; a later context
+request selects only matching cited sections rather than injecting an entire notes folder.
 
 **When does it get saved?** In automatic mode, Mnemo asks the connected agent to call
 `save_checkpoint` at a stop or compaction boundary. You can still ask explicitly at any point.
@@ -436,6 +443,12 @@ knowledge of earlier work or impact, and how to request saved structure for a na
 After the agent changes a project file, Mnemo also adds one short reminder before the next user
 turn. It does not read the submitted prompt or a model's private reasoning, so this is transparent
 timely guidance—not surveillance or a hidden automatic transcript recorder.
+
+**Will it read every Markdown file on my computer?** No. The `--auto-memory` consent applies only
+to the repository you enabled. Mnemo reads bounded `.md` files under that project root, skips
+symlinked files and common cache/config directories, and never leaves that root. An unregistered
+repository is not scanned. Clear credential-like values are rejected before storage; Mnemo does not
+claim that this deterministic safeguard can recognize every possible secret.
 
 **How does a new agent get it?** The new agent connects to the same Mnemo store and calls
 `get_context` for the same scope. It receives the latest active checkpoint and any requested dbt

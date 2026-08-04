@@ -35,6 +35,10 @@ from mnemo_memory.connectors.dbt.project_binding import (
     LocalDbtProjectBindingStore,
     find_dbt_project_root,
 )
+from mnemo_memory.connectors.filesystem import (
+    MarkdownSourceDiscovery,
+    MarkdownSourceDiscoveryRequest,
+)
 from mnemo_memory.packages.application import (
     CheckpointApplicationError,
     DbtApplicationConflict,
@@ -43,6 +47,8 @@ from mnemo_memory.packages.application import (
     DbtManifestApplicationService,
     GetActiveManifestStatus,
     IngestManifest,
+    KnowledgeDocumentApplicationService,
+    SynchronizeKnowledgeDocuments,
     build_checkpoint_runtime,
     build_lifecycle_service,
     resolve_local_config,
@@ -50,6 +56,7 @@ from mnemo_memory.packages.application import (
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
+    MemoryProjectBinding,
     find_memory_project_root,
 )
 from mnemo_memory.packages.application.command_wrapper import (
@@ -89,7 +96,10 @@ from mnemo_memory.packages.project_index import (
     SourceStructureParser,
     SourceStructureParseRequest,
 )
-from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
+from mnemo_memory.packages.storage import (
+    SQLiteKnowledgeDocumentRepository,
+    SQLiteSourceStructureRepository,
+)
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -189,6 +199,24 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _refresh_project_knowledge(data_directory: Path, binding: MemoryProjectBinding) -> None:
+    """Refresh only Markdown below an already user-enabled project root.
+
+    This app composition function owns the connector-to-service bridge. It intentionally returns
+    no document payload, and callers keep the client lifecycle fail-open when it raises.
+    """
+    discovered = MarkdownSourceDiscovery().discover(
+        MarkdownSourceDiscoveryRequest(binding.scope, binding.project_root)
+    )
+    repository = SQLiteKnowledgeDocumentRepository(
+        data_directory / "mnemo.sqlite3", base_directory=data_directory
+    )
+    repository.migrate()
+    KnowledgeDocumentApplicationService(repository, clock=lambda: datetime.now(UTC)).synchronize(
+        SynchronizeKnowledgeDocuments(binding.scope, discovered.documents)
+    )
 
 
 def _show(value: object) -> None:
@@ -1187,6 +1215,9 @@ def automatic_memory_hook(
             cast(ClientName, client),
             context_loader=lambda scope: _automatic_context_attachment(
                 config.data_directory, scope
+            ),
+            knowledge_refresher=lambda binding: _refresh_project_knowledge(
+                config.data_directory, binding
             ),
         )
         result = hook.handle(raw)

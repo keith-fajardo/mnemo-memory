@@ -66,6 +66,7 @@ _MAX_DBT_IMPACT_CUES = 3
 _MAX_DBT_IMPACT_CUE_NODES = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
 _ContextLoader = Callable[[MemoryScope], str | None]
+_KnowledgeRefresher = Callable[[MemoryProjectBinding], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class AutomaticMemoryHook:
     data_directory: Path
     client: ClientName
     context_loader: _ContextLoader | None = None
+    knowledge_refresher: _KnowledgeRefresher | None = None
 
     def handle(self, event: object) -> dict[str, object]:
         if not isinstance(event, dict):
@@ -102,12 +104,14 @@ class AutomaticMemoryHook:
                 # later stop/session start, so the newly saved handoff can immediately be paired
                 # with the structural state it describes. This remains fail-open and never reads
                 # tool bodies/output or source text into hook state.
+                self._refresh_project_knowledge(binding)
                 self._refresh_source_structure(binding)
                 _SessionStateStore(self.data_directory).save(session_id, dirty=False, saved=True)
             elif tool_name in _MUTATING_TOOLS:
                 _SessionStateStore(self.data_directory).save(session_id, dirty=True, saved=False)
             return {}
         if event_name == "SessionStart":
+            self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
             return self._context_output(
                 _resume_instruction(binding.checkpoint_scope.to_dict(), refreshed),
@@ -117,6 +121,7 @@ class AutomaticMemoryHook:
             # Do not inspect ``prompt``. Refresh once at this prompt boundary rather than for
             # every editor tool event, so the agent gets bounded structural/impact facts while it
             # is still working without a source scan on every keystroke.
+            self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
             return self._context_output(
                 _dirty_session_instruction(refreshed), event_name="UserPromptSubmit"
@@ -124,6 +129,7 @@ class AutomaticMemoryHook:
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
+            self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
             return self._checkpoint_output(
                 _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
@@ -216,6 +222,17 @@ class AutomaticMemoryHook:
             )
         except (OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
+
+    def _refresh_project_knowledge(self, binding: MemoryProjectBinding) -> None:
+        """Call the app-composed refresher without letting a knowledge failure block a client."""
+        if self.knowledge_refresher is None:
+            return
+        try:
+            self.knowledge_refresher(binding)
+        except Exception:
+            # A client session must never be blocked or shown document content because a local
+            # knowledge refresh could not complete. The app owns detailed diagnostics.
+            return
 
 
 @dataclass(frozen=True, slots=True)

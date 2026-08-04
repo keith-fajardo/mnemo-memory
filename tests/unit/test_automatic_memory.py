@@ -47,6 +47,7 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
+    SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
 
@@ -120,7 +121,11 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     project.mkdir()
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        knowledge_refresher=lambda current: cli._refresh_project_knowledge(data, current),
+    )
 
     started = hook.handle(
         {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
@@ -172,6 +177,54 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     state = (data / "automatic-memory-session-state.json").read_text()
     assert str(project) not in state
     assert "transcript" not in state.lower()
+
+
+def test_enabled_project_hook_incrementally_syncs_markdown_without_emitting_note_text(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo Δ"
+    project.mkdir()
+    notes = project / "docs"
+    notes.mkdir()
+    note = notes / "reconciliation.md"
+    note.write_text("# Reconciliation\nCompare Finance inputs at the business-date grain.\n")
+    data = tmp_path / "mnemo data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        knowledge_refresher=lambda current: cli._refresh_project_knowledge(data, current),
+    )
+    repository = SQLiteKnowledgeDocumentRepository(data / "mnemo.sqlite3", base_directory=data)
+
+    started = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "knowledge-1", "cwd": str(project)}
+    )
+    active = repository.list_active_documents(binding.scope)
+    assert len(active) == 1
+    assert active[0].relative_path == "docs/reconciliation.md"
+    assert "Finance inputs" not in str(started)
+
+    note.write_text("# Reconciliation\nCompare Finance inputs after the approved grain change.\n")
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "knowledge-1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+    hook.handle(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "knowledge-1", "cwd": str(project)}
+    )
+    active = repository.list_active_documents(binding.scope)
+    assert active[0].revision_number == 2
+
+    note.unlink()
+    hook.handle(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "knowledge-1", "cwd": str(project)}
+    )
+    assert repository.list_active_documents(binding.scope) == ()
 
 
 @pytest.mark.parametrize("operation", ("record_event", "record_lesson"))
@@ -282,6 +335,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     received: list[tuple[Path, object]] = []
+    refreshed: list[tuple[Path, object]] = []
 
     def load(directory: Path, scope: object) -> str:
         received.append((directory, scope))
@@ -291,6 +345,11 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         cli,
         "_automatic_context_attachment",
         load,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_refresh_project_knowledge",
+        lambda directory, scope_binding: refreshed.append((directory, scope_binding)),
     )
 
     result = CliRunner().invoke(
@@ -303,6 +362,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
 
     assert result.exit_code == 0, result.output
     assert received == [(data.resolve(), binding.checkpoint_scope)]
+    assert refreshed == [(data.resolve(), binding)]
     emitted = json.loads(result.output)
     additional_context = emitted["hookSpecificOutput"]["additionalContext"]
     assert '<mnemo-context-packet>\n{"packet":"saved"}' in additional_context
