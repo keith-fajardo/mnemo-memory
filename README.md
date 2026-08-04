@@ -450,6 +450,18 @@ symlinked files and common cache/config directories, and never leaves that root.
 repository is not scanned. Clear credential-like values are rejected before storage; Mnemo does not
 claim that this deterministic safeguard can recognize every possible secret.
 
+**What if my notes live in an Obsidian vault outside the repository?** Opt that vault in separately
+for the already-enabled project:
+
+```bash
+mnemo-memory memory vault enable "/path/to/My Obsidian Vault"
+```
+
+Mnemo checks for the vault's local `.obsidian` marker, assigns it a generated local source identity,
+and keeps its Markdown separate from same-named repository notes. It does not reveal the vault path
+through MCP context. Use `mnemo-memory memory vault status` to check the binding, or
+`mnemo-memory memory vault disable` to stop syncing it and remove its retained note payloads.
+
 **How does a new agent get it?** The new agent connects to the same Mnemo store and calls
 `get_context` for the same scope. It receives the latest active checkpoint and any requested dbt
 facts, with provenance. If no checkpoint was saved, it receives no hidden history.

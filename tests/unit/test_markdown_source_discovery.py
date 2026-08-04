@@ -69,6 +69,35 @@ def test_discovery_rejects_missing_root_and_enforces_bounded_files(tmp_path: Pat
         )
 
 
+def test_discovery_uses_a_safe_source_prefix_without_changing_document_content(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "architecture.md").write_text("# Architecture\nKeep source identities distinct.")
+
+    result = MarkdownSourceDiscovery().discover(
+        MarkdownSourceDiscoveryRequest(
+            scope(),
+            root.resolve(),
+            KnowledgeDocumentSourceKind.OBSIDIAN,
+            relative_path_prefix="obsidian/00000000-0000-4000-8000-000000000001",
+        )
+    )
+
+    assert result.documents[0].relative_path == (
+        "obsidian/00000000-0000-4000-8000-000000000001/architecture.md"
+    )
+
+
+@pytest.mark.parametrize("prefix", ("/absolute", "../escape", "notes\\escape", "notes/"))
+def test_discovery_rejects_unsafe_source_prefix(tmp_path: Path, prefix: str) -> None:
+    root = tmp_path / "notes"
+    root.mkdir()
+    with pytest.raises(MarkdownSourceDiscoveryError, match="MNEMO_KNOWLEDGE_SOURCE_PREFIX_INVALID"):
+        MarkdownSourceDiscoveryRequest(scope(), root.resolve(), relative_path_prefix=prefix)
+
+
 def test_discovery_never_interprets_note_text_or_exposes_it_in_safe_error(tmp_path: Path) -> None:
     root = tmp_path / "notes"
     root.mkdir()

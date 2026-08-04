@@ -263,6 +263,30 @@ knowledge budget. Mnemo scans no other folder, follows no symlink or Markdown li
 clear credential-like values before a batch can be stored. It does not promise to detect every
 possible secret, so keep secrets out of project documentation as usual.
 
+### Optional: add one Obsidian vault
+
+If your personal notes are in an Obsidian vault outside the repository, make that a separate,
+visible choice after project auto-memory is already enabled:
+
+```bash
+mnemo-memory memory vault enable "/path/to/My Obsidian Vault"
+```
+
+Mnemo requires the vault's `.obsidian` marker and gives it a generated local source prefix, so a
+vault note named `plans/roadmap.md` never collides with a repository note of the same name. It reads
+only bounded Markdown under that one vault, skips the `.obsidian` configuration directory and
+symlinks, and never turns note text into instructions. Check or remove the binding with:
+
+```bash
+mnemo-memory memory vault status
+mnemo-memory memory vault disable
+```
+
+Disabling first performs an atomic knowledge sync that removes the vault's retained
+content-bearing revisions, then removes the local binding. If that sync fails, the binding remains
+so Mnemo never claims the vault was removed when its stored content could not be reconciled. Your
+project checkpoint, structural memory, and repository documentation remain.
+
 ## Use task memory while working
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the

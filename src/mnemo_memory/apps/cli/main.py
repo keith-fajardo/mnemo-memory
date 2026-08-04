@@ -56,6 +56,7 @@ from mnemo_memory.packages.application import (
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
+    LocalObsidianVaultBindingStore,
     MemoryProjectBinding,
     find_memory_project_root,
 )
@@ -80,6 +81,7 @@ from mnemo_memory.packages.domain import (
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
+    KnowledgeDocumentSourceKind,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -118,10 +120,15 @@ memory_app = typer.Typer(
     no_args_is_help=True,
     help="Enable automatic bounded task handoffs for a connected coding client.",
 )
+memory_vault_app = typer.Typer(
+    no_args_is_help=True,
+    help="Opt an Obsidian vault into one already-enabled project's local knowledge memory.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
 app.add_typer(memory_app, name="memory", help="Set up automatic task memory for this project.")
+memory_app.add_typer(memory_vault_app, name="vault", help="Manage an optional Obsidian vault.")
 
 _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
@@ -201,7 +208,9 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
 
 
-def _refresh_project_knowledge(data_directory: Path, binding: MemoryProjectBinding) -> None:
+def _refresh_project_knowledge(
+    data_directory: Path, binding: MemoryProjectBinding, *, include_vault: bool = True
+) -> None:
     """Refresh only Markdown below an already user-enabled project root.
 
     This app composition function owns the connector-to-service bridge. It intentionally returns
@@ -210,12 +219,24 @@ def _refresh_project_knowledge(data_directory: Path, binding: MemoryProjectBindi
     discovered = MarkdownSourceDiscovery().discover(
         MarkdownSourceDiscoveryRequest(binding.scope, binding.project_root)
     )
+    documents = discovered.documents
+    vault = LocalObsidianVaultBindingStore(data_directory).get(binding) if include_vault else None
+    if vault is not None:
+        vault_documents = MarkdownSourceDiscovery().discover(
+            MarkdownSourceDiscoveryRequest(
+                binding.scope,
+                vault.vault_root,
+                KnowledgeDocumentSourceKind.OBSIDIAN,
+                relative_path_prefix=vault.relative_path_prefix,
+            )
+        )
+        documents = (*documents, *vault_documents.documents)
     repository = SQLiteKnowledgeDocumentRepository(
         data_directory / "mnemo.sqlite3", base_directory=data_directory
     )
     repository.migrate()
     KnowledgeDocumentApplicationService(repository, clock=lambda: datetime.now(UTC)).synchronize(
-        SynchronizeKnowledgeDocuments(binding.scope, discovered.documents)
+        SynchronizeKnowledgeDocuments(binding.scope, documents)
     )
 
 
@@ -873,6 +894,95 @@ def memory_enable(
     ):
         raise typer.Abort()
     _show(_enable_automatic_task_memory(client, project_dir, data_dir))
+
+
+@memory_vault_app.command(
+    "enable", help="Opt one existing Obsidian vault into this enabled project's local memory."
+)
+def memory_vault_enable(
+    vault_dir: Path = typer.Argument(  # noqa: B008
+        ..., help="Absolute or relative path to the vault root."
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Bind one vault only after the project itself has opted into automatic memory."""
+    try:
+        config = resolve_local_config(data_dir)
+        project = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if project is None:
+            raise typer.BadParameter("MNEMO_OBSIDIAN_PROJECT_UNENABLED")
+        vault = LocalObsidianVaultBindingStore(config.data_directory).enable(
+            project.project_root, vault_dir
+        )
+        _refresh_project_knowledge(config.data_directory, project)
+        _show(
+            {
+                "enabled": True,
+                "source": "obsidian",
+                "project_root": str(project.project_root),
+                "synchronized": True,
+                "vault_id": str(vault.vault_id),
+            }
+        )
+    except (AutomaticMemoryBindingError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_OBSIDIAN_ENABLE_FAILED") from error
+
+
+@memory_vault_app.command("status", help="Show whether this enabled project has an Obsidian vault.")
+def memory_vault_status(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        project = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if project is None:
+            _show({"project_enabled": False, "vault_enabled": False})
+            return
+        vault = LocalObsidianVaultBindingStore(config.data_directory).get(project)
+        _show(
+            {
+                "project_enabled": True,
+                "vault_enabled": vault is not None,
+                "vault_id": None if vault is None else str(vault.vault_id),
+            }
+        )
+    except (AutomaticMemoryBindingError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_OBSIDIAN_STATUS_UNAVAILABLE") from error
+
+
+@memory_vault_app.command(
+    "disable", help="Stop syncing this vault and immediately remove its retained document payloads."
+)
+def memory_vault_disable(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        project = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if project is None:
+            _show({"project_enabled": False, "vault_enabled": False, "removed": False})
+            return
+        store = LocalObsidianVaultBindingStore(config.data_directory)
+        if store.get(project) is None:
+            _show({"project_enabled": True, "vault_enabled": False, "removed": False})
+            return
+        # Reconcile from the still-enabled project source before removing the binding. The atomic
+        # sync tombstones every vault-prefixed revision, so a failed operation retains consent and
+        # data together rather than claiming deletion it could not complete.
+        _refresh_project_knowledge(config.data_directory, project, include_vault=False)
+        removed = store.disable(project.project_root)
+        _show(
+            {
+                "project_enabled": True,
+                "vault_enabled": False,
+                "removed": removed is not None,
+            }
+        )
+    except (AutomaticMemoryBindingError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_OBSIDIAN_DISABLE_FAILED") from error
 
 
 @memory_app.command("disable", help="Remove only Mnemo's automatic task-memory hooks.")

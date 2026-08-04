@@ -25,6 +25,7 @@ from mnemo_memory.connectors.dbt.project_binding import (
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
+    LocalObsidianVaultBindingStore,
     exclusive_local_file_lock,
 )
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
@@ -114,6 +115,51 @@ def test_local_binding_lock_rejects_a_symlink(tmp_path: Path) -> None:
         exclusive_local_file_lock(data, ".test.lock"),
     ):
         pass
+
+
+def test_obsidian_binding_requires_an_enabled_project_and_generates_a_non_path_identity(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    vault = tmp_path / "private vault Δ"
+    (vault / ".obsidian").mkdir(parents=True)
+    data = tmp_path / "data"
+    store = LocalObsidianVaultBindingStore(data)
+
+    with pytest.raises(AutomaticMemoryBindingError, match="MNEMO_OBSIDIAN_PROJECT_UNENABLED"):
+        store.enable(project, vault)
+
+    project_binding = LocalMemoryProjectBindingStore(data).enable(project)
+    first = store.enable(project, vault)
+    second = store.enable(project, vault)
+
+    assert first == second
+    assert first.scope == project_binding.scope
+    assert first.relative_path_prefix.startswith("obsidian/")
+    assert str(vault) not in first.relative_path_prefix
+    config = (data / "obsidian-vault-bindings.json").read_text()
+    assert oct((data / "obsidian-vault-bindings.json").stat().st_mode & 0o777) == "0o600"
+    assert "owner_id" in config
+
+
+def test_obsidian_binding_rejects_missing_marker_and_symlinked_vault_root(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    store = LocalObsidianVaultBindingStore(data)
+    invalid = tmp_path / "not a vault"
+    invalid.mkdir()
+    with pytest.raises(AutomaticMemoryBindingError, match="MNEMO_OBSIDIAN_ROOT_INVALID"):
+        store.enable(project, invalid)
+
+    target = tmp_path / "target vault"
+    (target / ".obsidian").mkdir(parents=True)
+    linked = tmp_path / "linked vault"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(AutomaticMemoryBindingError, match="MNEMO_OBSIDIAN_ROOT_UNSAFE"):
+        store.enable(project, linked)
 
 
 def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_path: Path) -> None:
@@ -1218,6 +1264,54 @@ def test_cli_memory_enable_creates_binding_without_exposing_scope_ids(
     assert "owner_id" not in result.output
     assert (tmp_path / "codex-home" / "hooks.json").is_file()
     assert (data / "mnemo.sqlite3").is_file()
+
+
+def test_cli_obsidian_vault_enable_syncs_and_disable_tombstones_vault_documents(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    vault = tmp_path / "vault Δ"
+    (vault / ".obsidian").mkdir(parents=True)
+    (vault / "decision.md").write_text("# Decision\nUse the cited current source.")
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    runner = CliRunner()
+
+    enabled = runner.invoke(
+        cli.app,
+        [
+            "memory",
+            "vault",
+            "enable",
+            str(vault),
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data),
+        ],
+    )
+    assert enabled.exit_code == 0, enabled.output
+    assert str(vault) not in enabled.output
+    repository = SQLiteKnowledgeDocumentRepository(data / "mnemo.sqlite3", base_directory=data)
+    active = repository.list_active_documents(binding.scope)
+    assert len(active) == 1
+    assert active[0].relative_path.startswith("obsidian/")
+
+    disabled = runner.invoke(
+        cli.app,
+        [
+            "memory",
+            "vault",
+            "disable",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data),
+        ],
+    )
+    assert disabled.exit_code == 0, disabled.output
+    assert repository.list_active_documents(binding.scope) == ()
 
 
 def test_automatic_enable_reuses_an_existing_dbt_scope(

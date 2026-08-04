@@ -60,6 +60,7 @@ class MarkdownSourceDiscoveryRequest:
     root: Path
     source_kind: KnowledgeDocumentSourceKind = KnowledgeDocumentSourceKind.MARKDOWN
     limits: MarkdownSourceDiscoveryLimits = MarkdownSourceDiscoveryLimits()
+    relative_path_prefix: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.scope, MemoryScope):
@@ -68,6 +69,18 @@ class MarkdownSourceDiscoveryRequest:
             raise MarkdownSourceDiscoveryError("MNEMO_KNOWLEDGE_ROOT_INVALID")
         if not isinstance(self.source_kind, KnowledgeDocumentSourceKind):
             raise TypeError("knowledge discovery source kind is invalid")
+        if (
+            not isinstance(self.relative_path_prefix, str)
+            or self.relative_path_prefix.startswith("/")
+            or "\\" in self.relative_path_prefix
+            or ".." in self.relative_path_prefix.split("/")
+            or (
+                self.relative_path_prefix
+                and any(not part for part in self.relative_path_prefix.split("/"))
+            )
+            or self.relative_path_prefix.rstrip("/") != self.relative_path_prefix
+        ):
+            raise MarkdownSourceDiscoveryError("MNEMO_KNOWLEDGE_SOURCE_PREFIX_INVALID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +113,8 @@ class MarkdownSourceDiscovery:
             if total_bytes > request.limits.max_total_bytes:
                 raise MarkdownSourceDiscoveryError("MNEMO_KNOWLEDGE_TOTAL_BYTES_LIMIT")
             relative_path = path.relative_to(root).as_posix()
+            if request.relative_path_prefix:
+                relative_path = f"{request.relative_path_prefix}/{relative_path}"
             try:
                 documents.append(
                     self._parser.parse(

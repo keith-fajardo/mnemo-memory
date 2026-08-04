@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
+from uuid import UUID, uuid4
 
 from mnemo_memory.packages.domain import (
     MemoryScope,
@@ -302,6 +303,169 @@ class LocalMemoryProjectBindingStore:
                 handle.write("\n")
             os.replace(temporary, destination)
             os.chmod(destination, 0o600)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True, slots=True)
+class ObsidianVaultBinding:
+    """One explicit external vault consented for one locally enabled project scope.
+
+    ``vault_id`` is generated once and becomes a safe local source prefix. It avoids deriving a
+    durable identity from the vault path and prevents a vault's `notes/x.md` from colliding with a
+    repository's `notes/x.md` in the same project scope.
+    """
+
+    project_root: Path
+    vault_root: Path
+    scope: MemoryScope
+    vault_id: UUID
+
+    def __post_init__(self) -> None:
+        if (
+            not self.project_root.is_absolute()
+            or not self.project_root.is_dir()
+            or not self.vault_root.is_absolute()
+            or not self.vault_root.is_dir()
+        ):
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_ROOT_INVALID")
+        if self.scope.level is not ScopeLevel.PROJECT:
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_SCOPE_INVALID")
+        if not isinstance(self.vault_id, UUID):
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_INVALID")
+
+    @property
+    def relative_path_prefix(self) -> str:
+        return f"obsidian/{self.vault_id}"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "project_scope": self.scope.to_dict(),
+            "vault_id": str(self.vault_id),
+            "vault_root": str(self.vault_root),
+        }
+
+    @classmethod
+    def from_dict(cls, project_root: Path, value: object) -> ObsidianVaultBinding:
+        if not isinstance(value, dict):
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_INVALID")
+        try:
+            vault_root, vault_id = value["vault_root"], value["vault_id"]
+            if not isinstance(vault_root, str) or not isinstance(vault_id, str):
+                raise TypeError
+            return cls(
+                project_root,
+                Path(vault_root),
+                MemoryScope.from_dict(value["project_scope"]),
+                UUID(vault_id),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_INVALID") from error
+
+
+def find_obsidian_vault_root(path: Path) -> Path:
+    """Return one normalized real vault root only when its local Obsidian marker exists."""
+    supplied = path.expanduser()
+    if supplied.is_symlink():
+        raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_ROOT_UNSAFE")
+    candidate = supplied.resolve()
+    if not candidate.is_dir() or not (candidate / ".obsidian").is_dir():
+        raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_ROOT_INVALID")
+    if (candidate / ".obsidian").is_symlink():
+        raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_ROOT_UNSAFE")
+    return candidate
+
+
+class LocalObsidianVaultBindingStore:
+    """Symlink-safe machine-local opt-in mapping from an enabled project to one vault."""
+
+    _bindings_name = "obsidian-vault-bindings.json"
+    _lock_name = ".automatic-memory.lock"
+
+    def __init__(self, data_directory: Path) -> None:
+        self._directory = data_directory.expanduser().resolve()
+        self._bindings_path = self._directory / self._bindings_name
+        self._projects = LocalMemoryProjectBindingStore(self._directory)
+
+    def enable(self, project_dir: Path, vault_dir: Path) -> ObsidianVaultBinding:
+        project = self._projects.get(project_dir)
+        if project is None:
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_PROJECT_UNENABLED")
+        vault_root = find_obsidian_vault_root(vault_dir)
+        with exclusive_local_file_lock(self._directory, self._lock_name):
+            existing = self._get(project.project_root)
+            if existing is not None:
+                if existing.scope != project.scope:
+                    raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_SCOPE_CONFLICT")
+                if existing.vault_root != vault_root:
+                    raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_VAULT_ALREADY_ENABLED")
+                return existing
+            binding = ObsidianVaultBinding(project.project_root, vault_root, project.scope, uuid4())
+            values = self._read_bindings()
+            values[str(project.project_root)] = binding.to_dict()
+            self._write(values)
+            return binding
+
+    def get(self, project: MemoryProjectBinding) -> ObsidianVaultBinding | None:
+        if not self._directory.exists():
+            return None
+        with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
+            binding = self._get(project.project_root)
+        if binding is None or binding.scope != project.scope:
+            return None
+        return binding
+
+    def disable(self, project_dir: Path) -> ObsidianVaultBinding | None:
+        project_root = find_memory_project_root(project_dir)
+        if not self._directory.exists():
+            return None
+        with exclusive_local_file_lock(self._directory, self._lock_name, create_directory=False):
+            values = self._read_bindings()
+            value = values.pop(str(project_root), None)
+            if value is None:
+                return None
+            binding = ObsidianVaultBinding.from_dict(project_root, value)
+            self._write(values)
+            return binding
+
+    def _get(self, project_root: Path) -> ObsidianVaultBinding | None:
+        value = self._read_bindings().get(str(project_root))
+        return None if value is None else ObsidianVaultBinding.from_dict(project_root, value)
+
+    def _read_bindings(self) -> dict[str, object]:
+        value = self._read_json()
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_INVALID")
+        return value
+
+    def _read_json(self) -> object | None:
+        if not self._bindings_path.exists():
+            return None
+        if self._bindings_path.is_symlink():
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_UNSAFE")
+        try:
+            return cast(object, json.loads(self._bindings_path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError) as error:
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_INVALID") from error
+
+    def _write(self, value: dict[str, object]) -> None:
+        self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self._bindings_path.exists() and self._bindings_path.is_symlink():
+            raise AutomaticMemoryBindingError("MNEMO_OBSIDIAN_BINDING_UNSAFE")
+        temporary: Path | None = None
+        try:
+            with NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self._directory, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                os.chmod(temporary, 0o600)
+                json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+                handle.write("\n")
+            os.replace(temporary, self._bindings_path)
+            os.chmod(self._bindings_path, 0o600)
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
