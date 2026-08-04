@@ -713,7 +713,9 @@ sections; the reference adapter shares its normalized literal-token scoring and 
 Every sync atomically rebuilds that scope’s projection, so historical revisions and explicit
 deletions are not searchable. It returns exact document/revision identities, executes no document,
 runs no model, and is deliberately capped for personal mode rather than performing broad ambient
-search. Embeddings remain in progress.
+search. Equal literal scores use checked-in repository Markdown before an optional Obsidian note,
+but that is only a deterministic ordering rule: both remain separately cited, untrusted evidence
+and no note silently overrides current structural facts. Embeddings remain in progress.
 
 An explicit `get_context` `knowledge_query` can now include matching current document sections in
 the same bounded packet as task and structural facts. Every included section is cited to its exact

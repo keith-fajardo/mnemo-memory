@@ -368,6 +368,10 @@ For local personal-scale search, Mnemo maintains a rebuildable SQLite full-text 
 projection. It is literal word search—not an embedding or model judgment—so it remains local,
 predictable, and cited. Semantic/embedding retrieval is a later opt-in capability.
 
+If two note sections have the same literal search score, a checked-in repository Markdown note is
+shown before an opted-in Obsidian note. That is only a predictable tie-breaker: Mnemo does not
+silently overwrite one note with another or present either as verified current code structure.
+
 At a new supported Codex or Claude Code session, Mnemo also tells the agent—without showing note
 text—how many current scoped knowledge documents are available and to use a short `knowledge_query`
 when the task needs a documented decision, architecture note, or policy. You do not need to keep a

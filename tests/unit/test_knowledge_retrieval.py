@@ -8,6 +8,7 @@ import pytest
 from mnemo_memory.packages.domain import (
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
+    KnowledgeDocumentSourceKind,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -93,3 +94,34 @@ def test_retrieval_reads_only_the_current_revision_and_rejects_empty_queries() -
     )
     with pytest.raises(KnowledgeRetrievalError, match="searchable term"):
         retriever.search(KnowledgeSearchRequest(scope(), "---"))
+
+
+def test_project_markdown_is_first_only_on_an_exact_lexical_tie() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    parser = KnowledgeDocumentParser()
+    project_document = parser.parse(
+        KnowledgeDocumentParseRequest(scope(), "docs/decision.md"),
+        "# Decision\nUse bounded retrieval.",
+    )
+    vault_document = parser.parse(
+        KnowledgeDocumentParseRequest(
+            scope(), "obsidian/vault/decision.md", KnowledgeDocumentSourceKind.OBSIDIAN
+        ),
+        "# Decision\nUse bounded retrieval.",
+    )
+    project_revision = KnowledgeDocumentRevision(
+        KnowledgeDocumentRevisionId.new(), project_document, 1, None, NOW
+    )
+    vault_revision = KnowledgeDocumentRevision(
+        KnowledgeDocumentRevisionId.new(), vault_document, 1, None, NOW
+    )
+    repository.apply_sync(scope(), (vault_revision, project_revision), ())
+
+    result = KnowledgeLexicalRetriever(repository).search(
+        KnowledgeSearchRequest(scope(), "bounded retrieval")
+    )
+
+    assert tuple(match.revision for match in result.matches) == (
+        project_revision,
+        vault_revision,
+    )

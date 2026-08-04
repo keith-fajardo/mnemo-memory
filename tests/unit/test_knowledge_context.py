@@ -81,6 +81,10 @@ def test_unified_context_adds_cited_bounded_untrusted_knowledge() -> None:
     assert "documented business-date grain" in item.content
     assert item.source_scope == request_scope
     assert item.validity.value == "unknown"
+    assert item.ranking is not None
+    assert item.ranking.retrieval_method == "scoped-literal-knowledge"
+    assert item.ranking.rank == 1
+    assert '"source_kind":"markdown"' in item.content
     assert item.evidence_references[0].immutable_source_ref.startswith("knowledge:")
     assert str(revision.revision_id) in item.item_id
     assert packet.provenance[-1].item_id == item.item_id

@@ -47,6 +47,7 @@ from mnemo_memory.packages.domain import (
     OmissionNotice,
     OmissionReason,
     ProvenanceNotice,
+    RankingMetadata,
     ScopeLevel,
     Sensitivity,
     SourceFileRename,
@@ -321,8 +322,8 @@ class UnifiedContextService:
         )
         items: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
-        for match in matches:
-            item, notice = _knowledge_context_item(packet, request.scope, match)
+        for rank, match in enumerate(matches, start=1):
+            item, notice = _knowledge_context_item(packet, request.scope, match, rank)
             if item.token_estimate > remaining:
                 packet = _with_omission(
                     packet,
@@ -1379,6 +1380,7 @@ def _knowledge_context_item(
     packet: ContextPacket,
     task_scope: MemoryScope,
     match: KnowledgeDocumentSectionMatch,
+    rank: int,
 ) -> tuple[ContextItem, ProvenanceNotice]:
     """Render one exact stored note section without private absolute paths or implicit authority."""
     revision, document = match.revision, match.revision.document
@@ -1394,6 +1396,7 @@ def _knowledge_context_item(
             "heading": match.section.heading,
             "revision_id": str(revision.revision_id),
             "section_index": match.section_index,
+            "source_kind": document.source_kind.value,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1424,7 +1427,7 @@ def _knowledge_context_item(
         SourceTrustClass.USER_AUTHORED,
         Sensitivity.NORMAL,
         ValidityState.UNKNOWN,
-        None,
+        RankingMetadata(rank, float(match.score), "scoped-literal-knowledge"),
         ConflictState.NONE,
         revision.created_at,
     )

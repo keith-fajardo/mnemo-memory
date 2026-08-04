@@ -268,6 +268,10 @@ send your notes to a model or silently include every note in an agent request. D
 and old note revisions are removed from the index; every selected section still cites its exact
 document revision. Semantic/embedding search is not enabled yet.
 
+When equally matching repository and optional-vault notes are returned, repository Markdown appears
+first as a predictable tie-breaker. Both are still separate, untrusted, cited evidence—not facts
+that can silently override current dbt or source-structure evidence.
+
 At the next supported client session start, Mnemo tells the agent only that scoped project knowledge
 is available and how to request it with a short `knowledge_query`; it does not attach every note or
 read the user’s prompt to guess a query. That makes the capability discoverable without making you

@@ -238,6 +238,9 @@ def rank_knowledge_sections(
             matches,
             key=lambda match: (
                 -match.score,
+                # A checked-in project note is the nearer project source on an exact lexical tie.
+                # This is only ordering: it never makes either untrusted note authoritative.
+                0 if match.revision.document.source_kind.value == "markdown" else 1,
                 match.revision.document.relative_path,
                 str(match.revision.revision_id),
                 match.section_index,
