@@ -60,6 +60,7 @@ _SKIP_DIRECTORIES: Final = frozenset(
 # claim to parse their language or infer dependencies from them.
 _FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
     {
+        ".csv",
         ".dart",
         ".ex",
         ".exs",
@@ -81,6 +82,7 @@ _FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
         ".sql",
         ".svelte",
         ".swift",
+        ".tsv",
         ".vb",
         ".vue",
         ".yaml",

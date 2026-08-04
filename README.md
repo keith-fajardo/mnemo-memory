@@ -151,11 +151,16 @@ added without changing saved memory. The
 this one.
 
 Mnemo also fingerprints common source files it does **not** parse yet—including dbt `.sql` models,
-dbt `schema.yml`/`schema.yaml` files, and Swift, Kotlin, Ruby, Scala, Elixir, Lua, Dart, and similar
-source extensions. That means later
+dbt `schema.yml`/`schema.yaml` files, dbt `.csv`/`.tsv` seed files, and Swift, Kotlin, Ruby, Scala,
+Elixir, Lua, Dart, and similar source extensions. That means later
 memory can truthfully say that `models/orders.sql` changed, with no SQL body stored or replayed. It
 does **not** pretend to know SQL dependencies or calls from that file until a dedicated safe parser
 or authoritative dbt manifest provides them.
+
+For example, if Finance updates a dbt seed, Mnemo can record that `seeds/finance_orders.csv`
+changed between two saved snapshots. It stores only the relative path and a SHA-256 fingerprint—not
+the financial values—so an agent has a durable cue to investigate the current seed and its verified
+dbt impact without treating the old file body as memory.
 
 For an enabled dbt project, the authoritative manifest closes that gap: an agent can request
 `dbt_lineage` with `relative_path: "models/marts/fct_orders.sql"`, and Mnemo resolves it only when

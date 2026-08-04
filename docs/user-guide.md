@@ -39,11 +39,16 @@ namespace-only imports and aliases remain unresolved. No unproven runtime relati
 presented as fact.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt
-`schema.yml`/`schema.yaml` files, Swift, Kotlin, Ruby, Scala, Elixir, Lua, and Dart—it still saves
-an immutable relative-path and byte fingerprint.
+`schema.yml`/`schema.yaml` files, dbt `.csv`/`.tsv` seed files, Swift, Kotlin, Ruby, Scala, Elixir,
+Lua, and Dart—it still saves an immutable relative-path and byte fingerprint.
 So a later source-change summary can honestly say that `models/orders.sql` changed without keeping
 or sending the SQL body. These files do not receive invented declarations, calls, or dependencies:
 for dbt structure, use the authoritative manifest; for another language, wait for a safe parser.
+
+This also covers the common reconciliation question, “did the Finance seed change?” Mnemo can say
+that an exact seed path changed between saved snapshots, but it does not retain the seed rows or
+claim why the numbers changed. Use the current source and dbt manifest for those facts, and keep
+the investigation’s decision and verification in the task checkpoint.
 
 When an agent needs orientation, it can request a symbol or relative-path match through Mnemo's
 existing `get_context` tool. Mnemo returns matching modules/classes/functions, declared module
