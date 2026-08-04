@@ -172,11 +172,12 @@ class ContextSourceChangeQuery:
 class ContextSourceOverviewQuery:
     """Request a small deterministic inventory of one scoped source snapshot.
 
-    This is intentionally an inventory of persisted identities and counts, not a source replay or
-    a claim about runtime behavior. It is bounded before packet rendering so an automatic session
-    can learn repository shape without consuming a full structural section.
+    This is intentionally an inventory of persisted file/declaration identities and counts, not a
+    source replay or a claim about runtime behavior. It is bounded before packet rendering so an
+    automatic session can learn repository shape without consuming a full structural section.
     """
 
+    maximum_files: int = 12
     maximum_modules: int = 12
     maximum_declarations: int = 24
     snapshot_id: CodeSnapshotId | None = None
@@ -184,9 +185,9 @@ class ContextSourceOverviewQuery:
     require_current: bool = False
 
     def __post_init__(self) -> None:
-        if self.maximum_modules < 1 or self.maximum_declarations < 1:
+        if self.maximum_files < 1 or self.maximum_modules < 1 or self.maximum_declarations < 1:
             raise ValueError("source overview limits must be positive")
-        if self.maximum_modules > 32 or self.maximum_declarations > 64:
+        if self.maximum_files > 32 or self.maximum_modules > 32 or self.maximum_declarations > 64:
             raise ValueError("source overview limits exceed bounded inventory")
         if self.current_source_digest is not None and (
             not self.current_source_digest.startswith("sha256:")
@@ -507,6 +508,12 @@ class UnifiedContextService:
                 OmissionReason.STALE,
                 "source snapshot is not proven current",
             )
+        files = tuple(
+            sorted(
+                self._source.iter_files(scope, snapshot.snapshot_id),
+                key=lambda item: item.relative_path,
+            )
+        )[: query.maximum_files]
         all_symbols = tuple(
             sorted(
                 self._source.iter_symbols(scope, snapshot.snapshot_id),
@@ -529,6 +536,7 @@ class UnifiedContextService:
             request.scope,
             snapshot,
             currentness,
+            len(files),
             len(modules),
             len(declarations),
         )
@@ -540,8 +548,20 @@ class UnifiedContextService:
         prior_source_item_ids = {
             item.item_id for item in packet.structural_items if item.item_id.startswith("source:")
         }
-        result = _append_source_items(
+        prior_file_item_ids = {
+            item.item_id
+            for item in packet.structural_items
+            if item.item_id.startswith("source-file:")
+        }
+        result = _append_source_file_items(
             packet,
+            request.scope,
+            snapshot,
+            files,
+            currentness=currentness,
+        )
+        result = _append_source_items(
+            result,
             request.scope,
             snapshot,
             (*modules, *declarations),
@@ -549,13 +569,18 @@ class UnifiedContextService:
             {item.relative_path: item for item in modules},
             currentness=currentness,
         )
-        requested_count = len(modules) + len(declarations)
-        rendered_count = sum(
+        requested_symbol_count = len(modules) + len(declarations)
+        rendered_symbol_count = sum(
             1
             for item in result.structural_items
             if item.item_id.startswith("source:") and item.item_id not in prior_source_item_ids
         )
-        if rendered_count < requested_count:
+        rendered_file_count = sum(
+            1
+            for item in result.structural_items
+            if item.item_id.startswith("source-file:") and item.item_id not in prior_file_item_ids
+        )
+        if rendered_symbol_count < requested_symbol_count or rendered_file_count < len(files):
             return _with_omission(
                 result,
                 "source-overview-items",
@@ -1178,6 +1203,7 @@ def _with_source_overview_summary(
     task_scope: MemoryScope,
     snapshot: CodeSnapshot,
     currentness: ValidityState,
+    selected_file_count: int,
     selected_module_count: int,
     selected_declaration_count: int,
 ) -> ContextPacket:
@@ -1194,6 +1220,7 @@ def _with_source_overview_summary(
             "file_count": snapshot.file_count,
             "kind": "source_snapshot_overview",
             "selected_declaration_count": selected_declaration_count,
+            "selected_file_count": selected_file_count,
             "selected_module_count": selected_module_count,
             "snapshot_id": str(snapshot.snapshot_id),
             "symbol_count": snapshot.symbol_count,
@@ -1253,6 +1280,99 @@ def _with_source_overview_summary(
         structural_items=(*packet.structural_items, item),
         skills_and_procedures=packet.skills_and_procedures,
         provenance=(*packet.provenance, notice),
+        omissions=packet.omissions,
+        conflicts=packet.conflicts,
+    )
+
+
+def _append_source_file_items(
+    packet: ContextPacket,
+    task_scope: MemoryScope,
+    snapshot: CodeSnapshot,
+    files: tuple[CodeFile, ...],
+    *,
+    currentness: ValidityState,
+) -> ContextPacket:
+    """Render bounded source-file identities without exposing their bytes.
+
+    File facts keep the automatic overview useful for file-only inputs such as dbt SQL and
+    unparsed languages. They deliberately establish no declaration, import, or runtime edge.
+    """
+    facts: list[ContextItem] = []
+    notices: list[ProvenanceNotice] = list(packet.provenance)
+    remaining = min(
+        packet.budget.structural - sum(item.token_estimate for item in packet.structural_items),
+        packet.budget.total_limit - packet.declared_total_tokens,
+    )
+    for file in files:
+        content = json.dumps(
+            {
+                "currentness": currentness.value,
+                "kind": "source_file",
+                "path": file.relative_path,
+                "snapshot_id": str(snapshot.snapshot_id),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        if tokens > remaining:
+            break
+        reference = f"source:{snapshot.source_digest}#{file.relative_path}"
+        evidence = EvidenceReference(
+            EvidenceId(uuid5(_SOURCE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+            SourceId(uuid5(_SOURCE_EVIDENCE_NAMESPACE, f"source:{snapshot.source_digest}")),
+            EvidenceSourceType.REPOSITORY,
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            reference,
+            file.content_digest,
+            EvidenceLocation(f"mnemo:source/{snapshot.snapshot_id}/{file.relative_path}"),
+            packet.created_at,
+            VerificationStatus.VERIFIED,
+        )
+        item = ContextItem(
+            f"source-file:{snapshot.snapshot_id}:{file.relative_path}",
+            ContextItemType.STRUCTURAL_FACT,
+            task_scope,
+            content,
+            ContentRepresentation.UNTRUSTED_EVIDENCE,
+            tokens,
+            (evidence,),
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            Sensitivity.NORMAL,
+            currentness,
+            None,
+            ConflictState.NONE,
+            packet.created_at,
+        )
+        facts.append(item)
+        notices.append(
+            ProvenanceNotice(
+                f"provenance:{item.item_id}",
+                item.item_id,
+                f"mnemo:source/{snapshot.snapshot_id}/file/{file.relative_path}",
+                hashlib.sha256(content.encode()).hexdigest(),
+                (evidence,),
+            )
+        )
+        remaining -= tokens
+    return ContextPacket(
+        packet.schema_version,
+        packet.request_id,
+        packet.owner_scope,
+        packet.query_id,
+        packet.task_id,
+        packet.created_at,
+        packet.expires_at,
+        packet.declared_total_tokens + sum(item.token_estimate for item in facts),
+        packet.budget,
+        packet.producer_version,
+        active_task_checkpoint=packet.active_task_checkpoint,
+        episodic_memories=packet.episodic_memories,
+        knowledge_items=packet.knowledge_items,
+        structural_items=(*packet.structural_items, *facts),
+        skills_and_procedures=packet.skills_and_procedures,
+        provenance=tuple(notices),
         omissions=packet.omissions,
         conflicts=packet.conflicts,
     )

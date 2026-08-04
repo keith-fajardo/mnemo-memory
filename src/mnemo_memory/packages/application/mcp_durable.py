@@ -160,6 +160,7 @@ class DurableMcpContextPort:
                 None
                 if source_overview is None
                 else ContextSourceOverviewQuery(
+                    maximum_files=int(source_overview.get("maximum_files", 12)),
                     maximum_modules=int(source_overview.get("maximum_modules", 12)),
                     maximum_declarations=int(source_overview.get("maximum_declarations", 24)),
                     snapshot_id=_optional_id(source_overview, "snapshot_id", CodeSnapshotId),

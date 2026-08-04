@@ -610,8 +610,9 @@ or budget pressure. It does not replay source text or infer why a change was mad
 
 Fresh enabled sessions also receive a bounded `source_overview` when an active scoped source
 snapshot exists, even if no latest transition is available. The overview contains only cited
-snapshot identity, file/symbol/edge counts, and a deterministic bounded sample of module and
-declaration identities. It is subject to the same current/stale/unknown policy and records a
+snapshot identity, file/symbol/edge counts, and a deterministic bounded sample of relative-file,
+module, and declaration identities. This keeps the map useful even for intentionally file-only
+inputs without claiming an unparsed file has declarations or dependencies. It is subject to the same current/stale/unknown policy and records a
 structured budget omission rather than dropping identifiers silently. It does not add a source
 replay, automatic reasoning, or a runtime call-graph claim.
 

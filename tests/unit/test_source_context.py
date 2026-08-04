@@ -963,6 +963,12 @@ def test_source_overview_is_scoped_deterministic_bounded_and_provenance_bearing(
     assert '"currentness":"current"' in overview.content
     assert str(root) not in overview.content
     assert overview.evidence_references[0].content_hash == stored.snapshot.source_digest
+    file_item = next(
+        item for item in first.structural_items if item.item_id.startswith("source-file:")
+    )
+    assert '"kind":"source_file"' in file_item.content
+    assert '"path":"app.py"' in file_item.content
+    assert file_item.evidence_references[0].content_hash.startswith("sha256:")
     assert any(item.item_id.startswith("source:") for item in first.structural_items)
     assert all(item.evidence_references for item in first.structural_items)
     assert all(str(root) not in item.content for item in first.structural_items)
@@ -1046,8 +1052,10 @@ def test_source_overview_currentness_and_budget_omissions_are_explicit(tmp_path:
     "kwargs",
     (
         {"maximum_modules": 0},
+        {"maximum_files": 0},
         {"maximum_declarations": 0},
         {"maximum_modules": 33},
+        {"maximum_files": 33},
         {"maximum_declarations": 65},
         {"current_source_digest": "not-a-digest"},
     ),
@@ -1057,3 +1065,53 @@ def test_source_overview_query_rejects_unbounded_or_invalid_inputs(
 ) -> None:
     with pytest.raises(ValueError):
         ContextSourceOverviewQuery(**kwargs)  # type: ignore[arg-type]
+
+
+def test_source_overview_includes_file_only_inputs_without_claiming_structure(
+    tmp_path: Path,
+) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "models").mkdir()
+    (root / "models" / "orders.sql").write_text("select 1", encoding="utf-8")
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_overview=ContextSourceOverviewQuery(
+                maximum_files=1, maximum_modules=1, maximum_declarations=1
+            ),
+        )
+    )
+
+    file_item = next(
+        item for item in packet.structural_items if item.item_id.startswith("source-file:")
+    )
+    assert '"path":"models/orders.sql"' in file_item.content
+    assert not any(item.item_id.startswith("source:") for item in packet.structural_items)
+    assert "select 1" not in file_item.content

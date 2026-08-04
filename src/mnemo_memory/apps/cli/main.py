@@ -153,8 +153,9 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                         maximum_files=8,
                     ),
                     source_overview=ContextSourceOverviewQuery(
-                        maximum_modules=6,
-                        maximum_declarations=10,
+                        maximum_files=3,
+                        maximum_modules=2,
+                        maximum_declarations=2,
                     ),
                 )
             )

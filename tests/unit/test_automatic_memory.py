@@ -480,6 +480,7 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     summary = json.loads(overview["content"])
     assert summary["kind"] == "source_snapshot_overview"
     assert summary["file_count"] == 1
+    assert any(item["item_id"].startswith("source-file:") for item in packet["structural_items"])
     assert packet["declared_total_tokens"] <= 1_200
     assert "return True" not in attached
     assert str(project) not in attached

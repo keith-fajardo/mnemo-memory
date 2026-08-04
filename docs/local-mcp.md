@@ -23,7 +23,7 @@ limited to 600 tokens by default and structured token-budget omissions are prese
 For an enabled source-memory project, `get_context` can also accept a bounded
 `"source_overview"` object. It selects the scoped active (or an explicitly named immutable)
 source snapshot and returns a cited inventory of its snapshot identity, file/symbol/edge counts,
-and deterministic saved module/declaration identities. Optional `current_source_digest` and
+and deterministic saved relative-file/module/declaration identities. Optional `current_source_digest` and
 `require_current` use exact digest matching; active does not mean current. The overview never
 contains source bodies, prompts, terminal output, or absolute paths, and budget pressure becomes a
 structured omission. Connected automatic sessions request this small overview themselves, so an
