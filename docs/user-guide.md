@@ -33,6 +33,9 @@ saved target, and follows those proven links to show a bounded list of code that
 statically depends on a selected file or symbol. It can also resolve a small safe subset of direct
 calls (same-module, fully-qualified, or unique imported members). Duplicate candidates across
 files or languages remain unresolved rather than being guessed. A JavaScript/TypeScript local
+top-level `const name = () => …` or `const name = function …` is indexed as a function, which covers
+the common `export const handler = …` style. Mutable, conditional, and nested bindings stay absent.
+A JavaScript/TypeScript local
 default import is resolved only for one named `export default function` or `export default class`;
 an exact local named barrel export such as `export { validate as check } from "./helpers"` is also
 resolved. A local wildcard barrel can resolve one non-default member only when it has exactly one

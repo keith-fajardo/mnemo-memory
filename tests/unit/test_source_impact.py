@@ -454,6 +454,63 @@ def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_
     )
 
 
+def test_typescript_top_level_const_function_exports_are_indexed_and_resolve_calls(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.ts").write_text(
+        "export const validate = (value: number) => value > 0;\n"
+        "export const format = function(value: number) { return String(value); };\n",
+        encoding="utf-8",
+    )
+    (root / "service.ts").write_text(
+        "import { validate as check, format } from './helpers';\n"
+        "const privateHelper = () => check(1);\n"
+        "export const process = () => { privateHelper(); return format(1); };\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    assert [
+        item.symbol.qualified_name
+        for item in service.query(
+            SourceImpactQuery(item_scope, "helpers.validate", SourceImpactDirection.DEPENDENTS)
+        ).symbols
+    ] == ["service.privateHelper", "service.process"]
+    assert [
+        item.symbol.qualified_name
+        for item in service.query(
+            SourceImpactQuery(item_scope, "helpers.format", SourceImpactDirection.DEPENDENTS)
+        ).symbols
+    ] == ["service.process"]
+
+
+def test_typescript_dynamic_or_reassignable_variable_functions_stay_unresolved(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "service.ts").write_text(
+        "let mutable = () => true;\n"
+        "const conditional = flag ? () => true : () => false;\n"
+        "function outer() { const nested = () => true; return nested(); }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.qualified_name for item in artifact.symbols}
+
+    assert "service.mutable" not in names
+    assert "service.conditional" not in names
+    assert "service.outer.nested" not in names
+
+
 def test_javascript_and_typescript_default_imports_resolve_only_explicit_named_defaults(
     tmp_path: Path,
 ) -> None:

@@ -1097,6 +1097,18 @@ class SourceStructureParser:
                 and node.type == "variable_declarator"
                 and parent == module
             ):
+                variable_function = self._static_top_level_variable_function(node, raw)
+                if variable_function is not None:
+                    qualified = f"{module}.{variable_function}"
+                    symbols.append(
+                        _PendingSymbol(
+                            relative,
+                            qualified,
+                            CodeSymbolKind.FUNCTION,
+                            node.start_point.row + 1,
+                        )
+                    )
+                    next_parent = qualified
                 # Support only the direct, top-level CommonJS spelling
                 # ``const local = require('./local')`` and object destructuring from the
                 # same literal call.  A computed module name, reassigned variable, nested
@@ -1120,6 +1132,27 @@ class SourceStructureParser:
                 visit(child, next_parent)
 
         visit(root, module)
+
+    @staticmethod
+    def _static_top_level_variable_function(node: Node, raw: bytes) -> str | None:
+        """Return a direct top-level ``const name = function/arrow`` binding, if proven.
+
+        A lexical ``const`` avoids treating a later reassignment as a stable declaration.  The
+        initializer must be exactly an arrow or function expression: conditional factories,
+        object properties, destructuring, nested bindings, and ``let``/``var`` are value-flow
+        territory and deliberately do not become source symbols.
+        """
+        declaration = node.parent
+        value = node.child_by_field_name("value")
+        if (
+            declaration is None
+            or declaration.type != "lexical_declaration"
+            or not any(child.type == "const" for child in declaration.children)
+            or value is None
+            or value.type not in {"arrow_function", "function_expression"}
+        ):
+            return None
+        return SourceStructureParser._declaration_name(node, raw)
 
     @staticmethod
     def _commonjs_require_bindings(

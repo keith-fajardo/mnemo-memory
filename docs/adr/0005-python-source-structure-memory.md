@@ -24,7 +24,8 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   declarations, and syntactically explicit calls. An import gains an internal target-symbol link
   only when exactly one module in the same snapshot matches. A call gains a target link
   only for an unambiguous same-module, fully-qualified, or imported-member declaration. JavaScript
-  and TypeScript additionally resolve a local default import only when its target file contains one
+  and TypeScript additionally record a direct top-level `const name = function/arrow` binding, then
+  resolve a local default import only when its target file contains one
   named `export default function` or `export default class`, and one exact named local barrel export
   such as `export { member as alias } from "./module"`. A local wildcard barrel can resolve a requested
   non-default member only when exactly one saved local declaration is proven; anonymous defaults,

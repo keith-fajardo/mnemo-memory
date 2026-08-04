@@ -143,6 +143,9 @@ Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. Jav
 TypeScript also recognize direct top-level literal CommonJS `require("./local")` bindings and a
 deliberately narrow default-import form: `import local from "./module"` only when that module
 explicitly declares one named `export default function Name` or `export default class Name`.
+They also index a direct top-level `const name = () => …` or `const name = function …` binding, so
+the common `export const handler = …` style can participate in proven local call links. Mutable,
+conditional, and nested variable bindings remain unresolved.
 It also follows an exact local named barrel export such as
 `export { validate as check } from "./helpers"`, and a local `export * from "./helpers"` only
 when the requested non-default name has exactly one proven local declaration. Anonymous defaults,
