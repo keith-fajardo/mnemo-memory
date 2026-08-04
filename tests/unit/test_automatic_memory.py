@@ -41,6 +41,7 @@ from mnemo_memory.packages.domain import (
     SourceTrustClass,
     VerificationStatus,
 )
+from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 
@@ -341,6 +342,38 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
         content.to_dict(), sort_keys=True, separators=(",", ":")
     )
     assert packet["episodic_memories"] == []
+
+
+def test_automatic_context_attachment_includes_the_latest_bounded_source_transition(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    source = project / "service.py"
+    source.write_text("def reconcile():\n    return 'before'\n", encoding="utf-8")
+
+    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
+    repository.migrate()
+    parser = SourceStructureParser()
+    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+    source.write_text("def reconcile():\n    return 'after'\n", encoding="utf-8")
+    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+
+    attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["active_task_checkpoint"] is None
+    assert packet["declared_total_tokens"] <= 1_200
+    change = next(
+        item for item in packet["structural_items"] if item["item_id"].startswith("source-change:")
+    )
+    summary = json.loads(change["content"])
+    assert summary["modified_files"] == ["service.py"]
+    assert "return 'before'" not in attached
+    assert "return 'after'" not in attached
 
 
 @pytest.mark.parametrize("client", ["codex", "claude-code"])

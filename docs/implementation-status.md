@@ -580,8 +580,10 @@ Source snapshots also retain a scoped, append-only activation ledger. This estab
 "previous structural state → current structural state" sequence without treating random snapshot
 UUIDs as timestamps.
 
-The bounded context path now surfaces that latest recorded transition through the existing
-`get_context` tool's optional `source_changes` request. It returns only provenance-bearing added
-and removed declaration/relationship identities, preserves current/stale/unknown labeling from an
-exact supplied source digest, and emits structured omissions for missing history or budget pressure.
-It does not replay source text or infer why a change was made.
+The bounded context path surfaces that latest recorded transition through the existing
+`get_context` tool's optional `source_changes` request. An enabled client now also receives that
+small transition alongside its automatic fresh-session checkpoint/lesson/fact attachment, so it
+does not need to remember a second query merely to see recent changed files. It returns only
+provenance-bearing file, declaration, and relationship identities, preserves current/stale/unknown
+labeling from an exact supplied source digest, and emits structured omissions for missing history
+or budget pressure. It does not replay source text or infer why a change was made.

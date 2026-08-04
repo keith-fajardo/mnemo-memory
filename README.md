@@ -299,10 +299,11 @@ matches; “active” alone is never treated as proof that files have not change
 
 When Mnemo observes a supported structural change between snapshots, it gives the connected agent
 a short factual summary of added/removed/modified **relative files**, declarations, and proven
-relationships at session start and when it asks for a checkpoint. A body-only edit is therefore
-visible even when a file keeps the same functions. Mnemo stores a SHA-256 fingerprint for that
-purpose—not source bodies—and still does not guess **why** it changed: the agent records that
-decision, failed approach, and verification in the checkpoint it saves.
+relationships in the automatically attached fresh-session context. A body-only edit is therefore
+visible even when a file keeps the same functions—without requiring the agent to remember to make
+a second query. Mnemo stores a SHA-256 fingerprint for that purpose—not source bodies—and still
+does not guess **why** it changed: the agent records that decision, failed approach, and
+verification in the checkpoint it saves.
 
 When an agent needs the durable version of that question in a later session, it can ask for
 `source_changes` with `get_context`. Mnemo compares the two most recently recorded structural

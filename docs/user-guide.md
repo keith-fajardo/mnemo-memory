@@ -138,11 +138,12 @@ You can connect both clients. They share saved handoffs when they use the same M
 ## Use task memory while working
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
-bounded saved handoff, lessons, and approved facts automatically. This automatic attachment has a
-1,200-token content budget and happens only when a supported client starts a new session—not
+bounded saved handoff, lessons, approved facts, and latest bounded source-change summary
+automatically. This automatic attachment has a 1,200-token content budget and happens only when a
+supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
 needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw
-conversation. The manual fallback is:
+conversation or source body. The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
 > exact next action. If you corrected an analysis mistake, also save its trigger, mistaken

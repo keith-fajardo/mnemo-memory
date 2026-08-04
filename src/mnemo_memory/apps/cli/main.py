@@ -42,7 +42,6 @@ from mnemo_memory.packages.application import (
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
-    GetCheckpointContext,
     IngestManifest,
     build_checkpoint_runtime,
     build_lifecycle_service,
@@ -61,6 +60,11 @@ from mnemo_memory.packages.application.command_wrapper import (
     merge_command_hooks,
 )
 from mnemo_memory.packages.application.services import LifecycleService
+from mnemo_memory.packages.application.unified_context import (
+    ContextSourceChangeQuery,
+    GetUnifiedContext,
+    UnifiedContextService,
+)
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeFile,
@@ -107,9 +111,9 @@ app.add_typer(memory_app, name="memory", help="Set up automatic task memory for 
 
 _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
-    episodic_memories=600,
+    episodic_memories=300,
     knowledge=0,
-    structural=0,
+    structural=400,
     skills_and_procedures=0,
     provenance_and_conflicts=0,
     total_limit=1_200,
@@ -124,22 +128,36 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
     """Return a small canonical handoff for an explicitly enabled session-start hook.
 
     This runs only after the hook has found a local project binding. The packet is deliberately
-    smaller than the normal 5,700-token request and contains only the active task handoff plus
-    bounded approved facts; structural lookups still require a named source question.
+    smaller than the normal 5,700-token request. It contains the active task handoff, bounded
+    approved facts, and the latest structural transition when one exists. This lets a fresh agent
+    see the immediately relevant durable history without replaying a transcript or guessing a
+    change reason from a file name.
     """
     try:
         with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
-            packet = runtime.checkpoint_service.get_context(
-                GetCheckpointContext(
+            packet = UnifiedContextService(
+                runtime.checkpoint_service,
+                runtime.dbt_manifest_service,
+                runtime.source_structure_repository,
+            ).get_context(
+                GetUnifiedContext(
                     scope,
                     budget=_AUTOMATIC_SESSION_CONTEXT_BUDGET,
                     include_approved_events=True,
-                    maximum_approved_events=8,
+                    source_changes=ContextSourceChangeQuery(
+                        maximum_declarations=8,
+                        maximum_relationships=8,
+                        maximum_files=8,
+                    ),
                 )
             )
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
         return None
-    if packet.active_task_checkpoint is None and not packet.episodic_memories:
+    if (
+        packet.active_task_checkpoint is None
+        and not packet.episodic_memories
+        and not packet.structural_items
+    ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
 
