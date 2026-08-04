@@ -660,6 +660,8 @@ An immutable source transition now labels a file rename only when exactly one re
 added path share the same saved SHA-256 body fingerprint. The bounded CLI, automatic session cue,
 and `source_changes` packet preserve both relative identities with snapshot evidence. Duplicate or
 copied bodies deliberately remain separate add/remove records rather than a guessed move.
+For a proven renamed dbt `.sql` model, the automatic cue uses only its new exact relative path for
+the existing scoped manifest lookup; it does not derive lineage from SQL or from the rename itself.
 
 The same personal audit is available without MCP through `mnemo-memory memory changes --path
 RELATIVE_PATH --history-limit N`; unrelated transitions are omitted from a path-filtered history.

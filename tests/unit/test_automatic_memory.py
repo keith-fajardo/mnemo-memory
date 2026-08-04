@@ -1016,6 +1016,46 @@ def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_mod
     assert "select 2" not in instruction
 
 
+def test_session_start_uses_new_path_of_digest_proven_renamed_dbt_model(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "dbt repo"
+    legacy = project / "models" / "marts" / "legacy_orders.sql"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("select 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    checkpoint_repository = SQLiteCheckpointRepository(data / "mnemo.sqlite3")
+    checkpoint_repository.migrate()
+    ingested = DbtManifestApplicationService(checkpoint_repository, DbtManifestParser()).ingest(
+        IngestManifest(
+            binding.scope,
+            DBT_FIXTURE.read_bytes(),
+            "tests/fixtures/dbt/manifest-v12.json",
+            datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
+
+    legacy.rename(project / "models" / "marts" / "fct_orders.sql")
+    result = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    instruction = str(output["additionalContext"])
+    assert (
+        "Renamed files: models/marts/legacy_orders.sql → models/marts/fct_orders.sql."
+        in instruction
+    )
+    assert "authoritative dbt-manifest downstream facts" in instruction
+    assert "models/marts/fct_orders.sql" in instruction
+    assert str(ingested.snapshot.snapshot_id) in instruction
+    assert "select 1" not in instruction
+
+
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:
     project = tmp_path / "private repo"
     project.mkdir()

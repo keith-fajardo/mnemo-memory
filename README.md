@@ -212,6 +212,8 @@ path, newest transition first, with snapshot citations. It never returns the SQL
 When one removed and one added relative path have the same unique saved SHA-256 fingerprint, Mnemo
 labels that as a **rename** instead of pretending that unrelated files were deleted and created.
 Copied or ambiguous content stays reported as ordinary add/remove evidence.
+For an enabled dbt project, Mnemo uses the new path of a digest-proven renamed `.sql` model for its
+normal exact manifest lookup; it still never infers dbt lineage from SQL.
 You can inspect the same bounded history yourself with `memory changes --path ... --history-limit`.
 Use `memory impact --path RELATIVE_PATH` when the question is “what proven static code depends on
 this exact file?” It includes all saved declarations in that file and never substitutes a similarly

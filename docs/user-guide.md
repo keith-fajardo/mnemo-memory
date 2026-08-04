@@ -129,7 +129,9 @@ files**, declarations, and resolved relationships, tied to the source snapshot M
 refreshed. That includes a body-only edit even when a file kept the same functions. Mnemo stores a
 SHA-256 fingerprint for this purpose—not source bodies. When exactly one removed and one added path
 share that fingerprint, it reports a rename; copied or ambiguous content remains add/remove rather
-than a guessed move. Mnemo does not pretend it can infer the
+than a guessed move. For an enabled dbt project, Mnemo can use the new path of a proven renamed
+`.sql` file for its normal exact manifest lookup; it never infers lineage from the SQL file itself.
+Mnemo does not pretend it can infer the
 reason from a diff. The checkpoint is where the agent records why the change was made, what failed,
 and what was verified. When it corrects a reasoning mistake, it should also save a compact
 **lesson**: the trigger, the assumption that was wrong, the evidence-backed correction, and how to

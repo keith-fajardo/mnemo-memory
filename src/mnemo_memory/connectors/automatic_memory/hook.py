@@ -233,6 +233,7 @@ class _SourceChangeSummary:
     added_files: tuple[str, ...]
     removed_files: tuple[str, ...]
     renamed_files: tuple[str, ...]
+    renamed_after_files: tuple[str, ...]
     modified_files: tuple[str, ...]
     added_symbols: tuple[str, ...]
     removed_symbols: tuple[str, ...]
@@ -253,6 +254,7 @@ class _SourceChangeSummary:
             _summary_paths(diff.added_files),
             _summary_paths(diff.removed_files),
             _summary_renames(diff),
+            _summary_renamed_after_paths(diff),
             _summary_paths(diff.modified_files),
             _summary_symbols(diff.added_symbols),
             _summary_symbols(diff.removed_symbols),
@@ -330,6 +332,15 @@ def _summary_renames(diff: SourceSnapshotDiff) -> tuple[str, ...]:
         <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
     )
     return labels[:_MAX_CHANGE_SYMBOLS]
+
+
+def _summary_renamed_after_paths(diff: SourceSnapshotDiff) -> tuple[str, ...]:
+    """Keep new paths separately for exact downstream structural lookups."""
+    return tuple(
+        item.after.relative_path
+        for item in diff.renamed_files
+        if len(item.after.relative_path) <= _MAX_CHANGE_SYMBOL_LABEL_LENGTH
+    )[:_MAX_CHANGE_SYMBOLS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,7 +595,9 @@ def _dbt_downstream_cues(
     if not changes.changed:
         return ()
     paths = tuple(
-        path for path in (*changes.added_files, *changes.modified_files) if path.endswith(".sql")
+        path
+        for path in (*changes.added_files, *changes.renamed_after_files, *changes.modified_files)
+        if path.endswith(".sql")
     )[:_MAX_DBT_IMPACT_CUES]
     if not paths:
         return ()
