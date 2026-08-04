@@ -665,6 +665,15 @@ class ReferenceProjectIndexRepository:
                 return node
         raise ManifestNodeNotFound("manifest node was not found")
 
+    def find_nodes_by_original_file_path(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, original_file_path: str
+    ) -> tuple[DbtManifestNode, ...]:
+        try:
+            nodes = self._artifact(scope, snapshot_id).nodes
+        except ManifestSnapshotNotFound:
+            return ()
+        return tuple(node for node in nodes if node.original_file_path == original_file_path)
+
     def iter_nodes(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> tuple[DbtManifestNode, ...]:

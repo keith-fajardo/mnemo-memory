@@ -314,6 +314,12 @@ class ProjectIndexRepository(Protocol):
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
     ) -> DbtManifestNode: ...
 
+    def find_nodes_by_original_file_path(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, original_file_path: str
+    ) -> tuple[DbtManifestNode, ...]:
+        """Return exact scoped manifest matches; callers must reject ambiguity."""
+        ...
+
     def iter_nodes(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> tuple[DbtManifestNode, ...]: ...

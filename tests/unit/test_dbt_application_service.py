@@ -10,6 +10,7 @@ import pytest
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.dbt import (
+    DbtApplicationAmbiguous,
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
     DbtApplicationNotFound,
@@ -18,6 +19,7 @@ from mnemo_memory.packages.application.dbt import (
     IngestManifest,
     LineageDirection,
     QueryLineage,
+    ResolveManifestFile,
 )
 from mnemo_memory.packages.application.unified_context import (
     ContextLineageQuery,
@@ -99,6 +101,23 @@ def test_ingestion_is_idempotent_replaces_active_and_preserves_prior_snapshot() 
         item.ingest(command(value, expected_active_snapshot_id=first.snapshot.snapshot_id))
 
 
+def test_manifest_file_resolution_is_exact_scoped_and_refuses_ambiguity() -> None:
+    item, value = service(), scope()
+    stored = item.ingest(command(value))
+
+    resolved = item.resolve_file(
+        ResolveManifestFile(value, "models/marts/fct_orders.sql", stored.snapshot.snapshot_id)
+    )
+    assert resolved.snapshot.snapshot_id == stored.snapshot.snapshot_id
+    assert str(resolved.node.unique_id) == "model.mnemo_analytics.fct_orders"
+    with pytest.raises(DbtApplicationAmbiguous):
+        item.resolve_file(ResolveManifestFile(value, "models/sources.yml"))
+    with pytest.raises(DbtApplicationNotFound):
+        item.resolve_file(ResolveManifestFile(scope(2), "models/marts/fct_orders.sql"))
+    with pytest.raises(ValueError, match="canonical relative path"):
+        ResolveManifestFile(value, "../models/marts/fct_orders.sql")
+
+
 def test_parser_failure_never_creates_snapshot() -> None:
     item = service()
     with pytest.raises(DbtApplicationInvalidManifest):
@@ -160,6 +179,43 @@ def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
     assert all(
         structural_item.source_scope == task_scope for structural_item in packet.structural_items
     )
+
+
+def test_task_context_can_resolve_an_unambiguous_dbt_file_to_authoritative_lineage() -> None:
+    item, project_scope = service(), scope()
+    stored = item.ingest(command(project_scope)).snapshot
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 2, tzinfo=UTC)
+        ),
+        item,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                None,
+                LineageDirection.DOWNSTREAM,
+                relative_path="models/marts/fct_orders.sql",
+                current_content_digest=stored.metadata.content_digest,
+            ),
+        )
+    )
+
+    assert packet.structural_items
+    assert all(
+        '"start_node":"model.mnemo_analytics.fct_orders"' in item.content
+        for item in packet.structural_items
+    )
+    assert all(item.validity.value == "current" for item in packet.structural_items)
 
 
 def test_currentness_uses_exact_digest_or_comparable_source_state() -> None:

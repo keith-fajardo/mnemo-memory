@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,12 @@ from mcp.client.stdio import stdio_client
 from mcp.types import Tool
 
 from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
-from mnemo_memory.packages.application import LocalConfig, build_checkpoint_runtime
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.packages.application import (
+    IngestManifest,
+    LocalConfig,
+    build_checkpoint_runtime,
+)
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -27,6 +33,7 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.project_index import PythonSourceParser, PythonSourceParseRequest
 
 ROOT = Path(__file__).parents[2]
+DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
 IDS = {
     "owner_id": "11111111-1111-4111-8111-111111111111",
     "workspace_id": "22222222-2222-4222-8222-222222222222",
@@ -459,6 +466,46 @@ def test_durable_port_rejects_a_non_string_source_change_path(tmp_path: Path) ->
         port = DurableMcpContextPort(runtime.checkpoint_service)
         with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
             port.get_context(context_payload(source_changes={"relative_path": 7}))
+
+
+def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: Path) -> None:
+    config = LocalConfig.defaults(tmp_path / "manifest file lineage")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 4, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                    }
+                )
+            )
+        )
+    assert packet.structural_items
+    assert all(
+        '"start_node":"model.mnemo_analytics.fct_orders"' in item.content
+        for item in packet.structural_items
+    )
 
 
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:

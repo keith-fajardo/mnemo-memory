@@ -233,6 +233,27 @@ parent traversal, or backslashes. A path with no recorded changes returns a stru
 it does not reveal another project’s history. An explicit `before_snapshot_id`/`after_snapshot_id`
 pair always selects exactly one transition and cannot be combined with a history limit above one.
 
+## Ask for dbt impact from a model file
+
+When a changed file is a dbt model, the manifest—not SQL text—is the authority for upstream and
+downstream impact. `dbt_lineage` can therefore use an exact `relative_path` instead of requiring
+you to know the dbt unique ID:
+
+```json
+{
+  "dbt_lineage": {
+    "relative_path": "models/marts/fct_orders.sql",
+    "direction": "downstream",
+    "transitive": true
+  }
+}
+```
+
+Mnemo looks for exactly one node in the active scoped manifest with that `original_file_path`, then
+returns its normal bounded, cited lineage facts. It rejects no match or multiple matches rather
+than guessing. As with a unique ID request, add an explicit snapshot ID for a historical audit and
+currentness evidence when you need to prove the artifact still matches your project.
+
 ## Durability and recovery
 
 Acknowledged saves are committed transactionally to the resolved `mnemo.sqlite3` profile and remain

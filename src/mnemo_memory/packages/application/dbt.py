@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Protocol
 
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -45,6 +46,12 @@ class DbtApplicationError(Exception):
 
 
 class DbtApplicationNotFound(DbtApplicationError):
+    pass
+
+
+class DbtApplicationAmbiguous(DbtApplicationError):
+    """More than one manifest node claims one requested file identity."""
+
     pass
 
 
@@ -100,6 +107,24 @@ class QueryLineage:
             raise ValueError("maximum_depth must be non-negative")
         if self.maximum_nodes < 1 or self.maximum_edges < 1:
             raise ValueError("lineage result limits must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveManifestFile:
+    """Resolve one canonical manifest relative file identity in one scoped snapshot."""
+
+    scope: MemoryScope
+    original_file_path: str
+    snapshot_id: DbtSnapshotId | None = None
+
+    def __post_init__(self) -> None:
+        _validate_manifest_relative_path(self.original_file_path)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedManifestFile:
+    snapshot: DbtManifestSnapshot
+    node: DbtManifestNode
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +204,31 @@ class DbtManifestApplicationService:
             snapshot, query.current_content_digest, query.current_source_state
         )
         return ManifestStatus(snapshot, state, reason)
+
+    def resolve_file(self, query: ResolveManifestFile) -> ResolvedManifestFile:
+        """Resolve an exact, scoped file only when its manifest ownership is unambiguous."""
+        try:
+            snapshot = (
+                self._repository.get_snapshot(query.scope, query.snapshot_id)
+                if query.snapshot_id is not None
+                else self._repository.get_active_snapshot(query.scope)
+            )
+            if snapshot is None:
+                raise ManifestSnapshotNotFound()
+            matches = self._repository.find_nodes_by_original_file_path(
+                query.scope, snapshot.snapshot_id, query.original_file_path
+            )
+        except (ManifestSnapshotNotFound, ManifestNodeNotFound) as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest file was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        if not matches:
+            raise DbtApplicationNotFound("dbt manifest file was not found in the authorized scope")
+        if len(matches) != 1:
+            raise DbtApplicationAmbiguous("dbt manifest file maps to multiple nodes")
+        return ResolvedManifestFile(snapshot, matches[0])
 
     def query(self, query: QueryLineage) -> LineageQueryResult:
         try:
@@ -348,3 +398,11 @@ def _currentness(
         if current_source_state.git_commit != stored.git_commit:
             return ArtifactCurrentness.STALE, "Git commit differs"
     return ArtifactCurrentness.UNKNOWN, "source-state evidence is not safely comparable"
+
+
+def _validate_manifest_relative_path(value: str) -> None:
+    if not isinstance(value, str) or not value or len(value) > 512 or "\\" in value:
+        raise ValueError("manifest file path must be a bounded relative POSIX path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or value != path.as_posix():
+        raise ValueError("manifest file path must be a canonical relative path")

@@ -609,3 +609,8 @@ approved fact—not a diff—as evidence for why it changed.
 
 The same personal audit is available without MCP through `mnemo-memory memory changes --path
 RELATIVE_PATH --history-limit N`; unrelated transitions are omitted from a path-filtered history.
+
+For an enabled dbt project, unified context now accepts an exact manifest `original_file_path` as
+the lineage start identity. It resolves only one scoped active-snapshot node and then uses
+authoritative manifest edges for impact; no match or an ambiguous shared file is rejected rather
+than inferred from SQL.

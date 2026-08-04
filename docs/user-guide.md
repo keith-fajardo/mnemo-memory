@@ -115,6 +115,12 @@ checkpoint’s own evidence and recorded lessons remain the truthful place to an
 For a dbt repository, Mnemo can also remember verified upstream/downstream structure after you
 enable dbt lineage. It still does not store raw SQL or a full source checkout.
 
+If you are looking at a changed dbt model file, you do not need to know dbt’s internal unique ID.
+Ask Mnemo for lineage using its exact relative path, such as `models/marts/fct_orders.sql`. Mnemo
+matches it only when one active manifest node owns that path, then uses the manifest’s verified
+dependencies to show impact. It never guesses lineage from the SQL text; ambiguous files are
+reported instead of being silently assigned to a model.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

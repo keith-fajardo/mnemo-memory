@@ -67,6 +67,16 @@ def test_snapshot_creation_retrieval_and_adjacency(
     assert repository.get_active_snapshot(scope) == result.snapshot
     node = repository.get_node(scope, result.snapshot.snapshot_id, graph.nodes[-1].unique_id)
     assert node.unique_id == graph.nodes[-1].unique_id
+    by_file = repository.find_nodes_by_original_file_path(
+        scope, result.snapshot.snapshot_id, "models/marts/fct_orders.sql"
+    )
+    assert [str(item.unique_id) for item in by_file] == ["model.mnemo_analytics.fct_orders"]
+    assert (
+        repository.find_nodes_by_original_file_path(
+            project_scope(2), result.snapshot.snapshot_id, "models/marts/fct_orders.sql"
+        )
+        == ()
+    )
     assert len(repository.iter_nodes(scope, result.snapshot.snapshot_id)) == len(graph.nodes)
     assert len(repository.iter_edges(scope, result.snapshot.snapshot_id)) == len(graph.edges)
     child = next(item for item in graph.nodes if item.dependency_ids)

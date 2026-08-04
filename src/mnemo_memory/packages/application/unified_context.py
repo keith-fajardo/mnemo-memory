@@ -17,6 +17,7 @@ from mnemo_memory.packages.application.dbt import (
     DbtManifestApplicationService,
     LineageDirection,
     QueryLineage,
+    ResolveManifestFile,
 )
 from mnemo_memory.packages.domain import (
     CheckpointId,
@@ -61,7 +62,7 @@ from mnemo_memory.packages.storage.contracts import (
 
 @dataclass(frozen=True, slots=True)
 class ContextLineageQuery:
-    unique_id: DbtNodeId
+    unique_id: DbtNodeId | None
     direction: LineageDirection
     transitive: bool = True
     maximum_depth: int | None = None
@@ -71,6 +72,13 @@ class ContextLineageQuery:
     current_content_digest: str | None = None
     current_source_state: SourceStateFingerprint | None = None
     require_current: bool = False
+    relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.unique_id is None) == (self.relative_path is None):
+            raise ValueError("dbt lineage requires exactly one unique_id or relative_path")
+        if self.relative_path is not None:
+            _validate_source_relative_path(self.relative_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,10 +222,18 @@ class UnifiedContextService:
                 packet, "dbt-lineage", OmissionReason.LOWER_RANK, "dbt index is unavailable"
             )
             return self._with_requested_source_facts(result_packet, request)
+        unique_id = query.unique_id
+        if unique_id is None:
+            assert query.relative_path is not None
+            unique_id = self._dbt.resolve_file(
+                ResolveManifestFile(
+                    _project_scope(request.scope), query.relative_path, query.snapshot_id
+                )
+            ).node.unique_id
         result = self._dbt.query(
             QueryLineage(
                 _project_scope(request.scope),
-                query.unique_id,
+                unique_id,
                 query.direction,
                 query.transitive,
                 query.maximum_depth,

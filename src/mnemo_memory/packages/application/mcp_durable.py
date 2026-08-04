@@ -167,8 +167,14 @@ class DurableMcpContextPort:
                         )
                     ).to_dict()
                 direction = LineageDirection(_string(lineage, "direction"))
+                has_unique_id = "unique_id" in lineage
+                has_relative_path = "relative_path" in lineage
+                if has_unique_id == has_relative_path:
+                    raise ValueError("dbt_lineage requires exactly one unique_id or relative_path")
+                if has_relative_path and not isinstance(lineage["relative_path"], str):
+                    raise ValueError("dbt_lineage.relative_path must be a string")
                 dbt_query = ContextLineageQuery(
-                    DbtNodeId(_string(lineage, "unique_id")),
+                    DbtNodeId(_string(lineage, "unique_id")) if has_unique_id else None,
                     direction,
                     bool(lineage.get("transitive", True)),
                     lineage.get("maximum_depth"),
@@ -180,6 +186,7 @@ class DurableMcpContextPort:
                     else None,
                     None,
                     bool(lineage.get("require_current", False)),
+                    cast(str, lineage["relative_path"]) if has_relative_path else None,
                 )
                 return self._context_service.get_context(
                     GetUnifiedContext(

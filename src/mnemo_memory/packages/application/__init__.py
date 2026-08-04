@@ -37,6 +37,7 @@ from .config import (
     resolve_local_config,
 )
 from .dbt import (
+    DbtApplicationAmbiguous,
     DbtApplicationConflict,
     DbtApplicationError,
     DbtApplicationInvalidManifest,
@@ -49,6 +50,8 @@ from .dbt import (
     LineageDirection,
     LineageQueryResult,
     QueryLineage,
+    ResolvedManifestFile,
+    ResolveManifestFile,
 )
 from .services import LifecycleService
 
@@ -71,6 +74,7 @@ __all__ = [
     "CheckpointView",
     "CompleteCheckpoint",
     "CreateCheckpoint",
+    "DbtApplicationAmbiguous",
     "DbtApplicationConflict",
     "DbtApplicationError",
     "DbtApplicationInvalidManifest",
@@ -91,6 +95,8 @@ __all__ = [
     "QueryLineage",
     "RecordApprovedEpisodicEvent",
     "RecordCheckpointLesson",
+    "ResolveManifestFile",
+    "ResolvedManifestFile",
     "ReviseCheckpoint",
     "build_checkpoint_runtime",
     "build_lifecycle_service",

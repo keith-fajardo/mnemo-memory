@@ -156,6 +156,11 @@ memory can truthfully say that `models/orders.sql` changed, with no SQL body sto
 does **not** pretend to know SQL dependencies or calls from that file until a dedicated safe parser
 or authoritative dbt manifest provides them.
 
+For an enabled dbt project, the authoritative manifest closes that gap: an agent can request
+`dbt_lineage` with `relative_path: "models/marts/fct_orders.sql"`, and Mnemo resolves it only when
+exactly one scoped manifest node owns that file. It then returns normal bounded upstream/downstream
+facts with citations—without reading SQL or guessing dependencies.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash

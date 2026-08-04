@@ -1041,6 +1041,18 @@ class SQLiteCheckpointRepository:
             raise ManifestNodeNotFound("manifest node was not found")
         return nodes[0]
 
+    def find_nodes_by_original_file_path(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, original_file_path: str
+    ) -> tuple[DbtManifestNode, ...]:
+        return tuple(
+            self._scoped_nodes(
+                scope,
+                snapshot_id,
+                "AND node.original_file_path = ?",
+                (original_file_path,),
+            )
+        )
+
     def iter_nodes(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> tuple[DbtManifestNode, ...]:

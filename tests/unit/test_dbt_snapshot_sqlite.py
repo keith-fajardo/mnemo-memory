@@ -59,6 +59,16 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
     restored = reopened.get_snapshot(scope(), stored.snapshot.snapshot_id)
     assert restored.metadata.content_digest == stored.snapshot.metadata.content_digest
     assert restored.node_count == stored.snapshot.node_count
+    matches = reopened.find_nodes_by_original_file_path(
+        scope(), stored.snapshot.snapshot_id, "models/marts/fct_orders.sql"
+    )
+    assert [str(node.unique_id) for node in matches] == ["model.mnemo_analytics.fct_orders"]
+    assert (
+        reopened.find_nodes_by_original_file_path(
+            scope(), stored.snapshot.snapshot_id, "models/not-recorded.sql"
+        )
+        == ()
+    )
     with sqlite3.connect(item.path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
