@@ -116,6 +116,37 @@ def test_registry_rejects_malformed_query_tags_and_cross_scope_selection() -> No
         registry.find_current_procedures(_task_scope(), ("dbt",), 8)
 
 
+def test_registry_selects_one_explicit_client_profile_and_fails_closed_on_ambiguity() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    any_profile = _revision(
+        _project_scope(),
+        "docs/default-profile.md",
+        "---\nmnemo_kind: agent_profile\nmnemo_client: any\n"
+        "mnemo_procedure_tags: reconciliation\n---\n# Default profile\nUse the playbook.",
+    )
+    codex_profile = _revision(
+        _project_scope(),
+        "docs/codex-profile.md",
+        "---\nmnemo_kind: agent_profile\nmnemo_client: codex\n"
+        "mnemo_procedure_tags: reconciliation, dbt\n---\n# Codex profile\nUse the Codex playbook.",
+    )
+    repository.apply_sync(_project_scope(), (any_profile, codex_profile), ())
+    registry = KnowledgeDocumentProcedureRegistry(repository)
+
+    selected_codex = registry.find_current_client_profile(_project_scope(), "codex")
+    selected_claude = registry.find_current_client_profile(_project_scope(), "claude-code")
+    assert selected_codex is not None and selected_codex.revision == codex_profile
+    assert selected_claude is not None and selected_claude.revision == any_profile
+    duplicate = _revision(
+        _project_scope(),
+        "docs/another-codex-profile.md",
+        "---\nmnemo_kind: agent_profile\nmnemo_client: codex\n"
+        "mnemo_procedure_tags: reconciliation\n---\n# Duplicate\nDo not choose by path.",
+    )
+    repository.apply_sync(_project_scope(), (duplicate,), ())
+    assert registry.find_current_client_profile(_project_scope(), "codex") is None
+
+
 def test_context_attaches_cited_procedure_only_when_tags_are_requested() -> None:
     repository = ReferenceKnowledgeDocumentRepository()
     revision = _revision(

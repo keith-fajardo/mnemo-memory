@@ -783,3 +783,10 @@ project playbook over matching optional playbooks; it cannot override scope poli
 instructions, or verified current dbt/source facts. Markdown remains untrusted evidence and is
 never executed. Discovery of third-party skills, agent definitions, and automatic applicability
 classification remain future work.
+
+An enabled project may now designate one checked-in automatic profile for `codex`, `claude-code`,
+or `any`. It supplies literal procedure tags for that client at fresh-session attachment time, so
+matching procedures join the bounded automatic packet without an agent needing to remember a tag.
+Exact-client profiles take precedence over `any`; multiple equally matching profiles fail closed.
+The profile revision/digest remains cited alongside each selected procedure. Mnemo does not infer
+an arbitrary named-agent role from hook events, inspect prompts, or execute project Markdown.

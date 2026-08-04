@@ -116,7 +116,7 @@ from .models import (
     VerificationStatus,
     Visibility,
 )
-from .procedures import ProjectProcedure, normalize_procedure_tags
+from .procedures import ProjectClientProfile, ProjectProcedure, normalize_procedure_tags
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
@@ -199,6 +199,7 @@ __all__ = [
     "OverrideRequesterType",
     "OwnerId",
     "PacketSchemaVersion",
+    "ProjectClientProfile",
     "ProjectId",
     "ProjectProcedure",
     "ProvenanceNotice",

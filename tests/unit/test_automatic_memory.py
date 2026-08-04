@@ -40,11 +40,14 @@ from mnemo_memory.packages.domain import (
     EvidenceLocation,
     EvidenceReference,
     EvidenceSourceType,
+    KnowledgeDocumentRevision,
+    KnowledgeDocumentRevisionId,
     MemoryScope,
     SourceId,
     SourceTrustClass,
     VerificationStatus,
 )
+from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
@@ -380,12 +383,12 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     project.mkdir()
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    received: list[tuple[Path, object]] = []
+    received: list[tuple[Path, object, str]] = []
     refreshed: list[tuple[Path, object]] = []
     counted: list[tuple[Path, object]] = []
 
-    def load(directory: Path, scope: object) -> str:
-        received.append((directory, scope))
+    def load(directory: Path, scope: object, client: str) -> str:
+        received.append((directory, scope, client))
         return '{"packet":"saved"}'
 
     monkeypatch.setattr(
@@ -418,7 +421,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     )
 
     assert result.exit_code == 0, result.output
-    assert received == [(data.resolve(), binding.checkpoint_scope)]
+    assert received == [(data.resolve(), binding.checkpoint_scope, "codex")]
     assert refreshed == [(data.resolve(), binding)]
     assert counted == [(data.resolve(), binding)]
     emitted = json.loads(result.output)
@@ -480,6 +483,57 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
     assert packet["episodic_memories"] == []
     assert len(packet["knowledge_items"]) == 1
     assert "documented business-date grain" in packet["knowledge_items"][0]["content"]
+
+
+def test_automatic_context_attaches_procedures_selected_by_one_client_profile(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    profile_document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(binding.scope, "docs/codex-profile.md"),
+        "---\nmnemo_kind: agent_profile\nmnemo_client: codex\n"
+        "mnemo_procedure_tags: reconciliation\n---\n# Codex reconciliation\n",
+    )
+    procedure_document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(binding.scope, "docs/reconciliation.md"),
+        "---\nmnemo_kind: procedure\nmnemo_tags: reconciliation\n"
+        "mnemo_mandatory: true\n---\n# Reconcile\nUse the cited input grain.",
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        assert runtime.knowledge_document_repository is not None
+        runtime.knowledge_document_repository.apply_sync(
+            binding.scope,
+            (
+                KnowledgeDocumentRevision(
+                    KnowledgeDocumentRevisionId.new(),
+                    profile_document,
+                    1,
+                    None,
+                    datetime(2026, 8, 5, tzinfo=UTC),
+                ),
+                KnowledgeDocumentRevision(
+                    KnowledgeDocumentRevisionId.new(),
+                    procedure_document,
+                    1,
+                    None,
+                    datetime(2026, 8, 5, tzinfo=UTC),
+                ),
+            ),
+            (),
+        )
+
+    attached = cli._automatic_context_attachment(data, binding.checkpoint_scope, "codex")
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert len(packet["skills_and_procedures"]) == 1
+    item = packet["skills_and_procedures"][0]
+    assert item["item_type"] == "mandatory_procedure"
+    assert "codex-profile.md" in item["content"]
+    assert len(item["evidence_references"]) == 2
 
 
 def test_checkpoint_save_observes_the_bound_source_snapshot_without_affecting_checkpoint_success(

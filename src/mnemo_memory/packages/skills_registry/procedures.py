@@ -9,6 +9,7 @@ from __future__ import annotations
 from mnemo_memory.packages.domain import (
     KnowledgeDocumentSourceKind,
     MemoryScope,
+    ProjectClientProfile,
     ProjectProcedure,
     ScopeLevel,
     normalize_procedure_tags,
@@ -18,6 +19,8 @@ from mnemo_memory.packages.storage import KnowledgeDocumentRepository
 _KIND = "mnemo_kind"
 _TAGS = "mnemo_tags"
 _MANDATORY = "mnemo_mandatory"
+_CLIENT = "mnemo_client"
+_PROCEDURE_TAGS = "mnemo_procedure_tags"
 
 
 class KnowledgeDocumentProcedureRegistry:
@@ -71,6 +74,46 @@ class KnowledgeDocumentProcedureRegistry:
                 ),
             )[:maximum_procedures]
         )
+
+    def find_current_client_profile(
+        self, scope: MemoryScope, client: str
+    ) -> ProjectClientProfile | None:
+        """Return one exact client profile, preferring client-specific over ``any``.
+
+        Multiple equally applicable profiles are deliberately unavailable instead of selected by
+        document ordering. A profile is local procedure-selection metadata, not an executable
+        agent definition.
+        """
+        if scope.level is not ScopeLevel.PROJECT:
+            raise ValueError("client profiles require an explicit project scope")
+        if client not in {"codex", "claude-code"}:
+            raise ValueError("client profile client is invalid")
+        candidates: list[ProjectClientProfile] = []
+        for known in self._documents.list_active_documents(scope):
+            revision = self._documents.get_current_revision(scope, known.document_id)
+            document = revision.document
+            if document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
+                continue
+            values = dict(document.frontmatter)
+            if values.get(_KIND) != "agent_profile":
+                continue
+            profile_client = values.get(_CLIENT)
+            try:
+                if profile_client not in {client, "any"}:
+                    continue
+                candidates.append(
+                    ProjectClientProfile(
+                        revision,
+                        profile_client,
+                        _parse_tags(values.get(_PROCEDURE_TAGS)),
+                    )
+                )
+            except ValueError:
+                continue
+        exact = tuple(item for item in candidates if item.client == client)
+        any_client = tuple(item for item in candidates if item.client == "any")
+        selected = exact or any_client
+        return selected[0] if len(selected) == 1 else None
 
 
 def _parse_tags(value: str | None) -> tuple[str, ...]:

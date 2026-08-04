@@ -349,6 +349,32 @@ file, execute the playbook, or treat it as a higher authority than system/user i
 scope policy, or verified current structural evidence. `mnemo_mandatory: true` prioritizes that
 checked-in project rule among matching project procedures; it is not an authorization mechanism.
 
+#### Have Mnemo attach the right playbook at session start
+
+For normal Codex and Claude Code use, you should not need to remember a tag in every conversation.
+After you have enabled automatic memory for this project, add one checked-in profile file:
+
+```markdown
+---
+mnemo_kind: agent_profile
+mnemo_client: any
+mnemo_procedure_tags: reconciliation, dbt
+---
+
+# Default project workflow
+```
+
+The next supported-client session receives the matching procedures automatically in the bounded
+Mnemo context packet. Every attached procedure cites both its own immutable revision and the
+profile revision that selected it. Use `codex` or `claude-code` instead of `any` only when those
+clients should receive different procedures. Keep one applicable profile per client: multiple
+matching profiles intentionally produce no automatic selection, rather than a filename-based guess.
+
+Mnemo cannot safely learn an arbitrary role name from a client hook, so a future named-agent
+registry is separate work. The client profile above is the simple, reliable default for a whole
+project: it gives your ordinary coding client its project's procedure without an extra prompt or
+per-agent configuration.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,

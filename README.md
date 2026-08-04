@@ -427,6 +427,28 @@ Markdown, infer tags from the agent's prompt, or let the procedure override syst
 verified current dbt/source facts. `mnemo_mandatory: true` means “prioritize this project playbook
 over an optional project playbook”; it is not a security permission.
 
+#### Make a playbook automatic for Codex and Claude Code
+
+If you enabled automatic memory for this repository, you do **not** need to remember to tell the
+agent these tags every session. Add one small checked-in client profile, alongside the playbook:
+
+```markdown
+---
+mnemo_kind: agent_profile
+mnemo_client: any
+mnemo_procedure_tags: reconciliation, dbt
+---
+
+# Default project workflow
+```
+
+At the next fresh supported-client session, Mnemo attaches matching procedures automatically with
+their exact procedure **and profile** revisions as provenance. Use `mnemo_client: codex` or
+`mnemo_client: claude-code` when the two clients need different playbooks; `any` applies to both.
+Keep at most one matching profile for a client. If two match, Mnemo safely attaches neither rather
+than guessing which file wins. This is how a project can make a reconciliation workflow available
+to its normal coding agent without a repeated prompt or an extra `CLAUDE.md`/`AGENTS.md` reminder.
+
 When the durable checkpoint already names relevant files, the small automatic session packet also
 looks up current same-project notes using those **file stems** (for example, `reconciliation` from
 `models/reconciliation.sql`). That gives a fresh agent a cited note about the file it is resuming

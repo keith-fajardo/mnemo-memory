@@ -34,6 +34,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
+    ProjectClientProfile,
     ProjectProcedure,
     knowledge_search_tokens,
 )
@@ -242,6 +243,10 @@ class ProjectProcedureRegistry(Protocol):
     def find_current_procedures(
         self, scope: MemoryScope, tags: tuple[str, ...], maximum_procedures: int
     ) -> tuple[ProjectProcedure, ...]: ...
+
+    def find_current_client_profile(
+        self, scope: MemoryScope, client: str
+    ) -> ProjectClientProfile | None: ...
 
 
 def validate_knowledge_search(terms: tuple[str, ...], limit: int, maximum_documents: int) -> None:

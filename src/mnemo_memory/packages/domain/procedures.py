@@ -49,3 +49,23 @@ class ProjectProcedure:
         object.__setattr__(self, "tags", normalize_procedure_tags(self.tags))
         if not isinstance(self.mandatory, bool):
             raise TypeError("procedure mandatory flag must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectClientProfile:
+    """One checked-in profile that can select procedures for a known MCP client.
+
+    Mnemo does not receive a reliable arbitrary agent-role identity from Codex or Claude Code.
+    A profile is therefore intentionally client-scoped (or ``any``), never guessed from a prompt.
+    """
+
+    revision: KnowledgeDocumentRevision
+    client: str
+    procedure_tags: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.revision.document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
+            raise ValueError("client profiles require checked-in Markdown")
+        if self.client not in {"codex", "claude-code", "any"}:
+            raise ValueError("client profile client is invalid")
+        object.__setattr__(self, "procedure_tags", normalize_procedure_tags(self.procedure_tags))

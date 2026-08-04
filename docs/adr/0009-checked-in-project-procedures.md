@@ -40,10 +40,32 @@ mnemo_mandatory: true
   privacy and makes applicability reviewable. A later agent/skill registry may add explicit
   compatibility metadata without weakening the tag contract.
 
+### Automatic client-profile selection
+
+An enabled Codex or Claude Code lifecycle hook knows its client name, but it does **not** receive a
+trustworthy arbitrary agent-role name such as `reconciliation-analyst`. To remove the need for an
+agent to remember procedure tags while preserving that boundary, a project may define one current
+client profile:
+
+```markdown
+---
+mnemo_kind: agent_profile
+mnemo_client: any
+mnemo_procedure_tags: reconciliation, dbt
+---
+```
+
+`mnemo_client` is exactly `codex`, `claude-code`, or `any`. At automatic session start, Mnemo
+prefers one exact-client profile over one `any` profile, then uses its literal tags to attach the
+matching procedure revisions to the bounded automatic context packet. Two equally applicable
+profiles fail closed: Mnemo attaches neither rather than selecting by path or prose. The selected
+profile's immutable revision and digest are retained as evidence on the attached procedure items.
+
 ## Consequences
 
 Projects can keep a small reusable playbook in ordinary version-controlled Markdown and retrieve
-only the relevant revision with exact digest provenance. Editing a procedure uses the existing
-knowledge synchronization path, so the old revision remains historical while the new current
-revision is selected. This slice deliberately does not execute procedures, discover arbitrary
-agent files, provide a separate MCP tool, or infer workflow applicability with a model.
+only the relevant revision with exact digest provenance. Editing a procedure or profile uses the
+existing knowledge synchronization path, so the old revision remains historical while the new
+current revision is selected. This slice deliberately does not execute procedures, discover
+arbitrary agent files, identify arbitrary agent roles, provide a separate MCP tool, or infer
+workflow applicability with a model.

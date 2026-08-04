@@ -48,6 +48,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OmissionNotice,
     OmissionReason,
+    ProjectClientProfile,
     ProjectProcedure,
     ProvenanceNotice,
     RankingMetadata,
@@ -266,12 +267,17 @@ class GetUnifiedContext:
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
     procedure_tags: tuple[str, ...] = ()
+    procedure_profile: ProjectClientProfile | None = None
 
     def __post_init__(self) -> None:
         if self.procedure_tags:
             object.__setattr__(
                 self, "procedure_tags", normalize_procedure_tags(self.procedure_tags)
             )
+        if self.procedure_profile is not None and (
+            not self.procedure_tags or self.procedure_profile.procedure_tags != self.procedure_tags
+        ):
+            raise ValueError("procedure profile must match explicit procedure tags")
 
 
 class UnifiedContextService:
@@ -354,7 +360,9 @@ class UnifiedContextService:
         items: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
         for rank, procedure in enumerate(procedures, start=1):
-            item, notice = _procedure_context_item(request.scope, procedure, rank)
+            item, notice = _procedure_context_item(
+                request.scope, procedure, rank, request.procedure_profile
+            )
             if item.token_estimate > remaining:
                 packet = _with_omission(
                     packet,
@@ -1560,6 +1568,7 @@ def _procedure_context_item(
     task_scope: MemoryScope,
     procedure: ProjectProcedure,
     rank: int,
+    profile: ProjectClientProfile | None,
 ) -> tuple[ContextItem, ProvenanceNotice]:
     """Render one exact procedure revision without granting Markdown execution authority."""
     revision, document = procedure.revision, procedure.revision.document
@@ -1570,6 +1579,13 @@ def _procedure_context_item(
             "mandatory": procedure.mandatory,
             "procedure_tags": procedure.tags,
             "revision_id": str(revision.revision_id),
+            "selected_by_profile": None
+            if profile is None
+            else {
+                "client": profile.client,
+                "document_path": profile.revision.document.relative_path,
+                "revision_id": str(profile.revision.revision_id),
+            },
             "sections": tuple(
                 {"heading": section.heading, "content": section.content}
                 for section in document.sections
@@ -1591,6 +1607,7 @@ def _procedure_context_item(
         revision.created_at,
         VerificationStatus.UNVERIFIED,
     )
+    evidence_references = (evidence,) if profile is None else (evidence, _profile_evidence(profile))
     item = ContextItem(
         item_id,
         ContextItemType.MANDATORY_PROCEDURE if procedure.mandatory else ContextItemType.SKILL,
@@ -1598,7 +1615,7 @@ def _procedure_context_item(
         content,
         ContentRepresentation.UNTRUSTED_EVIDENCE,
         (len(content) + 3) // 4,
-        (evidence,),
+        evidence_references,
         SourceTrustClass.USER_AUTHORED,
         Sensitivity.NORMAL,
         ValidityState.UNKNOWN,
@@ -1613,8 +1630,24 @@ def _procedure_context_item(
             item_id,
             f"mnemo:procedure/{document.document_id}/revision/{revision.revision_id}",
             document.content_digest.removeprefix("sha256:"),
-            (evidence,),
+            evidence_references,
         ),
+    )
+
+
+def _profile_evidence(profile: ProjectClientProfile) -> EvidenceReference:
+    revision, document = profile.revision, profile.revision.document
+    reference = f"agent-profile:{document.document_id}/revision/{revision.revision_id}"
+    return EvidenceReference(
+        EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),
+        EvidenceSourceType.REPOSITORY,
+        SourceTrustClass.USER_AUTHORED,
+        reference,
+        document.content_digest,
+        EvidenceLocation(f"mnemo:{reference}"),
+        revision.created_at,
+        VerificationStatus.UNVERIFIED,
     )
 
 

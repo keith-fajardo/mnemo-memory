@@ -105,6 +105,7 @@ from mnemo_memory.packages.project_index import (
     SourceStructureParser,
     SourceStructureParseRequest,
 )
+from mnemo_memory.packages.skills_registry import KnowledgeDocumentProcedureRegistry
 from mnemo_memory.packages.storage import (
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
@@ -151,9 +152,9 @@ _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     episodic_memories=300,
     knowledge=250,
     structural=400,
-    skills_and_procedures=0,
+    skills_and_procedures=300,
     provenance_and_conflicts=0,
-    total_limit=1_450,
+    total_limit=1_750,
 )
 
 
@@ -161,7 +162,9 @@ def _service(data_dir: Path | None) -> LifecycleService:
     return build_lifecycle_service(resolve_local_config(data_dir))
 
 
-def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> str | None:
+def _automatic_context_attachment(
+    data_directory: Path, scope: MemoryScope, client: ClientName = "codex"
+) -> str | None:
     """Return a small canonical handoff for an explicitly enabled session-start hook.
 
     This runs only after the hook has found a local project binding. The packet is deliberately
@@ -173,24 +176,32 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
     try:
         with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
             source_digest: str | None = None
+            project_scope = MemoryScope(
+                scope.owner_id,
+                ScopeLevel.PROJECT,
+                scope.visibility,
+                scope.workspace_id,
+                scope.project_id,
+            )
             if runtime.source_structure_repository is not None:
-                project_scope = MemoryScope(
-                    scope.owner_id,
-                    ScopeLevel.PROJECT,
-                    scope.visibility,
-                    scope.workspace_id,
-                    scope.project_id,
-                )
                 active_snapshot = runtime.source_structure_repository.get_active_snapshot(
                     project_scope
                 )
                 source_digest = None if active_snapshot is None else active_snapshot.source_digest
+            profile = None
+            procedures = None
+            if runtime.knowledge_document_repository is not None:
+                procedures = KnowledgeDocumentProcedureRegistry(
+                    runtime.knowledge_document_repository
+                )
+                profile = procedures.find_current_client_profile(project_scope, client)
             packet = UnifiedContextService(
                 runtime.checkpoint_service,
                 runtime.dbt_manifest_service,
                 runtime.source_structure_repository,
                 runtime.repository,
                 runtime.knowledge_document_repository,
+                procedures=procedures,
             ).get_context(
                 GetUnifiedContext(
                     scope,
@@ -212,6 +223,8 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                         current_source_digest=source_digest,
                     ),
                     include_checkpoint_file_knowledge=True,
+                    procedure_tags=() if profile is None else profile.procedure_tags,
+                    procedure_profile=profile,
                 )
             )
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
@@ -220,6 +233,7 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
         packet.active_task_checkpoint is None
         and not packet.episodic_memories
         and not packet.structural_items
+        and not packet.skills_and_procedures
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -1424,7 +1438,7 @@ def automatic_memory_hook(
             config.data_directory,
             cast(ClientName, client),
             context_loader=lambda scope: _automatic_context_attachment(
-                config.data_directory, scope
+                config.data_directory, scope, cast(ClientName, client)
             ),
             knowledge_refresher=lambda binding: _refresh_project_knowledge(
                 config.data_directory, binding
