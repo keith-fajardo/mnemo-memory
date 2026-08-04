@@ -139,6 +139,9 @@ and architecture rules when an approved architectural change requires it.
 - Read the current issue and nearby contracts before editing.
 - State assumptions and acceptance criteria before making a materially ambiguous choice.
 - Implement the smallest complete change that satisfies only the current issue.
+- **Do not overengineer.** Prefer the smallest user-visible improvement that solves a demonstrated
+  problem. Do not add general infrastructure, abstractions, indexes, parsers, or storage
+  projections without a concrete failing workflow or an explicitly approved issue requiring them.
 - Preserve valid user work and unrelated worktree changes.
 - Do not reformat, rename, move, or rewrite unrelated files.
 - Do not begin later features, speculative abstractions, or general cleanup.
