@@ -200,16 +200,18 @@ class ContextSourceOverviewQuery:
 
 @dataclass(frozen=True, slots=True)
 class ContextCheckpointSourceImpact:
-    """Bounded static dependents of one checkpoint's declared relevant source file.
+    """Bounded static dependents of checkpoint-declared relevant source files.
 
     ``relevant_files`` is a task handoff hint, not structural authority. Mnemo uses it only to
-    select one exact relative path from the active source snapshot; every returned relationship is
-    still derived from that immutable syntax projection and carries its own evidence.
+    select a small ordered set of exact relative paths from the active source snapshot. Every
+    returned relationship is still derived from that immutable syntax projection and carries its
+    own evidence.
     """
 
     maximum_symbols: int = 4
     maximum_edges: int = 2
     maximum_depth: int = 1
+    maximum_files: int = 2
     current_source_digest: str | None = None
     require_current: bool = False
 
@@ -220,6 +222,8 @@ class ContextCheckpointSourceImpact:
             raise ValueError("checkpoint source impact edge limit must be between 1 and 24")
         if not 0 <= self.maximum_depth <= 4:
             raise ValueError("checkpoint source impact depth must be between 0 and 4")
+        if not 1 <= self.maximum_files <= 4:
+            raise ValueError("checkpoint source impact file limit must be between 1 and 4")
         if self.current_source_digest is not None and (
             not self.current_source_digest.startswith("sha256:")
             or len(self.current_source_digest) != 71
@@ -526,11 +530,11 @@ class UnifiedContextService:
         request: GetUnifiedContext,
         query: ContextCheckpointSourceImpact,
     ) -> ContextPacket:
-        """Attach one relevant-file impact candidate without treating checkpoint text as truth.
+        """Attach bounded relevant-file impact candidates without treating checkpoint text as truth.
 
         The checkpoint writer controls the order of its ``relevant_files`` list. We keep that
-        order, select the first canonical path that exists in the scoped active snapshot, and
-        apply the ordinary source-impact contract to it. This avoids broad file search, preserves
+        order, select a small set of canonical paths that exists in the scoped active snapshot, and
+        apply the ordinary source-impact contract to each. This avoids broad file search, preserves
         a small session budget, and keeps a stale checkpoint from overriding structural evidence.
         """
         if self._source is None or packet.active_task_checkpoint is None:
@@ -545,24 +549,29 @@ class UnifiedContextService:
         snapshot_paths = {
             item.relative_path for item in self._source.iter_files(scope, snapshot.snapshot_id)
         }
-        selected_path = next((path for path in paths if path in snapshot_paths), None)
-        if selected_path is None:
+        selected_paths = tuple(dict.fromkeys(path for path in paths if path in snapshot_paths))[
+            : query.maximum_files
+        ]
+        if not selected_paths:
             return packet
-        return self._with_source_impact_facts(
-            packet,
-            request,
-            ContextSourceImpactQuery(
-                symbol=None,
-                relative_path=selected_path,
-                direction="dependents",
-                transitive=True,
-                maximum_depth=query.maximum_depth,
-                maximum_symbols=query.maximum_symbols,
-                maximum_edges=query.maximum_edges,
-                current_source_digest=query.current_source_digest,
-                require_current=query.require_current,
-            ),
-        )
+        result = packet
+        for selected_path in selected_paths:
+            result = self._with_source_impact_facts(
+                result,
+                request,
+                ContextSourceImpactQuery(
+                    symbol=None,
+                    relative_path=selected_path,
+                    direction="dependents",
+                    transitive=True,
+                    maximum_depth=query.maximum_depth,
+                    maximum_symbols=query.maximum_symbols,
+                    maximum_edges=query.maximum_edges,
+                    current_source_digest=query.current_source_digest,
+                    require_current=query.require_current,
+                ),
+            )
+        return result
 
     def _with_source_overview(
         self, packet: ContextPacket, request: GetUnifiedContext, query: ContextSourceOverviewQuery
