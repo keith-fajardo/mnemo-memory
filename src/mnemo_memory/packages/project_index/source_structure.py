@@ -1025,17 +1025,20 @@ class SourceStructureParser:
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
             return ((alias or parts[-1], target),)
         if language == "php":
-            # ``use Namespace\\Type;`` and its explicit ``as Alias`` spelling import exactly
-            # one class-like target. Grouped imports and namespace-only imports are outside this
+            # Type imports and ``use function`` imports name one exact static target. A
+            # ``use const`` alias is never a callable binding, so retaining it here could create
+            # a false call edge. Grouped imports and namespace-only imports are outside this
             # static subset.
-            parts = target.split("\\")
-            if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
-                return ()
             clause = next(
                 (child for child in node.named_children if child.type == "namespace_use_clause"),
                 None,
             )
-            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw) if clause else None
+            if clause is None or any(child.type == "const" for child in clause.children):
+                return ()
+            parts = target.split("\\")
+            if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
+                return ()
+            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw)
             return ((alias or parts[-1], ".".join(parts)),)
         if language not in {"javascript", "typescript", "tsx"}:
             return ()

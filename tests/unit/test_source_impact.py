@@ -588,6 +588,32 @@ def test_php_explicit_use_alias_resolves_a_unique_local_static_call(tmp_path: Pa
     assert calls[("service.Service.run", "H.go")] is not None
 
 
+def test_php_function_alias_resolves_but_const_alias_never_becomes_a_call_binding(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "Tools.php").write_text(
+        "<?php function validate() {} function VALUE() {}\n", encoding="utf-8"
+    )
+    (root / "service.php").write_text(
+        "<?php use function Tools\\validate as check; use const Tools\\VALUE as V; "
+        "function run() { check(); V(); }\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+
+    assert calls[("service.run", "check")] is not None
+    assert calls[("service.run", "V")] is None
+
+
 def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     tmp_path: Path,
 ) -> None:

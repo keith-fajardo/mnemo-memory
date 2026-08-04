@@ -149,7 +149,8 @@ relative imports that remain inside the registered project. Rust recognizes an e
 bounded dependency/impact candidate. It does not guess runtime dispatch or claim a complete call
 graph. That includes exact local C++ namespace calls, C# `using Namespace.Type` and
 `using static Namespace.Type` calls, and PHP
-`use Namespace\\Type` or `use Namespace\\Type as Alias` static calls when one saved target matches.
+`use Namespace\\Type`, `use Namespace\\Type as Alias`, or explicit `use function Namespace\\member`
+calls when one saved target matches.
 Namespace-only imports, aliases that do not name one unique target, computed/dynamic `require` calls,
 relative imports that escape the registered project, and duplicate
 candidates stay unresolved. The storage and
