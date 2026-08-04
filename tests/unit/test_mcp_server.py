@@ -452,6 +452,15 @@ def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path
     assert len(item.evidence_references) == 2
 
 
+def test_durable_port_rejects_a_non_string_source_change_path(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(
+        LocalConfig.defaults(tmp_path / "invalid source history")
+    ) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(context_payload(source_changes={"relative_path": 7}))
+
+
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:
     async def exercise() -> None:
         parameters = StdioServerParameters(

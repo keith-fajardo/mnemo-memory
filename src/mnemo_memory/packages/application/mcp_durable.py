@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from typing import cast
 
 from mnemo_memory.packages.application.checkpoints import (
     AbandonCheckpoint,
@@ -94,6 +95,11 @@ class DurableMcpContextPort:
                 raise ValueError("source_impact must be an object")
             if source_changes is not None and not isinstance(source_changes, Mapping):
                 raise ValueError("source_changes must be an object")
+            if source_changes is not None and (
+                "relative_path" in source_changes
+                and not isinstance(source_changes["relative_path"], str)
+            ):
+                raise ValueError("source_changes.relative_path must be a string")
             impact = (
                 None
                 if source_impact is None
@@ -119,9 +125,11 @@ class DurableMcpContextPort:
                     maximum_relationships=int(source_changes.get("maximum_relationships", 24)),
                     maximum_files=int(source_changes.get("maximum_files", 24)),
                     maximum_transitions=int(source_changes.get("maximum_transitions", 1)),
-                    relative_path=source_changes.get("relative_path")
-                    if isinstance(source_changes.get("relative_path"), str)
-                    else None,
+                    relative_path=(
+                        cast(str, source_changes["relative_path"])
+                        if "relative_path" in source_changes
+                        else None
+                    ),
                     current_source_digest=source_changes.get("current_source_digest")
                     if isinstance(source_changes.get("current_source_digest"), str)
                     else None,
