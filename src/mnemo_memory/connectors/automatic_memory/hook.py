@@ -22,6 +22,13 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
     exclusive_local_file_lock,
 )
+from mnemo_memory.packages.application.dbt import (
+    DbtApplicationError,
+    DbtManifestApplicationService,
+    LineageDirection,
+    QueryLineage,
+    ResolveManifestFile,
+)
 from mnemo_memory.packages.domain import CodeFile, CodeSymbol, MemoryScope
 from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
@@ -31,7 +38,10 @@ from mnemo_memory.packages.project_index import (
     SourceStructureParser,
     SourceStructureParseRequest,
 )
-from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
+from mnemo_memory.packages.storage import (
+    SQLiteCheckpointRepository,
+    SQLiteSourceStructureRepository,
+)
 from mnemo_memory.packages.storage.contracts import ProjectIndexRepositoryError
 
 ClientName = Literal["codex", "claude-code"]
@@ -46,6 +56,8 @@ _MAX_CHANGE_SYMBOLS = 12
 _MAX_CHANGE_SYMBOL_LABEL_LENGTH = 256
 _MAX_IMPACT_CUES = 3
 _MAX_IMPACT_CUE_DEPENDENTS = 6
+_MAX_DBT_IMPACT_CUES = 3
+_MAX_DBT_IMPACT_CUE_NODES = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
 _ContextLoader = Callable[[MemoryScope], str | None]
 
@@ -189,6 +201,7 @@ class AutomaticMemoryHook:
                 stored.snapshot.source_digest,
                 changes,
                 _dependent_impact_cues(repository, binding.scope, diff, changes),
+                _dbt_downstream_cues(self.data_directory, binding.scope, changes),
             )
         except (OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
@@ -254,10 +267,19 @@ class _SourceImpactCue:
 
 
 @dataclass(frozen=True, slots=True)
+class _DbtImpactCue:
+    """A bounded authoritative manifest downstream cue for one changed dbt model path."""
+
+    relative_path: str
+    downstream: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceRefresh:
     digest: str | None
     changes: _SourceChangeSummary | None = None
     impact_cues: tuple[_SourceImpactCue, ...] = ()
+    dbt_impact_cues: tuple[_DbtImpactCue, ...] = ()
 
 
 def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
@@ -372,6 +394,8 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         instruction += _source_change_instruction(refreshed.changes)
     if refreshed.impact_cues:
         instruction += _source_impact_instruction(refreshed.impact_cues)
+    if refreshed.dbt_impact_cues:
+        instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
     return instruction
 
 
@@ -394,6 +418,8 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
         instruction += _source_change_instruction(refreshed.changes)
     if refreshed.impact_cues:
         instruction += _source_impact_instruction(refreshed.impact_cues)
+    if refreshed.dbt_impact_cues:
+        instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
     return instruction
 
 
@@ -433,6 +459,16 @@ def _source_impact_instruction(cues: tuple[_SourceImpactCue, ...]) -> str:
         " Mnemo also found these bounded static dependent candidates from exact changed files: "
         f"{rendered}. They are syntax-derived impact candidates, not proof of runtime behavior; "
         "check the cited context before relying on them."
+    )
+
+
+def _dbt_impact_instruction(cues: tuple[_DbtImpactCue, ...]) -> str:
+    """Render only exact manifest identities; never SQL, descriptions, or relation metadata."""
+    rendered = "; ".join(f"{cue.relative_path} → {', '.join(cue.downstream)}" for cue in cues)
+    return (
+        " Mnemo also found these authoritative dbt-manifest downstream facts for exact changed "
+        f"model files: {rendered}. The manifest snapshot is structural evidence; verify whether it "
+        "is current before relying on it for a change decision."
     )
 
 
@@ -487,6 +523,51 @@ def _dependent_impact_cues(
         if dependents:
             cues.append(_SourceImpactCue(relative_path, dependents))
     return tuple(cues)
+
+
+def _dbt_downstream_cues(
+    data_directory: Path,
+    scope: MemoryScope,
+    changes: _SourceChangeSummary,
+) -> tuple[_DbtImpactCue, ...]:
+    """Find exact changed dbt models in the active scoped manifest without running dbt.
+
+    The source transition merely identifies local files that changed.  The manifest is the sole
+    authority for downstream dbt structure.  Missing, stale, ambiguous, or unavailable artifacts
+    result in no automatic cue; callers retain the ordinary source-change summary.
+    """
+    if not changes.changed:
+        return ()
+    paths = tuple(
+        path for path in (*changes.added_files, *changes.modified_files) if path.endswith(".sql")
+    )[:_MAX_DBT_IMPACT_CUES]
+    if not paths:
+        return ()
+    try:
+        repository = SQLiteCheckpointRepository(data_directory / "mnemo.sqlite3")
+        service = DbtManifestApplicationService(repository)
+        cues: list[_DbtImpactCue] = []
+        for relative_path in paths:
+            resolved = service.resolve_file(ResolveManifestFile(scope, relative_path))
+            result = service.query(
+                QueryLineage(
+                    scope,
+                    resolved.node.unique_id,
+                    LineageDirection.DOWNSTREAM,
+                    maximum_depth=2,
+                    maximum_nodes=_MAX_DBT_IMPACT_CUE_NODES,
+                    maximum_edges=16,
+                    snapshot_id=resolved.snapshot.snapshot_id,
+                )
+            )
+            downstream = tuple(str(item.node.unique_id) for item in result.nodes)[
+                :_MAX_DBT_IMPACT_CUE_NODES
+            ]
+            if downstream:
+                cues.append(_DbtImpactCue(relative_path, downstream))
+        return tuple(cues)
+    except (DbtApplicationError, ProjectIndexRepositoryError, ValueError, OSError):
+        return ()
 
 
 def _dirty_session_instruction() -> str:

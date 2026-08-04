@@ -101,6 +101,26 @@ def test_ingestion_is_idempotent_replaces_active_and_preserves_prior_snapshot() 
         item.ingest(command(value, expected_active_snapshot_id=first.snapshot.snapshot_id))
 
 
+def test_read_only_lineage_service_does_not_need_an_ingestion_parser() -> None:
+    repository = ReferenceProjectIndexRepository()
+    writer = DbtManifestApplicationService(repository, DbtManifestParser())
+    value = scope()
+    writer.ingest(command(value))
+    reader = DbtManifestApplicationService(repository)
+
+    result = reader.query(
+        QueryLineage(
+            value,
+            DbtNodeId("model.mnemo_analytics.fct_orders"),
+            LineageDirection.DOWNSTREAM,
+        )
+    )
+
+    assert result.start_node.unique_id == DbtNodeId("model.mnemo_analytics.fct_orders")
+    with pytest.raises(DbtApplicationInvalidManifest):
+        reader.ingest(command(value))
+
+
 def test_manifest_file_resolution_is_exact_scoped_and_refuses_ambiguity() -> None:
     item, value = service(), scope()
     stored = item.ingest(command(value))

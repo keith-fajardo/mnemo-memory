@@ -344,6 +344,12 @@ For a changed file in a supported parsed language, Mnemo also includes a very sm
 could be affected?” after a fresh session. They are syntax-derived, bounded, and cited—not proof of
 runtime behavior, and not a substitute for tests or current verification.
 
+For a changed dbt `.sql` model with an active manifest, the same cue includes bounded downstream
+model identities from that manifest. Those are authoritative structural facts for that artifact,
+but the cue treats their currentness as **unknown** until the agent supplies matching manifest or
+source-state evidence. Mnemo never treats an older active manifest as proof that the project has
+not changed.
+
 When an agent needs the durable version of that question in a later session, it can ask for
 `source_changes` with `get_context`. Mnemo compares the two most recently recorded structural
 snapshots in their actual activation order and returns a bounded list of added/removed/modified

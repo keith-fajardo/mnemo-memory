@@ -606,6 +606,11 @@ includes up to six static dependent candidates through resolved in-snapshot rela
 explicitly a syntax-derived impact candidate—not a runtime call-graph claim—and omits unparsed,
 ambiguous, or unresolved files rather than guessing.
 
+For a changed `.sql` path, the same lifecycle cue also attempts an exact lookup in the active,
+scoped dbt manifest. When one node owns the path, it includes up to six downstream dbt unique IDs
+from authoritative manifest edges, explicitly with unknown currentness until matching state evidence
+is supplied. Missing or ambiguous manifests produce no such cue and never fall back to SQL parsing.
+
 `source_changes` can now also request up to sixteen recent immutable transitions for one canonical
 relative path. Results are newest-first, scoped, bounded, and cited to each before/after snapshot;
 unrelated project changes and source bodies remain excluded. This lets a later agent investigate

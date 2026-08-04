@@ -120,6 +120,11 @@ small list of proven **static dependent candidates**. This is a practical “wha
 starting point, not a runtime promise: the agent should still inspect the cited structure and run
 the appropriate verification.
 
+If that changed file is a dbt `.sql` model and Mnemo has an active manifest for the same project,
+the cue instead also includes bounded downstream dbt model identities from the manifest. That is
+the authoritative source for dbt structure; it still does not expose SQL or pretend that an active
+manifest is automatically current.
+
 After a checkpoint is saved for an enabled project, Mnemo may add one small citation saying which
 immutable source snapshot it observed immediately afterward. Think of it as a timestamped bookmark
 between the handoff and the saved source map. It helps a later agent compare the handoff with the

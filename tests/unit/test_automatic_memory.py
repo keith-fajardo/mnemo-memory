@@ -17,6 +17,7 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
 from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
     LocalDbtProjectBindingStore,
@@ -29,6 +30,7 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
 from mnemo_memory.packages.application.checkpoints import CreateCheckpoint
 from mnemo_memory.packages.application.config import LocalConfig
+from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
 from mnemo_memory.packages.domain import (
@@ -43,7 +45,13 @@ from mnemo_memory.packages.domain import (
     VerificationStatus,
 )
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
-from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
+from mnemo_memory.packages.storage import (
+    SQLiteCheckpointRepository,
+    SQLiteSourceStructureRepository,
+)
+
+ROOT = Path(__file__).parents[2]
+DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
 
 
 def test_personal_binding_is_stable_and_never_derived_from_path(tmp_path: Path) -> None:
@@ -827,6 +835,43 @@ def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_f
     assert "service.py:service" in instruction
     assert "return 1" not in instruction
     assert "return 2" not in instruction
+
+
+def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_model(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "dbt repo"
+    model = project / "models" / "marts" / "fct_orders.sql"
+    model.parent.mkdir(parents=True)
+    model.write_text("select 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    checkpoint_repository = SQLiteCheckpointRepository(data / "mnemo.sqlite3")
+    checkpoint_repository.migrate()
+    DbtManifestApplicationService(checkpoint_repository, DbtManifestParser()).ingest(
+        IngestManifest(
+            binding.scope,
+            DBT_FIXTURE.read_bytes(),
+            "tests/fixtures/dbt/manifest-v12.json",
+            datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
+
+    model.write_text("select 2\n", encoding="utf-8")
+    result = hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    instruction = str(output["additionalContext"])
+    assert "authoritative dbt-manifest downstream facts" in instruction
+    assert "models/marts/fct_orders.sql" in instruction
+    assert "model.mnemo_analytics.mart_customer_value" in instruction
+    assert "select 1" not in instruction
+    assert "select 2" not in instruction
 
 
 def test_unenabled_project_is_fail_open_and_discloses_no_path(tmp_path: Path) -> None:

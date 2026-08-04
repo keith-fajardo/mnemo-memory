@@ -164,11 +164,15 @@ class LineageQueryResult:
 class DbtManifestApplicationService:
     """Coordinates authoritative parsing with immutable scoped snapshot storage."""
 
-    def __init__(self, repository: ProjectIndexRepository, parser: DbtManifestParserPort) -> None:
+    def __init__(
+        self, repository: ProjectIndexRepository, parser: DbtManifestParserPort | None = None
+    ) -> None:
         self._repository = repository
         self._parser = parser
 
     def ingest(self, command: IngestManifest) -> IngestManifestResult:
+        if self._parser is None:
+            raise DbtApplicationInvalidManifest("dbt manifest ingestion parser is unavailable")
         try:
             artifact = self._parser.parse_for_ingestion(
                 command.raw_manifest,
