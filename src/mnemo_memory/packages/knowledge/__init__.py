@@ -14,6 +14,13 @@ from .markdown import (
     KnowledgeDocumentParser,
     KnowledgeDocumentParseRequest,
 )
+from .retrieval import (
+    KnowledgeLexicalRetriever,
+    KnowledgeRetrievalError,
+    KnowledgeSearchMatch,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResult,
+)
 from .sync import (
     KnowledgeSyncAction,
     KnowledgeSyncActionKind,
@@ -30,6 +37,11 @@ __all__ = [
     "KnowledgeDocumentParser",
     "KnowledgeDocumentSection",
     "KnowledgeDocumentSourceKind",
+    "KnowledgeLexicalRetriever",
+    "KnowledgeRetrievalError",
+    "KnowledgeSearchMatch",
+    "KnowledgeSearchRequest",
+    "KnowledgeSearchResult",
     "KnowledgeSyncAction",
     "KnowledgeSyncActionKind",
     "KnowledgeSyncPlan",

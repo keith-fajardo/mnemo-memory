@@ -707,6 +707,13 @@ high-confidence secret policy rejects clear credential-like values before persis
 claim to detect every secret. The application service composes planning, policy, revision identity,
 and atomic storage without filesystem access, and the local runtime now exposes that service.
 
-Lexical retrieval, Obsidian vault consent/bindings, links/backlinks, embeddings, and automatic
+Deterministic lexical retrieval over current revisions is also available as a bounded,
+scope-first package service. It case-folds a small explicit query into literal terms, ranks matching
+current sections deterministically, and returns exact document/revision identities; it executes no
+document, runs no model, and does not make deleted revisions retrievable. The current baseline
+uses the repository contract and is deliberately capped for personal mode rather than performing a
+broad ambient search.
+
+Obsidian vault consent/bindings, links/backlinks, embedding retrieval, and automatic
 context-packet integration remain in progress. Documents are still not discovered, synchronized,
 or injected into an agent context automatically.
