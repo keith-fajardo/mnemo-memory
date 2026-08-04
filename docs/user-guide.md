@@ -40,7 +40,8 @@ Python also resolves direct local `from .module import member` and parent-packag
 that remain inside the registered project. Rust resolves an explicit
 `use crate::path::member as local_name` spelling when the saved target is unique. Namespace-only
 imports, computed/dynamic `require` calls, relative imports that escape the registered project,
-aliases that cannot be matched uniquely, and duplicate candidates remain unresolved. No unproven runtime relationship is
+and aliases that cannot be matched uniquely remain unresolved. C# also resolves an explicit
+`using Local = Namespace.Type` spelling when the target is unique. No unproven runtime relationship is
 presented as fact.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt

@@ -972,12 +972,15 @@ class SourceStructureParser:
             binding_name = alias or target.rsplit("/", maxsplit=1)[-1]
             return ((binding_name, f"go:{target}|"),) if _is_safe_symbol_name(binding_name) else ()
         if language == "csharp":
-            # ``using Namespace.Type;`` gives one explicit type spelling. Namespace-only
-            # imports and aliases deliberately remain unresolved: they need type inference.
+            # ``using Namespace.Type;`` gives one explicit type spelling. ``using Alias =
+            # Namespace.Type;`` has the same safe spelling when the alias is explicit; a later
+            # lookup still requires exactly one in-snapshot target. Namespace-only imports stay
+            # unresolved because they need type inference.
             parts = target.split(".")
             if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
                 return ()
-            return ((parts[-1], target),)
+            alias = _safe_tree_text(node.child_by_field_name("name"), raw)
+            return ((alias or parts[-1], target),)
         if language == "php":
             # ``use Namespace\\Type;`` imports exactly one class-like spelling. PHP aliases,
             # grouped imports, and namespace-only imports are outside this static subset.
@@ -1035,7 +1038,9 @@ class SourceStructureParser:
         if language in {"c", "cpp"}:
             return _include_literal(node.child_by_field_name("path"), raw)
         if language == "csharp":
-            return _safe_tree_text(node.named_children[0] if node.named_children else None, raw)
+            # A directive with an explicit alias has two named children: the alias and the
+            # qualified namespace/type.  The latter, never the alias, is the imported target.
+            return _safe_tree_text(node.named_children[-1] if node.named_children else None, raw)
         if language == "java":
             return SourceStructureParser._tree_static_target(node.named_children[0], raw)
         if language == "php":
