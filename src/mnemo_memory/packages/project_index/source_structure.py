@@ -719,6 +719,20 @@ class SourceStructureParser:
                     module.qualified_name if not member else f"{module.qualified_name}.{member}"
                 )
                 imported_names = [candidate_name]
+            elif imported_target.startswith("java-static:"):
+                # ``import static package.Type.member;`` brings one exact member spelling into
+                # scope. It resolves only if the package/type module and same-named declared
+                # class are each unique in the current immutable snapshot.
+                static_target = imported_target.removeprefix("java-static:")
+                owner_path, dot, static_member = static_target.rpartition(".")
+                module = _single_symbol(modules_by_name.get(owner_path, ())) if dot else None
+                if module is None:
+                    continue
+                type_name = owner_path.rsplit(".", maxsplit=1)[-1]
+                member_name = remainder if separator else static_member
+                if not _is_safe_symbol_name(member_name):
+                    continue
+                imported_names = [f"{module.qualified_name}.{type_name}.{member_name}"]
             else:
                 imported_names = [
                     imported_target if not separator else f"{imported_target}.{remainder}"
@@ -954,7 +968,11 @@ class SourceStructureParser:
         """
         if language == "java":
             binding_name = target.rsplit(".", maxsplit=1)[-1]
-            return ((binding_name, target),) if _is_safe_symbol_name(binding_name) else ()
+            if not _is_safe_symbol_name(binding_name):
+                return ()
+            is_static = any(child.type == "static" for child in node.children)
+            encoded_target = f"java-static:{target}" if is_static else target
+            return ((binding_name, encoded_target),)
         if language == "rust" and target.startswith("crate."):
             normalized = target.removeprefix("crate.")
             argument = node.child_by_field_name("argument")

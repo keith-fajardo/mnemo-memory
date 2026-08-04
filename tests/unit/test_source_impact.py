@@ -505,6 +505,34 @@ def test_csharp_explicit_using_alias_resolves_a_unique_local_static_call(tmp_pat
     assert calls[("Service.Service.Run", "H.Go")] is not None
 
 
+def test_java_explicit_static_import_resolves_a_unique_local_method_call(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "Helper.java").write_text(
+        "package tools; class Helper { static void go() {} }\n"
+    )
+    (root / "Service.java").write_text(
+        "import static tools.Helper.go; class Service { void run() { go(); } }\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, "tools.Helper.Helper.go", SourceImpactDirection.DEPENDENTS)
+    )
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["Service.Service.run"]
+    assert calls[("Service.Service.run", "go")] is not None
+
+
 def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     tmp_path: Path,
 ) -> None:

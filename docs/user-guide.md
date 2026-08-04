@@ -42,7 +42,8 @@ that remain inside the registered project. Rust resolves an explicit
 imports, computed/dynamic `require` calls, relative imports that escape the registered project,
 and aliases that cannot be matched uniquely remain unresolved. C# also resolves an explicit
 `using Local = Namespace.Type` spelling when the target is unique. No unproven runtime relationship is
-presented as fact.
+presented as fact. Java resolves direct `import static package.Type.member` only when its local
+class and method target are unique.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt
 `schema.yml`/`schema.yaml` files, dbt `.csv`/`.tsv` seed files, Swift, Kotlin, Ruby, Scala, Elixir,
