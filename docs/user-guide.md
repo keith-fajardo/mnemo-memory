@@ -263,6 +263,11 @@ knowledge budget. Mnemo scans no other folder, follows no symlink or Markdown li
 clear credential-like values before a batch can be stored. It does not promise to detect every
 possible secret, so keep secrets out of project documentation as usual.
 
+At the next supported client session start, Mnemo tells the agent only that scoped project knowledge
+is available and how to request it with a short `knowledge_query`; it does not attach every note or
+read the user’s prompt to guess a query. That makes the capability discoverable without making you
+maintain an additional agent instruction file.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,

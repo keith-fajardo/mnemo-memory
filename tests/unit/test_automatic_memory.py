@@ -382,6 +382,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     received: list[tuple[Path, object]] = []
     refreshed: list[tuple[Path, object]] = []
+    counted: list[tuple[Path, object]] = []
 
     def load(directory: Path, scope: object) -> str:
         received.append((directory, scope))
@@ -398,6 +399,16 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         lambda directory, scope_binding: refreshed.append((directory, scope_binding)),
     )
 
+    def count(directory: Path, scope_binding: object) -> int:
+        counted.append((directory, scope_binding))
+        return 2
+
+    monkeypatch.setattr(
+        cli,
+        "_project_knowledge_document_count",
+        count,
+    )
+
     result = CliRunner().invoke(
         cli.app,
         ["automatic-memory-hook", "--client", "codex", "--data-dir", str(data)],
@@ -409,9 +420,12 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     assert result.exit_code == 0, result.output
     assert received == [(data.resolve(), binding.checkpoint_scope)]
     assert refreshed == [(data.resolve(), binding)]
+    assert counted == [(data.resolve(), binding)]
     emitted = json.loads(result.output)
     additional_context = emitted["hookSpecificOutput"]["additionalContext"]
     assert '<mnemo-context-packet>\n{"packet":"saved"}' in additional_context
+    assert "2 current scoped project knowledge document(s)" in additional_context
+    assert "knowledge_query" in additional_context
 
 
 def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(

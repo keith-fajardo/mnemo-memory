@@ -240,6 +240,14 @@ def _refresh_project_knowledge(
     )
 
 
+def _project_knowledge_document_count(data_directory: Path, binding: MemoryProjectBinding) -> int:
+    """Return one bounded aggregate for an automatic hook; it never reads document payloads."""
+    repository = SQLiteKnowledgeDocumentRepository(
+        data_directory / "mnemo.sqlite3", base_directory=data_directory
+    )
+    return min(len(repository.list_active_documents(binding.scope)), 5_000)
+
+
 def _show(value: object) -> None:
     typer.echo(json.dumps(value, sort_keys=True))
 
@@ -1327,6 +1335,9 @@ def automatic_memory_hook(
                 config.data_directory, scope
             ),
             knowledge_refresher=lambda binding: _refresh_project_knowledge(
+                config.data_directory, binding
+            ),
+            knowledge_status_loader=lambda binding: _project_knowledge_document_count(
                 config.data_directory, binding
             ),
         )
