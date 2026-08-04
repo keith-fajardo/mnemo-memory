@@ -17,6 +17,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal
 
+from mnemo_memory.connectors.automatic_memory.git_observation import (
+    GitObservationStore,
+    GitSourceObservation,
+    GitSourceObserver,
+)
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
@@ -80,6 +85,7 @@ class AutomaticMemoryHook:
     context_loader: _ContextLoader | None = None
     knowledge_refresher: _KnowledgeRefresher | None = None
     knowledge_status_loader: _KnowledgeStatusLoader | None = None
+    git_observer: GitSourceObserver | None = None
 
     def handle(self, event: object) -> dict[str, object]:
         if not isinstance(event, dict):
@@ -212,14 +218,21 @@ class AutomaticMemoryHook:
                     SourceStructureParseRequest(binding.scope, binding.project_root)
                 )
             )
+            git_observation = self._observe_git(binding, stored.snapshot.source_digest)
             if previous is None:
-                return _SourceRefresh(stored.snapshot.source_digest)
+                return _SourceRefresh(
+                    stored.snapshot.source_digest, git_observation=git_observation
+                )
             if previous.snapshot_id == stored.snapshot.snapshot_id:
                 if not include_latest_transition:
-                    return _SourceRefresh(stored.snapshot.source_digest)
+                    return _SourceRefresh(
+                        stored.snapshot.source_digest, git_observation=git_observation
+                    )
                 transition = repository.latest_transition(binding.scope)
                 if transition is None:
-                    return _SourceRefresh(stored.snapshot.source_digest)
+                    return _SourceRefresh(
+                        stored.snapshot.source_digest, git_observation=git_observation
+                    )
                 before, after = transition
             else:
                 before, after = previous, stored.snapshot
@@ -232,9 +245,21 @@ class AutomaticMemoryHook:
                 changes,
                 _dependent_impact_cues(repository, binding.scope, diff, changes),
                 _dbt_downstream_cues(self.data_directory, binding.scope, changes),
+                git_observation,
+                GitObservationStore(self.data_directory).get(binding.scope, before.source_digest),
             )
         except (OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
+
+    def _observe_git(
+        self, binding: MemoryProjectBinding, source_digest: str
+    ) -> GitSourceObservation | None:
+        observation = (self.git_observer or GitSourceObserver()).observe(
+            binding.project_root, source_digest
+        )
+        if observation is not None:
+            GitObservationStore(self.data_directory).put(binding.scope, observation)
+        return observation
 
     def _refresh_project_knowledge(self, binding: MemoryProjectBinding) -> None:
         """Call the app-composed refresher without letting a knowledge failure block a client."""
@@ -340,6 +365,8 @@ class _SourceRefresh:
     changes: _SourceChangeSummary | None = None
     impact_cues: tuple[_SourceImpactCue, ...] = ()
     dbt_impact_cues: tuple[_DbtImpactCue, ...] = ()
+    git_observation: GitSourceObservation | None = None
+    previous_git_observation: GitSourceObservation | None = None
 
 
 def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
@@ -564,6 +591,8 @@ def _resume_instruction(
         instruction += _source_impact_instruction(refreshed.impact_cues)
     if refreshed.dbt_impact_cues:
         instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
+    if refreshed.git_observation is not None:
+        instruction += _git_observation_instruction(refreshed)
     if handoff_pending:
         instruction += (
             " Mnemo also recorded that an earlier tracked session changed this project without "
@@ -582,6 +611,27 @@ def _resume_instruction(
             "from prose."
         )
     return instruction
+
+
+def _git_observation_instruction(refreshed: _SourceRefresh) -> str:
+    """Render only commit IDs and state; Git is evidence, never an intent explanation."""
+    observation = refreshed.git_observation
+    assert observation is not None
+    state = "dirty" if observation.dirty else "clean"
+    message = (
+        " Mnemo observed local Git state for this source snapshot: "
+        f"{state} at {observation.commit_id}."
+    )
+    before = refreshed.previous_git_observation
+    if (
+        before is not None
+        and before.commit_id != observation.commit_id
+        and refreshed.changes is not None
+    ):
+        message += (
+            f" The recorded source transition spans {before.commit_id} to {observation.commit_id}."
+        )
+    return message
 
 
 def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:

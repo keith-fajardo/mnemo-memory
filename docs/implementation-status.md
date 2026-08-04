@@ -707,6 +707,13 @@ the existing scoped manifest lookup; it does not derive lineage from SQL or from
 The same personal audit is available without MCP through `mnemo-memory memory changes --path
 RELATIVE_PATH --history-limit N`; unrelated transitions are omitted from a path-filtered history.
 
+For an enabled local Git work tree, source refresh now records a small local observation keyed to
+the immutable Mnemo source digest: full commit ID, parent ID when available, and clean/dirty state.
+The automatic session cue can render that state and a proven before/after commit relationship next
+to the existing source transition. Git status output, diffs, commit messages, remote URLs,
+branches, absolute paths, source text, and intent are neither stored nor returned; checkpoints,
+lessons, and approved facts remain the evidence for why work changed.
+
 For an enabled dbt project, unified context now accepts an exact manifest `original_file_path` as
 the lineage start identity. It resolves only one scoped active-snapshot node and then uses
 authoritative manifest edges for impact; no match or an ambiguous shared file is rejected rather

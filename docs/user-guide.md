@@ -426,6 +426,15 @@ still needed for this project. At the next fresh session it asks the agent to re
 recent-work context and write the real handoff. This small local marker has no chat, prompt,
 source text, command output, or guessed rationale; a normal complete checkpoint clears it.
 
+### Git-aware source history
+
+When the enabled project is a local Git work tree, Mnemo adds a small evidence label to its source
+refresh: the full commit ID, its parent when available, and clean/dirty state. When Mnemo has a
+saved source transition, it can state the observed before/after commit relationship alongside the
+already-bounded file and dependency facts. This is useful for asking “was this source snapshot
+captured before or after that commit?” It is not a replacement for a checkpoint: Mnemo stores no
+commit subject, diff, branch, remote, source body, or inferred reason for the change.
+
 ### Example: a reconciliation investigation
 
 Suppose an agent is investigating why a dbt reconciliation model does not match Finance seed

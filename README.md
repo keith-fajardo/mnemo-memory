@@ -156,6 +156,12 @@ explicitly declares one named `export default function Name` or `export default 
 They also index a direct top-level `const name = () => …` or `const name = function …` binding, so
 the common `export const handler = …` style can participate in proven local call links. Mutable,
 conditional, and nested variable bindings remain unresolved.
+
+For an enabled Git repository, Mnemo also records the local commit ID, parent commit ID when one
+exists, and whether Git reported the working tree as clean or dirty at the time of a structural
+snapshot. On a later session it can show that safe state beside a source transition. It does **not**
+store a diff, commit message, remote URL, branch name, source body, or explanation of intent. A
+checkpoint, lesson, or approved fact remains the evidence for *why* a change was made.
 It also follows an exact local named barrel export such as
 `export { validate as check } from "./helpers"`, and a local `export * from "./helpers"` only
 when the requested non-default name has exactly one proven local declaration. Anonymous defaults,
