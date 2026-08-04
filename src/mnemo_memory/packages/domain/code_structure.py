@@ -23,6 +23,7 @@ class CodeSymbolId(Identifier):
 
 class CodeSymbolKind(StrEnum):
     MODULE = "module"
+    PACKAGE = "package"
     CLASS = "class"
     INTERFACE = "interface"
     STRUCT = "struct"

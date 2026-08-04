@@ -36,11 +36,11 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
   `use crate::...` items, exact Go imported-package member calls, and direct `self`/`this` sibling
   method calls only when a unique saved
   declaration exists. Duplicate declarations are left unresolved rather than resolved by source
-  ordering. A Go import gains a module edge only when a file-only root `go.mod` safely declares
-  the exact local module prefix and the imported package directory has exactly one saved Go file;
-  imported-package member calls use that same local-module proof before linking one exact local
-  declaration. Multi-file Go packages, malformed or absent `go.mod`, and external imports remain
-  unresolved rather than being guessed. It excludes source text,
+  ordering. A Go import gains a link only when a file-only root `go.mod` safely declares the exact
+  local module prefix; it targets Mnemo's explicit local package-directory symbol, never an
+  arbitrary source file. Imported-package member calls use that same local-module proof before
+  linking one exact local declaration. Malformed or absent `go.mod`, external imports, and
+  ambiguous member declarations remain unresolved rather than being guessed. It excludes source text,
   comments, docstrings, credentials, generated caches, and arbitrary project metadata.
 - Each projection is content-addressed and belongs to an explicit Mnemo scope. Paths locate a
   local checkout but never become owner, workspace, or project identity.

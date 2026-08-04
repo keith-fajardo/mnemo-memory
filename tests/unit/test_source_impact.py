@@ -6,6 +6,7 @@ import pytest
 
 from mnemo_memory.packages.domain import (
     CodeStructureArtifact,
+    CodeSymbolKind,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -831,7 +832,24 @@ def test_go_local_import_links_only_one_exact_package_file(tmp_path: Path) -> No
 
     assert len(imports) == 1
     assert imports[0].target_symbol_id is not None
-    assert names[imports[0].target_symbol_id].relative_path == "internal/orders/orders.go"
+    target = names[imports[0].target_symbol_id]
+    assert target.kind is CodeSymbolKind.PACKAGE
+    assert target.relative_path == "internal/orders"
+    assert target.qualified_name == "go:example.com/demo/internal/orders"
+
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(
+            item_scope,
+            "go:example.com/demo/internal/orders",
+            SourceImpactDirection.DEPENDENTS,
+            transitive=False,
+        )
+    )
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.service"]
+    assert [edge.target for edge in result.edges] == ["example.com/demo/internal/orders"]
 
 
 def test_go_external_suffix_match_never_becomes_a_local_edge(tmp_path: Path) -> None:
@@ -1111,7 +1129,7 @@ def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
     imports = [edge for edge in artifact.edges if edge.kind.value == "imports"]
 
-    assert imports[0].target_symbol_id is None
+    assert imports[0].target_symbol_id is not None
     assert any(edge.target == "orders.Process" and edge.target_symbol_id is None for edge in calls)
 
 

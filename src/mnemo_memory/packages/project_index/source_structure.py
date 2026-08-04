@@ -413,6 +413,8 @@ class SourceStructureParser:
         snapshot_id = CodeSnapshotId(
             uuid5(_SNAPSHOT_NAMESPACE, f"{request.scope.to_dict()}:{source_digest}")
         )
+        if go_module_path is not None:
+            pending.extend(self._go_package_symbols(pending, go_module_path))
         symbols = tuple(
             CodeSymbol(
                 snapshot_id,
@@ -443,7 +445,7 @@ class SourceStructureParser:
             if symbol.kind is CodeSymbolKind.MODULE
         }
         module_names = _symbols_by_name(modules.values())
-        go_modules_by_directory = self._go_modules_by_directory(modules)
+        go_packages_by_directory = self._go_packages_by_directory(symbols, go_module_path)
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]] = {}
@@ -529,7 +531,7 @@ class SourceStructureParser:
                                 module_names,
                                 modules,
                                 go_module_path,
-                                go_modules_by_directory,
+                                go_packages_by_directory,
                             ),
                         )
                         for path, target in sorted(set(imports))
@@ -633,21 +635,50 @@ class SourceStructureParser:
         return None
 
     @staticmethod
-    def _go_modules_by_directory(
-        modules_by_path: dict[str, CodeSymbol],
-    ) -> dict[str, tuple[CodeSymbol, ...]]:
-        """Index Go file modules by their exact package directory, never by suffix."""
-        result: dict[str, list[CodeSymbol]] = {}
-        for relative_path, module in modules_by_path.items():
-            if PurePosixPath(relative_path).suffix != ".go":
-                continue
-            parent = PurePosixPath(relative_path).parent
-            directory = "" if parent == PurePosixPath(".") else parent.as_posix()
-            result.setdefault(directory, []).append(module)
-        return {
-            directory: tuple(sorted(symbols, key=lambda item: item.relative_path))
-            for directory, symbols in result.items()
+    def _go_package_symbols(
+        pending: list[_PendingSymbol], go_module_path: str
+    ) -> tuple[_PendingSymbol, ...]:
+        """Create one import-addressable package symbol for each local Go directory.
+
+        A package is distinct from a Go source-file module.  The stable qualified name is the
+        declared module import path, while the relative identity is its safe directory (or the
+        root ``go.mod`` for the root package).  No package is inferred without ``go.mod``.
+        """
+        directories = {
+            ""
+            if PurePosixPath(item.relative_path).parent == PurePosixPath(".")
+            else PurePosixPath(item.relative_path).parent.as_posix()
+            for item in pending
+            if item.kind is CodeSymbolKind.MODULE
+            and PurePosixPath(item.relative_path).suffix == ".go"
         }
+        return tuple(
+            _PendingSymbol(
+                directory or "go.mod",
+                f"go:{go_module_path}" if not directory else f"go:{go_module_path}/{directory}",
+                CodeSymbolKind.PACKAGE,
+                1,
+            )
+            for directory in sorted(directories)
+        )
+
+    @staticmethod
+    def _go_packages_by_directory(
+        symbols: tuple[CodeSymbol, ...], go_module_path: str | None
+    ) -> dict[str, CodeSymbol]:
+        """Index the synthetic package symbols by exact local Go directory."""
+        if go_module_path is None:
+            return {}
+        root_name = f"go:{go_module_path}"
+        result: dict[str, CodeSymbol] = {}
+        for symbol in symbols:
+            if symbol.kind is not CodeSymbolKind.PACKAGE:
+                continue
+            if symbol.qualified_name == root_name:
+                result[""] = symbol
+            elif symbol.qualified_name.startswith(f"{root_name}/"):
+                result[symbol.qualified_name.removeprefix(f"{root_name}/")] = symbol
+        return result
 
     @staticmethod
     def _resolve_import_target(
@@ -656,7 +687,7 @@ class SourceStructureParser:
         modules_by_name: dict[str, tuple[CodeSymbol, ...]],
         modules_by_path: dict[str, CodeSymbol],
         go_module_path: str | None = None,
-        go_modules_by_directory: dict[str, tuple[CodeSymbol, ...]] | None = None,
+        go_packages_by_directory: dict[str, CodeSymbol] | None = None,
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
 
@@ -667,12 +698,12 @@ class SourceStructureParser:
         if source_path.endswith(".go"):
             directory = SourceStructureParser._go_local_package_directory(target, go_module_path)
             if directory is not None:
-                module = _single_symbol((go_modules_by_directory or {}).get(directory, ()))
-                if module is not None:
-                    return module.symbol_id
-            # Go import strings identify packages, not source files.  Without a matching local
-            # module declaration and exactly one file module, do not fall through to a coincidental
-            # dotted/path spelling elsewhere in the snapshot.
+                package = (go_packages_by_directory or {}).get(directory)
+                if package is not None:
+                    return package.symbol_id
+            # Go import strings identify packages. Without a matching local module declaration
+            # and exact package projection, do not fall through to a coincidental dotted/path
+            # spelling elsewhere in the snapshot.
             return None
         direct = _single_symbol(modules_by_name.get(target, ()))
         if direct is not None:
