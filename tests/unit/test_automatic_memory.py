@@ -1787,6 +1787,36 @@ def test_client_configuration_registers_prompt_boundary_without_prompt_matcher(
         assert "matcher" not in prompt_groups[0]
 
 
+def test_client_configuration_upgrades_owned_hook_timeout_without_duplication(
+    tmp_path: Path,
+) -> None:
+    launcher = tmp_path / "mnemo-memory"
+    launcher.touch()
+    home = tmp_path / "codex"
+    data = tmp_path / "mnemo data"
+    assert enable_client_hooks("codex", launcher, home, data) is True
+    path = home / "hooks.json"
+    value = json.loads(path.read_text())
+    for groups in value["hooks"].values():
+        for group in groups:
+            for handler in group["hooks"]:
+                handler["timeout"] = 8
+    path.write_text(json.dumps(value))
+
+    assert enable_client_hooks("codex", launcher, home, data) is True
+    upgraded = json.loads(path.read_text())
+    owned = [
+        handler
+        for groups in upgraded["hooks"].values()
+        for group in groups
+        for handler in group["hooks"]
+        if "automatic-memory-hook --client codex" in handler["command"]
+    ]
+    assert len(owned) == 5
+    assert all(handler["timeout"] == 30 for handler in owned)
+    assert enable_client_hooks("codex", launcher, home, data) is False
+
+
 def test_claude_hook_configuration_uses_only_its_settings_file(tmp_path: Path) -> None:
     launcher = tmp_path / "mnemo-memory"
     launcher.touch()

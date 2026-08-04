@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 from typing import Literal
 
 ClientName = Literal["codex", "claude-code"]
+_HOOK_TIMEOUT_SECONDS = 30
 
 
 class AutomaticMemoryClientConfigError(ValueError):
@@ -32,9 +33,17 @@ def enable_client_hooks(
         if not isinstance(groups, list):
             raise AutomaticMemoryClientConfigError("MNEMO_MEMORY_HOOK_CONFIG_INVALID")
         if _contains(groups, command):
+            if _set_owned_timeout(groups, command, _HOOK_TIMEOUT_SECONDS):
+                changed = True
             continue
         group: dict[str, object] = {
-            "hooks": [{"type": "command", "command": command, "timeout": 8}]
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command,
+                    "timeout": _HOOK_TIMEOUT_SECONDS,
+                }
+            ]
         }
         if matcher is not None:
             group["matcher"] = matcher
@@ -138,6 +147,24 @@ def _has_command(group: object, command: str) -> bool:
     return isinstance(handlers, list) and any(
         isinstance(handler, dict) and handler.get("command") == command for handler in handlers
     )
+
+
+def _set_owned_timeout(groups: list[object], command: str, timeout: int) -> bool:
+    """Upgrade only Mnemo's matching handler without disturbing client-owned entries."""
+    changed = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        handlers = group.get("hooks")
+        if not isinstance(handlers, list):
+            continue
+        for handler in handlers:
+            if not isinstance(handler, dict) or handler.get("command") != command:
+                continue
+            if handler.get("timeout") != timeout:
+                handler["timeout"] = timeout
+                changed = True
+    return changed
 
 
 def _without_owned_command(group: object, command: str) -> dict[str, object] | None:
