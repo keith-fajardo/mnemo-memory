@@ -693,3 +693,9 @@ an absolute approved root and exact scope; the connector reads only bounded `.md
 symlinked files and known metadata/cache directories (including `.obsidian`), preserves safe
 relative identities, and returns deterministic untrusted candidates. It does not persist text,
 follow document links, discover a vault automatically, or add documents to agent context.
+
+A storage-independent incremental-sync planner now compares one scoped discovery result with
+known active document metadata. It deterministically produces unchanged, revised, added,
+uniquely digest-proven renamed, and payload-free tombstone actions. A duplicate-content copy is
+never guessed to be a rename. Applying that plan atomically to durable document revisions,
+including secret policy and retrieval, remains in progress.

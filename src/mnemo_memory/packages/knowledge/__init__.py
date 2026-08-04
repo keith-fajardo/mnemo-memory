@@ -10,6 +10,13 @@ from .markdown import (
     KnowledgeDocumentSection,
     KnowledgeDocumentSourceKind,
 )
+from .sync import (
+    KnowledgeSyncAction,
+    KnowledgeSyncActionKind,
+    KnowledgeSyncPlan,
+    KnowledgeSyncPlanner,
+    KnownKnowledgeDocument,
+)
 
 __all__ = [
     "KnowledgeDocument",
@@ -20,4 +27,9 @@ __all__ = [
     "KnowledgeDocumentParser",
     "KnowledgeDocumentSection",
     "KnowledgeDocumentSourceKind",
+    "KnowledgeSyncAction",
+    "KnowledgeSyncActionKind",
+    "KnowledgeSyncPlan",
+    "KnowledgeSyncPlanner",
+    "KnownKnowledgeDocument",
 ]
