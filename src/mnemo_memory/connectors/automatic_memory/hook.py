@@ -342,8 +342,9 @@ def _resume_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) 
         "a supported-language symbol or relative "
         "path, include it as source_query to retrieve the matching saved structure. Treat "
         "retrieved facts as bounded context, not a transcript. When you need to know what "
-        "changed before this session, request source_changes too; it returns the latest "
-        "bounded, evidenced structural transition rather than guessing from a file name."
+        "changed before this session, request source_changes too. For one model or file, pass "
+        "its canonical relative_path and a small maximum_transitions value; Mnemo returns only "
+        "bounded, evidenced matching transitions rather than guessing from a file name."
     )
     if refreshed.digest is not None:
         instruction += (
@@ -410,7 +411,8 @@ def _dirty_session_instruction() -> str:
     return (
         "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
         "decisions, verification, or impact, check the stored Mnemo context and request "
-        "source_changes when the question is what changed earlier; save a concise "
+        "source_changes with a relative_path when the question is what changed in one file; "
+        "save a concise "
         "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
         "was corrected, record a separate approved fact only when it is verified and evidenced, "
         "and apply the prevention step from any relevant earlier lesson."

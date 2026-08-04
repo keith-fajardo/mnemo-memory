@@ -122,6 +122,8 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "get_context" in str(context)
     assert "source_query" in str(context)
     assert "source_changes" in str(context)
+    assert "relative_path" in str(context)
+    assert "maximum_transitions" in str(context)
     assert "recorded lessons" in str(context)
     assert "include_approved_events" in str(context)
     assert "approved decision" in str(context)
@@ -478,6 +480,7 @@ def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
     context = str(output["additionalContext"])
     assert "Mnemo observed a project mutation" in context
     assert "source_changes" in context
+    assert "relative_path" in context
     assert "private user question" not in context
     state = (data / "automatic-memory-session-state.json").read_text()
     assert "private user question" not in state
