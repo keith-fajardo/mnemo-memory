@@ -85,6 +85,7 @@ class DurableMcpContextPort:
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
             source_overview = request.get("source_overview")
+            knowledge_query = request.get("knowledge_query")
             include_lifecycle_events = request.get("include_lifecycle_events", False)
             include_approved_events = request.get("include_approved_events", False)
             if not isinstance(include_lifecycle_events, bool):
@@ -93,6 +94,8 @@ class DurableMcpContextPort:
                 raise ValueError("include_approved_events must be a boolean")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
+            if knowledge_query is not None and not isinstance(knowledge_query, str):
+                raise ValueError("knowledge_query must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
                 raise ValueError("source_impact must be an object")
             if source_impact is not None:
@@ -176,6 +179,7 @@ class DurableMcpContextPort:
                 or impact is not None
                 or changes is not None
                 or overview is not None
+                or knowledge_query is not None
             ):
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
@@ -191,6 +195,7 @@ class DurableMcpContextPort:
                             source_impact=impact,
                             source_changes=changes,
                             source_overview=overview,
+                            knowledge_query=knowledge_query,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -227,6 +232,7 @@ class DurableMcpContextPort:
                         source_impact=impact,
                         source_changes=changes,
                         source_overview=overview,
+                        knowledge_query=knowledge_query,
                         include_lifecycle_events=include_lifecycle_events,
                         include_approved_events=include_approved_events,
                     )

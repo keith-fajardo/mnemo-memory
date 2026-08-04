@@ -714,6 +714,10 @@ document, runs no model, and does not make deleted revisions retrievable. The cu
 uses the repository contract and is deliberately capped for personal mode rather than performing a
 broad ambient search.
 
-Obsidian vault consent/bindings, links/backlinks, embedding retrieval, and automatic
-context-packet integration remain in progress. Documents are still not discovered, synchronized,
-or injected into an agent context automatically.
+An explicit `get_context` `knowledge_query` can now include matching current document sections in
+the same bounded packet as task and structural facts. Every included section is cited to its exact
+immutable document revision and remains labelled `unknown` for filesystem currentness until a
+future source-state comparison can prove otherwise. This is an explicit, scope-first request—not
+ambient retrieval: documents are still not discovered, synchronized, or injected automatically.
+Obsidian vault consent/bindings, links/backlinks, embeddings, and automatic context selection
+remain in progress.

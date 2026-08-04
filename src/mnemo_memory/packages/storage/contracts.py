@@ -28,6 +28,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
+    KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
     KnownKnowledgeDocument,
     MemoryScope,
@@ -188,6 +189,15 @@ class KnowledgeDocumentRepository(Protocol):
     ) -> KnowledgeDocumentRevision:
         """Return one scoped retained historical revision, never an unscoped revision lookup."""
 
+    def search_current_sections(
+        self,
+        scope: MemoryScope,
+        terms: tuple[str, ...],
+        limit: int,
+        maximum_documents: int,
+    ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
+        """Rank current scoped sections only; terms must already be bounded and normalized."""
+
     def apply_sync(
         self,
         scope: MemoryScope,
@@ -196,6 +206,42 @@ class KnowledgeDocumentRepository(Protocol):
     ) -> KnowledgeDocumentSyncStoreResult:
         """Apply an all-or-nothing source reconciliation; deletions erase document payload rows."""
         ...
+
+
+def validate_knowledge_search(terms: tuple[str, ...], limit: int, maximum_documents: int) -> None:
+    """Validate a storage-neutral bounded lexical query without interpreting document text."""
+    if (
+        not terms
+        or len(terms) > 24
+        or any(not isinstance(term, str) or not term or len(term) > 64 for term in terms)
+    ):
+        raise KnowledgeDocumentConflict("knowledge search terms are invalid")
+    if not 1 <= limit <= 24 or not 1 <= maximum_documents <= 128:
+        raise KnowledgeDocumentConflict("knowledge search limits are invalid")
+
+
+def rank_knowledge_sections(
+    revisions: tuple[KnowledgeDocumentRevision, ...], terms: tuple[str, ...], limit: int
+) -> tuple[KnowledgeDocumentSectionMatch, ...]:
+    """Rank literal terms over current scoped revisions with stable, reproducible ordering."""
+    matches: list[KnowledgeDocumentSectionMatch] = []
+    for revision in revisions:
+        for index, section in enumerate(revision.document.sections):
+            heading, content = section.heading.casefold(), section.content.casefold()
+            score = sum(4 * heading.count(term) + content.count(term) for term in terms)
+            if score:
+                matches.append(KnowledgeDocumentSectionMatch(revision, index, section, score))
+    return tuple(
+        sorted(
+            matches,
+            key=lambda match: (
+                -match.score,
+                match.revision.document.relative_path,
+                str(match.revision.revision_id),
+                match.section_index,
+            ),
+        )[:limit]
+    )
 
 
 class ProjectIndexRepositoryError(Exception):

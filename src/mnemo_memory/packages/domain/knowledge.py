@@ -6,6 +6,7 @@ policy and repository layers must validate it before persistence or context retr
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -148,3 +149,35 @@ class KnowledgeDocumentTombstone:
             raise ValueError("knowledge tombstone requires a sha256 digest")
         if self.deleted_at.tzinfo is None or self.deleted_at.utcoffset() is None:
             raise ValueError("knowledge tombstone timestamp must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentSectionMatch:
+    """One scored literal section from a scoped retained revision; text remains untrusted data."""
+
+    revision: KnowledgeDocumentRevision
+    section_index: int
+    section: KnowledgeDocumentSection
+    score: int
+
+    def __post_init__(self) -> None:
+        if self.section_index < 0 or self.score < 1:
+            raise ValueError("knowledge section match is invalid")
+
+
+_KNOWLEDGE_TERM_PATTERN = re.compile(r"[^\W_][\w-]{1,63}", re.UNICODE)
+
+
+def normalize_knowledge_query(query: str, *, maximum_terms: int = 12) -> tuple[str, ...]:
+    """Return bounded, stable literal terms without semantic interpretation or model use."""
+    if not isinstance(query, str) or not 1 <= len(query) <= 512:
+        raise ValueError("knowledge query is invalid")
+    if not 1 <= maximum_terms <= 24:
+        raise ValueError("knowledge query term limit is invalid")
+    terms: list[str] = []
+    for term in _KNOWLEDGE_TERM_PATTERN.findall(query.casefold()):
+        if term not in terms:
+            terms.append(term)
+        if len(terms) == maximum_terms:
+            break
+    return tuple(terms)

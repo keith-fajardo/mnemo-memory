@@ -45,6 +45,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
     KnowledgeDocumentSection,
+    KnowledgeDocumentSectionMatch,
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
     KnownKnowledgeDocument,
@@ -111,6 +112,8 @@ from .contracts import (
     SourceIndexStorageFailure,
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
+    rank_knowledge_sections,
+    validate_knowledge_search,
 )
 
 LATEST_SCHEMA_VERSION = 10
@@ -2202,6 +2205,43 @@ class _KnowledgeOperations:
             raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
 
     @staticmethod
+    def search_current_knowledge_sections(
+        backend: SQLiteCheckpointRepository,
+        scope: MemoryScope,
+        terms: tuple[str, ...],
+        limit: int,
+        maximum_documents: int,
+    ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
+        """Load only current revisions for one SQL-scoped personal project before ranking."""
+        backend._require_project_scope(scope)
+        validate_knowledge_search(terms, limit, maximum_documents)
+        try:
+            with backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
+                    "knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0 "
+                    "ORDER BY source.relative_path ASC, source.document_id ASC LIMIT ?",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        maximum_documents,
+                    ),
+                ).fetchall()
+                revisions = tuple(
+                    _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+                    for row in rows
+                )
+                return rank_knowledge_sections(revisions, terms, limit)
+        except KnowledgeDocumentConflict:
+            raise
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
     def apply_knowledge_sync(
         backend: SQLiteCheckpointRepository,
         scope: MemoryScope,
@@ -2530,6 +2570,17 @@ class SQLiteKnowledgeDocumentRepository:
     ) -> KnowledgeDocumentRevision:
         return _KnowledgeOperations.get_knowledge_revision(
             self._backend, scope, document_id, revision_id
+        )
+
+    def search_current_sections(
+        self,
+        scope: MemoryScope,
+        terms: tuple[str, ...],
+        limit: int,
+        maximum_documents: int,
+    ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
+        return _KnowledgeOperations.search_current_knowledge_sections(
+            self._backend, scope, terms, limit, maximum_documents
         )
 
     def apply_sync(

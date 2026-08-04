@@ -53,6 +53,17 @@ def create_server(port: McpContextPort) -> FastMCP:
         source_query: Annotated[
             str | None, Field(default=None, min_length=1, max_length=512)
         ] = None,
+        knowledge_query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=512,
+                description=(
+                    "Optional literal query for scoped, cited local knowledge-document sections."
+                ),
+            ),
+        ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
@@ -86,6 +97,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "checkpoint_id": checkpoint_id,
                 "dbt_lineage": dbt_lineage,
                 "source_query": source_query,
+                "knowledge_query": knowledge_query,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
                 "source_overview": source_overview,
@@ -265,6 +277,7 @@ def main(data_directory: Path | None = None) -> None:
                     runtime.dbt_manifest_service,
                     runtime.source_structure_repository,
                     runtime.repository,
+                    runtime.knowledge_document_repository,
                 ),
                 observer.observe,
             )

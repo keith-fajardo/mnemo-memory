@@ -157,6 +157,7 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                 runtime.dbt_manifest_service,
                 runtime.source_structure_repository,
                 runtime.repository,
+                runtime.knowledge_document_repository,
             ).get_context(
                 GetUnifiedContext(
                     scope,

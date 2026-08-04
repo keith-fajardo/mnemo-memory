@@ -42,6 +42,7 @@ from mnemo_memory.packages.domain import (
     EvidenceLocation,
     EvidenceReference,
     EvidenceSourceType,
+    KnowledgeDocumentSectionMatch,
     MemoryScope,
     OmissionNotice,
     OmissionReason,
@@ -53,12 +54,14 @@ from mnemo_memory.packages.domain import (
     SourceTrustClass,
     ValidityState,
     VerificationStatus,
+    normalize_knowledge_query,
     unique_file_renames,
 )
 from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, SourceStateFingerprint
 from mnemo_memory.packages.storage.contracts import (
     CheckpointSourceObservationNotFound,
     CheckpointSourceObservationRepository,
+    KnowledgeDocumentRepository,
     SourceStructureRepository,
 )
 
@@ -242,6 +245,7 @@ class GetUnifiedContext:
     source_changes: ContextSourceChangeQuery | None = None
     source_overview: ContextSourceOverviewQuery | None = None
     checkpoint_source_impact: ContextCheckpointSourceImpact | None = None
+    knowledge_query: str | None = None
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
 
@@ -255,11 +259,13 @@ class UnifiedContextService:
         dbt: DbtManifestApplicationService | None,
         source: SourceStructureRepository | None = None,
         checkpoint_source_observations: CheckpointSourceObservationRepository | None = None,
+        knowledge: KnowledgeDocumentRepository | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
         self._source = source
         self._checkpoint_source_observations = checkpoint_source_observations
+        self._knowledge = knowledge
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -273,6 +279,7 @@ class UnifiedContextService:
             )
         )
         packet = self._with_checkpoint_source_observation(packet, request)
+        packet = self._with_requested_knowledge(packet, request)
         if (
             request.lineage is None
             and request.source_query is None
@@ -280,11 +287,75 @@ class UnifiedContextService:
             and request.source_changes is None
             and request.source_overview is None
             and request.checkpoint_source_impact is None
+            and request.knowledge_query is None
         ):
             return packet
         if request.lineage is None:
             return self._with_requested_source_facts(packet, request)
         return self._with_dbt_lineage(packet, request)
+
+    def _with_requested_knowledge(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach bounded literal note sections with exact revision provenance.
+
+        Local documents are user-authored but remain untrusted evidence. Selecting an active stored
+        revision does not prove that its filesystem source is current, so items label that fact as
+        unknown rather than presenting a note as present-day structural authority.
+        """
+        if request.knowledge_query is None:
+            return packet
+        if self._knowledge is None:
+            return _with_omission(
+                packet, "knowledge", OmissionReason.LOWER_RANK, "knowledge index is unavailable"
+            )
+        terms = normalize_knowledge_query(request.knowledge_query)
+        if not terms:
+            raise ValueError("knowledge query requires at least one searchable term")
+        matches = self._knowledge.search_current_sections(
+            _project_scope(request.scope), terms, 8, 128
+        )
+        remaining = min(
+            request.budget.knowledge - sum(item.token_estimate for item in packet.knowledge_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = list(packet.provenance)
+        for match in matches:
+            item, notice = _knowledge_context_item(packet, request.scope, match)
+            if item.token_estimate > remaining:
+                packet = _with_omission(
+                    packet,
+                    item.item_id,
+                    OmissionReason.TOKEN_BUDGET,
+                    "knowledge section exceeds the remaining knowledge budget",
+                )
+                continue
+            items.append(item)
+            notices.append(notice)
+            remaining -= item.token_estimate
+        if not items and matches:
+            return packet
+        return ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + sum(item.token_estimate for item in items),
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=(*packet.knowledge_items, *items),
+            structural_items=packet.structural_items,
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=tuple(notices),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
 
     def _with_dbt_lineage(self, packet: ContextPacket, request: GetUnifiedContext) -> ContextPacket:
         """Attach requested dbt lineage, then any requested source facts."""
@@ -1228,6 +1299,7 @@ def _checkpoint_reference_from_context_item(
 
 
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")
+_KNOWLEDGE_EVIDENCE_NAMESPACE = UUID("6b2c7437-752e-4d43-8b19-5156e50120fb")
 
 
 def _exact_scoped_source_file(
@@ -1300,6 +1372,71 @@ def _source_snapshot_evidence(packet: ContextPacket, snapshot: CodeSnapshot) -> 
         EvidenceLocation(f"mnemo:source/{snapshot.snapshot_id}"),
         packet.created_at,
         VerificationStatus.VERIFIED,
+    )
+
+
+def _knowledge_context_item(
+    packet: ContextPacket,
+    task_scope: MemoryScope,
+    match: KnowledgeDocumentSectionMatch,
+) -> tuple[ContextItem, ProvenanceNotice]:
+    """Render one exact stored note section without private absolute paths or implicit authority."""
+    revision, document = match.revision, match.revision.document
+    item_id = (
+        f"knowledge:{document.document_id}:revision:{revision.revision_id}:"
+        f"section:{match.section_index}"
+    )
+    content = json.dumps(
+        {
+            "content": match.section.content,
+            "currentness": "unknown",
+            "document_path": document.relative_path,
+            "heading": match.section.heading,
+            "revision_id": str(revision.revision_id),
+            "section_index": match.section_index,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    reference = (
+        f"knowledge:{document.document_id}/revision/{revision.revision_id}/"
+        f"section/{match.section_index}"
+    )
+    evidence = EvidenceReference(
+        EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),
+        EvidenceSourceType.USER_DOCUMENT,
+        SourceTrustClass.USER_AUTHORED,
+        reference,
+        document.content_digest,
+        EvidenceLocation(f"mnemo:{reference}"),
+        revision.created_at,
+        VerificationStatus.UNVERIFIED,
+    )
+    item = ContextItem(
+        item_id,
+        ContextItemType.KNOWLEDGE,
+        task_scope,
+        content,
+        ContentRepresentation.UNTRUSTED_EVIDENCE,
+        (len(content) + 3) // 4,
+        (evidence,),
+        SourceTrustClass.USER_AUTHORED,
+        Sensitivity.NORMAL,
+        ValidityState.UNKNOWN,
+        None,
+        ConflictState.NONE,
+        revision.created_at,
+    )
+    return (
+        item,
+        ProvenanceNotice(
+            f"provenance:{item_id}",
+            item_id,
+            f"mnemo:knowledge/{document.document_id}/revision/{revision.revision_id}",
+            document.content_digest.removeprefix("sha256:"),
+            (evidence,),
+        ),
     )
 
 

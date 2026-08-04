@@ -161,6 +161,9 @@ def test_sqlite_repository_is_atomic_scoped_and_removes_deleted_payload(tmp_path
     )
     repository.apply_sync(scope(), (second,), ())
     assert repository.get_revision(scope(), first.document.document_id, first.revision_id) == first
+    matches = repository.search_current_sections(scope(), ("bounded",), 8, 128)
+    assert matches[0].revision == second
+    assert matches[0].section.content == "Use bounded deterministic parsing."
     tombstone = KnowledgeDocumentTombstone(
         first.document.document_id,
         scope(),

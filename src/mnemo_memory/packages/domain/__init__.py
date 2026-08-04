@@ -77,9 +77,11 @@ from .knowledge import (
     KnowledgeDocumentLink,
     KnowledgeDocumentRevision,
     KnowledgeDocumentSection,
+    KnowledgeDocumentSectionMatch,
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
     KnownKnowledgeDocument,
+    normalize_knowledge_query,
 )
 from .knowledge_sync import (
     KnowledgeSyncAction,
@@ -163,6 +165,7 @@ __all__ = [
     "KnowledgeDocumentRevision",
     "KnowledgeDocumentRevisionId",
     "KnowledgeDocumentSection",
+    "KnowledgeDocumentSectionMatch",
     "KnowledgeDocumentSourceKind",
     "KnowledgeDocumentTombstone",
     "KnowledgeSyncAction",
@@ -205,5 +208,6 @@ __all__ = [
     "VerificationStatus",
     "Visibility",
     "WorkspaceId",
+    "normalize_knowledge_query",
     "unique_file_renames",
 ]

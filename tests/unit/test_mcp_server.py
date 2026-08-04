@@ -108,6 +108,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     )
     assert "exactly one" in tools[1].inputSchema["properties"]["lessons"]["description"]
     assert "source_query" in tools[0].inputSchema["properties"]
+    assert "knowledge_query" in tools[0].inputSchema["properties"]
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
     assert "source_overview" in tools[0].inputSchema["properties"]

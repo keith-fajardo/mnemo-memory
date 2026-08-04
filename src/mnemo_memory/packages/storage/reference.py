@@ -29,6 +29,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
+    KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
     KnownKnowledgeDocument,
     MemoryScope,
@@ -80,6 +81,8 @@ from .contracts import (
     SourceSnapshotNotFound,
     SourceSnapshotStoreResult,
     SourceStructureRepository,
+    rank_knowledge_sections,
+    validate_knowledge_search,
 )
 
 
@@ -131,6 +134,19 @@ class ReferenceKnowledgeDocumentRepository:
         ):
             raise KnowledgeDocumentNotFound("knowledge document was not found")
         return revision
+
+    def search_current_sections(
+        self,
+        scope: MemoryScope,
+        terms: tuple[str, ...],
+        limit: int,
+        maximum_documents: int,
+    ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
+        self._require_scope(scope)
+        validate_knowledge_search(terms, limit, maximum_documents)
+        active = self.list_active_documents(scope)[:maximum_documents]
+        revisions = tuple(self._revisions[known.current_revision_id] for known in active)
+        return rank_knowledge_sections(revisions, terms, limit)
 
     def apply_sync(
         self,
