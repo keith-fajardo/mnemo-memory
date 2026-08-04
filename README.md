@@ -150,7 +150,9 @@ ambiguous re-exports, and `export default existingName` remain unresolved rather
 For a default class, Mnemo follows `Class.staticMethod()` only when that method is explicitly
 declared `static`; it never pretends an instance method is a class call. These forms sit alongside
 ES-module imports, while Python recognizes direct local `from .module import member` and parent-package
-relative imports that remain inside the registered project. Rust recognizes an explicit
+relative imports that remain inside the registered project. A Python package initializer can also
+publish one exact local member, such as `from .core import validate as check`, for later
+`from package import check` calls; wildcard package exports stay unresolved. Rust recognizes an explicit
 `use crate::path::member as local_name` spelling and flat `use crate::path::{member as local_name, member}` lists, and C# recognizes an explicit
 `using Local = Namespace.Type` spelling. Java recognizes direct
 `import static package.Type.member` imports. They record explicit syntactic calls separately from imports and can follow only **proven** internal links to show a

@@ -435,6 +435,20 @@ class SourceStructureParser:
             for item in symbols_by_name.get(qualified_name, ())
             if item.relative_path == static_path
         )
+        python_package_re_exports_by_name: dict[str, dict[str, tuple[str, ...]]] = {}
+        for export_path, binding_name, imported_target in bindings:
+            if PurePosixPath(export_path).name != "__init__.py":
+                continue
+            package = modules.get(export_path)
+            if package is None or not _is_safe_symbol_name(binding_name):
+                continue
+            resolved_target = SourceStructureParser._python_re_export_target(
+                export_path, imported_target, modules, symbols_by_name
+            )
+            if resolved_target is None:
+                continue
+            exports = python_package_re_exports_by_name.setdefault(package.qualified_name, {})
+            exports[binding_name] = (*exports.get(binding_name, ()), resolved_target)
         call_edges: list[CodeEdge] = []
         for call_path, qualified_name, target in sorted(set(calls)):
             caller = _single_symbol(symbols_by_location.get((call_path, qualified_name), ()))
@@ -461,6 +475,7 @@ class SourceStructureParser:
                         default_exports_by_path,
                         re_exports_by_path,
                         wildcard_re_exports_by_path,
+                        python_package_re_exports_by_name,
                         static_method_ids,
                     ),
                 )
@@ -617,6 +632,53 @@ class SourceStructureParser:
         return None
 
     @staticmethod
+    def _python_re_export_target(
+        source_path: str,
+        imported_target: str,
+        modules_by_path: dict[str, CodeSymbol],
+        symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
+    ) -> str | None:
+        """Normalize one literal ``__init__.py`` import to a unique local declaration.
+
+        A package initializer can intentionally provide a stable public spelling,
+        for example ``from .core import validate as check``.  This is a static
+        declaration relationship, not execution of the initializer.  Wildcards
+        and anything that does not name one saved declaration stay unresolved.
+        """
+        if imported_target.startswith(".") and not imported_target.startswith(("./", "../")):
+            relative_reference = SourceStructureParser._relative_python_import_reference(
+                source_path, imported_target, modules_by_path
+            )
+            if relative_reference is None:
+                return None
+            module, tail = relative_reference
+            candidate_name = ".".join((module.qualified_name, *tail))
+        else:
+            candidate_name = imported_target
+        return candidate_name if _single_symbol(symbols_by_name.get(candidate_name, ())) else None
+
+    @staticmethod
+    def _resolve_python_package_re_export(
+        target: str,
+        package_re_exports_by_name: dict[str, dict[str, tuple[str, ...]]],
+        symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
+    ) -> CodeSymbol | None:
+        """Resolve one unambiguous package-export spelling to its saved declaration."""
+        for package_name in sorted(package_re_exports_by_name, key=len, reverse=True):
+            prefix = f"{package_name}."
+            if not target.startswith(prefix):
+                continue
+            member, dot, remainder = target[len(prefix) :].partition(".")
+            targets = package_re_exports_by_name[package_name].get(member, ())
+            if len(set(targets)) != 1:
+                continue
+            candidate_name = targets[0] if not dot else f"{targets[0]}.{remainder}"
+            candidate = _single_symbol(symbols_by_name.get(candidate_name, ()))
+            if candidate is not None:
+                return candidate
+        return None
+
+    @staticmethod
     def _path_import_target(
         normalized: str, modules_by_path: dict[str, CodeSymbol]
     ) -> CodeSymbolId | None:
@@ -678,6 +740,7 @@ class SourceStructureParser:
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
         re_exports_by_path: dict[str, dict[str, tuple[str, ...]]],
         wildcard_re_exports_by_path: dict[str, tuple[str, ...]],
+        python_package_re_exports_by_name: dict[str, dict[str, tuple[str, ...]]],
         static_method_ids: frozenset[CodeSymbolId],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
@@ -838,6 +901,10 @@ class SourceStructureParser:
                         imported_names.append(f"{imported_target}.{imported_type}.{remainder}")
             for candidate_name in imported_names:
                 imported = _single_symbol(symbols_by_name.get(candidate_name, ()))
+                if imported is None:
+                    imported = SourceStructureParser._resolve_python_package_re_export(
+                        candidate_name, python_package_re_exports_by_name, symbols_by_name
+                    )
                 if imported is not None:
                     candidates.append(imported)
         # C# ``using static Namespace.Type;`` exposes a named member without an alias. Treat it

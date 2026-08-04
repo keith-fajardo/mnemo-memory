@@ -580,7 +580,9 @@ declaration exists in the same unique local package directory; imports themselve
 because they name directories while the projection names files. Explicit class-owned `self`/`this`
 sibling calls now resolve across supported adapters when the enclosing type and target declaration
 are both unambiguous. Direct local Python `from .module import member` and parent-package relative
-imports now resolve when their path remains inside the registered project. Direct top-level literal
+imports now resolve when their path remains inside the registered project. A literal Python
+package-initializer re-export such as `from .core import member as public_name` also preserves that
+public name when a later caller imports it; wildcard package imports remain unresolved. Direct top-level literal
 CommonJS `require("./local")` bindings in JavaScript/TypeScript now also resolve exact local members;
 named explicit local default function/class exports resolve through `import local from "./module"`, and
 an exact named local barrel export such as `export { member as alias } from "./module"` resolves through

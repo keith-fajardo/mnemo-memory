@@ -38,8 +38,10 @@ an exact local named barrel export such as `export { validate as check } from ".
 resolved. A local wildcard barrel can resolve one non-default member only when it has exactly one
 proven local declaration. Anonymous, ambiguous, and value-flow defaults remain deliberately unresolved. For a default
 class, `Class.method()` is linked only when `method` is explicitly static; Mnemo does not turn an
-instance method into a guessed class call. More adapters and safely
-resolvable call edges use the same graph contract. That subset now includes exact local C++
+instance method into a guessed class call. Python package-initializer exports
+(`from .core import member as public_name`) follow the same rule: only one exact saved local
+declaration is followed; wildcard imports stay unresolved. More adapters and safely resolvable
+call edges use the same graph contract. That subset now includes exact local C++
 namespace calls, C# `using Namespace.Type` and `using static Namespace.Type` calls, PHP `use Namespace\\Type`,
 explicit `use Namespace\\Type as Alias`, explicit `use function Namespace\\member`, and flat grouped
 imports such as `use Namespace\\{Type as Alias}` calls, and

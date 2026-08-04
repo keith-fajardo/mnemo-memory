@@ -312,6 +312,60 @@ def test_python_relative_import_that_escapes_the_registered_root_stays_unresolve
     assert calls[0].target_symbol_id is None
 
 
+def test_python_package_initializer_re_exports_resolve_exact_public_calls(tmp_path: Path) -> None:
+    """A literal package public API can point to one stored internal declaration."""
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "core.py").write_text(
+        "def validate():\n    return True\n\n"
+        "class Service:\n    def run(self):\n        return True\n"
+    )
+    (root / "pkg" / "__init__.py").write_text(
+        "from .core import Service\nfrom .core import validate as check\n"
+    )
+    (root / "consumer.py").write_text(
+        "from pkg import Service, check\n\ndef process():\n    check(); return Service.run()\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    assert [
+        item.symbol.qualified_name
+        for item in service.query(
+            SourceImpactQuery(item_scope, "pkg.core.validate", SourceImpactDirection.DEPENDENTS)
+        ).symbols
+    ] == ["consumer.process"]
+    # This is not a claim about instance dispatch: the ordinary Python spelling
+    # remains unresolved unless the exact class member is statically called.
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+    assert {item.target: item.target_symbol_id is not None for item in calls} == {
+        "check": True,
+        "Service.run": True,
+    }
+
+
+def test_python_package_initializer_wildcard_re_export_stays_unresolved(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "pkg").mkdir(parents=True)
+    (root / "pkg" / "core.py").write_text("def validate():\n    return True\n")
+    (root / "pkg" / "__init__.py").write_text("from .core import *\n")
+    (root / "consumer.py").write_text(
+        "from pkg import validate\n\ndef process():\n    return validate()\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert len(calls) == 1
+    assert calls[0].target == "validate"
+    assert calls[0].target_symbol_id is None
+
+
 def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_path: Path) -> None:
     item_scope = scope()
     root = tmp_path / "source"
