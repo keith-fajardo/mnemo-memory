@@ -32,7 +32,9 @@ PHP. It also records an internal file/module link when an explicit import resolv
 saved target, and follows those proven links to show a bounded list of code that
 statically depends on a selected file or symbol. It can also resolve a small safe subset of direct
 calls (same-module, fully-qualified, or unique imported members). Duplicate candidates across
-files or languages remain unresolved rather than being guessed. More adapters and safely
+files or languages remain unresolved rather than being guessed. A JavaScript/TypeScript local
+default import is resolved only for one named `export default function` or `export default class`;
+anonymous, re-exported, and value-flow defaults remain deliberately unresolved. More adapters and safely
 resolvable call edges use the same graph contract. That subset now includes exact local C++
 namespace calls, C# `using Namespace.Type` and `using static Namespace.Type` calls, PHP `use Namespace\\Type`,
 explicit `use Namespace\\Type as Alias`, explicit `use function Namespace\\member`, and flat grouped

@@ -351,6 +351,64 @@ def test_typescript_named_and_namespace_imports_resolve_safe_internal_calls(tmp_
     )
 
 
+def test_javascript_and_typescript_default_imports_resolve_only_explicit_named_defaults(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "normalizer.ts").write_text(
+        "export default function normalize(value: number) { return value }\n",
+        encoding="utf-8",
+    )
+    (root / "formatter.js").write_text(
+        "export default class Formatter { static format() { return true } }\n",
+        encoding="utf-8",
+    )
+    (root / "service.ts").write_text(
+        "import check from './normalizer';\n"
+        "import Format from './formatter';\n"
+        "export function process() { check(1); return Format.format(); }\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+    service = SourceImpactService(repository)
+
+    default_function = service.query(
+        SourceImpactQuery(item_scope, "normalizer.normalize", SourceImpactDirection.DEPENDENTS)
+    )
+    default_class = service.query(
+        SourceImpactQuery(
+            item_scope, "formatter.Formatter.format", SourceImpactDirection.DEPENDENTS
+        )
+    )
+
+    assert [item.symbol.qualified_name for item in default_function.symbols] == ["service.process"]
+    assert [item.symbol.qualified_name for item in default_class.symbols] == ["service.process"]
+
+
+def test_default_import_does_not_resolve_an_implicit_or_ambiguous_export(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.ts").write_text(
+        "export function normalize() { return 1 }\n",
+        encoding="utf-8",
+    )
+    (root / "service.ts").write_text(
+        "import normalize from './helpers';\nexport function process() { return normalize(); }\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert len(calls) == 1
+    assert calls[0].target == "normalize"
+    assert calls[0].target_symbol_id is None
+
+
 def test_commonjs_literal_require_bindings_resolve_safe_internal_calls(tmp_path: Path) -> None:
     """Direct CommonJS imports have the same bounded static certainty as ES imports."""
     item_scope = scope()

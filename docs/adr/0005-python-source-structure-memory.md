@@ -23,7 +23,10 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
 - The projection includes safe relative file identity, module/class/function declarations, import
   declarations, and syntactically explicit calls. An import gains an internal target-symbol link
   only when exactly one module in the same snapshot matches. A call gains a target link
-  only for an unambiguous same-module, fully-qualified, or imported-member declaration. The current
+  only for an unambiguous same-module, fully-qualified, or imported-member declaration. JavaScript
+  and TypeScript additionally resolve a local default import only when its target file contains one
+  named `export default function` or `export default class`; anonymous defaults, re-exports, and
+  `export default existingName` require value-flow semantics and remain unresolved. The current
   adapters resolve simple Python/ES-module aliases plus direct Java class imports, Rust
   `use crate::...` items, exact Go imported-package member calls, and direct `self`/`this` sibling
   method calls only when a unique saved

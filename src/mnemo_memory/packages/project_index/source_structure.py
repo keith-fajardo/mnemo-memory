@@ -335,6 +335,7 @@ class SourceStructureParser:
         files: list[tuple[str, str]] = []
         imports: list[tuple[str, str]] = []
         bindings: list[tuple[str, str, str]] = []
+        default_exports: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
         total_bytes = 0
         for path in paths:
@@ -358,7 +359,15 @@ class SourceStructureParser:
                 self._parse_python(raw, relative, module, pending, imports, bindings, calls)
             else:
                 self._parse_tree_sitter(
-                    language, raw, relative, module, pending, imports, bindings, calls
+                    language,
+                    raw,
+                    relative,
+                    module,
+                    pending,
+                    imports,
+                    bindings,
+                    default_exports,
+                    calls,
                 )
         if len(pending) > request.limits.max_symbols:
             raise SourceStructureError("MNEMO_SOURCE_SYMBOL_LIMIT")
@@ -398,6 +407,12 @@ class SourceStructureParser:
         module_names = _symbols_by_name(modules.values())
         symbols_by_location = _symbols_by_location(symbols)
         symbols_by_name = _symbols_by_name(symbols)
+        default_exports_by_path: dict[str, tuple[CodeSymbol, ...]] = {}
+        for default_path, qualified_name in default_exports:
+            default_exports_by_path[default_path] = (
+                *default_exports_by_path.get(default_path, ()),
+                *symbols_by_name.get(qualified_name, ()),
+            )
         call_edges: list[CodeEdge] = []
         for call_path, qualified_name, target in sorted(set(calls)):
             caller = _single_symbol(symbols_by_location.get((call_path, qualified_name), ()))
@@ -421,6 +436,7 @@ class SourceStructureParser:
                         symbols_by_name,
                         imports,
                         bindings,
+                        default_exports_by_path,
                     ),
                 )
             )
@@ -634,6 +650,7 @@ class SourceStructureParser:
         symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
+        default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -723,6 +740,22 @@ class SourceStructureParser:
                 if module is None:
                     continue
                 member = remainder if separator else imported_member
+                if imported_member == "default":
+                    default_export = _single_symbol(
+                        default_exports_by_path.get(module.relative_path, ())
+                    )
+                    if default_export is not None:
+                        if not separator:
+                            candidates.append(default_export)
+                        else:
+                            member_export = _single_symbol(
+                                symbols_by_name.get(
+                                    f"{default_export.qualified_name}.{remainder}", ()
+                                )
+                            )
+                            if member_export is not None:
+                                candidates.append(member_export)
+                    continue
                 candidate_name = (
                     module.qualified_name if not member else f"{module.qualified_name}.{member}"
                 )
@@ -882,6 +915,7 @@ class SourceStructureParser:
         symbols: list[_PendingSymbol],
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
+        default_exports: list[tuple[str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
         rules = next(rule for rule in _TREE_SITTER_RULES if rule.name == language)
@@ -899,6 +933,10 @@ class SourceStructureParser:
                 qualified = f"{parent}.{name}"
                 symbols.append(_PendingSymbol(relative, qualified, kind, node.start_point.row + 1))
                 next_parent = qualified
+            if language in {"javascript", "typescript", "tsx"} and node.type == "export_statement":
+                default_export = self._explicit_default_export(node, raw, module)
+                if default_export is not None:
+                    default_exports.append((relative, default_export))
             if node.type in rules.import_kinds:
                 if language == "rust":
                     for rust_target, rust_binding in self._rust_import_entries(node, raw):
@@ -1167,7 +1205,11 @@ class SourceStructureParser:
             return ()
         result: list[tuple[str, str]] = []
         for child in clause.named_children:
-            if child.type == "named_imports":
+            if child.type == "identifier":
+                binding = _safe_tree_text(child, raw)
+                if binding is not None:
+                    result.append((binding, f"{target}|default"))
+            elif child.type == "named_imports":
                 for specifier in child.named_children:
                     if specifier.type != "import_specifier":
                         continue
@@ -1182,6 +1224,25 @@ class SourceStructureParser:
                 if binding is not None:
                     result.append((binding, f"{target}|"))
         return tuple(result)
+
+    @staticmethod
+    def _explicit_default_export(node: Node, raw: bytes, module: str) -> str | None:
+        """Return one explicit named JS/TS default declaration, never an inferred export.
+
+        This deliberately accepts only ``export default function Name`` and ``export default
+        class Name``. Anonymous defaults, re-exports, and ``export default existing_name`` need
+        broader module/value-flow semantics and therefore remain unresolved.
+        """
+        if not any(child.type == "default" for child in node.children):
+            return None
+        declaration = node.child_by_field_name("declaration")
+        if declaration is None or declaration.type not in {
+            "function_declaration",
+            "class_declaration",
+        }:
+            return None
+        name = SourceStructureParser._declaration_name(declaration, raw)
+        return None if name is None else f"{module}.{name}"
 
     @staticmethod
     def _declaration_name(node: Node, raw: bytes) -> str | None:

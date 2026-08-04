@@ -582,7 +582,8 @@ sibling calls now resolve across supported adapters when the enclosing type and 
 are both unambiguous. Direct local Python `from .module import member` and parent-package relative
 imports now resolve when their path remains inside the registered project. Direct top-level literal
 CommonJS `require("./local")` bindings in JavaScript/TypeScript now also resolve exact local members;
-computed/dynamic or nested requires remain deliberately unresolved. Explicit Rust `use crate::path::member as local_name` aliases and flat `use crate::path::{member as local_name, member}` lists now resolve only to unique local members; wildcards and nested groups remain unresolved. Exact C++ namespace calls, C#
+named explicit local default function/class exports resolve through `import local from "./module"`, while
+anonymous, re-exported, and value-flow defaults remain deliberately unresolved; computed/dynamic or nested requires remain deliberately unresolved. Explicit Rust `use crate::path::member as local_name` aliases and flat `use crate::path::{member as local_name, member}` lists now resolve only to unique local members; wildcards and nested groups remain unresolved. Exact C++ namespace calls, C#
 `using Namespace.Type`, explicit `using Local = Namespace.Type`, and `using static Namespace.Type` calls, and PHP
 `use Namespace\\Type`, explicit `use Namespace\\Type as Alias`, explicit `use function Namespace\\member`, and flat grouped PHP imports now join when their saved target is unique; `use const` aliases never become callable links. Direct Java
 `import static package.Type.member` calls now join when their local class and method target are

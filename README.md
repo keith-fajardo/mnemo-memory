@@ -140,8 +140,11 @@ in the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
 
 Mnemo stores no source-text copy and makes no network or model call. Its current local parsers cover
 Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. JavaScript and
-TypeScript also recognize direct top-level literal CommonJS `require("./local")` bindings alongside
-ES-module imports, while Python recognizes direct local `from .module import member` and parent-package
+TypeScript also recognize direct top-level literal CommonJS `require("./local")` bindings and a
+deliberately narrow default-import form: `import local from "./module"` only when that module
+explicitly declares one named `export default function Name` or `export default class Name`.
+Anonymous defaults, re-exports, and `export default existingName` remain unresolved rather than guessed.
+These forms sit alongside ES-module imports, while Python recognizes direct local `from .module import member` and parent-package
 relative imports that remain inside the registered project. Rust recognizes an explicit
 `use crate::path::member as local_name` spelling and flat `use crate::path::{member as local_name, member}` lists, and C# recognizes an explicit
 `using Local = Namespace.Type` spelling. Java recognizes direct
