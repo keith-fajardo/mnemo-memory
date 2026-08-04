@@ -584,6 +584,11 @@ are both unambiguous. Exact C++ namespace calls, C# `using Namespace.Type` calls
 imports, aliases, and duplicate candidates remain unresolved. Broad multi-language semantic resolution, a complete call graph, and
 automatic transcript capture remain separate follow-up work.
 
+Common unparsed source extensions, including dbt `.sql` models and Swift/Kotlin/Ruby/Scala/Elixir/
+Lua/Dart files, now participate as immutable file-only fingerprints. They make a path/body change
+visible in a source transition without persisting source text or claiming parsed declarations,
+dependencies, or calls. dbt dependency authority remains the manifest projection.
+
 Source snapshots also retain a scoped, append-only activation ledger. This establishes a truthful
 "previous structural state → current structural state" sequence without treating random snapshot
 UUIDs as timestamps.

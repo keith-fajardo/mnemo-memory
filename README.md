@@ -150,6 +150,12 @@ added without changing saved memory. The
 [practical user guide](docs/user-guide.md) shows exactly how to use Mnemo on a repository such as
 this one.
 
+Mnemo also fingerprints common source files it does **not** parse yet—including dbt `.sql` models
+and Swift, Kotlin, Ruby, Scala, Elixir, Lua, Dart, and similar source extensions. That means later
+memory can truthfully say that `models/orders.sql` changed, with no SQL body stored or replayed. It
+does **not** pretend to know SQL dependencies or calls from that file until a dedicated safe parser
+or authoritative dbt manifest provides them.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash

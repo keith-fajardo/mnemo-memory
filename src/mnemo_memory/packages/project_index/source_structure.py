@@ -55,6 +55,36 @@ _SKIP_DIRECTORIES: Final = frozenset(
         "node_modules",
     }
 )
+# These are intentionally file-only inputs. Mnemo fingerprints their safe relative paths and bytes
+# so a later source transition can say that (for example) a dbt model changed, but it does not
+# claim to parse their language or infer dependencies from them.
+_FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
+    {
+        ".dart",
+        ".ex",
+        ".exs",
+        ".erl",
+        ".fs",
+        ".fsx",
+        ".hs",
+        ".kts",
+        ".kt",
+        ".lhs",
+        ".lua",
+        ".pl",
+        ".pm",
+        ".ps1",
+        ".r",
+        ".rb",
+        ".scala",
+        ".sc",
+        ".sql",
+        ".svelte",
+        ".swift",
+        ".vb",
+        ".vue",
+    }
+)
 
 
 class SourceStructureError(ValueError):
@@ -281,6 +311,11 @@ class SourceStructureParser:
     def supported_languages(self) -> tuple[str, ...]:
         return tuple(sorted(self._languages))
 
+    @property
+    def file_only_suffixes(self) -> tuple[str, ...]:
+        """Extensions Mnemo fingerprints without claiming syntax or dependency support."""
+        return tuple(sorted(_FILE_ONLY_SOURCE_SUFFIXES))
+
     def parse(self, request: SourceStructureParseRequest) -> CodeStructureArtifact:
         paths = self._paths(request)
         digest = sha256()
@@ -300,7 +335,11 @@ class SourceStructureParser:
             digest.update(b"\0")
             digest.update(raw)
             files.append((relative, f"sha256:{sha256(raw).hexdigest()}"))
-            language = self._suffixes[path.suffix.lower()]
+            language = self._suffixes.get(path.suffix.lower())
+            if language is None:
+                # Keep only the path/digest projection for a deliberately file-only extension.
+                # No module, declaration, import, or call claim is manufactured from its bytes.
+                continue
             module = self._module_name(relative, language)
             pending.append(_PendingSymbol(relative, module, CodeSymbolKind.MODULE, 1))
             if language == "python":
@@ -424,7 +463,10 @@ class SourceStructureParser:
             for path in sorted(request.root.rglob("*"))
             if path.is_file()
             and not path.is_symlink()
-            and path.suffix.lower() in self._suffixes
+            and (
+                path.suffix.lower() in self._suffixes
+                or path.suffix.lower() in _FILE_ONLY_SOURCE_SUFFIXES
+            )
             and not any(part in _SKIP_DIRECTORIES for part in path.relative_to(request.root).parts)
         )
         if len(paths) > request.limits.max_files:

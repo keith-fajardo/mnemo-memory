@@ -221,6 +221,55 @@ def test_sqlite_file_fingerprint_projection_excludes_source_bodies(tmp_path: Pat
 
 
 @pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
+    tmp_path: Path, adapter: str
+) -> None:
+    root = tmp_path / "dbt and swift source"
+    models = root / "models"
+    models.mkdir(parents=True)
+    sql = models / "orders.sql"
+    swift = root / "Application.swift"
+    secret_body = "private model expression must not persist"
+    sql.write_text(f"select '{secret_body}' as value\n", encoding="utf-8")
+    swift.write_text("struct Application {}\n", encoding="utf-8")
+    (root / ".env").write_text("PASSWORD=not-indexed\n", encoding="utf-8")
+    parser = SourceStructureParser()
+    first = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
+    repository = (
+        ReferenceSourceStructureRepository()
+        if adapter == "reference"
+        else SQLiteSourceStructureRepository(tmp_path / "memory" / "mnemo.sqlite3")
+    )
+    if adapter == "sqlite":
+        repository.migrate()  # type: ignore[union-attr]
+    repository.store_and_activate(first)
+
+    assert parser.file_only_suffixes and ".sql" in parser.file_only_suffixes
+    assert first.snapshot.symbol_count == 0
+    assert first.snapshot.edge_count == 0
+    assert [item.relative_path for item in first.files] == [
+        "Application.swift",
+        "models/orders.sql",
+    ]
+    assert secret_body not in repr(first)
+
+    sql.write_text("select 'changed' as value\n", encoding="utf-8")
+    second = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
+    repository.store_and_activate(second)
+    diff = SourceImpactService(repository).diff(
+        scope(), first.snapshot.snapshot_id, second.snapshot.snapshot_id
+    )
+
+    assert [item.relative_path for item in diff.modified_files] == ["models/orders.sql"]
+    assert [item.relative_path for item in diff.added_files] == []
+    assert [item.relative_path for item in diff.removed_files] == []
+    if adapter == "sqlite":
+        with sqlite3.connect(tmp_path / "memory" / "mnemo.sqlite3") as connection:
+            stored = str(connection.execute("SELECT * FROM source_structure_files").fetchall())
+        assert secret_body not in stored
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
 def test_source_snapshot_activation_history_is_scoped_and_uses_explicit_order(
     tmp_path: Path, adapter: str
 ) -> None:
