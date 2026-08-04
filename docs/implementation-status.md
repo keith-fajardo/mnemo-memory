@@ -677,3 +677,13 @@ For an enabled dbt project, unified context now accepts an exact manifest `origi
 the lineage start identity. It resolves only one scoped active-snapshot node and then uses
 authoritative manifest edges for impact; no match or an ambiguous shared file is rejected rather
 than inferred from SQL.
+
+### Personal knowledge and Obsidian — In progress
+
+The first completed foundation is a storage-independent, deterministic Markdown/Obsidian document
+parser. It requires explicit scope and a safe relative source identity; records a stable document
+identity, SHA-256 digest, bounded scalar frontmatter, headings, literal sections, and declared
+links; and marks every parsed document as untrusted data. It reads no filesystem itself, follows
+no links, executes no Markdown/frontmatter, and makes no model or network call. Vault discovery,
+consent, secret policy, persistent incremental sync, rename/deletion handling, lexical retrieval,
+embeddings, and context integration remain in progress.

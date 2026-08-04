@@ -100,6 +100,12 @@ class SourceId(Identifier):
     __slots__ = ()
 
 
+class KnowledgeDocumentId(Identifier):
+    """Identity of one scoped local knowledge document source."""
+
+    __slots__ = ()
+
+
 class RetentionPolicyId(Identifier):
     __slots__ = ()
 
