@@ -893,9 +893,16 @@ class SourceStructureParser:
                 next_parent = qualified
             if node.type in rules.import_kinds:
                 if language == "rust":
-                    for rust_target, binding in self._rust_import_entries(node, raw):
+                    for rust_target, rust_binding in self._rust_import_entries(node, raw):
                         imports.append((relative, rust_target))
-                        bindings.append((relative, binding, rust_target.removeprefix("crate.")))
+                        bindings.append(
+                            (relative, rust_binding, rust_target.removeprefix("crate."))
+                        )
+                elif language == "php":
+                    for php_target, php_binding in self._php_import_entries(node, raw):
+                        imports.append((relative, php_target))
+                        if php_binding is not None:
+                            bindings.append((relative, php_binding, php_target.replace("\\", ".")))
                 else:
                     import_target = self._import_target(language, node, raw)
                     if import_target is not None:
@@ -1041,6 +1048,71 @@ class SourceStructureParser:
         return ((target, binding),) if _is_safe_symbol_name(binding) else ()
 
     @staticmethod
+    def _php_import_entries(node: Node, raw: bytes) -> tuple[tuple[str, str | None], ...]:
+        """Return exact PHP import targets with a callable/type binding where applicable.
+
+        Flat grouped imports are represented member-by-member so each import and any later static
+        call remains independently evidenced. ``use const`` retains import evidence but never
+        creates a call binding; wildcard and malformed forms are absent rather than guessed.
+        """
+        is_const = any(child.type == "const" for child in node.children)
+        group = node.child_by_field_name("body")
+        if group is None:
+            clause = next(
+                (child for child in node.named_children if child.type == "namespace_use_clause"),
+                None,
+            )
+            is_const = is_const or any(
+                child.type == "const" for child in (clause.children if clause is not None else ())
+            )
+            target = SourceStructureParser._php_qualified_target(clause, raw)
+            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw) if clause else None
+            return SourceStructureParser._php_import_entry(target, alias, is_const)
+        prefix = _safe_tree_text(
+            next((child for child in node.named_children if child.type == "namespace_name"), None),
+            raw,
+        )
+        if prefix is None:
+            return ()
+        entries: list[tuple[str, str | None]] = []
+        for clause in group.named_children:
+            if clause.type != "namespace_use_clause":
+                continue
+            member = _safe_tree_text(
+                clause.named_children[0] if clause.named_children else None, raw
+            )
+            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw)
+            if member is not None:
+                entries.extend(
+                    SourceStructureParser._php_import_entry(f"{prefix}\\{member}", alias, is_const)
+                )
+        return tuple(entries)
+
+    @staticmethod
+    def _php_qualified_target(clause: Node | None, raw: bytes) -> str | None:
+        qualified_name = next(
+            (
+                child
+                for child in (clause.named_children if clause is not None else ())
+                if child.type == "qualified_name"
+            ),
+            None,
+        )
+        return _safe_tree_text(qualified_name, raw)
+
+    @staticmethod
+    def _php_import_entry(
+        target: str | None, alias: str | None, is_const: bool
+    ) -> tuple[tuple[str, str | None], ...]:
+        if target is None:
+            return ()
+        parts = target.split("\\")
+        if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
+            return ()
+        binding = None if is_const else alias or parts[-1]
+        return ((target, binding),) if binding is None or _is_safe_symbol_name(binding) else ()
+
+    @staticmethod
     def _tree_import_bindings(
         language: str, node: Node, raw: bytes, target: str
     ) -> tuple[tuple[str, str], ...]:
@@ -1078,22 +1150,6 @@ class SourceStructureParser:
                 return (("*", f"csharp-static:{target}"),)
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
             return ((alias or parts[-1], target),)
-        if language == "php":
-            # Type imports and ``use function`` imports name one exact static target. A
-            # ``use const`` alias is never a callable binding, so retaining it here could create
-            # a false call edge. Grouped imports and namespace-only imports are outside this
-            # static subset.
-            clause = next(
-                (child for child in node.named_children if child.type == "namespace_use_clause"),
-                None,
-            )
-            if clause is None or any(child.type == "const" for child in clause.children):
-                return ()
-            parts = target.split("\\")
-            if len(parts) < 2 or not all(_is_identifier_part(part) for part in parts):
-                return ()
-            alias = _safe_tree_text(clause.child_by_field_name("alias"), raw)
-            return ((alias or parts[-1], ".".join(parts)),)
         if language not in {"javascript", "typescript", "tsx"}:
             return ()
         clause = next(
@@ -1149,23 +1205,6 @@ class SourceStructureParser:
             return _safe_tree_text(node.named_children[-1] if node.named_children else None, raw)
         if language == "java":
             return SourceStructureParser._tree_static_target(node.named_children[0], raw)
-        if language == "php":
-            clause = next(
-                (child for child in node.named_children if child.type == "namespace_use_clause"),
-                None,
-            )
-            # A clause can include an ``as Alias`` suffix.  The imported target is its
-            # qualified name alone; retaining the suffix here would make the binding
-            # invalid and would incorrectly leave an otherwise static alias unresolved.
-            qualified_name = next(
-                (
-                    child
-                    for child in (clause.named_children if clause is not None else ())
-                    if child.type == "qualified_name"
-                ),
-                None,
-            )
-            return _safe_tree_text(qualified_name, raw)
         return None
 
     @staticmethod

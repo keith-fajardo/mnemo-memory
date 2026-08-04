@@ -645,6 +645,42 @@ def test_php_function_alias_resolves_but_const_alias_never_becomes_a_call_bindin
     assert calls[("service.run", "V")] is None
 
 
+def test_php_flat_grouped_imports_keep_members_exact_and_callable_only_when_safe(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "Tools").mkdir(parents=True)
+    (root / "Tools" / "Helper.php").write_text(
+        "<?php class Helper { static function go() {} }\n", encoding="utf-8"
+    )
+    (root / "Tools.php").write_text(
+        "<?php function validate() {} function VALUE() {}\n", encoding="utf-8"
+    )
+    (root / "service.php").write_text(
+        "<?php use Tools\\{Helper as H}; use function Tools\\{validate as check}; "
+        "use const Tools\\{VALUE as V}; function run() { H::go(); check(); V(); }\n",
+        encoding="utf-8",
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+    imports = {
+        edge.target
+        for edge in artifact.edges
+        if edge.kind.value == "imports" and edge.source_symbol_id is not None
+    }
+
+    assert calls[("service.run", "H.go")] is not None
+    assert calls[("service.run", "check")] is not None
+    assert calls[("service.run", "V")] is None
+    assert {"Tools\\Helper", "Tools\\validate", "Tools\\VALUE"} <= imports
+
+
 def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     tmp_path: Path,
 ) -> None:

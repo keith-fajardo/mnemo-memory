@@ -584,7 +584,7 @@ imports now resolve when their path remains inside the registered project. Direc
 CommonJS `require("./local")` bindings in JavaScript/TypeScript now also resolve exact local members;
 computed/dynamic or nested requires remain deliberately unresolved. Explicit Rust `use crate::path::member as local_name` aliases and flat `use crate::path::{member as local_name, member}` lists now resolve only to unique local members; wildcards and nested groups remain unresolved. Exact C++ namespace calls, C#
 `using Namespace.Type`, explicit `using Local = Namespace.Type`, and `using static Namespace.Type` calls, and PHP
-`use Namespace\\Type`, explicit `use Namespace\\Type as Alias`, and explicit `use function Namespace\\member` calls now join when their saved target is unique; `use const` aliases never become callable links. Direct Java
+`use Namespace\\Type`, explicit `use Namespace\\Type as Alias`, explicit `use function Namespace\\member`, and flat grouped PHP imports now join when their saved target is unique; `use const` aliases never become callable links. Direct Java
 `import static package.Type.member` calls now join when their local class and method target are
 unique; namespace-only imports, aliases that do not name a unique target, and duplicate candidates
 remain unresolved. Broad multi-language semantic resolution, a complete call graph, and

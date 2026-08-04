@@ -35,7 +35,8 @@ calls (same-module, fully-qualified, or unique imported members). Duplicate cand
 files or languages remain unresolved rather than being guessed. More adapters and safely
 resolvable call edges use the same graph contract. That subset now includes exact local C++
 namespace calls, C# `using Namespace.Type` and `using static Namespace.Type` calls, PHP `use Namespace\\Type`,
-explicit `use Namespace\\Type as Alias`, and explicit `use function Namespace\\member` calls, and
+explicit `use Namespace\\Type as Alias`, explicit `use function Namespace\\member`, and flat grouped
+imports such as `use Namespace\\{Type as Alias}` calls, and
 direct top-level literal CommonJS `require("./local")` bindings in JavaScript and TypeScript.
 Python also resolves direct local `from .module import member` and parent-package relative imports
 that remain inside the registered project. Rust resolves an explicit
