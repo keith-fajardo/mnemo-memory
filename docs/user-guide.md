@@ -263,6 +263,11 @@ knowledge budget. Mnemo scans no other folder, follows no symlink or Markdown li
 clear credential-like values before a batch can be stored. It does not promise to detect every
 possible secret, so keep secrets out of project documentation as usual.
 
+Mnemo searches current scoped notes through a local rebuildable SQLite full-text index. It does not
+send your notes to a model or silently include every note in an agent request. Deleted note bodies
+and old note revisions are removed from the index; every selected section still cites its exact
+document revision. Semantic/embedding search is not enabled yet.
+
 At the next supported client session start, Mnemo tells the agent only that scoped project knowledge
 is available and how to request it with a short `knowledge_query`; it does not attach every note or
 read the user’s prompt to guess a query. That makes the capability discoverable without making you

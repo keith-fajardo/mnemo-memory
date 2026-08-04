@@ -27,4 +27,6 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0009_checkpoint_source_observations.sql"
     ).is_file()
+    assert package_files.joinpath("resources/migrations/0010_knowledge_documents.sql").is_file()
+    assert package_files.joinpath("resources/migrations/0011_knowledge_section_fts.sql").is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

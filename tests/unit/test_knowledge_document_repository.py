@@ -11,6 +11,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
+    KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
     MemoryScope,
     OwnerId,
@@ -26,6 +27,7 @@ from mnemo_memory.packages.storage import (
     KnowledgeDocumentSecretRejected,
     ReferenceKnowledgeDocumentRepository,
     SQLiteKnowledgeDocumentRepository,
+    SQLiteMigrationError,
 )
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
@@ -48,9 +50,11 @@ def revision(
     number: int = 1,
     predecessor: KnowledgeDocumentRevisionId | None = None,
     document_id: KnowledgeDocumentId | None = None,
+    scope_value: MemoryScope | None = None,
 ) -> KnowledgeDocumentRevision:
+    actual_scope = scope() if scope_value is None else scope_value
     document = KnowledgeDocumentParser().parse(
-        KnowledgeDocumentParseRequest(scope(), path), content
+        KnowledgeDocumentParseRequest(actual_scope, path), content
     )
     if document_id is not None:
         document = replace(document, document_id=document_id)
@@ -191,7 +195,75 @@ def test_sqlite_repository_is_atomic_scoped_and_removes_deleted_payload(tmp_path
         assert connection.execute(
             "SELECT relative_path, content_digest FROM knowledge_document_tombstones"
         ).fetchone() == (second.document.relative_path, second.document.content_digest)
+        # The rebuildable FTS projection must not retain text after an explicit deletion.
+        assert connection.execute(
+            "SELECT COUNT(*) FROM knowledge_document_section_fts"
+        ).fetchone() == (0,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_sqlite_fts_projection_contains_only_current_scoped_revisions_and_migrates_v10_data(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "fts.sqlite3"
+    repository = SQLiteKnowledgeDocumentRepository(path, base_directory=tmp_path)
+    repository.migrate()
+    first = revision("notes/decision.md", "# Café post-hook\nDeprecated plan.")
+    repository.apply_sync(scope(), (first,), ())
+    second = revision(
+        "notes/decision.md",
+        "# Café post-hook\nCurrent bounded plan.",
+        number=2,
+        predecessor=first.revision_id,
+        document_id=first.document.document_id,
+    )
+    private = revision(
+        "notes/private.md", "# Café post-hook\nOther scope only.", scope_value=scope(2)
+    )
+    repository.apply_sync(scope(), (second,), ())
+    repository.apply_sync(scope(2), (private,), ())
+
+    # FTS uses the same literal-token behavior as the reference adapter: accents normalize,
+    # hyphenated tokens remain literal, old revisions and other scopes cannot be retrieved.
+    assert repository.search_current_sections(scope(), ("cafe", "post-hook"), 8, 128) == (
+        KnowledgeDocumentSectionMatch(second, 0, second.document.sections[0], 8),
+    )
+    assert repository.search_current_sections(scope(), ("deprecated",), 8, 128) == ()
+    assert repository.search_current_sections(scope(2), ("current",), 8, 128) == ()
+
+    # Simulate a valid pre-0011 database: the forward migration rehydrates only its active rows.
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE knowledge_document_section_fts")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+    repository.migrate()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT revision_id FROM knowledge_document_section_fts "
+            "WHERE owner_id = ? AND project_id = ? ORDER BY revision_id",
+            (str(scope().owner_id), str(scope().project_id)),
+        ).fetchall() == [(str(second.revision_id),)]
+
+
+def test_knowledge_fts_migration_is_atomic(tmp_path: Path) -> None:
+    path = tmp_path / "fts-migration.sqlite3"
+    repository = SQLiteKnowledgeDocumentRepository(path, base_directory=tmp_path)
+    repository.migrate()
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE knowledge_document_section_fts")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        repository.migrate(fail_after_version=11)
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'knowledge_document_section_fts'"
+            ).fetchone()
+            is None
+        )
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (10,)
 
 
 def test_sqlite_repository_rolls_back_invalid_batch_and_hides_cross_scope(tmp_path: Path) -> None:

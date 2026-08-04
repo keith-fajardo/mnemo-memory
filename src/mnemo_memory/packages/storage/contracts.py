@@ -32,6 +32,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentTombstone,
     KnownKnowledgeDocument,
     MemoryScope,
+    knowledge_search_tokens,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
     DbtLineageEdge,
@@ -227,7 +228,8 @@ def rank_knowledge_sections(
     matches: list[KnowledgeDocumentSectionMatch] = []
     for revision in revisions:
         for index, section in enumerate(revision.document.sections):
-            heading, content = section.heading.casefold(), section.content.casefold()
+            heading = knowledge_search_tokens(section.heading)
+            content = knowledge_search_tokens(section.content)
             score = sum(4 * heading.count(term) + content.count(term) for term in terms)
             if score:
                 matches.append(KnowledgeDocumentSectionMatch(revision, index, section, score))

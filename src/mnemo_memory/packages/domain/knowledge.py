@@ -7,6 +7,7 @@ policy and repository layers must validate it before persistence or context retr
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -203,6 +204,12 @@ class KnowledgeDocumentRelation:
 _KNOWLEDGE_TERM_PATTERN = re.compile(r"[^\W_][\w-]{1,63}", re.UNICODE)
 
 
+def _knowledge_search_token(value: str) -> str:
+    """Normalize one literal token to SQLite unicode61-compatible search text."""
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    return "".join(character for character in decomposed if not unicodedata.combining(character))
+
+
 def normalize_knowledge_query(query: str, *, maximum_terms: int = 12) -> tuple[str, ...]:
     """Return bounded, stable literal terms without semantic interpretation or model use."""
     if not isinstance(query, str) or not 1 <= len(query) <= 512:
@@ -210,9 +217,21 @@ def normalize_knowledge_query(query: str, *, maximum_terms: int = 12) -> tuple[s
     if not 1 <= maximum_terms <= 24:
         raise ValueError("knowledge query term limit is invalid")
     terms: list[str] = []
-    for term in _KNOWLEDGE_TERM_PATTERN.findall(query.casefold()):
+    for raw_term in _KNOWLEDGE_TERM_PATTERN.findall(query.casefold()):
+        term = _knowledge_search_token(raw_term)
         if term not in terms:
             terms.append(term)
         if len(terms) == maximum_terms:
             break
     return tuple(terms)
+
+
+def knowledge_search_tokens(text: str) -> tuple[str, ...]:
+    """Return all literal tokens for deterministic lexical scoring.
+
+    The token-based rule deliberately shares SQLite FTS5's search semantics with the reference
+    adapter. Document text remains untrusted data; tokenization grants it no authority.
+    """
+    if not isinstance(text, str):
+        raise TypeError("knowledge search text must be a string")
+    return tuple(_knowledge_search_token(term) for term in _KNOWLEDGE_TERM_PATTERN.findall(text))

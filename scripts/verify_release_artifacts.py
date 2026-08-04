@@ -24,6 +24,8 @@ REQUIRED_MIGRATIONS = (
     "0007_approved_episodic_events.sql",
     "0008_source_file_fingerprints.sql",
     "0009_checkpoint_source_observations.sql",
+    "0010_knowledge_documents.sql",
+    "0011_knowledge_section_fts.sql",
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",

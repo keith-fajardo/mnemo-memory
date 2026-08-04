@@ -686,7 +686,7 @@ identity, SHA-256 digest, bounded scalar frontmatter, headings, literal sections
 links; and marks every parsed document as untrusted data. It reads no filesystem itself, follows
 no links, executes no Markdown/frontmatter, and makes no model or network call. Vault discovery,
 consent, secret policy, persistent incremental sync, rename/deletion handling, lexical retrieval,
-embeddings, and context integration remain in progress.
+and context integration remain in progress.
 
 The next completed boundary is an explicit local Markdown discovery connector. A caller supplies
 an absolute approved root and exact scope; the connector reads only bounded `.md` files, skips
@@ -708,11 +708,12 @@ claim to detect every secret. The application service composes planning, policy,
 and atomic storage without filesystem access, and the local runtime now exposes that service.
 
 Deterministic lexical retrieval over current revisions is also available as a bounded,
-scope-first package service. It case-folds a small explicit query into literal terms, ranks matching
-current sections deterministically, and returns exact document/revision identities; it executes no
-document, runs no model, and does not make deleted revisions retrievable. The current baseline
-uses the repository contract and is deliberately capped for personal mode rather than performing a
-broad ambient search.
+scope-first package service. SQLite uses a rebuildable FTS5 projection over only the current scoped
+sections; the reference adapter shares its normalized literal-token scoring and ordering contract.
+Every sync atomically rebuilds that scope’s projection, so historical revisions and explicit
+deletions are not searchable. It returns exact document/revision identities, executes no document,
+runs no model, and is deliberately capped for personal mode rather than performing broad ambient
+search. Embeddings remain in progress.
 
 An explicit `get_context` `knowledge_query` can now include matching current document sections in
 the same bounded packet as task and structural facts. Every included section is cited to its exact

@@ -116,7 +116,7 @@ from .contracts import (
     validate_knowledge_search,
 )
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -314,6 +314,24 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 10:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 10
+            if version < 11:
+                # Permit recovery from an interrupted local migration where the rebuildable FTS
+                # projection exists but the migration ledger was not recorded.
+                knowledge_fts_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'knowledge_document_section_fts'"
+                ).fetchone()
+                if knowledge_fts_table is None:
+                    _execute_sql_script(
+                        connection, _migration_text("0011_knowledge_section_fts.sql")
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (11, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 11:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 11
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -2212,30 +2230,67 @@ class _KnowledgeOperations:
         limit: int,
         maximum_documents: int,
     ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
-        """Load only current revisions for one SQL-scoped personal project before ranking."""
+        """Search one current, SQL-scoped FTS projection before shared deterministic ranking."""
         backend._require_project_scope(scope)
         validate_knowledge_search(terms, limit, maximum_documents)
         try:
             with backend._connect() as connection:
+                fts_query = " OR ".join(f'"{term}"' for term in terms)
+                matched_rows = connection.execute(
+                    "WITH selected_sources AS ("
+                    "SELECT document_id, current_revision_id FROM knowledge_document_sources "
+                    "WHERE owner_id = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND is_deleted = 0 ORDER BY relative_path ASC, document_id ASC LIMIT ?"
+                    ") SELECT fts.revision_id, fts.section_index "
+                    "FROM knowledge_document_section_fts AS fts "
+                    "JOIN selected_sources AS source "
+                    "ON source.document_id = fts.document_id "
+                    "AND source.current_revision_id = fts.revision_id "
+                    "WHERE fts.owner_id = ? AND fts.workspace_id IS ? AND fts.project_id = ? "
+                    "AND knowledge_document_section_fts MATCH ? "
+                    "ORDER BY fts.relative_path ASC, fts.revision_id ASC, fts.section_index ASC",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        maximum_documents,
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        fts_query,
+                    ),
+                ).fetchall()
+                matched_keys = {
+                    (row["revision_id"], int(row["section_index"])) for row in matched_rows
+                }
+                if not matched_keys:
+                    return ()
+                revision_ids = sorted({revision_id for revision_id, _ in matched_keys})
+                placeholders = ", ".join("?" for _ in revision_ids)
                 rows = connection.execute(
                     "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
                     "knowledge_document_revisions AS revision "
                     "ON revision.revision_id = source.current_revision_id "
                     "WHERE source.owner_id = ? AND source.workspace_id IS ? "
                     "AND source.project_id = ? AND source.is_deleted = 0 "
-                    "ORDER BY source.relative_path ASC, source.document_id ASC LIMIT ?",
+                    f"AND revision.revision_id IN ({placeholders}) "
+                    "ORDER BY source.relative_path ASC, source.document_id ASC",
                     (
                         str(scope.owner_id),
                         _maybe(scope.workspace_id),
                         str(scope.project_id),
-                        maximum_documents,
+                        *revision_ids,
                     ),
                 ).fetchall()
                 revisions = tuple(
                     _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
                     for row in rows
                 )
-                return rank_knowledge_sections(revisions, terms, limit)
+                return tuple(
+                    match
+                    for match in rank_knowledge_sections(revisions, terms, limit)
+                    if (str(match.revision.revision_id), match.section_index) in matched_keys
+                )
         except KnowledgeDocumentConflict:
             raise
         except sqlite3.Error as error:
@@ -2312,6 +2367,7 @@ class _KnowledgeOperations:
                         )
                 for revision in revisions:
                     _KnowledgeOperations._store_knowledge_revision(connection, scope, revision)
+                _KnowledgeOperations._rebuild_knowledge_search_index(connection, scope)
                 rows = connection.execute(
                     "SELECT source.document_id, source.relative_path, source.content_digest, "
                     "source.current_revision_id, revision.revision_number "
@@ -2430,6 +2486,31 @@ class _KnowledgeOperations:
         )
         if updated.rowcount != 1:
             raise KnowledgeDocumentConflict("knowledge document activation conflicts")
+
+    @staticmethod
+    def _rebuild_knowledge_search_index(connection: sqlite3.Connection, scope: MemoryScope) -> None:
+        """Atomically retain FTS rows for only current revisions in one complete scope."""
+        parameters = (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id))
+        connection.execute(
+            "DELETE FROM knowledge_document_section_fts WHERE owner_id = ? "
+            "AND workspace_id IS ? AND project_id = ?",
+            parameters,
+        )
+        connection.execute(
+            "INSERT INTO knowledge_document_section_fts("
+            "document_id, revision_id, section_index, owner_id, workspace_id, project_id, "
+            "relative_path, heading, content) "
+            "SELECT source.document_id, revision.revision_id, section.section_index, "
+            "source.owner_id, source.workspace_id, source.project_id, source.relative_path, "
+            "section.heading, section.content FROM knowledge_document_sources AS source "
+            "JOIN knowledge_document_revisions AS revision "
+            "ON revision.revision_id = source.current_revision_id "
+            "JOIN knowledge_document_sections AS section "
+            "ON section.revision_id = revision.revision_id "
+            "WHERE source.owner_id = ? AND source.workspace_id IS ? AND source.project_id = ? "
+            "AND source.is_deleted = 0",
+            parameters,
+        )
 
     @staticmethod
     def _knowledge_revision_number(

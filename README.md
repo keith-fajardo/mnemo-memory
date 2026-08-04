@@ -363,6 +363,11 @@ It never executes a note, follows a note link, or treats a note as an instructio
 hook refreshes the enabled repository's Markdown at session and work boundaries; a later context
 request selects only matching cited sections rather than injecting an entire notes folder.
 
+For local personal-scale search, Mnemo maintains a rebuildable SQLite full-text index of only the
+**current** scoped note sections. Old revisions and deleted note bodies are removed from that search
+projection. It is literal word search—not an embedding or model judgment—so it remains local,
+predictable, and cited. Semantic/embedding retrieval is a later opt-in capability.
+
 At a new supported Codex or Claude Code session, Mnemo also tells the agent—without showing note
 text—how many current scoped knowledge documents are available and to use a short `knowledge_query`
 when the task needs a documented decision, architecture note, or policy. You do not need to keep a

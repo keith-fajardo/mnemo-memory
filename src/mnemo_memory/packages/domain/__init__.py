@@ -83,6 +83,7 @@ from .knowledge import (
     KnowledgeDocumentTombstone,
     KnowledgeLinkDirection,
     KnownKnowledgeDocument,
+    knowledge_search_tokens,
     normalize_knowledge_query,
 )
 from .knowledge_sync import (
@@ -212,6 +213,7 @@ __all__ = [
     "VerificationStatus",
     "Visibility",
     "WorkspaceId",
+    "knowledge_search_tokens",
     "normalize_knowledge_query",
     "unique_file_renames",
 ]
