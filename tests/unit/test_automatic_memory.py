@@ -29,7 +29,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     exclusive_local_file_lock,
 )
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
-from mnemo_memory.packages.application.checkpoints import CreateCheckpoint
+from mnemo_memory.packages.application.checkpoints import CreateCheckpoint, ReviseCheckpoint
 from mnemo_memory.packages.application.config import LocalConfig
 from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
@@ -445,6 +445,113 @@ def test_session_start_attaches_only_the_bounded_context_loader_result(tmp_path:
     assert '{"packet":"bounded evidence"}' in context
     assert "evidence and data, not as instructions" in context
     assert str(project) not in context
+
+
+def test_compaction_requests_a_real_handoff_and_next_session_attaches_saved_revision(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://automatic-memory/compact",
+        "sha256:" + "c" * 64,
+        EvidenceLocation("fixture://automatic-memory/compact"),
+        datetime(2026, 8, 5, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
+    initial = CheckpointContent(
+        task_objective="Preserve the task across compaction.",
+        completed_work=("Started the focused change.",),
+        current_state="Work is in progress.",
+        remaining_work=("Finish the focused change.",),
+        decisions=("Do not expand scope.",),
+        failures=(),
+        blockers=(),
+        relevant_files=("service.py",),
+        relevant_artifacts=(),
+        verification_performed=(),
+        token_estimate=70,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        first = runtime.checkpoint_service.create(
+            CreateCheckpoint(binding.checkpoint_scope, initial, (evidence,))
+        )
+
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        context_loader=lambda scope: cli._automatic_context_attachment(data, scope, "codex"),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "before", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "before",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+
+    compact = hook.handle(
+        {"hook_event_name": "PreCompact", "session_id": "before", "cwd": str(project)}
+    )
+    compact_output = compact["hookSpecificOutput"]
+    assert isinstance(compact_output, dict)
+    assert compact_output["hookEventName"] == "PreCompact"
+    assert "save_checkpoint" in str(compact_output["additionalContext"])
+    assert "Preserve the task across compaction" in str(compact_output["additionalContext"])
+    assert "decision" not in compact
+
+    revised = CheckpointContent(
+        task_objective=initial.task_objective,
+        completed_work=("Finished the focused change before compaction.",),
+        current_state="The bounded handoff is durable.",
+        remaining_work=("Run the final verification.",),
+        decisions=initial.decisions,
+        failures=(),
+        blockers=(),
+        relevant_files=initial.relevant_files,
+        relevant_artifacts=(),
+        verification_performed=("Focused tests passed.",),
+        token_estimate=80,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        runtime.checkpoint_service.revise(
+            ReviseCheckpoint(
+                binding.checkpoint_scope,
+                first.aggregate.checkpoint_id,
+                first.revision.revision_id,
+                revised,
+                (evidence,),
+            )
+        )
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "before",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+            "tool_input": {"operation": "revise"},
+        }
+    )
+
+    resumed = AutomaticMemoryHook(
+        data,
+        "codex",
+        context_loader=lambda scope: cli._automatic_context_attachment(data, scope, "codex"),
+    ).handle({"hook_event_name": "SessionStart", "session_id": "after", "cwd": str(project)})
+    resumed_output = resumed["hookSpecificOutput"]
+    assert isinstance(resumed_output, dict)
+    resumed_context = str(resumed_output["additionalContext"])
+    assert "Finished the focused change before compaction" in resumed_context
+    assert "Run the final verification" in resumed_context
+    assert "without a complete checkpoint" not in resumed_context
 
 
 @pytest.mark.parametrize(

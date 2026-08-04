@@ -150,9 +150,18 @@ class AutomaticMemoryHook:
             _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
-            return self._checkpoint_output(
-                _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
-            )
+            instruction = _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
+            if event_name == "PreCompact":
+                # Compaction hooks are a context boundary, not a command-stop decision. Attach the
+                # last durable handoff while asking the agent to save its current one; if the
+                # client compacts immediately, the persistent pending marker makes the same need
+                # visible at the following SessionStart. No transcript or prompt text is read.
+                return self._context_output(
+                    instruction,
+                    event_name="PreCompact",
+                    attached_context=self._attached_context(binding.checkpoint_scope),
+                )
+            return self._checkpoint_output(instruction)
         return {}
 
     def _context_output(

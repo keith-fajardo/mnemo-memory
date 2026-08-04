@@ -688,6 +688,14 @@ overview and latest-transition request, so those facts are labeled current for t
 snapshot. It does not weaken the normal rule that a later manual request needs comparable evidence
 before an active snapshot can be called current.
 
+The opt-in automatic-memory lifecycle now treats compaction as a context boundary rather than a
+command-stop decision. When changed work still needs a handoff, `PreCompact` attaches the last
+bounded durable packet and asks the agent to save the current checkpoint; the existing private
+pending marker survives immediate compaction. After the real checkpoint save, a fresh
+`SessionStart` directly attaches that exact new revision and no longer reports an incomplete
+handoff. The Stop boundary continues to block completion until a full checkpoint save is observed.
+No prompt, transcript, tool body, or inferred explanation is captured by the hook.
+
 For each bounded exact changed file that has saved parsed declarations, the lifecycle cue also
 includes up to six static dependent candidates through resolved in-snapshot relationships, with
 the exact immutable source snapshot ID as provenance. It is explicitly a syntax-derived impact
