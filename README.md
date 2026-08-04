@@ -339,6 +339,10 @@ a second query. Mnemo stores a SHA-256 fingerprint for that purpose—not source
 does not guess **why** it changed: the agent records that decision, failed approach, and
 verification in the checkpoint it saves.
 
+After an agent changes a project file, Mnemo batches that work and refreshes at the **next user-turn
+boundary**, not after every keystroke. The agent therefore receives the same small change and impact
+cue while it is still working, before it needs to make another historical claim.
+
 For a changed file in a supported parsed language, Mnemo also includes a very small list of
 **static dependent candidates** from that exact file. This saves the agent from first asking “what
 could be affected?” after a fresh session. They are syntax-derived, bounded, and cited—not proof of

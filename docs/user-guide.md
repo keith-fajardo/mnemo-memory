@@ -115,6 +115,11 @@ records it explicitly. If a later revision focuses on fresh progress and omits a
 Mnemo still returns the bounded lesson as historical episodic evidence, with the exact original
 revision and evidence references.
 
+During an active session, Mnemo does not scan after every edit. It marks project work as changed,
+then refreshes once at the next user-turn boundary and attaches the same small file/impact cue.
+That gives the agent relevant structural facts while it is analyzing the next request without
+capturing the user’s prompt or source body.
+
 For an exact changed file in a supported parsed language, that fresh-session cue also includes a
 small list of proven **static dependent candidates**. This is a practical “what might be affected?”
 starting point, not a runtime promise: the agent should still inspect the cited structure and run

@@ -606,6 +606,10 @@ includes up to six static dependent candidates through resolved in-snapshot rela
 explicitly a syntax-derived impact candidate—not a runtime call-graph claim—and omits unparsed,
 ambiguous, or unresolved files rather than guessing.
 
+After a trusted client mutation, source refresh is batched to the next `UserPromptSubmit` lifecycle
+boundary rather than executed for every editor operation. The resulting cue contains the same
+bounded change and static-impact facts without inspecting or retaining submitted prompt text.
+
 For a changed `.sql` path, the same lifecycle cue also attempts an exact lookup in the active,
 scoped dbt manifest. When one node owns the path, it includes up to six downstream dbt unique IDs
 from authoritative manifest edges, explicitly with unknown currentness until matching state evidence

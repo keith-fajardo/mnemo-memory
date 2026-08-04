@@ -108,8 +108,13 @@ class AutomaticMemoryHook:
                 attached_context=self._attached_context(binding.checkpoint_scope),
             )
         if event_name == "UserPromptSubmit" and state.dirty and not state.saved:
-            # Do not inspect ``prompt``. The cue is driven only by trusted lifecycle state.
-            return self._context_output(_dirty_session_instruction(), event_name="UserPromptSubmit")
+            # Do not inspect ``prompt``. Refresh once at this prompt boundary rather than for
+            # every editor tool event, so the agent gets bounded structural/impact facts while it
+            # is still working without a source scan on every keystroke.
+            refreshed = self._refresh_source_structure(binding)
+            return self._context_output(
+                _dirty_session_instruction(refreshed), event_name="UserPromptSubmit"
+            )
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
@@ -575,9 +580,9 @@ def _dbt_downstream_cues(
         return ()
 
 
-def _dirty_session_instruction() -> str:
+def _dirty_session_instruction(refreshed: _SourceRefresh) -> str:
     """One short prompt-boundary cue; no submitted prompt content is read or retained."""
-    return (
+    instruction = (
         "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
         "decisions, verification, or impact, check the stored Mnemo context and request "
         "source_changes with a relative_path when the question is what changed in one file; "
@@ -586,6 +591,13 @@ def _dirty_session_instruction() -> str:
         "was corrected, record a separate approved fact only when it is verified and evidenced, "
         "and apply the prevention step from any relevant earlier lesson."
     )
+    if refreshed.changes is not None:
+        instruction += _source_change_instruction(refreshed.changes)
+    if refreshed.impact_cues:
+        instruction += _source_impact_instruction(refreshed.impact_cues)
+    if refreshed.dbt_impact_cues:
+        instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
+    return instruction
 
 
 def _is_durable_checkpoint_save(event: Mapping[str, object], tool_name: str) -> bool:

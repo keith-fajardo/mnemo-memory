@@ -490,6 +490,48 @@ def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
     assert "source_changes" in context
     assert "relative_path" in context
     assert "private user question" not in context
+
+
+def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    core = project / "core.py"
+    core.write_text("def calculate():\n    return 1\n", encoding="utf-8")
+    (project / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
+    )
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    core.write_text("def calculate():\n    return 2\n", encoding="utf-8")
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "private user question must not be retained",
+        }
+    )
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    instruction = str(output["additionalContext"])
+    assert "Modified files: core.py." in instruction
+    assert "static dependent candidates" in instruction
+    assert "service.py:service" in instruction
+    assert "return 1" not in instruction
+    assert "return 2" not in instruction
+    assert "private user question must not be retained" not in instruction
     state = (data / "automatic-memory-session-state.json").read_text()
     assert "private user question" not in state
 
