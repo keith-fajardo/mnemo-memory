@@ -156,8 +156,9 @@ task reasoning and evidence.
 
 For code orientation, the agent can include a `source_query` (a symbol or relative-path fragment)
 in `get_context`. Mnemo returns matching structural facts plus declared module imports and explicit
-syntactic calls, each tied to the exact local snapshot. If an import points unambiguously to another
-saved module, its returned relationship identifies that module too. It does not return source text,
+syntactic calls, each tied to the exact local snapshot. If an import has exactly one saved target,
+its returned relationship identifies that module too; duplicate candidates are deliberately left
+unresolved. It does not return source text,
 chat history, or guessed calls. Like a dbt snapshot, an active source snapshot is not silently
 presented as proof that the working tree is current; its currentness is explicit.
 

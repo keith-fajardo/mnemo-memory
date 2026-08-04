@@ -282,8 +282,10 @@ database; it does not inspect or bind the current directory.
 **What is remembered long term?** Explicit checkpoint revisions, and—after you opt a repository
 into automatic memory—a static structure snapshot of its supported-language files. Mnemo currently
 supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP. It stores
-declarations plus explicit imports and calls, resolving an import to another file only when that
-link is unambiguous. If you enable dbt, Mnemo also keeps its manifest projection. A checkpoint is
+declarations plus explicit imports and calls, resolving a relationship only when exactly one saved
+target matches. If two files or languages define the same candidate name, Mnemo leaves the link
+unresolved rather than guessing. If you enable dbt, Mnemo also keeps its manifest projection. A
+checkpoint is
 a compact handoff record for one task—not a copy of your files, terminal history, or every chat
 message.
 

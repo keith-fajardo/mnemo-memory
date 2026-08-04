@@ -296,3 +296,49 @@ def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     calls = [edge for edge in artifact.edges if edge.kind.value == "calls"]
 
     assert any(edge.target == "orders.Process" and edge.target_symbol_id is None for edge in calls)
+
+
+def test_duplicate_polyglot_symbol_names_never_create_a_guessed_internal_call_edge(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "helpers.py").write_text("def validate():\n    return True\n")
+    (root / "helpers.ts").write_text("export function validate() { return true }\n")
+    (root / "service.py").write_text(
+        "from helpers import validate\n\ndef process():\n    return validate()\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind.value == "calls"
+    }
+    imports = [item for item in artifact.edges if item.kind.value == "imports"]
+
+    assert calls[("service.process", "validate")] is None
+    assert imports[0].target_symbol_id is None
+
+
+def test_overloaded_declarations_do_not_receive_or_resolve_a_guessed_call_edge(
+    tmp_path: Path,
+) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "Service.java").write_text(
+        "class Service { void handle() {} void handle(int value) {} void run() { handle(); } }\n"
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[item.source_symbol_id], item.target): item.target_symbol_id
+        for item in artifact.edges
+        if item.kind.value == "calls"
+    }
+
+    assert calls[("Service.Service.run", "handle")] is None

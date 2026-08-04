@@ -9,7 +9,7 @@ only declarations plus syntactically explicit import and call targets.
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
@@ -340,11 +340,35 @@ class SourceStructureParser:
             for symbol in symbols
             if symbol.kind is CodeSymbolKind.MODULE
         }
-        module_names = {symbol.qualified_name: symbol for symbol in modules.values()}
-        symbols_by_location = {
-            (symbol.relative_path, symbol.qualified_name): symbol for symbol in symbols
-        }
-        symbols_by_name = {symbol.qualified_name: symbol for symbol in symbols}
+        module_names = _symbols_by_name(modules.values())
+        symbols_by_location = _symbols_by_location(symbols)
+        symbols_by_name = _symbols_by_name(symbols)
+        call_edges: list[CodeEdge] = []
+        for call_path, qualified_name, target in sorted(set(calls)):
+            caller = _single_symbol(symbols_by_location.get((call_path, qualified_name), ()))
+            if caller is None:
+                # Overloaded or otherwise duplicated declarations have no unambiguous source
+                # symbol in this bounded projection. Preserve neither a guessed call edge nor a
+                # false impact candidate.
+                continue
+            call_edges.append(
+                CodeEdge(
+                    snapshot_id,
+                    caller.symbol_id,
+                    target,
+                    CodeEdgeKind.CALLS,
+                    self._resolve_call_target(
+                        call_path,
+                        qualified_name,
+                        target,
+                        module_names,
+                        modules,
+                        symbols_by_name,
+                        imports,
+                        bindings,
+                    ),
+                )
+            )
         edges = tuple(
             sorted(
                 (
@@ -358,25 +382,7 @@ class SourceStructureParser:
                         )
                         for path, target in sorted(set(imports))
                     ),
-                    *(
-                        CodeEdge(
-                            snapshot_id,
-                            symbols_by_location[(path, qualified_name)].symbol_id,
-                            target,
-                            CodeEdgeKind.CALLS,
-                            self._resolve_call_target(
-                                path,
-                                qualified_name,
-                                target,
-                                module_names,
-                                modules,
-                                symbols_by_name,
-                                imports,
-                                bindings,
-                            ),
-                        )
-                        for path, qualified_name, target in sorted(set(calls))
-                    ),
+                    *call_edges,
                 ),
                 key=lambda edge: (str(edge.source_symbol_id), edge.kind.value, edge.target),
             )
@@ -442,7 +448,7 @@ class SourceStructureParser:
     def _resolve_import_target(
         source_path: str,
         target: str,
-        modules_by_name: dict[str, CodeSymbol],
+        modules_by_name: dict[str, tuple[CodeSymbol, ...]],
         modules_by_path: dict[str, CodeSymbol],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous import to a module in this snapshot.
@@ -451,12 +457,12 @@ class SourceStructureParser:
         members are deliberately not guessed. An unresolved string target remains
         evidence, but is not represented as an internal graph link.
         """
-        direct = modules_by_name.get(target)
+        direct = _single_symbol(modules_by_name.get(target, ()))
         if direct is not None:
             return direct.symbol_id
         parts = target.split(".")
         for end in range(len(parts) - 1, 0, -1):
-            candidate = modules_by_name.get(".".join(parts[:end]))
+            candidate = _single_symbol(modules_by_name.get(".".join(parts[:end]), ()))
             if candidate is not None:
                 return candidate.symbol_id
         if target.startswith("."):
@@ -521,9 +527,9 @@ class SourceStructureParser:
         source_path: str,
         caller_qualified_name: str,
         target: str,
-        modules_by_name: dict[str, CodeSymbol],
+        modules_by_name: dict[str, tuple[CodeSymbol, ...]],
         modules_by_path: dict[str, CodeSymbol],
-        symbols_by_name: dict[str, CodeSymbol],
+        symbols_by_name: dict[str, tuple[CodeSymbol, ...]],
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
     ) -> CodeSymbolId | None:
@@ -538,14 +544,20 @@ class SourceStructureParser:
         module = modules_by_path.get(source_path)
         candidates: list[CodeSymbol] = []
         if module is not None:
-            same_module = symbols_by_name.get(f"{module.qualified_name}.{target}")
+            same_module = _single_symbol(
+                tuple(
+                    item
+                    for item in symbols_by_name.get(f"{module.qualified_name}.{target}", ())
+                    if item.relative_path == source_path
+                )
+            )
             if same_module is not None:
                 candidates.append(same_module)
-        direct = symbols_by_name.get(target)
+        direct = _single_symbol(symbols_by_name.get(target, ()))
         if direct is not None:
             candidates.append(direct)
         owner_name, separator, member = caller_qualified_name.rpartition(".")
-        owner = symbols_by_name.get(owner_name) if separator else None
+        owner = _single_symbol(symbols_by_name.get(owner_name, ())) if separator else None
         if (
             owner is not None
             and owner.kind
@@ -559,12 +571,18 @@ class SourceStructureParser:
             and target.startswith(("self.", "this."))
         ):
             sibling_name = target.partition(".")[2]
-            sibling = symbols_by_name.get(f"{owner.qualified_name}.{sibling_name}")
+            sibling = _single_symbol(
+                tuple(
+                    item
+                    for item in symbols_by_name.get(f"{owner.qualified_name}.{sibling_name}", ())
+                    if item.relative_path == owner.relative_path
+                )
+            )
             if sibling is not None:
                 candidates.append(sibling)
         for _, imported_target in (item for item in imports if item[0] == source_path):
             if imported_target.endswith(f".{target}"):
-                imported = symbols_by_name.get(imported_target)
+                imported = _single_symbol(symbols_by_name.get(imported_target, ()))
                 if imported is not None:
                     candidates.append(imported)
         binding_name, separator, remainder = target.partition(".")
@@ -603,7 +621,7 @@ class SourceStructureParser:
                     if _is_safe_symbol_name(imported_type):
                         imported_names.append(f"{imported_target}.{imported_type}.{remainder}")
             for candidate_name in imported_names:
-                imported = symbols_by_name.get(candidate_name)
+                imported = _single_symbol(symbols_by_name.get(candidate_name, ()))
                 if imported is not None:
                     candidates.append(imported)
         unique = {item.symbol_id: item for item in candidates}
@@ -611,7 +629,7 @@ class SourceStructureParser:
 
     @staticmethod
     def _go_imported_member_candidates(
-        import_target: str, member: str, symbols_by_name: dict[str, CodeSymbol]
+        import_target: str, member: str, symbols_by_name: dict[str, tuple[CodeSymbol, ...]]
     ) -> tuple[CodeSymbol, ...]:
         """Resolve an exact Go package member only when its local directory is unique.
 
@@ -625,7 +643,8 @@ class SourceStructureParser:
         target_parts = PurePosixPath(import_target).parts
         candidates = [
             symbol
-            for symbol in symbols_by_name.values()
+            for symbols in symbols_by_name.values()
+            for symbol in symbols
             if symbol.qualified_name.endswith(f".{member}")
             and len(PurePosixPath(symbol.relative_path).parent.parts) >= 2
             and len(PurePosixPath(symbol.relative_path).parent.parts) <= len(target_parts)
@@ -888,6 +907,39 @@ class SourceStructureParser:
         left = SourceStructureParser._tree_static_target(node.child_by_field_name(fields[0]), raw)
         right = SourceStructureParser._tree_static_target(node.child_by_field_name(fields[1]), raw)
         return None if left is None or right is None else f"{left}.{right}"
+
+
+def _symbols_by_name(symbols: Iterable[CodeSymbol]) -> dict[str, tuple[CodeSymbol, ...]]:
+    """Index every candidate instead of accidentally overwriting duplicate names."""
+    grouped: dict[str, list[CodeSymbol]] = {}
+    for symbol in symbols:
+        grouped.setdefault(symbol.qualified_name, []).append(symbol)
+    return {
+        name: tuple(
+            sorted(
+                values,
+                key=lambda item: (item.relative_path, item.line, str(item.symbol_id)),
+            )
+        )
+        for name, values in grouped.items()
+    }
+
+
+def _symbols_by_location(
+    symbols: tuple[CodeSymbol, ...],
+) -> dict[tuple[str, str], tuple[CodeSymbol, ...]]:
+    """Preserve overload ambiguity rather than attributing calls to an arbitrary symbol."""
+    grouped: dict[tuple[str, str], list[CodeSymbol]] = {}
+    for symbol in symbols:
+        grouped.setdefault((symbol.relative_path, symbol.qualified_name), []).append(symbol)
+    return {
+        key: tuple(sorted(values, key=lambda item: (item.line, str(item.symbol_id))))
+        for key, values in grouped.items()
+    }
+
+
+def _single_symbol(candidates: tuple[CodeSymbol, ...]) -> CodeSymbol | None:
+    return candidates[0] if len(candidates) == 1 else None
 
 
 class _DirectCallVisitor(ast.NodeVisitor):
