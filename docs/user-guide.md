@@ -58,7 +58,8 @@ and aliases that cannot be matched uniquely remain unresolved. C# also resolves 
 presented as fact. Java resolves direct `import static package.Type.member` only when its local
 class and method target are unique.
 
-Common unparsed project files—such as CSS, HTML, GraphQL, TOML, dbt SQL/YAML, and several other
+Common unparsed project files—such as JSON/XML/INI configuration, dependency lockfiles,
+Dockerfile/Makefile-style build files, CSS, HTML, GraphQL, TOML, dbt SQL/YAML, and several other
 language extensions—still participate as file-only fingerprints. Mnemo can tell that a safe
 relative path changed, but does not store the file body or claim its dependencies, symbols, or
 runtime behavior.

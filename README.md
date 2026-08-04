@@ -173,9 +173,10 @@ added without changing saved memory. The
 [practical user guide](docs/user-guide.md) shows exactly how to use Mnemo on a repository such as
 this one.
 
-For common unparsed project files—including CSS, HTML, GraphQL, TOML, dbt SQL/YAML, and several
-additional language extensions—Mnemo still records only the relative path and immutable content
-digest. This makes a later change visible without saving the file contents or claiming that Mnemo
+For common unparsed project files—including JSON/XML/INI configuration, dependency lockfiles,
+Dockerfile/Makefile-style build files, CSS, HTML, GraphQL, TOML, and dbt SQL/YAML—Mnemo still
+records only the relative path and immutable content digest. This makes a later configuration or
+dependency-manifest change visible without saving the file contents or claiming that Mnemo
 understands its symbols or dependencies.
 
 Mnemo also fingerprints common source files it does **not** parse yet—including dbt `.sql` models,

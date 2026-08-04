@@ -73,10 +73,14 @@ _FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
         ".hs",
         ".htm",
         ".html",
+        ".ini",
+        ".json",
+        ".jsonc",
         ".kts",
         ".kt",
         ".lhs",
         ".lua",
+        ".lock",
         ".pl",
         ".pm",
         ".ps1",
@@ -93,8 +97,24 @@ _FILE_ONLY_SOURCE_SUFFIXES: Final = frozenset(
         ".tsv",
         ".vb",
         ".vue",
+        ".xml",
         ".yaml",
         ".yml",
+    }
+)
+# These conventional repository files have no useful suffix, or have names whose purpose matters
+# more than their extension. They participate only as path/digest evidence. In particular, Mnemo
+# does not parse dependency constraints, execute build instructions, or retain their contents.
+_FILE_ONLY_SOURCE_FILENAMES: Final = frozenset(
+    {
+        "containerfile",
+        "dockerfile",
+        "gemfile",
+        "justfile",
+        "makefile",
+        "pipfile",
+        "procfile",
+        "rakefile",
     }
 )
 
@@ -328,6 +348,11 @@ class SourceStructureParser:
         """Extensions Mnemo fingerprints without claiming syntax or dependency support."""
         return tuple(sorted(_FILE_ONLY_SOURCE_SUFFIXES))
 
+    @property
+    def file_only_filenames(self) -> tuple[str, ...]:
+        """Conventional file names Mnemo fingerprints without parsing their contents."""
+        return tuple(sorted(_FILE_ONLY_SOURCE_FILENAMES))
+
     def parse(self, request: SourceStructureParseRequest) -> CodeStructureArtifact:
         paths = self._paths(request)
         digest = sha256()
@@ -534,6 +559,7 @@ class SourceStructureParser:
             and (
                 path.suffix.lower() in self._suffixes
                 or path.suffix.lower() in _FILE_ONLY_SOURCE_SUFFIXES
+                or path.name.lower() in _FILE_ONLY_SOURCE_FILENAMES
             )
             and not any(part in _SKIP_DIRECTORIES for part in path.relative_to(request.root).parts)
         )

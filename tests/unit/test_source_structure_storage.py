@@ -236,8 +236,13 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     stylesheet = root / "web" / "application.css"
     interface = root / "api" / "schema.graphql"
     configuration = root / "tooling.toml"
+    package_manifest = root / "package.json"
+    lockfile = root / "uv.lock"
+    containerfile = root / "Dockerfile"
+    integration = root / "config" / "integration.xml"
     stylesheet.parent.mkdir()
     interface.parent.mkdir()
+    integration.parent.mkdir()
     secret_body = "private model expression must not persist"
     sql.write_text(f"select '{secret_body}' as value\n", encoding="utf-8")
     schema.write_text("version: 2\nmodels: []\n", encoding="utf-8")
@@ -246,6 +251,10 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     stylesheet.write_text(".button { color: blue; }\n", encoding="utf-8")
     interface.write_text("type Query { orders: [Order!]! }\n", encoding="utf-8")
     configuration.write_text("[tool.mnemo]\nenabled = true\n", encoding="utf-8")
+    package_manifest.write_text('{"name":"safe-example"}\n', encoding="utf-8")
+    lockfile.write_text("version = 1\n", encoding="utf-8")
+    containerfile.write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    integration.write_text('<configuration enabled="true" />\n', encoding="utf-8")
     (root / ".env").write_text("PASSWORD=not-indexed\n", encoding="utf-8")
     parser = SourceStructureParser()
     first = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
@@ -262,21 +271,29 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
         ".csv",
         ".css",
         ".graphql",
+        ".json",
+        ".lock",
         ".sql",
         ".toml",
         ".tsv",
+        ".xml",
         ".yaml",
         ".yml",
     }.issubset(parser.file_only_suffixes)
+    assert {"containerfile", "dockerfile", "makefile"}.issubset(parser.file_only_filenames)
     assert first.snapshot.symbol_count == 0
     assert first.snapshot.edge_count == 0
     assert [item.relative_path for item in first.files] == [
         "Application.swift",
+        "Dockerfile",
         "api/schema.graphql",
+        "config/integration.xml",
         "models/orders.sql",
         "models/schema.yml",
+        "package.json",
         "seeds/finance_orders.csv",
         "tooling.toml",
+        "uv.lock",
         "web/application.css",
     ]
     assert secret_body not in repr(first)
@@ -287,6 +304,10 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     stylesheet.write_text(".button { color: green; }\n", encoding="utf-8")
     interface.write_text("type Query { orders: [Order!]!, orderCount: Int! }\n", encoding="utf-8")
     configuration.write_text("[tool.mnemo]\nenabled = false\n", encoding="utf-8")
+    package_manifest.write_text('{"name":"safe-example","private":true}\n', encoding="utf-8")
+    lockfile.write_text("version = 1\nrevision = 2\n", encoding="utf-8")
+    containerfile.write_text("FROM python:3.12-alpine\n", encoding="utf-8")
+    integration.write_text('<configuration enabled="false" />\n', encoding="utf-8")
     second = parser.parse(SourceStructureParseRequest(scope(), root.resolve()))
     repository.store_and_activate(second)
     diff = SourceImpactService(repository).diff(
@@ -294,11 +315,15 @@ def test_file_only_sql_and_unparsed_source_files_are_durable_change_evidence(
     )
 
     assert [item.relative_path for item in diff.modified_files] == [
+        "Dockerfile",
         "api/schema.graphql",
+        "config/integration.xml",
         "models/orders.sql",
         "models/schema.yml",
+        "package.json",
         "seeds/finance_orders.csv",
         "tooling.toml",
+        "uv.lock",
         "web/application.css",
     ]
     assert [item.relative_path for item in diff.added_files] == []

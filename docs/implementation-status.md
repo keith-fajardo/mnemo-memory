@@ -599,8 +599,9 @@ unique; namespace-only imports, aliases that do not name a unique target, and du
 remain unresolved. Broad multi-language semantic resolution, a complete call graph, and
 automatic transcript capture remain separate follow-up work.
 
-Common unparsed source extensions, including dbt `.sql` models, CSS/HTML/GraphQL/TOML project
-files, and Swift/Kotlin/Ruby/Scala/Elixir/Lua/Dart files, now participate as immutable file-only
+Common unparsed source extensions, including dbt `.sql` models, JSON/XML/INI configuration,
+dependency lockfiles, Dockerfile/Makefile-style build files, CSS/HTML/GraphQL/TOML project files,
+and Swift/Kotlin/Ruby/Scala/Elixir/Lua/Dart files, now participate as immutable file-only
 fingerprints. They make a path/body change visible in a source transition without persisting source
 text or claiming parsed declarations, dependencies, or calls. dbt dependency authority remains the
 manifest projection.
