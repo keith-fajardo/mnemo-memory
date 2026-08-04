@@ -409,6 +409,27 @@ def test_default_import_does_not_resolve_an_implicit_or_ambiguous_export(tmp_pat
     assert calls[0].target_symbol_id is None
 
 
+def test_default_class_import_never_treats_an_instance_method_as_static(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "formatter.ts").write_text(
+        "export default class Formatter { format() { return true } }\n", encoding="utf-8"
+    )
+    (root / "service.ts").write_text(
+        "import Format from './formatter';\n"
+        "export function process() { return Format.format(); }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    calls = [item for item in artifact.edges if item.kind.value == "calls"]
+
+    assert len(calls) == 1
+    assert calls[0].target == "Format.format"
+    assert calls[0].target_symbol_id is None
+
+
 def test_commonjs_literal_require_bindings_resolve_safe_internal_calls(tmp_path: Path) -> None:
     """Direct CommonJS imports have the same bounded static certainty as ES imports."""
     item_scope = scope()

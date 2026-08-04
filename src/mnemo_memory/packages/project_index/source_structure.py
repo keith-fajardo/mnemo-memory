@@ -336,6 +336,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]] = []
         bindings: list[tuple[str, str, str]] = []
         default_exports: list[tuple[str, str]] = []
+        static_methods: list[tuple[str, str]] = []
         calls: list[tuple[str, str, str]] = []
         total_bytes = 0
         for path in paths:
@@ -367,6 +368,7 @@ class SourceStructureParser:
                     imports,
                     bindings,
                     default_exports,
+                    static_methods,
                     calls,
                 )
         if len(pending) > request.limits.max_symbols:
@@ -413,6 +415,12 @@ class SourceStructureParser:
                 *default_exports_by_path.get(default_path, ()),
                 *symbols_by_name.get(qualified_name, ()),
             )
+        static_method_ids = frozenset(
+            item.symbol_id
+            for static_path, qualified_name in static_methods
+            for item in symbols_by_name.get(qualified_name, ())
+            if item.relative_path == static_path
+        )
         call_edges: list[CodeEdge] = []
         for call_path, qualified_name, target in sorted(set(calls)):
             caller = _single_symbol(symbols_by_location.get((call_path, qualified_name), ()))
@@ -437,6 +445,7 @@ class SourceStructureParser:
                         imports,
                         bindings,
                         default_exports_by_path,
+                        static_method_ids,
                     ),
                 )
             )
@@ -651,6 +660,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
         default_exports_by_path: dict[str, tuple[CodeSymbol, ...]],
+        static_method_ids: frozenset[CodeSymbolId],
     ) -> CodeSymbolId | None:
         """Resolve only an unambiguous static call target within this snapshot.
 
@@ -747,13 +757,16 @@ class SourceStructureParser:
                     if default_export is not None:
                         if not separator:
                             candidates.append(default_export)
-                        else:
+                        elif default_export.kind is CodeSymbolKind.CLASS:
                             member_export = _single_symbol(
                                 symbols_by_name.get(
                                     f"{default_export.qualified_name}.{remainder}", ()
                                 )
                             )
-                            if member_export is not None:
+                            if (
+                                member_export is not None
+                                and member_export.symbol_id in static_method_ids
+                            ):
                                 candidates.append(member_export)
                     continue
                 candidate_name = (
@@ -916,6 +929,7 @@ class SourceStructureParser:
         imports: list[tuple[str, str]],
         bindings: list[tuple[str, str, str]],
         default_exports: list[tuple[str, str]],
+        static_methods: list[tuple[str, str]],
         calls: list[tuple[str, str, str]],
     ) -> None:
         rules = next(rule for rule in _TREE_SITTER_RULES if rule.name == language)
@@ -937,6 +951,13 @@ class SourceStructureParser:
                 default_export = self._explicit_default_export(node, raw, module)
                 if default_export is not None:
                     default_exports.append((relative, default_export))
+            if (
+                language in {"javascript", "typescript", "tsx"}
+                and node.type == "method_definition"
+                and any(child.type == "static" for child in node.children)
+                and name is not None
+            ):
+                static_methods.append((relative, f"{parent}.{name}"))
             if node.type in rules.import_kinds:
                 if language == "rust":
                     for rust_target, rust_binding in self._rust_import_entries(node, raw):
