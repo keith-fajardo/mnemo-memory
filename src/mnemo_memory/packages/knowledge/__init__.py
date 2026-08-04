@@ -8,6 +8,12 @@ from mnemo_memory.packages.domain import (
     KnownKnowledgeDocument,
 )
 
+from .links import (
+    KnowledgeLinkNavigationError,
+    KnowledgeLinkNavigationRequest,
+    KnowledgeLinkNavigationResult,
+    KnowledgeLinkNavigator,
+)
 from .markdown import (
     KnowledgeDocumentParseError,
     KnowledgeDocumentParseLimits,
@@ -38,6 +44,10 @@ __all__ = [
     "KnowledgeDocumentSection",
     "KnowledgeDocumentSourceKind",
     "KnowledgeLexicalRetriever",
+    "KnowledgeLinkNavigationError",
+    "KnowledgeLinkNavigationRequest",
+    "KnowledgeLinkNavigationResult",
+    "KnowledgeLinkNavigator",
     "KnowledgeRetrievalError",
     "KnowledgeSearchMatch",
     "KnowledgeSearchRequest",

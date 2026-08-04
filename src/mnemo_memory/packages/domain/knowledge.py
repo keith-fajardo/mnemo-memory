@@ -20,6 +20,13 @@ class KnowledgeDocumentSourceKind(StrEnum):
     OBSIDIAN = "obsidian"
 
 
+class KnowledgeLinkDirection(StrEnum):
+    """One bounded current-revision navigation direction; no graph inference is implied."""
+
+    OUTBOUND = "outbound"
+    BACKLINKS = "backlinks"
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeDocumentLink:
     """One declared Markdown or Obsidian link, retained as untrusted text evidence."""
@@ -163,6 +170,34 @@ class KnowledgeDocumentSectionMatch:
     def __post_init__(self) -> None:
         if self.section_index < 0 or self.score < 1:
             raise ValueError("knowledge section match is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentRelation:
+    """One exact resolved current-document link with immutable revision evidence on both ends."""
+
+    source_document_id: KnowledgeDocumentId
+    source_revision_id: KnowledgeDocumentRevisionId
+    source_relative_path: str
+    target_document_id: KnowledgeDocumentId
+    target_revision_id: KnowledgeDocumentRevisionId
+    target_relative_path: str
+    link_kind: str
+    declared_target: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.source_document_id, KnowledgeDocumentId)
+            or not isinstance(self.target_document_id, KnowledgeDocumentId)
+            or not isinstance(self.source_revision_id, KnowledgeDocumentRevisionId)
+            or not isinstance(self.target_revision_id, KnowledgeDocumentRevisionId)
+            or not self.source_relative_path
+            or not self.target_relative_path
+            or self.link_kind not in {"markdown", "wiki"}
+            or not self.declared_target
+            or len(self.declared_target) > 512
+        ):
+            raise ValueError("knowledge document relation is invalid")
 
 
 _KNOWLEDGE_TERM_PATTERN = re.compile(r"[^\W_][\w-]{1,63}", re.UNICODE)
