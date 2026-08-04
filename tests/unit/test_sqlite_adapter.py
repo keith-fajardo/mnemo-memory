@@ -13,7 +13,7 @@ def test_newer_schema_is_rejected_and_foreign_keys_are_enforced(tmp_path: Path) 
     repository.migrate()
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (13, ?)",
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (14, ?)",
             (datetime(2026, 8, 2, tzinfo=UTC).isoformat(),),
         )
     with pytest.raises(SQLiteSchemaTooNewError):

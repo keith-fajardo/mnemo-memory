@@ -27,6 +27,7 @@ REQUIRED_MIGRATIONS = (
     "0010_knowledge_documents.sql",
     "0011_knowledge_section_fts.sql",
     "0012_knowledge_section_embeddings.sql",
+    "0013_approved_episodic_event_governance.sql",
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",

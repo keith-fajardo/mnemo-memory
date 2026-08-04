@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,12 @@ from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
     LocalDbtProjectBindingStore,
 )
-from mnemo_memory.packages.application import LocalConfig, build_lifecycle_service
+from mnemo_memory.packages.application import (
+    CreateCheckpoint,
+    LocalConfig,
+    build_checkpoint_runtime,
+    build_lifecycle_service,
+)
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.application.command_wrapper import (
     CommandContext,
@@ -25,6 +31,16 @@ from mnemo_memory.packages.application.command_wrapper import (
     HookStatus,
 )
 from mnemo_memory.packages.application.services import LifecycleService
+from mnemo_memory.packages.domain import (
+    CheckpointContent,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
+    SourceId,
+    SourceTrustClass,
+    VerificationStatus,
+)
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
@@ -41,7 +57,7 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
     assert first["initialized"] is True
     assert second["initialized"] is False
-    assert first["schema_version"] == 12
+    assert first["schema_version"] == 13
     assert value.config.config_path.exists()
     assert value.config.database_path.exists()
 
@@ -57,6 +73,7 @@ def test_cli_help_explains_the_user_facing_workflow() -> None:
     assert "Run a deterministic interactive Mnemo setup guide." in root.output
     assert "Register Mnemo with an AI coding client." in root.output
     assert "Enable automatic task handoffs for this project and client." in memory.output
+    assert "Print this enabled project's bounded active handoff" in memory.output
     assert "Show bounded saved structural changes" in memory.output
     assert "Enable Mnemo for this dbt project; no UUIDs are needed normally." in dbt.output
     assert "Run exact dbt arguments with safe Mnemo pre/post manifest hooks." in dbt.output
@@ -166,6 +183,132 @@ def test_agent_is_an_interactive_guide_alias(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Mnemo Memory setup guide" in result.output
+
+
+def test_memory_inspect_returns_only_the_enabled_projects_active_checkpoint(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "enabled project"
+    other_project = tmp_path / "other enabled project"
+    project.mkdir()
+    other_project.mkdir()
+    data_dir = tmp_path / "memory data"
+    config = LocalConfig.defaults(data_dir)
+    bindings = LocalMemoryProjectBindingStore(config.data_directory)
+    binding = bindings.enable(project)
+    other_binding = bindings.enable(other_project)
+    observed_at = datetime(2026, 8, 5, 4, 30, tzinfo=UTC)
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "synthetic://cli-inspection",
+        "sha256:" + "a" * 64,
+        EvidenceLocation("fixture://cli-inspection"),
+        observed_at,
+        VerificationStatus.VERIFIED,
+    )
+    content = CheckpointContent(
+        "Inspect the exact active handoff",
+        ("implemented bounded inspection",),
+        "ready for verification",
+        ("run the focused test",),
+        ("use only the enabled project scope",),
+        (),
+        (),
+        ("src/mnemo_memory/apps/cli/main.py",),
+        (),
+        ("focused CLI test",),
+        48,
+    )
+    with build_checkpoint_runtime(config) as runtime:
+        created = runtime.checkpoint_service.create(
+            CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
+        )
+        other = runtime.checkpoint_service.create(
+            CreateCheckpoint(other_binding.checkpoint_scope, content, (evidence,))
+        )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "inspect",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    packet = json.loads(result.output)
+    checkpoint = packet["active_task_checkpoint"]
+    assert packet["owner_scope"] == binding.checkpoint_scope.to_dict()
+    assert checkpoint["item_id"] == (
+        f"checkpoint:{created.aggregate.checkpoint_id}:revision:{created.revision.revision_id}"
+    )
+    assert json.loads(checkpoint["content"])["task_objective"] == (
+        "Inspect the exact active handoff"
+    )
+    assert packet["provenance"] == [
+        {
+            "evidence_references": [evidence.to_dict()],
+            "item_id": checkpoint["item_id"],
+            "provenance_id": f"provenance:{checkpoint['item_id']}",
+            "source_digest": packet["provenance"][0]["source_digest"],
+            "source_reference": (
+                f"mnemo:checkpoint/{created.aggregate.checkpoint_id}/"
+                f"revision/{created.revision.revision_id}"
+            ),
+            "token_estimate": 0,
+        }
+    ]
+    assert str(other.aggregate.checkpoint_id) not in result.output
+    assert str(other.revision.revision_id) not in result.output
+
+
+def test_memory_inspect_reports_no_active_checkpoint_and_rejects_unregistered_project(
+    tmp_path: Path,
+) -> None:
+    enabled = tmp_path / "enabled"
+    unregistered = tmp_path / "unregistered"
+    enabled.mkdir()
+    unregistered.mkdir()
+    data_dir = tmp_path / "memory data"
+    config = LocalConfig.defaults(data_dir)
+    LocalMemoryProjectBindingStore(config.data_directory).enable(enabled)
+
+    empty = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "inspect",
+            "--project-dir",
+            str(enabled),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+    rejected = CliRunner().invoke(
+        app,
+        [
+            "memory",
+            "inspect",
+            "--project-dir",
+            str(unregistered),
+            "--data-dir",
+            str(data_dir),
+        ],
+    )
+
+    assert empty.exit_code == 0, empty.output
+    packet = json.loads(empty.output)
+    assert packet["active_task_checkpoint"] is None
+    assert packet["provenance"] == []
+    assert rejected.exit_code != 0
+    assert "MNEMO_MEMORY_PROJECT_NOT_ENABLED" in rejected.output
 
 
 def test_memory_impact_queries_the_enabled_projects_static_snapshot(tmp_path: Path) -> None:

@@ -7,6 +7,9 @@ from datetime import datetime
 
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEventGovernanceKind,
+    ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -45,13 +48,20 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     DbtNodeId,
 )
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
-from mnemo_memory.packages.policy import KnowledgeDocumentSafetyPolicy
+from mnemo_memory.packages.policy import (
+    ApprovedEpisodicEventSafetyPolicy,
+    KnowledgeDocumentSafetyPolicy,
+)
 
 from .contracts import (
     ActiveSnapshotConflict,
     ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventGovernanceResult,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventRecord,
+    ApprovedEpisodicEventRecordPage,
+    ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStoreResult,
     CheckpointNotFound,
     CheckpointPage,
@@ -343,14 +353,21 @@ class ReferenceApprovedEpisodicEventRepository:
     """Append-only reference store for explicit, evidence-backed task facts."""
 
     def __init__(self) -> None:
+        self._policy = ApprovedEpisodicEventSafetyPolicy()
         self._events: dict[EventId, ApprovedEpisodicEvent] = {}
         self._keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._governance: dict[EventId, ApprovedEpisodicEventGovernance] = {}
+        self._action_keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._ordered: list[EventId] = []
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent
     ) -> ApprovedEpisodicEventStoreResult:
         self._require_scope(event.scope)
+        if not self._policy.assess_event(event).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event was rejected by deterministic secret policy"
+            )
         key = (event.scope, event.source_event_key)
         existing_id = self._keys.get(key)
         if existing_id is not None:
@@ -358,6 +375,8 @@ class ReferenceApprovedEpisodicEventRepository:
             if existing == event:
                 return ApprovedEpisodicEventStoreResult(existing, True)
             raise ApprovedEpisodicEventConflict("approved episodic event key conflicts")
+        if event.event_id in self._governance:
+            raise ApprovedEpisodicEventConflict("retracted approved event cannot be restored")
         self._events[event.event_id] = event
         self._keys[key] = event.event_id
         self._ordered.append(event.event_id)
@@ -379,11 +398,172 @@ class ReferenceApprovedEpisodicEventRepository:
         items = tuple(
             self._events[event_id]
             for event_id in reversed(self._ordered)
-            if self._events[event_id].scope == scope
+            if event_id in self._events
+            and self._events[event_id].scope == scope
+            and event_id not in self._governance
         )
         return ApprovedEpisodicEventPage(
             items[offset : offset + limit],
             offset + limit if offset + limit < len(items) else None,
+        )
+
+    def correct_approved_event(
+        self,
+        replacement: ApprovedEpisodicEvent,
+        governance: ApprovedEpisodicEventGovernance,
+    ) -> ApprovedEpisodicEventGovernanceResult:
+        self._validate_governance(replacement.scope, governance)
+        if (
+            not self._policy.assess_event(replacement).accepted
+            or not self._policy.assess_governance(governance).accepted
+        ):
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event correction was rejected by secret policy"
+            )
+        if governance.kind is not ApprovedEventGovernanceKind.CORRECTED:
+            raise ApprovedEpisodicEventConflict("approved event correction action is invalid")
+        if replacement.event_id != governance.replacement_event_id:
+            raise ApprovedEpisodicEventConflict("approved event replacement does not match action")
+        existing = self._governance.get(governance.target_event_id)
+        if existing is not None:
+            replacement_record = self.get_approved_event_record(
+                governance.scope, replacement.event_id
+            )
+            if existing.same_intent(governance) and (
+                replacement_record.event is None
+                or self._same_event_intent(replacement_record.event, replacement)
+            ):
+                return ApprovedEpisodicEventGovernanceResult(
+                    self.get_approved_event_record(governance.scope, governance.target_event_id),
+                    replacement_record,
+                    True,
+                )
+            raise ApprovedEpisodicEventConflict("approved event already has a governance action")
+        target = self._events.get(governance.target_event_id)
+        if target is None or target.scope != governance.scope:
+            raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+        if replacement.kind is not target.kind:
+            raise ApprovedEpisodicEventConflict("approved event correction cannot change kind")
+        if (
+            replacement.event_id in self._events
+            or replacement.event_id in self._governance
+            or (replacement.scope, replacement.source_event_key) in self._keys
+        ):
+            raise ApprovedEpisodicEventConflict("approved event replacement conflicts")
+        self._require_unused_action_key(governance)
+        self._events[replacement.event_id] = replacement
+        self._keys[(replacement.scope, replacement.source_event_key)] = replacement.event_id
+        self._ordered.append(replacement.event_id)
+        self._governance[governance.target_event_id] = governance
+        self._action_keys[(governance.scope, governance.source_action_key)] = governance.action_id
+        return ApprovedEpisodicEventGovernanceResult(
+            self.get_approved_event_record(governance.scope, governance.target_event_id),
+            self.get_approved_event_record(governance.scope, replacement.event_id),
+            False,
+        )
+
+    def retract_approved_event(
+        self, governance: ApprovedEpisodicEventGovernance
+    ) -> ApprovedEpisodicEventGovernanceResult:
+        self._validate_governance(governance.scope, governance)
+        if not self._policy.assess_governance(governance).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event retraction was rejected by secret policy"
+            )
+        if governance.kind is not ApprovedEventGovernanceKind.RETRACTED:
+            raise ApprovedEpisodicEventConflict("approved event retraction action is invalid")
+        existing = self._governance.get(governance.target_event_id)
+        if existing is not None:
+            if existing.same_intent(governance):
+                return ApprovedEpisodicEventGovernanceResult(
+                    self.get_approved_event_record(governance.scope, governance.target_event_id),
+                    None,
+                    True,
+                )
+            raise ApprovedEpisodicEventConflict("approved event already has a governance action")
+        target = self._events.get(governance.target_event_id)
+        if target is None or target.scope != governance.scope:
+            raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+        self._require_unused_action_key(governance)
+        self._governance[governance.target_event_id] = governance
+        self._action_keys[(governance.scope, governance.source_action_key)] = governance.action_id
+        del self._events[target.event_id]
+        del self._keys[(target.scope, target.source_event_key)]
+        return ApprovedEpisodicEventGovernanceResult(
+            self.get_approved_event_record(governance.scope, governance.target_event_id),
+            None,
+            False,
+        )
+
+    def get_approved_event_record(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventRecord:
+        self._require_scope(scope)
+        event = self._events.get(event_id)
+        governance = self._governance.get(event_id)
+        if event is not None and event.scope == scope:
+            status = (
+                ApprovedEventLifecycleStatus.ACTIVE
+                if governance is None
+                else ApprovedEventLifecycleStatus.CORRECTED
+            )
+            return ApprovedEpisodicEventRecord(event_id, scope, status, event, governance)
+        if governance is not None and governance.scope == scope:
+            return ApprovedEpisodicEventRecord(
+                event_id,
+                scope,
+                ApprovedEventLifecycleStatus.RETRACTED,
+                None,
+                governance,
+            )
+        raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+
+    def list_approved_event_records(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventRecordPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        records = tuple(
+            self.get_approved_event_record(scope, event_id)
+            for event_id in reversed(self._ordered)
+            if (
+                (event_id in self._events and self._events[event_id].scope == scope)
+                or (event_id in self._governance and self._governance[event_id].scope == scope)
+            )
+        )
+        return ApprovedEpisodicEventRecordPage(
+            records[offset : offset + limit],
+            offset + limit if offset + limit < len(records) else None,
+        )
+
+    def _validate_governance(
+        self, scope: MemoryScope, governance: ApprovedEpisodicEventGovernance
+    ) -> None:
+        self._require_scope(scope)
+        if governance.scope != scope:
+            raise InvalidApprovedEpisodicEventScope(
+                "approved event governance requires one complete task scope"
+            )
+
+    def _require_unused_action_key(self, governance: ApprovedEpisodicEventGovernance) -> None:
+        if (governance.scope, governance.source_action_key) in self._action_keys:
+            raise ApprovedEpisodicEventConflict("approved event action key conflicts")
+
+    @staticmethod
+    def _same_event_intent(first: ApprovedEpisodicEvent, second: ApprovedEpisodicEvent) -> bool:
+        return (
+            first.event_id,
+            first.scope,
+            first.kind,
+            first.summary,
+            first.source_event_key,
+        ) == (
+            second.event_id,
+            second.scope,
+            second.kind,
+            second.summary,
+            second.source_event_key,
         )
 
     @staticmethod

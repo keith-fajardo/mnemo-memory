@@ -17,7 +17,10 @@ from typing import cast
 
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEventGovernanceKind,
     ApprovedEventKind,
+    ApprovedEventLifecycleStatus,
     Checkpoint,
     CheckpointAggregate,
     CheckpointContent,
@@ -73,13 +76,20 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     LineageEdgeType,
     SourceStateFingerprint,
 )
-from mnemo_memory.packages.policy import KnowledgeDocumentSafetyPolicy
+from mnemo_memory.packages.policy import (
+    ApprovedEpisodicEventSafetyPolicy,
+    KnowledgeDocumentSafetyPolicy,
+)
 
 from .contracts import (
     ActiveSnapshotConflict,
     ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventGovernanceResult,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventRecord,
+    ApprovedEpisodicEventRecordPage,
+    ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStorageFailure,
     ApprovedEpisodicEventStoreResult,
     CheckpointNotFound,
@@ -120,7 +130,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -354,6 +364,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 12:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 12
+            if version < 13:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0013_approved_episodic_event_governance.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (13, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 13:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 13
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -905,6 +927,10 @@ class SQLiteCheckpointRepository:
         self, event: ApprovedEpisodicEvent
     ) -> ApprovedEpisodicEventStoreResult:
         self._require_approved_episodic_scope(event.scope)
+        if not ApprovedEpisodicEventSafetyPolicy().assess_event(event).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event was rejected by deterministic secret policy"
+            )
         try:
             with self._transaction() as connection:
                 self._store_scope(connection, event.scope)
@@ -919,21 +945,15 @@ class SQLiteCheckpointRepository:
                     if stored == event:
                         return ApprovedEpisodicEventStoreResult(stored, idempotent=True)
                     raise ApprovedEpisodicEventConflict("approved episodic event key conflicts")
-                connection.execute(
-                    "INSERT INTO approved_episodic_events("
-                    "event_id,source_event_key,event_kind,summary,owner_id,visibility,workspace_id,"
-                    "project_id,session_id,task_id,occurred_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        str(event.event_id),
-                        event.source_event_key,
-                        event.kind.value,
-                        event.summary,
-                        *self._scope_values(event.scope),
-                        event.occurred_at.isoformat(),
-                    ),
-                )
-                self._insert_approved_event_evidence(connection, event)
+                governed = connection.execute(
+                    "SELECT 1 FROM approved_episodic_event_governance WHERE target_event_id = ?",
+                    (str(event.event_id),),
+                ).fetchone()
+                if governed is not None:
+                    raise ApprovedEpisodicEventConflict(
+                        "retracted approved event cannot be restored"
+                    )
+                self._insert_approved_event(connection, event)
                 return ApprovedEpisodicEventStoreResult(event, idempotent=False)
         except ApprovedEpisodicEventConflict:
             raise
@@ -974,6 +994,8 @@ class SQLiteCheckpointRepository:
                     "SELECT * FROM approved_episodic_events WHERE owner_id = ? "
                     "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
                     "AND session_id = ? AND task_id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM approved_episodic_event_governance AS action "
+                    "WHERE action.target_event_id = approved_episodic_events.event_id) "
                     "ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
                     (*self._scope_values(scope), limit + 1, offset),
                 ).fetchall()
@@ -985,6 +1007,198 @@ class SQLiteCheckpointRepository:
                 "approved episodic event storage operation failed"
             ) from error
         return ApprovedEpisodicEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def correct_approved_event(
+        self,
+        replacement: ApprovedEpisodicEvent,
+        governance: ApprovedEpisodicEventGovernance,
+    ) -> ApprovedEpisodicEventGovernanceResult:
+        self._validate_approved_governance(replacement.scope, governance)
+        policy = ApprovedEpisodicEventSafetyPolicy()
+        if (
+            not policy.assess_event(replacement).accepted
+            or not policy.assess_governance(governance).accepted
+        ):
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event correction was rejected by secret policy"
+            )
+        if (
+            governance.kind is not ApprovedEventGovernanceKind.CORRECTED
+            or replacement.event_id != governance.replacement_event_id
+        ):
+            raise ApprovedEpisodicEventConflict("approved event correction action is invalid")
+        try:
+            with self._transaction() as connection:
+                self._store_scope(connection, governance.scope)
+                existing = self._scoped_approved_governance_row(
+                    connection, governance.scope, governance.target_event_id
+                )
+                if existing is not None:
+                    stored_action = self._approved_governance_from_row(
+                        connection, existing, governance.scope
+                    )
+                    if not stored_action.same_intent(governance):
+                        raise ApprovedEpisodicEventConflict(
+                            "approved event already has a governance action"
+                        )
+                    replacement_record = self._approved_event_record(
+                        connection, governance.scope, replacement.event_id
+                    )
+                    if (
+                        replacement_record.event is not None
+                        and not self._same_approved_event_intent(
+                            replacement_record.event, replacement
+                        )
+                    ):
+                        raise ApprovedEpisodicEventConflict("approved event replacement conflicts")
+                    return ApprovedEpisodicEventGovernanceResult(
+                        self._approved_event_record(
+                            connection, governance.scope, governance.target_event_id
+                        ),
+                        replacement_record,
+                        True,
+                    )
+                target_row = self._scoped_approved_event_row(
+                    connection, governance.scope, governance.target_event_id
+                )
+                if target_row is None:
+                    raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+                target = self._approved_event_from_row(connection, target_row, governance.scope)
+                if replacement.kind is not target.kind:
+                    raise ApprovedEpisodicEventConflict(
+                        "approved event correction cannot change kind"
+                    )
+                self._require_available_approved_replacement(connection, replacement, governance)
+                self._insert_approved_event(connection, replacement)
+                self._insert_approved_governance(
+                    connection, governance, int(target_row["event_sequence"])
+                )
+                return ApprovedEpisodicEventGovernanceResult(
+                    self._approved_event_record(
+                        connection, governance.scope, governance.target_event_id
+                    ),
+                    self._approved_event_record(connection, governance.scope, replacement.event_id),
+                    False,
+                )
+        except (ApprovedEpisodicEventConflict, ApprovedEpisodicEventNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event governance operation failed"
+            ) from error
+
+    def retract_approved_event(
+        self, governance: ApprovedEpisodicEventGovernance
+    ) -> ApprovedEpisodicEventGovernanceResult:
+        self._validate_approved_governance(governance.scope, governance)
+        if not ApprovedEpisodicEventSafetyPolicy().assess_governance(governance).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event retraction was rejected by secret policy"
+            )
+        if governance.kind is not ApprovedEventGovernanceKind.RETRACTED:
+            raise ApprovedEpisodicEventConflict("approved event retraction action is invalid")
+        try:
+            with self._transaction() as connection:
+                self._store_scope(connection, governance.scope)
+                existing = self._scoped_approved_governance_row(
+                    connection, governance.scope, governance.target_event_id
+                )
+                if existing is not None:
+                    stored_action = self._approved_governance_from_row(
+                        connection, existing, governance.scope
+                    )
+                    if stored_action.same_intent(governance):
+                        return ApprovedEpisodicEventGovernanceResult(
+                            self._approved_event_record(
+                                connection, governance.scope, governance.target_event_id
+                            ),
+                            None,
+                            True,
+                        )
+                    raise ApprovedEpisodicEventConflict(
+                        "approved event already has a governance action"
+                    )
+                target_row = self._scoped_approved_event_row(
+                    connection, governance.scope, governance.target_event_id
+                )
+                if target_row is None:
+                    raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+                self._require_available_approved_action_key(connection, governance)
+                self._insert_approved_governance(
+                    connection, governance, int(target_row["event_sequence"])
+                )
+                connection.execute(
+                    "DELETE FROM approved_episodic_event_evidence WHERE event_id = ?",
+                    (str(governance.target_event_id),),
+                )
+                connection.execute(
+                    "DELETE FROM approved_episodic_events WHERE event_id = ?",
+                    (str(governance.target_event_id),),
+                )
+                return ApprovedEpisodicEventGovernanceResult(
+                    self._approved_event_record(
+                        connection, governance.scope, governance.target_event_id
+                    ),
+                    None,
+                    False,
+                )
+        except (ApprovedEpisodicEventConflict, ApprovedEpisodicEventNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event governance operation failed"
+            ) from error
+
+    def get_approved_event_record(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventRecord:
+        self._require_approved_episodic_scope(scope)
+        try:
+            with self._connect() as connection:
+                return self._approved_event_record(connection, scope, event_id)
+        except ApprovedEpisodicEventNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event governance operation failed"
+            ) from error
+
+    def list_approved_event_records(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventRecordPage:
+        self._require_approved_episodic_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT event_sequence AS record_sequence, event_id FROM "
+                    "approved_episodic_events WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "UNION ALL "
+                    "SELECT target_event_sequence AS record_sequence, target_event_id AS event_id "
+                    "FROM approved_episodic_event_governance WHERE action_kind = 'retracted' "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? "
+                    "ORDER BY record_sequence DESC LIMIT ? OFFSET ?",
+                    (
+                        *self._scope_values(scope),
+                        *self._scope_values(scope),
+                        limit + 1,
+                        offset,
+                    ),
+                ).fetchall()
+                items = tuple(
+                    self._approved_event_record(
+                        connection, scope, EventId.from_string(row["event_id"])
+                    )
+                    for row in rows[:limit]
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event governance operation failed"
+            ) from error
+        return ApprovedEpisodicEventRecordPage(items, offset + limit if len(rows) > limit else None)
 
     def store_and_activate(
         self,
@@ -1921,6 +2135,26 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _insert_approved_event(
+        connection: sqlite3.Connection, event: ApprovedEpisodicEvent
+    ) -> None:
+        connection.execute(
+            "INSERT INTO approved_episodic_events("
+            "event_id,source_event_key,event_kind,summary,owner_id,visibility,workspace_id,"
+            "project_id,session_id,task_id,occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(event.event_id),
+                event.source_event_key,
+                event.kind.value,
+                event.summary,
+                *SQLiteCheckpointRepository._scope_values(event.scope),
+                event.occurred_at.isoformat(),
+            ),
+        )
+        SQLiteCheckpointRepository._insert_approved_event_evidence(connection, event)
+
+    @staticmethod
     def _insert_approved_event_evidence(
         connection: sqlite3.Connection, event: ApprovedEpisodicEvent
     ) -> None:
@@ -1933,6 +2167,43 @@ class SQLiteCheckpointRepository:
             connection.execute(
                 "INSERT INTO approved_episodic_event_evidence(event_id, evidence_id) VALUES (?, ?)",
                 (str(event.event_id), str(evidence.evidence_id)),
+            )
+
+    @staticmethod
+    def _insert_approved_governance(
+        connection: sqlite3.Connection,
+        governance: ApprovedEpisodicEventGovernance,
+        target_event_sequence: int,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO approved_episodic_event_governance("
+            "action_id,source_action_key,action_kind,target_event_id,target_event_sequence,"
+            "replacement_event_id,reason,owner_id,visibility,workspace_id,project_id,session_id,"
+            "task_id,occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(governance.action_id),
+                governance.source_action_key,
+                governance.kind.value,
+                str(governance.target_event_id),
+                target_event_sequence,
+                None
+                if governance.replacement_event_id is None
+                else str(governance.replacement_event_id),
+                governance.reason,
+                *SQLiteCheckpointRepository._scope_values(governance.scope),
+                governance.occurred_at.isoformat(),
+            ),
+        )
+        for evidence in governance.evidence_references:
+            connection.execute(
+                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) "
+                "VALUES (?, ?, ?)",
+                (str(evidence.evidence_id), str(evidence.source_id), _json(evidence.to_dict())),
+            )
+            connection.execute(
+                "INSERT INTO approved_episodic_event_governance_evidence(action_id, evidence_id) "
+                "VALUES (?, ?)",
+                (str(governance.action_id), str(evidence.evidence_id)),
             )
 
     def _advance_current_pointer(
@@ -2117,6 +2388,174 @@ class SQLiteCheckpointRepository:
                 for item in evidence_rows
             ),
         )
+
+    @staticmethod
+    def _approved_governance_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> ApprovedEpisodicEventGovernance:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json "
+            "FROM approved_episodic_event_governance_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.action_id = ? ORDER BY link.evidence_id ASC",
+            (row["action_id"],),
+        ).fetchall()
+        return ApprovedEpisodicEventGovernance(
+            action_id=EventId.from_string(row["action_id"]),
+            scope=scope,
+            kind=ApprovedEventGovernanceKind(row["action_kind"]),
+            target_event_id=EventId.from_string(row["target_event_id"]),
+            replacement_event_id=(
+                None
+                if row["replacement_event_id"] is None
+                else EventId.from_string(row["replacement_event_id"])
+            ),
+            reason=row["reason"],
+            source_action_key=row["source_action_key"],
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
+        )
+
+    @staticmethod
+    def _scoped_approved_event_row(
+        connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM approved_episodic_events WHERE event_id = ? "
+                "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                "AND project_id = ? AND session_id = ? AND task_id = ?",
+                (str(event_id), *SQLiteCheckpointRepository._scope_values(scope)),
+            ).fetchone(),
+        )
+
+    @staticmethod
+    def _scoped_approved_governance_row(
+        connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT * FROM approved_episodic_event_governance WHERE target_event_id = ? "
+                "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                "AND project_id = ? AND session_id = ? AND task_id = ?",
+                (str(event_id), *SQLiteCheckpointRepository._scope_values(scope)),
+            ).fetchone(),
+        )
+
+    @staticmethod
+    def _approved_event_record(
+        connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventRecord:
+        event_row = SQLiteCheckpointRepository._scoped_approved_event_row(
+            connection, scope, event_id
+        )
+        governance_row = SQLiteCheckpointRepository._scoped_approved_governance_row(
+            connection, scope, event_id
+        )
+        if event_row is not None:
+            event = SQLiteCheckpointRepository._approved_event_from_row(
+                connection, event_row, scope
+            )
+            governance = (
+                None
+                if governance_row is None
+                else SQLiteCheckpointRepository._approved_governance_from_row(
+                    connection, governance_row, scope
+                )
+            )
+            return ApprovedEpisodicEventRecord(
+                event_id,
+                scope,
+                ApprovedEventLifecycleStatus.ACTIVE
+                if governance is None
+                else ApprovedEventLifecycleStatus.CORRECTED,
+                event,
+                governance,
+            )
+        if governance_row is not None and governance_row["action_kind"] == "retracted":
+            governance = SQLiteCheckpointRepository._approved_governance_from_row(
+                connection, governance_row, scope
+            )
+            return ApprovedEpisodicEventRecord(
+                event_id,
+                scope,
+                ApprovedEventLifecycleStatus.RETRACTED,
+                None,
+                governance,
+            )
+        raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+
+    @staticmethod
+    def _same_approved_event_intent(
+        first: ApprovedEpisodicEvent, second: ApprovedEpisodicEvent
+    ) -> bool:
+        return (
+            first.event_id,
+            first.scope,
+            first.kind,
+            first.summary,
+            first.source_event_key,
+        ) == (
+            second.event_id,
+            second.scope,
+            second.kind,
+            second.summary,
+            second.source_event_key,
+        )
+
+    def _validate_approved_governance(
+        self, scope: MemoryScope, governance: ApprovedEpisodicEventGovernance
+    ) -> None:
+        self._require_approved_episodic_scope(scope)
+        if governance.scope != scope:
+            raise InvalidApprovedEpisodicEventScope(
+                "approved event governance requires one complete task scope"
+            )
+
+    @staticmethod
+    def _require_available_approved_action_key(
+        connection: sqlite3.Connection, governance: ApprovedEpisodicEventGovernance
+    ) -> None:
+        existing = connection.execute(
+            "SELECT 1 FROM approved_episodic_event_governance WHERE owner_id = ? "
+            "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+            "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+            (
+                *SQLiteCheckpointRepository._scope_values(governance.scope),
+                governance.source_action_key,
+            ),
+        ).fetchone()
+        if existing is not None:
+            raise ApprovedEpisodicEventConflict("approved event action key conflicts")
+
+    def _require_available_approved_replacement(
+        self,
+        connection: sqlite3.Connection,
+        replacement: ApprovedEpisodicEvent,
+        governance: ApprovedEpisodicEventGovernance,
+    ) -> None:
+        self._require_available_approved_action_key(connection, governance)
+        event_conflict = connection.execute(
+            "SELECT 1 FROM approved_episodic_events WHERE event_id = ? OR "
+            "(owner_id = ? AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+            "AND session_id = ? AND task_id = ? AND source_event_key = ?)",
+            (
+                str(replacement.event_id),
+                *self._scope_values(replacement.scope),
+                replacement.source_event_key,
+            ),
+        ).fetchone()
+        governed = connection.execute(
+            "SELECT 1 FROM approved_episodic_event_governance WHERE target_event_id = ?",
+            (str(replacement.event_id),),
+        ).fetchone()
+        if event_conflict is not None or governed is not None:
+            raise ApprovedEpisodicEventConflict("approved event replacement conflicts")
 
     @staticmethod
     def _is_identical_terminal_retry(

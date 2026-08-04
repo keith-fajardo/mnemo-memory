@@ -28,9 +28,26 @@ stores transcript bodies, prompts, arbitrary tool output, SQL, environment data,
 absolute machine paths. The reference and SQLite adapters have the same append, retrieval,
 pagination, evidence, idempotency, and cross-scope behavior.
 
+Correction and retraction use a separate append-only governance record introduced by migration
+0013. One fact may have at most one outgoing governance action. A correction atomically appends a
+same-kind replacement fact and an evidence-bearing link from the superseded fact. A retraction
+atomically appends an evidence-bearing tombstone and removes the target event row plus its original
+evidence links, so its summary and source key are no longer reviewable or retrievable. The
+deterministic target ID remains in the tombstone to prevent resurrection with the same source key.
+Repeating the same action key and intent is idempotent; a competing or stale action is a conflict.
+
+Ordinary approved-event listing is an authorization-constrained active query: it excludes any
+event that has an outgoing governance action in SQL or in the reference adapter before context
+selection. Review listing is a separate bounded scoped contract that may return active events,
+superseded events, and payload-free retraction tombstones. Migration 0013 is forward-only and
+transactional; failure rolls back its schema objects and ledger entry, and retry re-applies the
+whole step. Recovery from a successfully committed migration requires restoring the pre-upgrade
+personal-profile database backup rather than attempting a lossy down-migration.
+
 ## Consequences
 
-This provides a durable, privacy-bounded event substrate for later application and context
-retrieval work. It does not infer decisions or mistakes from a diff, failed command, or model
-reasoning. Retention, correction/supersession, deletion propagation, automatic capture, and
-background event processing remain separate, explicitly designed milestones.
+This provides a durable, privacy-bounded event substrate plus explicit personal governance. It does
+not infer decisions or mistakes from a diff, failed command, or model reasoning. The retraction
+contract applies only to the canonical approved-fact payload and its direct evidence links; it is
+not a claim about future exports or backups. General retention, backup deletion, automatic capture,
+and background event processing remain separate, explicitly designed milestones.

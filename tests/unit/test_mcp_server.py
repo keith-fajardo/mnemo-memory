@@ -283,6 +283,17 @@ def test_durable_port_records_and_returns_explicit_approved_episodic_fact(tmp_pa
             )["idempotent"]
             is True
         )
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.save_checkpoint(
+                {
+                    "operation": "record_event",
+                    **IDS,
+                    "event_kind": "failure",
+                    "event_summary": "api_key=ABCDEFGHIJKLMNOPQRSTUVWX",
+                    "source_event_key": "reconciliation:secret:1",
+                    "evidence_references": [EVIDENCE],
+                }
+            )
         packet = ContextPacket.from_dict(
             port.get_context(context_payload(include_approved_events=True))
         )

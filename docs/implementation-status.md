@@ -847,3 +847,48 @@ matching procedures join the bounded automatic packet without an agent needing t
 Exact-client profiles take precedence over `any`; multiple equally matching profiles fail closed.
 The profile revision/digest remains cited alongside each selected procedure. Mnemo does not infer
 an arbitrary named-agent role from hook events, inspect prompts, or execute project Markdown.
+
+### Personal checkpoint inspection — Complete
+
+The current approved slice adds one read-only local CLI inspection path for the active durable
+handoff. It must resolve scope only from an explicitly enabled canonical project directory, return
+the existing bounded canonical checkpoint packet with exact immutable revision and evidence
+provenance, report truthfully when no active checkpoint exists, and fail closed for an unregistered
+project. It must not add a model call, MCP tool, mutation, source refresh, note read, broad history
+browser, export, deletion, settings UI, team behavior, or new dependency.
+
+Implemented `mnemo-memory memory inspect` as a read-only personal-mode command over the existing
+canonical checkpoint application service and context-packet contract. It resolves only an explicit
+local project binding, returns exact checkpoint revision and evidence provenance, reports no active
+handoff truthfully, and rejects an unregistered project without disclosing another project’s IDs or
+payload. The user guide and cross-project threat-model control now cover the command. Focused
+formatting, lint, strict typing, and all 27 lifecycle/CLI tests passed; the complete verification
+gate passed with 526 tests, schema validation, dependency/provenance validation for 86 registered
+entries, and architecture validation for 69 product Python files. No dependency or MCP tool was
+added.
+
+### Approved episodic fact governance — Complete
+
+The current approved issue adds personal-mode review, immutable correction, and explicit retraction
+for the existing task-scoped approved decision/failure/tool-outcome facts. A correction must append
+one evidence-bearing replacement and one immutable link from the superseded fact; a retraction must
+remove the original fact payload and retain only a bounded scoped tombstone. Both operations must be
+idempotent for the same caller action key, reject stale or competing actions, survive restart, and
+make ordinary `get_context` return active facts only. Local CLI review and mutation commands must
+resolve scope only from an explicitly enabled canonical project and require confirmation for writes.
+Cross-project reads and mutations must fail without disclosing IDs, counts, or payload. This issue
+does not add automatic extraction, transcript capture, a model call, a new MCP tool, broad checkpoint
+history, export, backup deletion, settings UI, team behavior, or a dependency.
+
+Implemented scope-bound `memory events`, `memory event inspect`, `memory event correct`, and
+`memory event retract` commands over new application and storage contracts. Corrections append an
+immutable same-kind replacement plus an evidence-bearing governance action; retractions erase the
+target event and its evidence payload while retaining a minimal scoped tombstone. Reference and
+SQLite repositories enforce active-only retrieval, deterministic action-key retries, stale and
+competing action rejection, exact-scope isolation, secret rejection, transactional rollback, and
+restart durability. SQLite migration 0013 is append-only for governance actions and has a documented
+forward-only recovery boundary. The user guide, ADR, personal storage profile, and threat model now
+cover the lifecycle and its limits. Focused governance, CLI, application, and MCP tests passed; the
+complete verification gate passed with 541 tests, schema validation, dependency/provenance validation
+for 86 registered entries, and architecture validation for 70 product Python files. No dependency or
+MCP tool was added.

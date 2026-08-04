@@ -8,6 +8,8 @@ from typing import Protocol
 
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -116,6 +118,10 @@ class ApprovedEpisodicEventStorageFailure(ApprovedEpisodicEventRepositoryError):
     pass
 
 
+class ApprovedEpisodicEventSecretRejected(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -152,6 +158,50 @@ class ApprovedEpisodicEventPage:
     next_offset: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventRecord:
+    """Review state for an active, corrected, or payload-free retracted fact."""
+
+    event_id: EventId
+    scope: MemoryScope
+    status: ApprovedEventLifecycleStatus
+    event: ApprovedEpisodicEvent | None
+    governance: ApprovedEpisodicEventGovernance | None
+
+    def __post_init__(self) -> None:
+        if self.status is ApprovedEventLifecycleStatus.ACTIVE:
+            if self.event is None or self.governance is not None:
+                raise ValueError("active approved event record is invalid")
+        elif self.status is ApprovedEventLifecycleStatus.CORRECTED:
+            if self.event is None or self.governance is None:
+                raise ValueError("corrected approved event record is invalid")
+        elif self.event is not None or self.governance is None:
+            raise ValueError("retracted approved event record is invalid")
+        if self.event is not None and (
+            self.event.event_id != self.event_id or self.event.scope != self.scope
+        ):
+            raise ValueError("approved event record does not match its event")
+        if self.governance is not None and (
+            self.governance.target_event_id != self.event_id
+            or self.governance.scope != self.scope
+            or self.governance.kind.value != self.status.value
+        ):
+            raise ValueError("approved event record does not match its governance action")
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventRecordPage:
+    items: tuple[ApprovedEpisodicEventRecord, ...]
+    next_offset: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventGovernanceResult:
+    target: ApprovedEpisodicEventRecord
+    replacement: ApprovedEpisodicEventRecord | None
+    idempotent: bool
+
+
 class ApprovedEpisodicEventRepository(Protocol):
     """Explicit task-scoped decision/failure/tool-outcome facts."""
 
@@ -166,6 +216,24 @@ class ApprovedEpisodicEventRepository(Protocol):
     def list_approved_events(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventPage: ...
+
+    def correct_approved_event(
+        self,
+        replacement: ApprovedEpisodicEvent,
+        governance: ApprovedEpisodicEventGovernance,
+    ) -> ApprovedEpisodicEventGovernanceResult: ...
+
+    def retract_approved_event(
+        self, governance: ApprovedEpisodicEventGovernance
+    ) -> ApprovedEpisodicEventGovernanceResult: ...
+
+    def get_approved_event_record(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventRecord: ...
+
+    def list_approved_event_records(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ApprovedEpisodicEventRecordPage: ...
 
 
 @dataclass(frozen=True, slots=True)

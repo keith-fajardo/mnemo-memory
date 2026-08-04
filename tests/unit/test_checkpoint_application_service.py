@@ -13,6 +13,7 @@ from mnemo_memory.packages.application import (
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
     CheckpointApplicationEpisodicEventConflict,
+    CheckpointApplicationEpisodicEventNotFound,
     CheckpointApplicationInvalidContent,
     CheckpointApplicationInvalidLifecycle,
     CheckpointApplicationInvalidScope,
@@ -23,15 +24,20 @@ from mnemo_memory.packages.application import (
     CheckpointApplicationStorageFailure,
     CheckpointView,
     CompleteCheckpoint,
+    CorrectApprovedEpisodicEvent,
     CreateCheckpoint,
+    GetApprovedEpisodicEventRecord,
     GetCheckpoint,
     GetCheckpointContext,
+    ListApprovedEpisodicEventRecords,
     RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
+    RetractApprovedEpisodicEvent,
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.domain import (
     ApprovedEventKind,
+    ApprovedEventLifecycleStatus,
     CheckpointContent,
     CheckpointId,
     CheckpointLesson,
@@ -227,6 +233,112 @@ def test_explicit_approved_events_are_idempotent_evidenced_and_opt_in() -> None:
                 (evidence(),),
             )
         )
+
+
+def test_approved_event_correction_and_retraction_govern_context_and_review() -> None:
+    target = service()
+    scope_value = scope()
+    original = target.record_approved_event(
+        RecordApprovedEpisodicEvent(
+            scope_value,
+            ApprovedEventKind.DECISION,
+            "Use the account grain for the reconciliation.",
+            "reconciliation:grain:original",
+            (evidence(),),
+        )
+    ).event
+    correction = CorrectApprovedEpisodicEvent(
+        scope_value,
+        original.event_id,
+        "Use the verified transaction grain for the reconciliation.",
+        "reconciliation:grain:corrected",
+        "The account-grain statement was disproved by the verified fixture.",
+        "reconciliation:grain:correction-action",
+        (evidence(),),
+    )
+
+    corrected = target.correct_approved_event(correction)
+    assert corrected.idempotent is False
+    assert target.correct_approved_event(correction).idempotent is True
+    assert corrected.target.status is ApprovedEventLifecycleStatus.CORRECTED
+    assert corrected.replacement is not None
+    replacement = corrected.replacement.event
+    assert replacement is not None
+    packet = target.get_context(GetCheckpointContext(scope_value, include_approved_events=True))
+    assert len(packet.episodic_memories) == 1
+    assert "verified transaction grain" in packet.episodic_memories[0].content
+    assert "account grain" not in packet.episodic_memories[0].content
+    records = target.list_approved_event_records(ListApprovedEpisodicEventRecords(scope_value))
+    assert [item.status for item in records.items] == [
+        ApprovedEventLifecycleStatus.ACTIVE,
+        ApprovedEventLifecycleStatus.CORRECTED,
+    ]
+
+    retraction = RetractApprovedEpisodicEvent(
+        scope_value,
+        replacement.event_id,
+        "The user withdrew the corrected fact from durable episodic memory.",
+        "reconciliation:grain:retraction-action",
+        (evidence(),),
+    )
+    retracted = target.retract_approved_event(retraction)
+    assert retracted.idempotent is False
+    assert target.retract_approved_event(retraction).idempotent is True
+    assert (
+        target.get_context(
+            GetCheckpointContext(scope_value, include_approved_events=True)
+        ).episodic_memories
+        == ()
+    )
+    record = target.get_approved_event_record(
+        GetApprovedEpisodicEventRecord(scope_value, replacement.event_id)
+    )
+    assert record.status is ApprovedEventLifecycleStatus.RETRACTED
+    assert record.event is None
+
+
+def test_approved_event_governance_rejects_stale_and_cross_scope_actions() -> None:
+    target = service()
+    scope_value = scope()
+    original = target.record_approved_event(
+        RecordApprovedEpisodicEvent(
+            scope_value,
+            ApprovedEventKind.FAILURE,
+            "A stale comparison failed.",
+            "comparison:failure:original",
+            (evidence(),),
+        )
+    ).event
+    target.retract_approved_event(
+        RetractApprovedEpisodicEvent(
+            scope_value,
+            original.event_id,
+            "The user withdrew the failed comparison fact.",
+            "comparison:failure:retract",
+            (evidence(),),
+        )
+    )
+    with pytest.raises(CheckpointApplicationEpisodicEventNotFound):
+        target.correct_approved_event(
+            CorrectApprovedEpisodicEvent(
+                scope_value,
+                original.event_id,
+                "A competing replacement.",
+                "comparison:failure:replacement",
+                "A stale action must not replace a retracted fact.",
+                "comparison:failure:stale-correction",
+                (evidence(),),
+            )
+        )
+    other_scope = scope()
+    with pytest.raises(CheckpointApplicationEpisodicEventNotFound):
+        target.get_approved_event_record(
+            GetApprovedEpisodicEventRecord(other_scope, original.event_id)
+        )
+    assert (
+        target.list_approved_event_records(ListApprovedEpisodicEventRecords(other_scope)).items
+        == ()
+    )
 
 
 def test_episodic_lifecycle_and_approved_facts_share_one_hard_budget() -> None:

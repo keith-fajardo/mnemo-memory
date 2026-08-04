@@ -2,6 +2,8 @@
 
 from .contracts import (
     ActiveSnapshotConflict,
+    ApprovedEpisodicEventRecord,
+    ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventRepository,
     ApprovedEpisodicEventStorageFailure,
     CheckpointLifecycleEventRepository,
@@ -41,6 +43,8 @@ from .sqlite import (
 
 __all__ = [
     "ActiveSnapshotConflict",
+    "ApprovedEpisodicEventRecord",
+    "ApprovedEpisodicEventRecordPage",
     "ApprovedEpisodicEventRepository",
     "ApprovedEpisodicEventStorageFailure",
     "CheckpointLifecycleEventRepository",

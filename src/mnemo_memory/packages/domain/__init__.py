@@ -1,6 +1,12 @@
 """Pure Mnemo domain identifiers and immutable value objects."""
 
-from .approved_episodic_events import ApprovedEpisodicEvent, ApprovedEventKind
+from .approved_episodic_events import (
+    ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEventGovernanceKind,
+    ApprovedEventKind,
+    ApprovedEventLifecycleStatus,
+)
 from .checkpoint_source_observation import CheckpointSourceObservation
 from .code_structure import (
     CodeEdge,
@@ -122,7 +128,10 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "AgentId",
     "ApprovedEpisodicEvent",
+    "ApprovedEpisodicEventGovernance",
+    "ApprovedEventGovernanceKind",
     "ApprovedEventKind",
+    "ApprovedEventLifecycleStatus",
     "ArtifactCurrentness",
     "BudgetOverride",
     "Checkpoint",

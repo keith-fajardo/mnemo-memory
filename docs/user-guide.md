@@ -239,6 +239,18 @@ Mnemo stores the handoff in its local data directory, not inside the repository.
 data directory and task scope lets the later session retrieve it. Starting a new repository does
 not automatically expose a checkpoint from another project.
 
+To inspect the same bounded active handoff yourself without starting an MCP client, run this from
+the explicitly enabled repository:
+
+```bash
+mnemo-memory memory inspect
+```
+
+The command prints the canonical context packet, including the exact immutable checkpoint revision
+and evidence provenance. It returns `active_task_checkpoint: null` when no active handoff exists and
+fails closed outside an enabled project. Inspection is read-only: it does not refresh source or
+notes, call a model, or broaden retrieval to another project.
+
 ## Start with the guided setup
 
 After installing, run:
@@ -258,6 +270,39 @@ tells the agent to treat that material as evidence rather than instructions, and
 relevant saved structure when a task names a symbol or file. This is a
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
+
+### Review and govern approved facts
+
+An agent may explicitly save one evidence-backed decision, failure, or bounded tool outcome in
+addition to the full checkpoint. You can review those facts from the enabled repository without an
+MCP client:
+
+```bash
+mnemo-memory memory events
+mnemo-memory memory event inspect EVENT_ID
+```
+
+If a fact is wrong, append a same-kind immutable replacement while preserving the correction link:
+
+```bash
+mnemo-memory memory event correct EVENT_ID \
+  --summary "Corrected factual summary" \
+  --reason "Why the retained fact was wrong" \
+  --yes
+```
+
+If the fact should no longer be retained, retract it:
+
+```bash
+mnemo-memory memory event retract EVENT_ID \
+  --reason "Why this fact is being withdrawn" \
+  --yes
+```
+
+Correction and retraction are scoped to the enabled project and require confirmation unless `--yes`
+is supplied. Context returns only active facts. Retraction removes the original summary, source key,
+and evidence links while retaining a bounded tombstone and the evidence for the retraction itself.
+It does not delete checkpoints, notes, exports, or future backups.
 
 You also do not supply or guess owner/workspace/project/session/task UUIDs. When the local MCP
 server starts inside an enabled repository, it resolves that repository's saved internal scope.

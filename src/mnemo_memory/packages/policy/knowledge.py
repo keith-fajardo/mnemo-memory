@@ -23,6 +23,17 @@ _HIGH_CONFIDENCE_SECRET_PATTERNS = (
 )
 
 
+def contains_high_confidence_secret(*values: str) -> bool:
+    """Return a content-free deterministic decision shared by persistence boundaries."""
+    if any(not isinstance(value, str) for value in values):
+        raise TypeError("secret policy values must be strings")
+    return any(
+        pattern.search(value) is not None
+        for value in values
+        for pattern in _HIGH_CONFIDENCE_SECRET_PATTERNS
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeDocumentSafetyDecision:
     """A content-free safety result suitable for diagnostics and tests."""
@@ -47,10 +58,6 @@ class KnowledgeDocumentSafetyPolicy:
             *tuple(value for _, value in document.frontmatter),
             *(item.content for item in document.sections),
         )
-        if any(
-            pattern.search(value) is not None
-            for value in values
-            for pattern in _HIGH_CONFIDENCE_SECRET_PATTERNS
-        ):
+        if contains_high_confidence_secret(*values):
             return KnowledgeDocumentSafetyDecision(False, "MNEMO_KNOWLEDGE_SECRET_REJECTED")
         return KnowledgeDocumentSafetyDecision(True)

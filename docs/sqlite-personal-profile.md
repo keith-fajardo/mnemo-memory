@@ -15,6 +15,13 @@ before repository use; it is idempotent and rejects databases newer than the app
 destructive migration exists in Issue 5. A future destructive change requires a backup/restore
 strategy and a new migration policy ADR before implementation.
 
+Migration `0013_approved_episodic_event_governance.sql` adds append-only correction/retraction
+metadata. The migration itself is additive, forward-only, and transactional: a failed step rolls
+back both schema objects and its ledger entry and can be retried. Retraction is a runtime
+transaction, not a schema migration; it removes one approved event payload and its direct evidence
+links only after inserting the scoped tombstone. Restore the pre-upgrade database backup to return
+to schema 12; no down-migration is provided because schema-12 code cannot enforce governance state.
+
 Scope/principal records are retained with `RESTRICT`. Checkpoints, revisions, evidence, and their
 links also use `RESTRICT`, so evidence supporting a durable checkpoint cannot disappear silently.
 The repository contract suite exercises the same public contract intended for a later PostgreSQL

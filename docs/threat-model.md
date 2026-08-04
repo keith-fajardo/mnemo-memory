@@ -55,10 +55,13 @@ because scope is absent, inferred, cached incorrectly, or filtered only after ra
 
 **Required controls:** Explicit owner/workspace/project scope on every item and operation;
 authorization-constrained database and index queries; no null-as-wildcard behavior; scoped cache
-keys; deny-by-default multi-project requests; provenance showing included scope.
+keys; deny-by-default multi-project requests; provenance showing included scope. Local inspection
+must resolve one explicitly enabled canonical project directory to its stored internal task scope
+before querying and must not accept an absent binding as a wildcard.
 
-**Verification:** Adversarial unit, repository-contract, integration, cache, and export tests with
-identical text across projects. Required result is zero leaked IDs, metadata, counts, or payloads.
+**Verification:** Adversarial unit, repository-contract, integration, cache, export, and local CLI
+tests with identical text across projects, including enabled and unregistered directories. Required
+result is zero leaked IDs, metadata, counts, or payloads.
 
 **Residual risk:** Team authorization is not designed; team mode must not reuse personal-mode
 nullability.
@@ -86,7 +89,9 @@ or compromised extraction creates an apparently authoritative durable memory.
 
 **Required controls:** Evidence and source-trust requirements; assistant output cannot become a
 user fact without verified evidence; candidate/approval states; revision chains; source-authority
-order; conflict reporting; extractor and prompt versioning; deterministic mutation policy.
+order; conflict reporting; extractor and prompt versioning; deterministic mutation policy. An
+explicit approved fact has at most one immutable correction or retraction action; corrected and
+retracted targets are excluded before context ranking, and correction retains exact evidence.
 
 **Verification:** Conflicting-source, repeated-claim, low-confidence, source-deletion, correction,
 and model-output tests. Frequency must not increase authority.
@@ -132,7 +137,9 @@ request creates, pins, corrects, or deletes memory without authority or consent.
 
 **Required controls:** Separate read/write tools and permissions; explicit scoped actor; request IDs
 and idempotency; deterministic schema, policy, consent, and evidence validation; confirmation for
-destructive or authority-changing writes; audit metadata without sensitive payloads.
+destructive or authority-changing writes; audit metadata without sensitive payloads. Personal CLI
+governance resolves only an enabled canonical project binding, requires confirmation, and uses a
+deterministic action key so retry cannot create a second replacement or tombstone.
 
 **Verification:** Read-only annotation tests, confused-deputy cases, replay tests, malformed scope,
 stale consent, injection-triggered writes, and mutation authorization matrices.
@@ -148,6 +155,11 @@ summaries, exports, or backups, or is resurrected during re-ingestion.
 **Required controls:** Immediate retrieval exclusion; tombstones; idempotent durable deletion jobs;
 projection/cache invalidation; job cancellation; source re-ingestion checks; export disclosure;
 backup policy defined before backups ship.
+
+For the current approved-fact-only retraction slice, the canonical event payload and its direct
+evidence links are removed atomically after the scoped tombstone is inserted. Approved facts have
+no FTS, vector, cache, export, or backup projection in this profile. This narrow control does not
+claim general checkpoint, knowledge, export, or backup deletion.
 
 **Verification:** Failure-injected deletion tests across every materialized copy, retries, export,
 reindex, restore, and source rename/recreation. Counts and digests must reconcile.

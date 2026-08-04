@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -9,7 +10,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 import typer
 
@@ -41,14 +42,23 @@ from mnemo_memory.connectors.filesystem import (
 )
 from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
+    CheckpointApplicationEpisodicEventConflict,
+    CheckpointApplicationEpisodicEventNotFound,
     CheckpointApplicationError,
+    CheckpointRuntime,
+    CorrectApprovedEpisodicEvent,
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
+    GetApprovedEpisodicEventRecord,
+    GetCheckpointContext,
     IngestManifest,
     KnowledgeDocumentApplicationService,
+    ListApprovedEpisodicEventRecords,
+    LocalRuntimeError,
+    RetractApprovedEpisodicEvent,
     SynchronizeKnowledgeDocuments,
     build_checkpoint_runtime,
     build_lifecycle_service,
@@ -82,12 +92,20 @@ from mnemo_memory.packages.domain import (
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
+    EventId,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
     KnowledgeDocumentSourceKind,
     MemoryScope,
     OwnerId,
     ProjectId,
     ScopeLevel,
     SourceFileRename,
+    SourceId,
+    SourceTrustClass,
+    VerificationStatus,
     Visibility,
     WorkspaceId,
 )
@@ -108,6 +126,7 @@ from mnemo_memory.packages.project_index import (
 )
 from mnemo_memory.packages.skills_registry import KnowledgeDocumentProcedureRegistry
 from mnemo_memory.packages.storage import (
+    ApprovedEpisodicEventRecord,
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
@@ -137,6 +156,10 @@ memory_semantic_app = typer.Typer(
     no_args_is_help=True,
     help="Explicitly build and inspect an on-device semantic index for this project's notes.",
 )
+memory_event_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inspect, correct, or retract explicit approved project facts.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
@@ -147,6 +170,13 @@ memory_app.add_typer(
     name="semantic",
     help="Use optional local-only semantic retrieval for project notes.",
 )
+memory_app.add_typer(
+    memory_event_app,
+    name="event",
+    help="Inspect, correct, or retract one explicit approved project fact.",
+)
+
+_CLI_APPROVED_EVENT_NAMESPACE = UUID("f40bdf0f-3f1c-4540-956e-6cd210477bee")
 
 _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
@@ -998,6 +1028,273 @@ def _semantic_repository(data_directory: Path) -> SQLiteKnowledgeDocumentReposit
     )
     repository.migrate()
     return repository
+
+
+@memory_app.command(
+    "inspect",
+    help="Print this enabled project's bounded active handoff with exact provenance.",
+)
+def memory_inspect(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Inspect one explicitly bound project without broadening or mutating its scope."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        with build_checkpoint_runtime(config) as runtime:
+            packet = runtime.checkpoint_service.get_context(
+                GetCheckpointContext(binding.checkpoint_scope)
+            )
+        _show(packet.to_dict())
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_MEMORY_INSPECTION_UNAVAILABLE") from error
+
+
+def _approved_event_record_dict(
+    record: ApprovedEpisodicEventRecord, *, include_evidence: bool
+) -> dict[str, object]:
+    event = record.event
+    governance = record.governance
+    event_value: dict[str, object] | None = None
+    if event is not None:
+        event_value = {
+            "kind": event.kind.value,
+            "summary": event.summary,
+            "occurred_at": event.occurred_at.isoformat(),
+        }
+        if include_evidence:
+            event_value["source_event_key"] = event.source_event_key
+            event_value["evidence_references"] = [
+                item.to_dict() for item in event.evidence_references
+            ]
+    governance_value: dict[str, object] | None = None
+    if governance is not None:
+        governance_value = {
+            "action_id": str(governance.action_id),
+            "kind": governance.kind.value,
+            "replacement_event_id": (
+                None
+                if governance.replacement_event_id is None
+                else str(governance.replacement_event_id)
+            ),
+            "reason": governance.reason,
+            "occurred_at": governance.occurred_at.isoformat(),
+        }
+        if include_evidence:
+            governance_value["source_action_key"] = governance.source_action_key
+            governance_value["evidence_references"] = [
+                item.to_dict() for item in governance.evidence_references
+            ]
+    return {
+        "event_id": str(record.event_id),
+        "status": record.status.value,
+        "event": event_value,
+        "governance": governance_value,
+    }
+
+
+def _approved_event_action_material(
+    kind: str, event_id: EventId, reason: str, summary: str | None
+) -> tuple[str, str]:
+    material = json.dumps(
+        {
+            "event_id": str(event_id),
+            "kind": kind,
+            "reason": reason,
+            "summary": summary,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return material, hashlib.sha256(material.encode()).hexdigest()
+
+
+def _approved_event_cli_evidence(
+    event_id: EventId, digest: str, observed_at: datetime
+) -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId(uuid5(_CLI_APPROVED_EVENT_NAMESPACE, f"evidence:{digest}")),
+        SourceId(uuid5(_CLI_APPROVED_EVENT_NAMESPACE, "source:user-correction")),
+        EvidenceSourceType.USER_CORRECTION,
+        SourceTrustClass.USER_CORRECTION,
+        f"mnemo:user-correction/{digest}",
+        f"sha256:{digest}",
+        EvidenceLocation(f"mnemo:cli/memory/event/{event_id}"),
+        observed_at,
+        VerificationStatus.VERIFIED,
+    )
+
+
+def _memory_event_runtime(
+    project_dir: Path, data_dir: Path | None
+) -> tuple[MemoryProjectBinding, CheckpointRuntime]:
+    config = resolve_local_config(data_dir)
+    binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+    if binding is None:
+        raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+    return binding, build_checkpoint_runtime(config)
+
+
+@memory_app.command("events", help="List this enabled project's approved episodic facts.")
+def memory_events(
+    limit: int = typer.Option(20, "--limit", min=1, max=100),
+    offset: int = typer.Option(0, "--offset", min=0),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        binding, runtime_value = _memory_event_runtime(project_dir, data_dir)
+        with runtime_value as opened:
+            page = opened.checkpoint_service.list_approved_event_records(
+                ListApprovedEpisodicEventRecords(binding.checkpoint_scope, offset, limit)
+            )
+        _show(
+            {
+                "events": [
+                    _approved_event_record_dict(item, include_evidence=False) for item in page.items
+                ],
+                "next_offset": page.next_offset,
+            }
+        )
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_REVIEW_UNAVAILABLE") from error
+
+
+@memory_event_app.command("inspect", help="Inspect one approved fact and its exact evidence.")
+def memory_event_inspect(
+    event_id: str = typer.Argument(...),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        typed_event_id = EventId.from_string(event_id)
+        binding, runtime_value = _memory_event_runtime(project_dir, data_dir)
+        with runtime_value as runtime:
+            record = runtime.checkpoint_service.get_approved_event_record(
+                GetApprovedEpisodicEventRecord(binding.checkpoint_scope, typed_event_id)
+            )
+        _show(_approved_event_record_dict(record, include_evidence=True))
+    except CheckpointApplicationEpisodicEventNotFound as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_NOT_FOUND") from error
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_REVIEW_UNAVAILABLE") from error
+
+
+@memory_event_app.command("correct", help="Append an evidence-backed correction for one fact.")
+def memory_event_correct(
+    event_id: str = typer.Argument(...),
+    summary: str = typer.Option(..., "--summary", min=1, max=1200),
+    reason: str = typer.Option(..., "--reason", min=1, max=1200),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    yes: bool = typer.Option(False, "--yes", help="Confirm the immutable correction."),
+) -> None:
+    if not yes and not typer.confirm("Correct this approved episodic fact?"):
+        raise typer.Abort()
+    try:
+        typed_event_id = EventId.from_string(event_id)
+        _, digest = _approved_event_action_material("corrected", typed_event_id, reason, summary)
+        observed_at = datetime.now(UTC)
+        evidence = _approved_event_cli_evidence(typed_event_id, digest, observed_at)
+        binding, runtime_value = _memory_event_runtime(project_dir, data_dir)
+        with runtime_value as runtime:
+            result = runtime.checkpoint_service.correct_approved_event(
+                CorrectApprovedEpisodicEvent(
+                    binding.checkpoint_scope,
+                    typed_event_id,
+                    summary,
+                    f"cli-correction-event:{typed_event_id}:{digest[:32]}",
+                    reason,
+                    f"cli-correction-action:{typed_event_id}:{digest[:32]}",
+                    (evidence,),
+                )
+            )
+        _show(
+            {
+                "idempotent": result.idempotent,
+                "corrected": _approved_event_record_dict(result.target, include_evidence=False),
+                "replacement": None
+                if result.replacement is None
+                else _approved_event_record_dict(result.replacement, include_evidence=False),
+            }
+        )
+    except CheckpointApplicationEpisodicEventNotFound as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_NOT_FOUND") from error
+    except CheckpointApplicationEpisodicEventConflict as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_ACTION_CONFLICT") from error
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_CORRECTION_FAILED") from error
+
+
+@memory_event_app.command("retract", help="Retract one fact and erase its retained payload.")
+def memory_event_retract(
+    event_id: str = typer.Argument(...),
+    reason: str = typer.Option(..., "--reason", min=1, max=1200),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    yes: bool = typer.Option(False, "--yes", help="Confirm payload retraction."),
+) -> None:
+    if not yes and not typer.confirm("Retract this approved fact and erase its payload?"):
+        raise typer.Abort()
+    try:
+        typed_event_id = EventId.from_string(event_id)
+        _, digest = _approved_event_action_material("retracted", typed_event_id, reason, None)
+        observed_at = datetime.now(UTC)
+        evidence = _approved_event_cli_evidence(typed_event_id, digest, observed_at)
+        binding, runtime_value = _memory_event_runtime(project_dir, data_dir)
+        with runtime_value as runtime:
+            result = runtime.checkpoint_service.retract_approved_event(
+                RetractApprovedEpisodicEvent(
+                    binding.checkpoint_scope,
+                    typed_event_id,
+                    reason,
+                    f"cli-retraction-action:{typed_event_id}:{digest[:32]}",
+                    (evidence,),
+                )
+            )
+        _show(
+            {
+                "idempotent": result.idempotent,
+                "retracted": _approved_event_record_dict(result.target, include_evidence=False),
+            }
+        )
+    except CheckpointApplicationEpisodicEventNotFound as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_NOT_FOUND") from error
+    except CheckpointApplicationEpisodicEventConflict as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_ACTION_CONFLICT") from error
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_APPROVED_EVENT_RETRACTION_FAILED") from error
 
 
 @memory_semantic_app.command(

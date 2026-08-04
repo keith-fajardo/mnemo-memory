@@ -12,6 +12,8 @@ from typing import TypeVar
 from mnemo_memory.packages.domain import (
     DEFAULT_CONTEXT_BUDGET,
     ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEventGovernanceKind,
     ApprovedEventKind,
     CheckpointAggregate,
     CheckpointContent,
@@ -28,6 +30,7 @@ from mnemo_memory.packages.domain import (
     ContextItem,
     ContextItemType,
     ContextPacket,
+    EventId,
     EvidenceId,
     EvidenceReference,
     MemoryScope,
@@ -44,8 +47,11 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.storage.contracts import (
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventNotFound,
+    ApprovedEpisodicEventRecord,
+    ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventRepository,
     ApprovedEpisodicEventRepositoryError,
+    ApprovedEpisodicEventSecretRejected,
     CheckpointLifecycleEventRepository,
     CheckpointNotFound,
     CheckpointRepository,
@@ -108,6 +114,10 @@ class CheckpointApplicationEpisodicEventConflict(CheckpointApplicationError):
     pass
 
 
+class CheckpointApplicationEpisodicEventNotFound(CheckpointApplicationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CreateCheckpoint:
     scope: MemoryScope
@@ -167,6 +177,45 @@ class RecordApprovedEpisodicEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class CorrectApprovedEpisodicEvent:
+    scope: MemoryScope
+    event_id: EventId
+    summary: str
+    source_event_key: str
+    reason: str
+    source_action_key: str
+    evidence_references: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RetractApprovedEpisodicEvent:
+    scope: MemoryScope
+    event_id: EventId
+    reason: str
+    source_action_key: str
+    evidence_references: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GetApprovedEpisodicEventRecord:
+    scope: MemoryScope
+    event_id: EventId
+
+
+@dataclass(frozen=True, slots=True)
+class ListApprovedEpisodicEventRecords:
+    scope: MemoryScope
+    offset: int = 0
+    limit: int = 50
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.offset, int) or self.offset < 0:
+            raise ValueError("approved event offset must be non-negative")
+        if not isinstance(self.limit, int) or not 1 <= self.limit <= 100:
+            raise ValueError("approved event limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
 class GetCheckpoint:
     scope: MemoryScope
     checkpoint_id: CheckpointId
@@ -210,6 +259,13 @@ class CheckpointView:
 @dataclass(frozen=True, slots=True)
 class ApprovedEpisodicEventView:
     event: ApprovedEpisodicEvent
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventGovernanceView:
+    target: ApprovedEpisodicEventRecord
+    replacement: ApprovedEpisodicEventRecord | None
     idempotent: bool
 
 
@@ -446,6 +502,10 @@ class CheckpointApplicationService:
             )
         try:
             stored = self._approved_event_repository.append_approved_event(candidate)
+        except ApprovedEpisodicEventSecretRejected as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved episodic event was rejected by deterministic secret policy"
+            ) from error
         except ApprovedEpisodicEventConflict as error:
             raise CheckpointApplicationEpisodicEventConflict(
                 "approved episodic event conflicts with an existing fact"
@@ -455,6 +515,159 @@ class CheckpointApplicationService:
                 "approved episodic event storage is unavailable"
             ) from error
         return ApprovedEpisodicEventView(stored.event, stored.idempotent)
+
+    def correct_approved_event(
+        self, command: CorrectApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventGovernanceView:
+        self._validate_scope(command.scope)
+        repository = self._approved_repository()
+        evidence = self._approved_governance_evidence(command.evidence_references)
+        try:
+            target = repository.get_approved_event(command.scope, command.event_id)
+        except ApprovedEpisodicEventNotFound as error:
+            raise CheckpointApplicationEpisodicEventNotFound(
+                "approved episodic event was not found"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        occurred_at = self._now()
+        try:
+            replacement = ApprovedEpisodicEvent.create(
+                scope=command.scope,
+                kind=target.kind,
+                summary=command.summary,
+                source_event_key=command.source_event_key,
+                occurred_at=occurred_at,
+                evidence_references=evidence,
+            )
+            governance = ApprovedEpisodicEventGovernance.create(
+                scope=command.scope,
+                kind=ApprovedEventGovernanceKind.CORRECTED,
+                target_event_id=command.event_id,
+                replacement_event_id=replacement.event_id,
+                reason=command.reason,
+                source_action_key=command.source_action_key,
+                occurred_at=occurred_at,
+                evidence_references=evidence,
+            )
+        except (TypeError, ValueError) as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved event correction is invalid"
+            ) from error
+        try:
+            result = repository.correct_approved_event(replacement, governance)
+        except ApprovedEpisodicEventSecretRejected as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved event correction was rejected by deterministic secret policy"
+            ) from error
+        except ApprovedEpisodicEventNotFound as error:
+            raise CheckpointApplicationEpisodicEventNotFound(
+                "approved episodic event was not found"
+            ) from error
+        except ApprovedEpisodicEventConflict as error:
+            raise CheckpointApplicationEpisodicEventConflict(
+                "approved episodic event correction conflicts"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        return ApprovedEpisodicEventGovernanceView(
+            result.target, result.replacement, result.idempotent
+        )
+
+    def retract_approved_event(
+        self, command: RetractApprovedEpisodicEvent
+    ) -> ApprovedEpisodicEventGovernanceView:
+        self._validate_scope(command.scope)
+        repository = self._approved_repository()
+        evidence = self._approved_governance_evidence(command.evidence_references)
+        try:
+            governance = ApprovedEpisodicEventGovernance.create(
+                scope=command.scope,
+                kind=ApprovedEventGovernanceKind.RETRACTED,
+                target_event_id=command.event_id,
+                replacement_event_id=None,
+                reason=command.reason,
+                source_action_key=command.source_action_key,
+                occurred_at=self._now(),
+                evidence_references=evidence,
+            )
+        except (TypeError, ValueError) as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved event retraction is invalid"
+            ) from error
+        try:
+            result = repository.retract_approved_event(governance)
+        except ApprovedEpisodicEventSecretRejected as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved event retraction was rejected by deterministic secret policy"
+            ) from error
+        except ApprovedEpisodicEventNotFound as error:
+            raise CheckpointApplicationEpisodicEventNotFound(
+                "approved episodic event was not found"
+            ) from error
+        except ApprovedEpisodicEventConflict as error:
+            raise CheckpointApplicationEpisodicEventConflict(
+                "approved episodic event retraction conflicts"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        return ApprovedEpisodicEventGovernanceView(
+            result.target, result.replacement, result.idempotent
+        )
+
+    def get_approved_event_record(
+        self, query: GetApprovedEpisodicEventRecord
+    ) -> ApprovedEpisodicEventRecord:
+        self._validate_scope(query.scope)
+        try:
+            return self._approved_repository().get_approved_event_record(
+                query.scope, query.event_id
+            )
+        except ApprovedEpisodicEventNotFound as error:
+            raise CheckpointApplicationEpisodicEventNotFound(
+                "approved episodic event was not found"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+
+    def list_approved_event_records(
+        self, query: ListApprovedEpisodicEventRecords
+    ) -> ApprovedEpisodicEventRecordPage:
+        self._validate_scope(query.scope)
+        try:
+            return self._approved_repository().list_approved_event_records(
+                query.scope, offset=query.offset, limit=query.limit
+            )
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+
+    def _approved_repository(self) -> ApprovedEpisodicEventRepository:
+        if self._approved_event_repository is None:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            )
+        return self._approved_event_repository
+
+    @staticmethod
+    def _approved_governance_evidence(
+        evidence_references: tuple[EvidenceReference, ...],
+    ) -> tuple[EvidenceReference, ...]:
+        evidence = tuple(evidence_references)
+        if not evidence or any(not isinstance(item, EvidenceReference) for item in evidence):
+            raise CheckpointApplicationMissingProvenance(
+                "approved event governance requires evidence-bearing provenance"
+            )
+        return evidence
 
     def get(self, query: GetCheckpoint) -> CheckpointView:
         self._validate_scope(query.scope)
