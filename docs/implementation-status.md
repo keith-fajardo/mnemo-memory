@@ -687,3 +687,9 @@ links; and marks every parsed document as untrusted data. It reads no filesystem
 no links, executes no Markdown/frontmatter, and makes no model or network call. Vault discovery,
 consent, secret policy, persistent incremental sync, rename/deletion handling, lexical retrieval,
 embeddings, and context integration remain in progress.
+
+The next completed boundary is an explicit local Markdown discovery connector. A caller supplies
+an absolute approved root and exact scope; the connector reads only bounded `.md` files, skips
+symlinked files and known metadata/cache directories (including `.obsidian`), preserves safe
+relative identities, and returns deterministic untrusted candidates. It does not persist text,
+follow document links, discover a vault automatically, or add documents to agent context.
