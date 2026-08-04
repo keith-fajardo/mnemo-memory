@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import struct
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -36,6 +37,7 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    CurrentKnowledgeDocumentSection,
     DbtSnapshotId,
     EventId,
     EvidenceReference,
@@ -48,6 +50,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
+    KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
     OwnerId,
@@ -116,7 +119,7 @@ from .contracts import (
     validate_knowledge_search,
 )
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -332,6 +335,24 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 11:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 11
+            if version < 12:
+                # The semantic rows are rebuildable.  As with FTS, an interrupted unreleased
+                # local migration may have created the table before its ledger entry.
+                embeddings_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'knowledge_section_embeddings'"
+                ).fetchone()
+                if embeddings_table is None:
+                    _execute_sql_script(
+                        connection, _migration_text("0012_knowledge_section_embeddings.sql")
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (12, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 12:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 12
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -2134,6 +2155,17 @@ def _maybe(value: object | None) -> str | None:
     return None if value is None else str(value)
 
 
+def _pack_embedding_vector(vector: tuple[float, ...]) -> bytes:
+    """Serialize bounded finite floats without a pickle or architecture-dependent payload."""
+    return struct.pack(f"!{len(vector)}f", *vector)
+
+
+def _unpack_embedding_vector(payload: bytes, dimensions: int) -> tuple[float, ...]:
+    if not 8 <= dimensions <= 4_096 or len(payload) != dimensions * 4:
+        raise ValueError("knowledge embedding vector storage is invalid")
+    return tuple(struct.unpack(f"!{dimensions}f", payload))
+
+
 class _KnowledgeOperations:
     """SQLite-specific knowledge operations kept separate from checkpoint public methods."""
 
@@ -2294,6 +2326,159 @@ class _KnowledgeOperations:
         except KnowledgeDocumentConflict:
             raise
         except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def iter_current_knowledge_sections(
+        backend: SQLiteCheckpointRepository, scope: MemoryScope, maximum_documents: int
+    ) -> tuple[CurrentKnowledgeDocumentSection, ...]:
+        """Load only selected current sections, in source/section order, for a local projection."""
+        backend._require_project_scope(scope)
+        if not 1 <= maximum_documents <= 128:
+            raise KnowledgeDocumentConflict("knowledge document limit is invalid")
+        try:
+            with backend._connect() as connection:
+                rows = connection.execute(
+                    "WITH selected_sources AS ("
+                    "SELECT document_id, current_revision_id FROM knowledge_document_sources "
+                    "WHERE owner_id = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND is_deleted = 0 ORDER BY relative_path ASC, document_id ASC LIMIT ?"
+                    ") SELECT revision.* FROM selected_sources AS selected "
+                    "JOIN knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = selected.current_revision_id "
+                    "ORDER BY revision.relative_path ASC, revision.document_id ASC",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        maximum_documents,
+                    ),
+                ).fetchall()
+                return tuple(
+                    CurrentKnowledgeDocumentSection(revision, index, section)
+                    for row in rows
+                    for revision in (
+                        _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope),
+                    )
+                    for index, section in enumerate(revision.document.sections)
+                )
+        except KnowledgeDocumentConflict:
+            raise
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def list_current_knowledge_section_embeddings(
+        backend: SQLiteCheckpointRepository,
+        scope: MemoryScope,
+        model_id: str,
+        maximum_documents: int,
+    ) -> tuple[KnowledgeSectionEmbedding, ...]:
+        backend._require_project_scope(scope)
+        if not model_id or len(model_id) > 256 or not 1 <= maximum_documents <= 128:
+            raise KnowledgeDocumentConflict("knowledge embedding query is invalid")
+        try:
+            with backend._connect() as connection:
+                rows = connection.execute(
+                    "WITH selected_sources AS ("
+                    "SELECT document_id, current_revision_id FROM knowledge_document_sources "
+                    "WHERE owner_id = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND is_deleted = 0 ORDER BY relative_path ASC, document_id ASC LIMIT ?"
+                    ") SELECT embedding.* FROM selected_sources AS selected "
+                    "JOIN knowledge_section_embeddings AS embedding "
+                    "ON embedding.revision_id = selected.current_revision_id "
+                    "WHERE embedding.owner_id = ? AND embedding.workspace_id IS ? "
+                    "AND embedding.project_id = ? AND embedding.model_id = ? "
+                    "ORDER BY embedding.revision_id ASC, embedding.section_index ASC",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        maximum_documents,
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        model_id,
+                    ),
+                ).fetchall()
+                return tuple(
+                    KnowledgeSectionEmbedding(
+                        scope,
+                        KnowledgeDocumentRevisionId.from_string(row["revision_id"]),
+                        int(row["section_index"]),
+                        row["model_id"],
+                        row["section_digest"],
+                        _unpack_embedding_vector(row["vector_blob"], int(row["dimensions"])),
+                    )
+                    for row in rows
+                )
+        except (ValueError, struct.error) as error:
+            raise KnowledgeDocumentStorageFailure(
+                "knowledge embedding storage is invalid"
+            ) from error
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
+    def store_knowledge_section_embeddings(
+        backend: SQLiteCheckpointRepository,
+        scope: MemoryScope,
+        embeddings: tuple[KnowledgeSectionEmbedding, ...],
+    ) -> None:
+        backend._require_project_scope(scope)
+        if not embeddings:
+            return
+        keys = [(item.revision_id, item.section_index, item.model_id) for item in embeddings]
+        if len(set(keys)) != len(keys) or any(item.scope != scope for item in embeddings):
+            raise KnowledgeDocumentConflict("knowledge embeddings are invalid")
+        try:
+            with backend._transaction() as connection:
+                backend._store_project_scope(connection, scope)
+                for item in embeddings:
+                    exists = connection.execute(
+                        "SELECT 1 FROM knowledge_document_sources AS source "
+                        "JOIN knowledge_document_sections AS section "
+                        "ON section.revision_id = source.current_revision_id "
+                        "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                        "AND source.project_id = ? AND source.is_deleted = 0 "
+                        "AND section.revision_id = ? AND section.section_index = ?",
+                        (
+                            str(scope.owner_id),
+                            _maybe(scope.workspace_id),
+                            str(scope.project_id),
+                            str(item.revision_id),
+                            item.section_index,
+                        ),
+                    ).fetchone()
+                    if exists is None:
+                        raise KnowledgeDocumentConflict("knowledge embedding is not current")
+                connection.executemany(
+                    "INSERT INTO knowledge_section_embeddings("
+                    "revision_id, section_index, owner_id, workspace_id, project_id, model_id, "
+                    "section_digest, dimensions, vector_blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(revision_id, section_index, model_id) DO UPDATE SET "
+                    "section_digest = excluded.section_digest, dimensions = excluded.dimensions, "
+                    "vector_blob = excluded.vector_blob",
+                    [
+                        (
+                            str(item.revision_id),
+                            item.section_index,
+                            str(scope.owner_id),
+                            _maybe(scope.workspace_id),
+                            str(scope.project_id),
+                            item.model_id,
+                            item.section_digest,
+                            len(item.vector),
+                            _pack_embedding_vector(item.vector),
+                        )
+                        for item in embeddings
+                    ],
+                )
+        except KnowledgeDocumentConflict:
+            raise
+        except sqlite3.IntegrityError as error:
+            raise KnowledgeDocumentConflict("knowledge embedding storage conflicts") from error
+        except (sqlite3.Error, struct.error) as error:
             raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
 
     @staticmethod
@@ -2663,6 +2848,25 @@ class SQLiteKnowledgeDocumentRepository:
         return _KnowledgeOperations.search_current_knowledge_sections(
             self._backend, scope, terms, limit, maximum_documents
         )
+
+    def iter_current_sections(
+        self, scope: MemoryScope, maximum_documents: int
+    ) -> tuple[CurrentKnowledgeDocumentSection, ...]:
+        return _KnowledgeOperations.iter_current_knowledge_sections(
+            self._backend, scope, maximum_documents
+        )
+
+    def list_current_section_embeddings(
+        self, scope: MemoryScope, model_id: str, maximum_documents: int
+    ) -> tuple[KnowledgeSectionEmbedding, ...]:
+        return _KnowledgeOperations.list_current_knowledge_section_embeddings(
+            self._backend, scope, model_id, maximum_documents
+        )
+
+    def store_section_embeddings(
+        self, scope: MemoryScope, embeddings: tuple[KnowledgeSectionEmbedding, ...]
+    ) -> None:
+        _KnowledgeOperations.store_knowledge_section_embeddings(self._backend, scope, embeddings)
 
     def apply_sync(
         self,

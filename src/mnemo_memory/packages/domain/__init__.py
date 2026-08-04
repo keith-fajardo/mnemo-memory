@@ -73,6 +73,7 @@ from .identifiers import (
     WorkspaceId,
 )
 from .knowledge import (
+    CurrentKnowledgeDocumentSection,
     KnowledgeDocument,
     KnowledgeDocumentLink,
     KnowledgeDocumentRelation,
@@ -82,8 +83,10 @@ from .knowledge import (
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
     KnowledgeLinkDirection,
+    KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     knowledge_search_tokens,
+    knowledge_section_digest,
     normalize_knowledge_query,
 )
 from .knowledge_sync import (
@@ -148,6 +151,7 @@ __all__ = [
     "ContextItem",
     "ContextItemType",
     "ContextPacket",
+    "CurrentKnowledgeDocumentSection",
     "DbtArtifactMetadata",
     "DbtLineageEdge",
     "DbtManifestArtifact",
@@ -173,6 +177,7 @@ __all__ = [
     "KnowledgeDocumentSourceKind",
     "KnowledgeDocumentTombstone",
     "KnowledgeLinkDirection",
+    "KnowledgeSectionEmbedding",
     "KnowledgeSyncAction",
     "KnowledgeSyncActionKind",
     "KnowledgeSyncPlan",
@@ -214,6 +219,7 @@ __all__ = [
     "Visibility",
     "WorkspaceId",
     "knowledge_search_tokens",
+    "knowledge_section_digest",
     "normalize_knowledge_query",
     "unique_file_renames",
 ]

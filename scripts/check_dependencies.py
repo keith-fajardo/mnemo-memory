@@ -89,9 +89,12 @@ def validate_python_lock(dependencies: list[dict[str, object]]) -> None:
         )
 
     project = load_toml(REPOSITORY_ROOT / "pyproject.toml")
+    project_table = cast(dict[str, object], project["project"])
+    optional = cast(dict[str, list[str]], project_table.get("optional-dependencies", {}))
     direct_requirements = (
-        list(cast(list[str], cast(dict[str, object], project["project"])["dependencies"]))
+        list(cast(list[str], project_table["dependencies"]))
         + cast(dict[str, list[str]], project["dependency-groups"])["dev"]
+        + [requirement for requirements in optional.values() for requirement in requirements]
     )
     direct_locked = {
         (requirement.split("==", maxsplit=1)[0].casefold(), requirement.split("==", maxsplit=1)[1])

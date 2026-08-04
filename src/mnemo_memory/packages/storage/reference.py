@@ -24,6 +24,7 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    CurrentKnowledgeDocumentSection,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -31,6 +32,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentRevisionId,
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
+    KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
     ScopeLevel,
@@ -98,6 +100,9 @@ class ReferenceKnowledgeDocumentRepository:
         self._active: dict[KnowledgeDocumentId, KnownKnowledgeDocument] = {}
         self._revisions: dict[KnowledgeDocumentRevisionId, KnowledgeDocumentRevision] = {}
         self._tombstones: dict[KnowledgeDocumentId, KnowledgeDocumentTombstone] = {}
+        self._embeddings: dict[
+            tuple[KnowledgeDocumentRevisionId, int, str], KnowledgeSectionEmbedding
+        ] = {}
 
     def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]:
         self._require_scope(scope)
@@ -148,6 +153,61 @@ class ReferenceKnowledgeDocumentRepository:
         revisions = tuple(self._revisions[known.current_revision_id] for known in active)
         return rank_knowledge_sections(revisions, terms, limit)
 
+    def iter_current_sections(
+        self, scope: MemoryScope, maximum_documents: int
+    ) -> tuple[CurrentKnowledgeDocumentSection, ...]:
+        self._require_scope(scope)
+        if not 1 <= maximum_documents <= 128:
+            raise KnowledgeDocumentConflict("knowledge document limit is invalid")
+        return tuple(
+            CurrentKnowledgeDocumentSection(revision, index, section)
+            for known in self.list_active_documents(scope)[:maximum_documents]
+            for revision in (self._revisions[known.current_revision_id],)
+            for index, section in enumerate(revision.document.sections)
+        )
+
+    def list_current_section_embeddings(
+        self, scope: MemoryScope, model_id: str, maximum_documents: int
+    ) -> tuple[KnowledgeSectionEmbedding, ...]:
+        self._require_scope(scope)
+        if not model_id or len(model_id) > 256 or not 1 <= maximum_documents <= 128:
+            raise KnowledgeDocumentConflict("knowledge embedding query is invalid")
+        current = {
+            (section.revision.revision_id, section.section_index)
+            for section in self.iter_current_sections(scope, maximum_documents)
+        }
+        return tuple(
+            item
+            for _, item in sorted(
+                self._embeddings.items(),
+                key=lambda pair: (str(pair[0][0]), pair[0][1], pair[0][2]),
+            )
+            if item.scope == scope
+            and item.model_id == model_id
+            and (item.revision_id, item.section_index) in current
+        )
+
+    def store_section_embeddings(
+        self, scope: MemoryScope, embeddings: tuple[KnowledgeSectionEmbedding, ...]
+    ) -> None:
+        self._require_scope(scope)
+        if not embeddings:
+            return
+        keys = [(item.revision_id, item.section_index, item.model_id) for item in embeddings]
+        if len(set(keys)) != len(keys) or any(item.scope != scope for item in embeddings):
+            raise KnowledgeDocumentConflict("knowledge embeddings are invalid")
+        current = {
+            (section.revision.revision_id, section.section_index)
+            for section in self.iter_current_sections(scope, 128)
+        }
+        if any((item.revision_id, item.section_index) not in current for item in embeddings):
+            raise KnowledgeDocumentConflict("knowledge embedding is not current")
+        updated = dict(self._embeddings)
+        updated.update(
+            {(item.revision_id, item.section_index, item.model_id): item for item in embeddings}
+        )
+        self._embeddings = updated
+
     def apply_sync(
         self,
         scope: MemoryScope,
@@ -156,10 +216,11 @@ class ReferenceKnowledgeDocumentRepository:
     ) -> KnowledgeDocumentSyncStoreResult:
         self._require_scope(scope)
         self._validate(scope, revisions, tombstones)
-        active, stored_revisions, stored_tombstones = (
+        active, stored_revisions, stored_tombstones, stored_embeddings = (
             dict(self._active),
             dict(self._revisions),
             dict(self._tombstones),
+            dict(self._embeddings),
         )
         try:
             for tombstone in tombstones:
@@ -169,6 +230,9 @@ class ReferenceKnowledgeDocumentRepository:
                 for revision_id, revision in tuple(stored_revisions.items()):
                     if revision.document.document_id == tombstone.document_id:
                         del stored_revisions[revision_id]
+                        for key in tuple(stored_embeddings):
+                            if key[0] == revision_id:
+                                del stored_embeddings[key]
                 stored_tombstones[tombstone.document_id] = tombstone
             for revision in revisions:
                 document = revision.document
@@ -184,10 +248,11 @@ class ReferenceKnowledgeDocumentRepository:
                 stored_tombstones.pop(document.document_id, None)
         except BaseException:
             raise
-        self._active, self._revisions, self._tombstones = (
+        self._active, self._revisions, self._tombstones, self._embeddings = (
             active,
             stored_revisions,
             stored_tombstones,
+            stored_embeddings,
         )
         return KnowledgeDocumentSyncStoreResult(
             self.list_active_documents(scope), len(revisions), len(tombstones)

@@ -233,8 +233,9 @@ def test_sqlite_fts_projection_contains_only_current_scoped_revisions_and_migrat
 
     # Simulate a valid pre-0011 database: the forward migration rehydrates only its active rows.
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE knowledge_section_embeddings")
         connection.execute("DROP TABLE knowledge_document_section_fts")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (11, 12)")
     repository.migrate()
     with sqlite3.connect(path) as connection:
         assert connection.execute(
@@ -249,8 +250,9 @@ def test_knowledge_fts_migration_is_atomic(tmp_path: Path) -> None:
     repository = SQLiteKnowledgeDocumentRepository(path, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE knowledge_section_embeddings")
         connection.execute("DROP TABLE knowledge_document_section_fts")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (11, 12)")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=11)

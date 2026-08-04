@@ -29,4 +29,7 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     ).is_file()
     assert package_files.joinpath("resources/migrations/0010_knowledge_documents.sql").is_file()
     assert package_files.joinpath("resources/migrations/0011_knowledge_section_fts.sql").is_file()
+    assert package_files.joinpath(
+        "resources/migrations/0012_knowledge_section_embeddings.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

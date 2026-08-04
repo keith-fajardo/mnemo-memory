@@ -8,10 +8,13 @@ approved_licenses = [
     "Apache-2.0 OR BSD-2-Clause",
     "Apache-2.0 OR MIT",
     "Artistic-2.0",
+    "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "MIT",
+    "MIT-CMU",
+    "MPL-2.0 AND MIT",
     "MPL-2.0",
     "PSF-2.0",
 ]
@@ -872,4 +875,264 @@ owner = "Mnemo CI"
 purpose = "Installs the pinned Node.js runtime in CI"
 replacement_boundary = "CI Node.js provisioning step"
 direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "fastembed"
+version = "0.8.0"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/fastembed/0.8.0/"
+author = "Qdrant Team"
+owner = "Mnemo semantic-retrieval optional extra"
+purpose = "Optional local ONNX embedding adapter; never loaded by the default runtime"
+replacement_boundary = "Local embedding connector; package knowledge contracts remain model-independent"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "onnxruntime"
+version = "1.28.0"
+license = "MIT"
+source_url = "https://pypi.org/project/onnxruntime/1.28.0/"
+author = "Microsoft Corporation"
+owner = "fastembed"
+purpose = "Local CPU inference runtime for the optional semantic extra"
+replacement_boundary = "Transitive FastEmbed inference runtime"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "numpy"
+version = "2.5.1"
+license = "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
+source_url = "https://pypi.org/project/numpy/2.5.1/"
+author = "NumPy contributors"
+owner = "fastembed"
+purpose = "Numeric vectors required by the optional local embedding runtime"
+replacement_boundary = "Transitive FastEmbed numeric runtime"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "huggingface-hub"
+version = "1.26.0"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/huggingface-hub/1.26.0/"
+author = "Hugging Face, Inc."
+owner = "fastembed"
+purpose = "Explicit local model-artifact acquisition for the optional semantic extra"
+replacement_boundary = "Transitive FastEmbed model-download client; never used by default Mnemo operation"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "hf-xet"
+version = "1.6.0"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/hf-xet/1.6.0/"
+author = "Hugging Face contributors"
+owner = "huggingface-hub"
+purpose = "Efficient transfer support for an explicitly requested local model artifact"
+replacement_boundary = "Transitive Hugging Face Hub transport support"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tokenizers"
+version = "0.23.1"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/tokenizers/0.23.1/"
+author = "Hugging Face contributors"
+owner = "fastembed"
+purpose = "Local tokenization required by the optional embedding model"
+replacement_boundary = "Transitive FastEmbed tokenization runtime"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pillow"
+version = "12.3.0"
+license = "MIT-CMU"
+source_url = "https://pypi.org/project/pillow/12.3.0/"
+author = "Pillow contributors"
+owner = "fastembed"
+purpose = "Transitive package support required by FastEmbed's declared runtime"
+replacement_boundary = "Transitive FastEmbed image dependency; Mnemo uses no image embeddings"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "requests"
+version = "2.34.2"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/requests/2.34.2/"
+author = "Requests contributors"
+owner = "fastembed"
+purpose = "Declared transport dependency used only while explicitly acquiring a local model"
+replacement_boundary = "Transitive FastEmbed transport dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "tqdm"
+version = "4.70.0"
+license = "MPL-2.0 AND MIT"
+source_url = "https://pypi.org/project/tqdm/4.70.0/"
+author = "tqdm contributors"
+owner = "fastembed"
+purpose = "Progress reporting for explicit local model acquisition"
+replacement_boundary = "Transitive FastEmbed progress utility"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "loguru"
+version = "0.7.3"
+license = "MIT"
+source_url = "https://pypi.org/project/loguru/0.7.3/"
+author = "Delgan"
+owner = "fastembed"
+purpose = "Declared FastEmbed diagnostic dependency; Mnemo does not route its logs into context"
+replacement_boundary = "Transitive FastEmbed logging dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "mmh3"
+version = "5.2.1"
+license = "MIT"
+source_url = "https://pypi.org/project/mmh3/5.2.1/"
+author = "Hajime Senuma"
+owner = "fastembed"
+purpose = "Declared local hashing dependency for FastEmbed"
+replacement_boundary = "Transitive FastEmbed hashing dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "py-rust-stemmers"
+version = "0.1.8"
+license = "MIT"
+source_url = "https://pypi.org/project/py-rust-stemmers/0.1.8/"
+author = "Qdrant"
+owner = "fastembed"
+purpose = "Declared local stemming support for FastEmbed"
+replacement_boundary = "Transitive FastEmbed stemming dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "flatbuffers"
+version = "25.12.19"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/flatbuffers/25.12.19/"
+author = "Google FlatBuffers contributors"
+owner = "onnxruntime"
+purpose = "Binary model format support for local ONNX inference"
+replacement_boundary = "Transitive ONNX Runtime dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "protobuf"
+version = "7.35.1"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/protobuf/7.35.1/"
+author = "Protocol Buffers contributors"
+owner = "onnxruntime"
+purpose = "Model serialization support for local ONNX inference"
+replacement_boundary = "Transitive ONNX Runtime dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pyyaml"
+version = "6.0.3"
+license = "MIT"
+source_url = "https://pypi.org/project/PyYAML/6.0.3/"
+author = "PyYAML contributors"
+owner = "huggingface-hub"
+purpose = "Declared local metadata parsing for explicit model acquisition"
+replacement_boundary = "Transitive Hugging Face Hub dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "fsspec"
+version = "2026.7.0"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/fsspec/2026.7.0/"
+author = "fsspec contributors"
+owner = "huggingface-hub"
+purpose = "Declared local cache/filesystem abstraction for model acquisition"
+replacement_boundary = "Transitive Hugging Face Hub dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "filelock"
+version = "3.32.2"
+license = "MIT"
+source_url = "https://pypi.org/project/filelock/3.32.2/"
+author = "filelock contributors"
+owner = "huggingface-hub"
+purpose = "Local model-cache coordination"
+replacement_boundary = "Transitive Hugging Face Hub dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "charset-normalizer"
+version = "3.4.9"
+license = "MIT"
+source_url = "https://pypi.org/project/charset-normalizer/3.4.9/"
+author = "Ahmed R. Tahri"
+owner = "requests"
+purpose = "HTTP text encoding support for explicit model acquisition"
+replacement_boundary = "Transitive Requests dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "urllib3"
+version = "2.7.0"
+license = "MIT"
+source_url = "https://pypi.org/project/urllib3/2.7.0/"
+author = "urllib3 contributors"
+owner = "requests"
+purpose = "HTTP transport used only by explicit local model acquisition"
+replacement_boundary = "Transitive Requests dependency"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "win32-setctime"
+version = "1.2.0"
+license = "MIT"
+source_url = "https://pypi.org/project/win32-setctime/1.2.0/"
+author = "Delgan"
+owner = "loguru"
+purpose = "Windows-only timestamp support declared by Loguru for the optional local semantic extra"
+replacement_boundary = "Conditional transitive Loguru dependency; unused outside Windows"
+direct = false
 approved = true

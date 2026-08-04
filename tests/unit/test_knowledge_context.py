@@ -33,7 +33,13 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
+from mnemo_memory.packages.knowledge import (
+    KnowledgeDocumentParser,
+    KnowledgeDocumentParseRequest,
+    LocalSemanticKnowledgeIndexer,
+    LocalSemanticKnowledgeRetriever,
+    SemanticKnowledgeIndexRequest,
+)
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointRepository,
     ReferenceKnowledgeDocumentRepository,
@@ -73,6 +79,22 @@ def service(repository: ReferenceKnowledgeDocumentRepository) -> UnifiedContextS
     )
 
 
+class _LocalProvider:
+    model_id = "test-local:context-v1"
+
+    def embed_passages(self, passages: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        return tuple(self._vector(value) for value in passages)
+
+    def embed_query(self, query: str) -> tuple[float, ...]:
+        return self._vector(query)
+
+    @staticmethod
+    def _vector(value: str) -> tuple[float, ...]:
+        if "invoice" in value.casefold() or "charge" in value.casefold():
+            return (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
 def test_unified_context_adds_cited_bounded_untrusted_knowledge() -> None:
     repository = ReferenceKnowledgeDocumentRepository()
     document = KnowledgeDocumentParser().parse(
@@ -99,6 +121,34 @@ def test_unified_context_adds_cited_bounded_untrusted_knowledge() -> None:
     assert item.evidence_references[0].immutable_source_ref.startswith("knowledge:")
     assert str(revision.revision_id) in item.item_id
     assert packet.provenance[-1].item_id == item.item_id
+
+
+def test_unified_context_can_attach_explicit_local_semantic_knowledge() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "notes/billing.md"),
+        "# Invoices\nReconcile invoice totals before the close.",
+    )
+    revision = KnowledgeDocumentRevision(KnowledgeDocumentRevisionId.new(), document, 1, None, NOW)
+    repository.apply_sync(project_scope(), (revision,), ())
+    provider = _LocalProvider()
+    LocalSemanticKnowledgeIndexer(repository, provider).index(
+        SemanticKnowledgeIndexRequest(project_scope())
+    )
+    context = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW),
+        None,
+        knowledge=repository,
+        semantic_knowledge=LocalSemanticKnowledgeRetriever(repository, provider),
+    )
+
+    packet = context.get_context(
+        GetUnifiedContext(task_scope(), semantic_knowledge_query="charge variance")
+    )
+
+    assert len(packet.knowledge_items) == 1
+    assert "invoice totals" in packet.knowledge_items[0].content
+    assert packet.knowledge_items[0].evidence_references
 
 
 def test_unified_context_omits_whole_knowledge_sections_that_do_not_fit_budget() -> None:

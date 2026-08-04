@@ -366,7 +366,25 @@ request selects only matching cited sections rather than injecting an entire not
 For local personal-scale search, Mnemo maintains a rebuildable SQLite full-text index of only the
 **current** scoped note sections. Old revisions and deleted note bodies are removed from that search
 projection. It is literal word search—not an embedding or model judgment—so it remains local,
-predictable, and cited. Semantic/embedding retrieval is a later opt-in capability.
+predictable, and cited.
+
+If literal words are not enough, you can opt in to **local-only semantic note search**. This is
+not part of ordinary setup and it does not send notes, prompts, or queries to a hosted AI provider:
+
+```bash
+# once, after enabling this repository's automatic memory
+uv tool install "mnemo-unified-context[semantic]"
+mnemo-memory memory semantic index
+
+# optional local inspection with different wording than the note itself
+mnemo-memory memory semantic search "why did billing totals drift?"
+```
+
+The first explicit index may download the public local embedding-model weights into Mnemo's data
+directory. Afterwards both indexing and querying run on-device. Mnemo stores only vectors tied to
+the current, cited note revision; it never stores a second text copy, and it removes vectors when
+the note is deleted. Agents can request this same bounded evidence through `get_context` with
+`semantic_knowledge_query`; literal `knowledge_query` remains available and unchanged.
 
 If two note sections have the same literal search score, a checked-in repository Markdown note is
 shown before an opted-in Obsidian note. That is only a predictable tie-breaker: Mnemo does not

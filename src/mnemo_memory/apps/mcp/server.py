@@ -15,6 +15,7 @@ from pydantic import Field
 
 from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
     LocalConfigurationError,
     LocalRuntimeError,
@@ -64,6 +65,18 @@ def create_server(port: McpContextPort) -> FastMCP:
                 ),
             ),
         ] = None,
+        semantic_knowledge_query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=512,
+                description=(
+                    "Optional local-only semantic query. It uses only an explicitly built local "
+                    "semantic index and never sends text to a model provider."
+                ),
+            ),
+        ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
@@ -98,6 +111,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "dbt_lineage": dbt_lineage,
                 "source_query": source_query,
                 "knowledge_query": knowledge_query,
+                "semantic_knowledge_query": semantic_knowledge_query,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
                 "source_overview": source_overview,
@@ -263,11 +277,20 @@ def main(data_directory: Path | None = None) -> None:
     ) as runtime:
         assert runtime.dbt_manifest_service is not None
         assert runtime.source_structure_repository is not None
+        assert runtime.knowledge_document_repository is not None
         observer = CheckpointSourceObserver(
             LocalMemoryProjectBindingStore(runtime.config.data_directory),
             runtime.source_structure_repository,
             runtime.repository,
             lambda: datetime.now(UTC),
+        )
+        # Construction is inert: FastEmbed is imported and model weights are requested only when
+        # a caller explicitly sends semantic_knowledge_query after local semantic indexing.
+        from mnemo_memory.packages.knowledge import LocalSemanticKnowledgeRetriever
+
+        semantic_knowledge = LocalSemanticKnowledgeRetriever(
+            runtime.knowledge_document_repository,
+            FastEmbedLocalProvider(runtime.config.data_directory / "semantic-model-cache"),
         )
         create_server(
             DurableMcpContextPort(
@@ -278,6 +301,7 @@ def main(data_directory: Path | None = None) -> None:
                     runtime.source_structure_repository,
                     runtime.repository,
                     runtime.knowledge_document_repository,
+                    semantic_knowledge,
                 ),
                 observer.observe,
             )

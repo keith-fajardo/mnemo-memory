@@ -715,7 +715,7 @@ deletions are not searchable. It returns exact document/revision identities, exe
 runs no model, and is deliberately capped for personal mode rather than performing broad ambient
 search. Equal literal scores use checked-in repository Markdown before an optional Obsidian note,
 but that is only a deterministic ordering rule: both remain separately cited, untrusted evidence
-and no note silently overrides current structural facts. Embeddings remain in progress.
+and no note silently overrides current structural facts.
 
 An explicit `get_context` `knowledge_query` can now include matching current document sections in
 the same bounded packet as task and structural facts. Every included section is cited to its exact
@@ -732,4 +732,15 @@ that same project scope with a generated source prefix, and disabling it first p
 sync that removes its retained content-bearing revisions before removing the binding. Current scoped document navigation
 now resolves only declared direct Markdown/Obsidian links and backlinks; ambiguous, external, and
 unresolvable links are omitted rather than guessed, with both endpoint revision IDs retained as
-evidence. Embeddings remain in progress.
+evidence.
+
+The optional local semantic retrieval slice now adds a rebuildable vector projection for current
+scoped note sections. It is activated only by `mnemo-memory memory semantic index` after the
+project's ordinary automatic memory is enabled. The FastEmbed ONNX adapter may download its public
+model weights at that first explicit action, but document and query text remain local. SQLite stores
+only model identifiers, section digests, and finite vectors tied to immutable revisions; no second
+note body, raw SQL, credential, or environment payload is stored. The projection is idempotent,
+scope-first, hidden when a revision is superseded, deleted with a tombstoned note, and returned as
+the same bounded cited untrusted evidence through an explicit `semantic_knowledge_query`. Hosted
+embedding providers, broad ambient semantic retrieval, and semantic authority over current dbt or
+source facts remain out of scope.

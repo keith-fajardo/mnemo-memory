@@ -31,6 +31,7 @@ CONNECTOR_COMPONENTS = {
     "connectors/command_wrapper",
     "connectors/dbt",
     "connectors/filesystem",
+    "connectors/local_embeddings",
     "connectors/git",
     "connectors/obsidian",
 }

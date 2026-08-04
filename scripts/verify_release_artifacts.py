@@ -26,6 +26,7 @@ REQUIRED_MIGRATIONS = (
     "0009_checkpoint_source_observations.sql",
     "0010_knowledge_documents.sql",
     "0011_knowledge_section_fts.sql",
+    "0012_knowledge_section_embeddings.sql",
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",

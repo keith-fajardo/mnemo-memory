@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import cast
+from typing import Protocol, cast
 from uuid import UUID, uuid5
 
 from mnemo_memory.packages.application.checkpoints import (
@@ -36,6 +36,7 @@ from mnemo_memory.packages.domain import (
     ContextItem,
     ContextItemType,
     ContextPacket,
+    CurrentKnowledgeDocumentSection,
     DbtNodeId,
     DbtSnapshotId,
     EvidenceId,
@@ -65,6 +66,14 @@ from mnemo_memory.packages.storage.contracts import (
     KnowledgeDocumentRepository,
     SourceStructureRepository,
 )
+
+
+class SemanticKnowledgeRetrieverPort(Protocol):
+    """Application port for an explicitly enabled, already-local semantic projection."""
+
+    def search_sections(
+        self, scope: MemoryScope, query: str
+    ) -> tuple[tuple[CurrentKnowledgeDocumentSection, float], ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +256,7 @@ class GetUnifiedContext:
     source_overview: ContextSourceOverviewQuery | None = None
     checkpoint_source_impact: ContextCheckpointSourceImpact | None = None
     knowledge_query: str | None = None
+    semantic_knowledge_query: str | None = None
     include_checkpoint_file_knowledge: bool = False
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
@@ -262,12 +272,14 @@ class UnifiedContextService:
         source: SourceStructureRepository | None = None,
         checkpoint_source_observations: CheckpointSourceObservationRepository | None = None,
         knowledge: KnowledgeDocumentRepository | None = None,
+        semantic_knowledge: SemanticKnowledgeRetrieverPort | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
         self._source = source
         self._checkpoint_source_observations = checkpoint_source_observations
         self._knowledge = knowledge
+        self._semantic_knowledge = semantic_knowledge
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -290,6 +302,7 @@ class UnifiedContextService:
             and request.source_overview is None
             and request.checkpoint_source_impact is None
             and request.knowledge_query is None
+            and request.semantic_knowledge_query is None
         ):
             return packet
         if request.lineage is None:
@@ -308,18 +321,58 @@ class UnifiedContextService:
         query = request.knowledge_query
         if query is None and request.include_checkpoint_file_knowledge:
             query = _checkpoint_file_knowledge_query(packet)
-        if query is None:
+        semantic_query = request.semantic_knowledge_query
+        if query is None and semantic_query is None:
             return packet
-        if self._knowledge is None:
+        if query is not None and self._knowledge is None:
             return _with_omission(
                 packet, "knowledge", OmissionReason.LOWER_RANK, "knowledge index is unavailable"
             )
-        terms = normalize_knowledge_query(query)
-        if not terms:
-            raise ValueError("knowledge query requires at least one searchable term")
-        matches = self._knowledge.search_current_sections(
-            _project_scope(request.scope), terms, 8, 128
-        )
+        matches: list[KnowledgeDocumentSectionMatch] = []
+        if query is not None:
+            terms = normalize_knowledge_query(query)
+            if not terms:
+                raise ValueError("knowledge query requires at least one searchable term")
+            assert self._knowledge is not None
+            matches.extend(
+                self._knowledge.search_current_sections(
+                    _project_scope(request.scope), terms, 8, 128
+                )
+            )
+        if semantic_query is not None:
+            if self._semantic_knowledge is None:
+                return _with_omission(
+                    packet,
+                    "semantic-knowledge",
+                    OmissionReason.LOWER_RANK,
+                    "local semantic knowledge index is unavailable",
+                )
+            semantic = self._semantic_knowledge.search_sections(
+                _project_scope(request.scope), semantic_query
+            )
+            matches.extend(
+                KnowledgeDocumentSectionMatch(
+                    section.revision,
+                    section.section_index,
+                    section.section,
+                    max(1, int(similarity * 10_000)),
+                )
+                for section, similarity in semantic
+            )
+        selected: dict[tuple[object, int], KnowledgeDocumentSectionMatch] = {}
+        for match in matches:
+            key = (match.revision.revision_id, match.section_index)
+            previous = selected.get(key)
+            if previous is None or match.score > previous.score:
+                selected[key] = match
+        matches = sorted(
+            selected.values(),
+            key=lambda item: (
+                -item.score,
+                item.revision.document.relative_path,
+                item.section_index,
+            ),
+        )[:8]
         remaining = min(
             request.budget.knowledge - sum(item.token_estimate for item in packet.knowledge_items),
             request.budget.total_limit - packet.declared_total_tokens,

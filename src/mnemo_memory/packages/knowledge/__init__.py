@@ -27,6 +27,17 @@ from .retrieval import (
     KnowledgeSearchRequest,
     KnowledgeSearchResult,
 )
+from .semantic import (
+    LocalEmbeddingError,
+    LocalEmbeddingProvider,
+    LocalSemanticKnowledgeIndexer,
+    LocalSemanticKnowledgeRetriever,
+    SemanticKnowledgeIndexRequest,
+    SemanticKnowledgeIndexResult,
+    SemanticKnowledgeMatch,
+    SemanticKnowledgeSearchRequest,
+    SemanticKnowledgeSearchResult,
+)
 from .sync import (
     KnowledgeSyncAction,
     KnowledgeSyncActionKind,
@@ -57,4 +68,13 @@ __all__ = [
     "KnowledgeSyncPlan",
     "KnowledgeSyncPlanner",
     "KnownKnowledgeDocument",
+    "LocalEmbeddingError",
+    "LocalEmbeddingProvider",
+    "LocalSemanticKnowledgeIndexer",
+    "LocalSemanticKnowledgeRetriever",
+    "SemanticKnowledgeIndexRequest",
+    "SemanticKnowledgeIndexResult",
+    "SemanticKnowledgeMatch",
+    "SemanticKnowledgeSearchRequest",
+    "SemanticKnowledgeSearchResult",
 ]

@@ -11,9 +11,11 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from hashlib import sha256
+from math import isfinite
 
 from .identifiers import KnowledgeDocumentId, KnowledgeDocumentRevisionId
-from .models import MemoryScope
+from .models import MemoryScope, ScopeLevel
 
 
 class KnowledgeDocumentSourceKind(StrEnum):
@@ -174,6 +176,56 @@ class KnowledgeDocumentSectionMatch:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentKnowledgeDocumentSection:
+    """One current, scoped section made available to a rebuildable retrieval projection."""
+
+    revision: KnowledgeDocumentRevision
+    section_index: int
+    section: KnowledgeDocumentSection
+
+    def __post_init__(self) -> None:
+        if self.section_index < 0 or self.section_index >= len(self.revision.document.sections):
+            raise ValueError("current knowledge section is invalid")
+        if self.revision.document.sections[self.section_index] != self.section:
+            raise ValueError("current knowledge section does not match its revision")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSectionEmbedding:
+    """One rebuildable local vector projection for an immutable document section.
+
+    This is not canonical memory and it has no authority over document evidence.  It is retained
+    only after an explicit local semantic-index action, is always scope-bound, and is deleted with
+    its revision when the source is tombstoned.  ``section_digest`` lets the projection be safely
+    invalidated without persisting a second copy of the text.
+    """
+
+    scope: MemoryScope
+    revision_id: KnowledgeDocumentRevisionId
+    section_index: int
+    model_id: str
+    section_digest: str
+    vector: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.PROJECT:
+            raise ValueError("knowledge embedding requires an explicit project scope")
+        if not isinstance(self.revision_id, KnowledgeDocumentRevisionId) or self.section_index < 0:
+            raise ValueError("knowledge embedding identity is invalid")
+        if (
+            not isinstance(self.model_id, str)
+            or not self.model_id.strip()
+            or len(self.model_id) > 256
+            or any(character.isspace() for character in self.model_id)
+        ):
+            raise ValueError("knowledge embedding model is invalid")
+        if not self.section_digest.startswith("sha256:") or len(self.section_digest) != 71:
+            raise ValueError("knowledge embedding section digest is invalid")
+        if not 8 <= len(self.vector) <= 4_096 or not all(isfinite(value) for value in self.vector):
+            raise ValueError("knowledge embedding vector is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class KnowledgeDocumentRelation:
     """One exact resolved current-document link with immutable revision evidence on both ends."""
 
@@ -235,3 +287,11 @@ def knowledge_search_tokens(text: str) -> tuple[str, ...]:
     if not isinstance(text, str):
         raise TypeError("knowledge search text must be a string")
     return tuple(_knowledge_search_token(term) for term in _KNOWLEDGE_TERM_PATTERN.findall(text))
+
+
+def knowledge_section_digest(section: KnowledgeDocumentSection) -> str:
+    """Return a deterministic identity for one literal section without retaining another payload."""
+    if not isinstance(section, KnowledgeDocumentSection):
+        raise TypeError("knowledge section is invalid")
+    encoded = (section.heading + "\n" + section.content).encode("utf-8")
+    return "sha256:" + sha256(encoded).hexdigest()

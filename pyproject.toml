@@ -41,6 +41,13 @@ Repository = "https://github.com/keith-fajardo/mnemo-memory"
 Issues = "https://github.com/keith-fajardo/mnemo-memory/issues"
 Documentation = "https://github.com/keith-fajardo/mnemo-memory#readme"
 
+[project.optional-dependencies]
+# This extra runs embeddings on the local machine.  It is deliberately not installed by default:
+# model weights are fetched only after an explicit local semantic-index action.
+semantic = [
+    "fastembed==0.8.0",
+]
+
 [dependency-groups]
 dev = [
     "mypy==1.20.2",

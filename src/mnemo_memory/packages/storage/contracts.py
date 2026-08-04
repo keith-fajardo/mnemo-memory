@@ -23,6 +23,7 @@ from mnemo_memory.packages.domain import (
     CodeStructureArtifact,
     CodeSymbol,
     CodeSymbolId,
+    CurrentKnowledgeDocumentSection,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -30,6 +31,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentRevisionId,
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
+    KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
     knowledge_search_tokens,
@@ -198,6 +200,21 @@ class KnowledgeDocumentRepository(Protocol):
         maximum_documents: int,
     ) -> tuple[KnowledgeDocumentSectionMatch, ...]:
         """Rank current scoped sections only; terms must already be bounded and normalized."""
+
+    def iter_current_sections(
+        self, scope: MemoryScope, maximum_documents: int
+    ) -> tuple[CurrentKnowledgeDocumentSection, ...]:
+        """Return bounded current sections only, in stable source/section order."""
+
+    def list_current_section_embeddings(
+        self, scope: MemoryScope, model_id: str, maximum_documents: int
+    ) -> tuple[KnowledgeSectionEmbedding, ...]:
+        """Return only embeddings whose revision remains current in one complete scope."""
+
+    def store_section_embeddings(
+        self, scope: MemoryScope, embeddings: tuple[KnowledgeSectionEmbedding, ...]
+    ) -> None:
+        """Atomically store validated rebuildable projections for currently active sections."""
 
     def apply_sync(
         self,

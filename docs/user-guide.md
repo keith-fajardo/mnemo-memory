@@ -266,7 +266,26 @@ possible secret, so keep secrets out of project documentation as usual.
 Mnemo searches current scoped notes through a local rebuildable SQLite full-text index. It does not
 send your notes to a model or silently include every note in an agent request. Deleted note bodies
 and old note revisions are removed from the index; every selected section still cites its exact
-document revision. Semantic/embedding search is not enabled yet.
+document revision.
+
+### Optional local semantic note search
+
+Literal search is the default. If you want a note about “invoice reconciliation” to be findable
+when you ask about “billing variance,” install the optional local runtime and build one index for
+the project you already enabled:
+
+```bash
+uv tool install "mnemo-unified-context[semantic]"
+mnemo-memory memory semantic index
+mnemo-memory memory semantic search "billing variance"
+```
+
+This is an explicit personal-machine choice. The first index can download public embedding-model
+weights; the note text and later query text are processed only by the local runtime. Mnemo stores
+a vector attached to the note's current immutable revision, not another copy of the note. It does
+not activate automatically, inspect every prompt, or change the authority of returned notes: they
+remain bounded, cited, untrusted evidence. An MCP client can request it with
+`semantic_knowledge_query` when it needs this kind of match.
 
 When equally matching repository and optional-vault notes are returned, repository Markdown appears
 first as a predictable tie-breaker. Both are still separate, untrusted, cited evidence—not facts

@@ -39,6 +39,7 @@ from mnemo_memory.connectors.filesystem import (
     MarkdownSourceDiscovery,
     MarkdownSourceDiscoveryRequest,
 )
+from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
     CheckpointApplicationError,
     DbtApplicationConflict,
@@ -90,6 +91,12 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
+from mnemo_memory.packages.knowledge import (
+    LocalSemanticKnowledgeIndexer,
+    LocalSemanticKnowledgeRetriever,
+    SemanticKnowledgeIndexRequest,
+    SemanticKnowledgeSearchRequest,
+)
 from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
     SourceImpactQuery,
@@ -124,11 +131,20 @@ memory_vault_app = typer.Typer(
     no_args_is_help=True,
     help="Opt an Obsidian vault into one already-enabled project's local knowledge memory.",
 )
+memory_semantic_app = typer.Typer(
+    no_args_is_help=True,
+    help="Explicitly build and inspect an on-device semantic index for this project's notes.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
 app.add_typer(memory_app, name="memory", help="Set up automatic task memory for this project.")
 memory_app.add_typer(memory_vault_app, name="vault", help="Manage an optional Obsidian vault.")
+memory_app.add_typer(
+    memory_semantic_app,
+    name="semantic",
+    help="Use optional local-only semantic retrieval for project notes.",
+)
 
 _AUTOMATIC_SESSION_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
@@ -888,6 +904,81 @@ def _disable_automatic_task_memory(client: str, data_dir: Path | None) -> bool:
         )
     except AutomaticMemoryClientConfigError as error:
         raise typer.BadParameter("MNEMO_MEMORY_DISABLE_FAILED") from error
+
+
+def _semantic_repository(data_directory: Path) -> SQLiteKnowledgeDocumentRepository:
+    repository = SQLiteKnowledgeDocumentRepository(
+        data_directory / "mnemo.sqlite3", base_directory=data_directory
+    )
+    repository.migrate()
+    return repository
+
+
+@memory_semantic_app.command(
+    "index",
+    help="Build or refresh this project's optional on-device semantic note index.",
+)
+def memory_semantic_index(
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Explicitly enable local semantic matching; first use may download public model weights."""
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        repository = _semantic_repository(config.data_directory)
+        result = LocalSemanticKnowledgeIndexer(
+            repository,
+            FastEmbedLocalProvider(config.data_directory / "semantic-model-cache"),
+        ).index(SemanticKnowledgeIndexRequest(binding.scope))
+        _show(
+            {
+                "local_only": True,
+                "model": result.model_id,
+                "current_sections": result.current_section_count,
+                "reused_sections": result.reused_section_count,
+                "indexed_sections": result.indexed_section_count,
+            }
+        )
+    except (AutomaticMemoryBindingError, OSError, RuntimeError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SEMANTIC_INDEX_FAILED") from error
+
+
+@memory_semantic_app.command("search", help="Search already-indexed project notes locally.")
+def memory_semantic_search(
+    query: str = typer.Argument(..., min=1, max=512),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(project_dir)
+        if binding is None:
+            raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+        result = LocalSemanticKnowledgeRetriever(
+            _semantic_repository(config.data_directory),
+            FastEmbedLocalProvider(config.data_directory / "semantic-model-cache"),
+        ).search(SemanticKnowledgeSearchRequest(binding.scope, query))
+        _show(
+            {
+                "local_only": True,
+                "model": result.model_id,
+                "indexed_sections": result.indexed_section_count,
+                "unindexed_sections": result.unindexed_section_count,
+                "matches": [
+                    {
+                        "relative_path": value.section.revision.document.relative_path,
+                        "section_index": value.section.section_index,
+                        "similarity": round(value.similarity, 6),
+                    }
+                    for value in result.matches
+                ],
+            }
+        )
+    except (AutomaticMemoryBindingError, OSError, RuntimeError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SEMANTIC_SEARCH_FAILED") from error
 
 
 @memory_app.command("enable", help="Enable automatic task handoffs for this project and client.")
