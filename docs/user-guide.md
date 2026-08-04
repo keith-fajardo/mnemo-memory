@@ -37,9 +37,10 @@ resolvable call edges use the same graph contract. That subset now includes exac
 namespace calls, C# `using Namespace.Type` calls, PHP `use Namespace\\Type` static calls, and
 direct top-level literal CommonJS `require("./local")` bindings in JavaScript and TypeScript.
 Python also resolves direct local `from .module import member` and parent-package relative imports
-that remain inside the registered project. Namespace-only imports, computed/dynamic `require` calls,
-relative imports that escape the registered project, aliases that cannot be matched uniquely, and
-duplicate candidates remain unresolved. No unproven runtime relationship is
+that remain inside the registered project. Rust resolves an explicit
+`use crate::path::member as local_name` spelling when the saved target is unique. Namespace-only
+imports, computed/dynamic `require` calls, relative imports that escape the registered project,
+aliases that cannot be matched uniquely, and duplicate candidates remain unresolved. No unproven runtime relationship is
 presented as fact.
 
 For common source extensions Mnemo does not parse yet—such as dbt `.sql` models, dbt

@@ -957,7 +957,13 @@ class SourceStructureParser:
             return ((binding_name, target),) if _is_safe_symbol_name(binding_name) else ()
         if language == "rust" and target.startswith("crate."):
             normalized = target.removeprefix("crate.")
-            binding_name = normalized.rsplit(".", maxsplit=1)[-1]
+            argument = node.child_by_field_name("argument")
+            alias = (
+                _safe_tree_text(argument.child_by_field_name("alias"), raw)
+                if argument is not None and argument.type == "use_as_clause"
+                else None
+            )
+            binding_name = alias or normalized.rsplit(".", maxsplit=1)[-1]
             return ((binding_name, normalized),) if _is_safe_symbol_name(binding_name) else ()
         if language == "go":
             alias = _safe_tree_text(node.child_by_field_name("name"), raw)
@@ -1022,9 +1028,10 @@ class SourceStructureParser:
         if language == "go":
             return _string_literal(node.child_by_field_name("path"), raw)
         if language == "rust":
-            return SourceStructureParser._tree_static_target(
-                node.child_by_field_name("argument"), raw
-            )
+            argument = node.child_by_field_name("argument")
+            if argument is not None and argument.type == "use_as_clause":
+                argument = argument.child_by_field_name("path")
+            return SourceStructureParser._tree_static_target(argument, raw)
         if language in {"c", "cpp"}:
             return _include_literal(node.child_by_field_name("path"), raw)
         if language == "csharp":

@@ -450,6 +450,33 @@ def test_go_import_aliases_resolve_only_unique_local_package_calls(tmp_path: Pat
     )
 
 
+def test_rust_explicit_use_alias_resolves_a_unique_local_member_call(tmp_path: Path) -> None:
+    item_scope = scope()
+    root = tmp_path / "source"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "helpers.rs").write_text("pub fn validate() {}\n")
+    (root / "service.rs").write_text(
+        "use crate::tools::helpers::validate as local_validate;\n"
+        "fn process() { local_validate(); }\n"
+    )
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(item_scope, root))
+    repository = ReferenceSourceStructureRepository()
+    repository.store_and_activate(artifact)
+
+    result = SourceImpactService(repository).query(
+        SourceImpactQuery(item_scope, "tools.helpers.validate", SourceImpactDirection.DEPENDENTS)
+    )
+    names = {item.symbol_id: item.qualified_name for item in artifact.symbols}
+    calls = {
+        (names[edge.source_symbol_id], edge.target): edge.target_symbol_id
+        for edge in artifact.edges
+        if edge.kind.value == "calls"
+    }
+
+    assert [item.symbol.qualified_name for item in result.symbols] == ["service.process"]
+    assert calls[("service.process", "local_validate")] is not None
+
+
 def test_go_package_calls_remain_unresolved_when_the_local_member_is_ambiguous(
     tmp_path: Path,
 ) -> None:
