@@ -61,6 +61,7 @@ from mnemo_memory.packages.application.command_wrapper import (
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.application.unified_context import (
+    ContextCheckpointSourceImpact,
     ContextSourceChangeQuery,
     ContextSourceOverviewQuery,
     GetUnifiedContext,
@@ -170,6 +171,9 @@ def _automatic_context_attachment(data_directory: Path, scope: MemoryScope) -> s
                         maximum_files=3,
                         maximum_modules=2,
                         maximum_declarations=2,
+                        current_source_digest=source_digest,
+                    ),
+                    checkpoint_source_impact=ContextCheckpointSourceImpact(
                         current_source_digest=source_digest,
                     ),
                 )

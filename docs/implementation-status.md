@@ -629,6 +629,12 @@ the exact immutable source snapshot ID as provenance. It is explicitly a syntax-
 candidate—not a runtime call-graph claim—and omits unparsed, ambiguous, or unresolved files rather
 than guessing.
 
+When a checkpoint itself names a supported relative file as relevant, the automatic handoff now
+uses its first matching scoped path as a bounded static-dependent starting point. The checkpoint
+only selects the task topic: returned relationships remain source-snapshot facts with their own
+provenance and currentness. This bridges a saved “why this file changed” handoff to the small
+syntax-proven “what may depend on it?” context without broad source replay.
+
 After a trusted client mutation, source refresh is batched to the next `UserPromptSubmit` lifecycle
 boundary rather than executed for every editor operation. The resulting cue contains the same
 bounded change and static-impact facts without inspecting or retaining submitted prompt text.

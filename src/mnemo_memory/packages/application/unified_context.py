@@ -197,6 +197,35 @@ class ContextSourceOverviewQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextCheckpointSourceImpact:
+    """Bounded static dependents of one checkpoint's declared relevant source file.
+
+    ``relevant_files`` is a task handoff hint, not structural authority. Mnemo uses it only to
+    select one exact relative path from the active source snapshot; every returned relationship is
+    still derived from that immutable syntax projection and carries its own evidence.
+    """
+
+    maximum_symbols: int = 4
+    maximum_edges: int = 2
+    maximum_depth: int = 1
+    current_source_digest: str | None = None
+    require_current: bool = False
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.maximum_symbols <= 12:
+            raise ValueError("checkpoint source impact symbol limit must be between 1 and 12")
+        if not 1 <= self.maximum_edges <= 24:
+            raise ValueError("checkpoint source impact edge limit must be between 1 and 24")
+        if not 0 <= self.maximum_depth <= 4:
+            raise ValueError("checkpoint source impact depth must be between 0 and 4")
+        if self.current_source_digest is not None and (
+            not self.current_source_digest.startswith("sha256:")
+            or len(self.current_source_digest) != 71
+        ):
+            raise ValueError("checkpoint source impact digest must be a sha256 digest")
+
+
+@dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
     checkpoint_id: object | None = None
@@ -206,6 +235,7 @@ class GetUnifiedContext:
     source_impact: ContextSourceImpactQuery | None = None
     source_changes: ContextSourceChangeQuery | None = None
     source_overview: ContextSourceOverviewQuery | None = None
+    checkpoint_source_impact: ContextCheckpointSourceImpact | None = None
     include_lifecycle_events: bool = False
     include_approved_events: bool = False
 
@@ -243,6 +273,7 @@ class UnifiedContextService:
             and request.source_impact is None
             and request.source_changes is None
             and request.source_overview is None
+            and request.checkpoint_source_impact is None
         ):
             return packet
         if request.lineage is None:
@@ -475,6 +506,10 @@ class UnifiedContextService:
     def _with_requested_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
     ) -> ContextPacket:
+        if request.checkpoint_source_impact is not None:
+            packet = self._with_checkpoint_source_impact(
+                packet, request, request.checkpoint_source_impact
+            )
         if request.source_impact is not None or request.source_query:
             packet = self._with_source_facts(packet, request)
         if request.source_changes is not None:
@@ -482,6 +517,50 @@ class UnifiedContextService:
         if request.source_overview is not None:
             packet = self._with_source_overview(packet, request, request.source_overview)
         return packet
+
+    def _with_checkpoint_source_impact(
+        self,
+        packet: ContextPacket,
+        request: GetUnifiedContext,
+        query: ContextCheckpointSourceImpact,
+    ) -> ContextPacket:
+        """Attach one relevant-file impact candidate without treating checkpoint text as truth.
+
+        The checkpoint writer controls the order of its ``relevant_files`` list. We keep that
+        order, select the first canonical path that exists in the scoped active snapshot, and
+        apply the ordinary source-impact contract to it. This avoids broad file search, preserves
+        a small session budget, and keeps a stale checkpoint from overriding structural evidence.
+        """
+        if self._source is None or packet.active_task_checkpoint is None:
+            return packet
+        paths = _checkpoint_relevant_source_paths(packet.active_task_checkpoint.content)
+        if not paths:
+            return packet
+        scope = _project_scope(request.scope)
+        snapshot = self._source.get_active_snapshot(scope)
+        if snapshot is None:
+            return packet
+        snapshot_paths = {
+            item.relative_path for item in self._source.iter_files(scope, snapshot.snapshot_id)
+        }
+        selected_path = next((path for path in paths if path in snapshot_paths), None)
+        if selected_path is None:
+            return packet
+        return self._with_source_impact_facts(
+            packet,
+            request,
+            ContextSourceImpactQuery(
+                symbol=None,
+                relative_path=selected_path,
+                direction="dependents",
+                transitive=True,
+                maximum_depth=query.maximum_depth,
+                maximum_symbols=query.maximum_symbols,
+                maximum_edges=query.maximum_edges,
+                current_source_digest=query.current_source_digest,
+                require_current=query.require_current,
+            ),
+        )
 
     def _with_source_overview(
         self, packet: ContextPacket, request: GetUnifiedContext, query: ContextSourceOverviewQuery
@@ -668,7 +747,7 @@ class UnifiedContextService:
                 "source snapshot is not proven current",
             )
         if query.relative_path is not None:
-            starts = tuple(
+            candidates = tuple(
                 item
                 for item in self._source.find_symbols(
                     scope, snapshot.snapshot_id, query.relative_path, limit=256
@@ -680,7 +759,7 @@ class UnifiedContextService:
             candidates = self._source.find_symbols(
                 scope, snapshot.snapshot_id, query.symbol, limit=64
             )
-            starts = (
+            candidates = (
                 tuple(
                     item
                     for item in candidates
@@ -688,18 +767,31 @@ class UnifiedContextService:
                 )
                 or candidates
             )
-        if not starts:
+        if not candidates:
             return _with_omission(
                 packet, "source-impact", OmissionReason.LOWER_RANK, "source symbol was not found"
             )
+        starts = tuple(
+            sorted(
+                candidates,
+                key=lambda item: (
+                    item.relative_path,
+                    item.line,
+                    item.qualified_name,
+                    str(item.symbol_id),
+                ),
+            )
+        )
+        starts_truncated = len(starts) > query.maximum_symbols
+        starts = starts[: query.maximum_symbols]
         visited = {item.symbol_id for item in starts}
         selected = {item.symbol_id: item for item in starts}
         depths = {item.symbol_id: 0 for item in starts}
         frontier = tuple(visited)
         edges: list[CodeEdge] = []
         depth = 0
-        truncated: str | None = None
-        while frontier and (query.transitive or depth == 0):
+        truncated: str | None = "maximum symbol count reached" if starts_truncated else None
+        while frontier and truncated is None and (query.transitive or depth == 0):
             depth += 1
             if query.maximum_depth is not None and depth > query.maximum_depth:
                 truncated = "maximum depth reached"
@@ -718,7 +810,6 @@ class UnifiedContextService:
             if len(edges) + len(boundary) > query.maximum_edges:
                 truncated = "maximum edge count reached"
                 break
-            edges.extend(boundary)
             if query.direction == "dependents":
                 next_ids = tuple(
                     sorted(
@@ -745,6 +836,10 @@ class UnifiedContextService:
             if len(selected) + len(next_ids) > query.maximum_symbols:
                 truncated = "maximum symbol count reached"
                 break
+            # Do not expose a relationship whose dependent/dependency symbol cannot fit in the
+            # same bounded result. Besides making the limit truthful, this keeps edge rendering
+            # from referring to an omitted source symbol.
+            edges.extend(boundary)
             resolved = self._source.symbols_by_ids(scope, snapshot.snapshot_id, next_ids)
             for item in resolved:
                 visited.add(item.symbol_id)
@@ -1103,6 +1198,27 @@ def _validate_source_relative_path(value: str) -> None:
         raise ValueError("source change path must be a canonical relative path")
 
 
+def _checkpoint_relevant_source_paths(content: str) -> tuple[str, ...]:
+    """Read canonical checkpoint file hints defensively, without surfacing malformed payloads."""
+    try:
+        value = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return ()
+    raw_paths = value.get("relevant_files") if isinstance(value, dict) else None
+    if not isinstance(raw_paths, list):
+        return ()
+    result: list[str] = []
+    for path in raw_paths:
+        if not isinstance(path, str) or path in result:
+            continue
+        try:
+            _validate_source_relative_path(path)
+        except ValueError:
+            continue
+        result.append(path)
+    return tuple(result)
+
+
 def _source_currentness(snapshot: CodeSnapshot, supplied_digest: str | None) -> ValidityState:
     """Use only an exact source-tree digest as evidence that a snapshot is current."""
     if supplied_digest is None:
@@ -1400,12 +1516,16 @@ def _append_source_items(
     currentness: ValidityState = ValidityState.UNKNOWN,
 ) -> ContextPacket:
     facts: list[ContextItem] = []
+    existing_item_ids = {item.item_id for item in packet.structural_items}
     remaining = min(
         packet.budget.structural - sum(item.token_estimate for item in packet.structural_items),
         packet.budget.total_limit - packet.declared_total_tokens,
     )
     notices: list[ProvenanceNotice] = list(packet.provenance)
     for symbol in symbols:
+        item_id = f"source:{symbol.symbol_id}"
+        if item_id in existing_item_ids:
+            continue
         content = json.dumps(
             {
                 "snapshot_id": str(snapshot.snapshot_id),
@@ -1445,7 +1565,7 @@ def _append_source_items(
             VerificationStatus.VERIFIED,
         )
         context_item = ContextItem(
-            f"source:{symbol.symbol_id}",
+            item_id,
             ContextItemType.STRUCTURAL_FACT,
             task_scope,
             content,
@@ -1460,6 +1580,7 @@ def _append_source_items(
             packet.created_at,
         )
         facts.append(context_item)
+        existing_item_ids.add(item_id)
         notices.append(
             ProvenanceNotice(
                 f"provenance:{context_item.item_id}",
@@ -1475,6 +1596,9 @@ def _append_source_items(
     }
     symbols_by_id = {symbol.symbol_id: symbol for symbol in symbols}
     for edge in edges:
+        item_id = f"source-edge:{snapshot.snapshot_id}:{edge.source_symbol_id}:{edge.target}"
+        if item_id in existing_item_ids:
+            continue
         content = json.dumps(
             {
                 "snapshot_id": str(snapshot.snapshot_id),
@@ -1512,7 +1636,7 @@ def _append_source_items(
             VerificationStatus.VERIFIED,
         )
         context_item = ContextItem(
-            f"source-edge:{snapshot.snapshot_id}:{edge.source_symbol_id}:{edge.target}",
+            item_id,
             ContextItemType.STRUCTURAL_FACT,
             task_scope,
             content,
@@ -1527,6 +1651,7 @@ def _append_source_items(
             packet.created_at,
         )
         facts.append(context_item)
+        existing_item_ids.add(item_id)
         notices.append(
             ProvenanceNotice(
                 f"provenance:{context_item.item_id}",

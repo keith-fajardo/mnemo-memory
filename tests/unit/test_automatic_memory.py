@@ -488,6 +488,68 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     assert str(project) not in attached
 
 
+def test_automatic_context_attaches_checkpoint_relevant_static_impact(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "core.py").write_text("def calculate():\n    return 1\n", encoding="utf-8")
+    (project / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
+    )
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
+    repository.migrate()
+    repository.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "fixture://automatic-memory/checkpoint",
+        "sha256:" + "b" * 64,
+        EvidenceLocation("fixture://automatic-memory/checkpoint"),
+        datetime(2026, 8, 4, tzinfo=UTC),
+        VerificationStatus.VERIFIED,
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        runtime.checkpoint_service.create(
+            CreateCheckpoint(
+                binding.checkpoint_scope,
+                CheckpointContent(
+                    "Assess a changed calculation.",
+                    (),
+                    "Review its static dependents.",
+                    (),
+                    (),
+                    (),
+                    (),
+                    ("core.py",),
+                    (),
+                    (),
+                    30,
+                ),
+                (evidence,),
+            )
+        )
+
+    attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
+
+    assert attached is not None
+    packet = json.loads(attached)
+    impact = [
+        json.loads(item["content"])
+        for item in packet["structural_items"]
+        if '"impact_direction":"dependents"' in item["content"]
+    ]
+    assert any(item["path"] == "core.py" for item in impact)
+    assert any(item["path"] == "service.py" for item in impact)
+    assert all(item["currentness"] == "current" for item in impact)
+    assert packet["declared_total_tokens"] <= 1_200
+    assert "return core.calculate" not in attached
+
+
 @pytest.mark.parametrize("client", ["codex", "claude-code"])
 def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
     tmp_path: Path, client: str

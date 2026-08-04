@@ -154,6 +154,14 @@ small list of proven **static dependent candidates** and the immutable source sn
 them. This is a practical “what might be affected?” starting point, not a runtime promise: the
 agent should still inspect the cited structure and run the appropriate verification.
 
+The same help is available when there was no new edit yet: if the current saved checkpoint lists a
+supported relative file under `relevant_files`, Mnemo uses that file as a small static-impact
+starting point in the next automatic handoff. For example, a reconciliation handoff can name
+`models/reconcile.py`; the next agent receives only the bounded saved dependents Mnemo can prove
+from syntax. The checkpoint records *why* the file matters; the cited source snapshot records
+*which structural relationships* are known. Mnemo never treats the checkpoint’s file list as
+proof of a dependency.
+
 If that changed file is a dbt `.sql` model and Mnemo has an active manifest for the same project,
 the cue instead also includes bounded downstream dbt model identities from the manifest. That is
 the authoritative source for dbt structure; it still does not expose SQL or pretend that an active

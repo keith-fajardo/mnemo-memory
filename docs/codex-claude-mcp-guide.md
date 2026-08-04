@@ -155,6 +155,11 @@ and resolved relationships from the most recent proved structural transition. It
 recent code change, not a claim about why the change was made; the saved checkpoint supplies that
 task reasoning and evidence.
 
+If the saved checkpoint identifies a supported relative file as relevant, Mnemo additionally
+attaches a very small cited static-impact candidate from that exact file. This lets the next Codex
+or Claude session see both the handoff’s reason for the work and the syntax-proven code that may
+depend on it, without the agent having to remember a second `get_context` request.
+
 For code orientation, the agent can include a `source_query` (a symbol or relative-path fragment)
 in `get_context`. Mnemo returns matching structural facts plus declared module imports and explicit
 syntactic calls, each tied to the exact local snapshot. If an import has exactly one saved target,

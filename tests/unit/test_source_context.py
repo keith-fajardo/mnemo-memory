@@ -10,6 +10,7 @@ from mnemo_memory.packages.application.checkpoints import (
     CreateCheckpoint,
 )
 from mnemo_memory.packages.application.unified_context import (
+    ContextCheckpointSourceImpact,
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
     ContextSourceOverviewQuery,
@@ -796,6 +797,121 @@ def test_source_impact_context_resolves_a_relative_path_exactly(tmp_path: Path) 
     assert any('"path":"core.py"' in item.content for item in packet.structural_items)
     assert any('"path":"service.py"' in item.content for item in packet.structural_items)
     assert not any('"path":"other_core.py"' in item.content for item in packet.structural_items)
+
+
+def test_checkpoint_relevant_file_selects_bounded_current_static_impact(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "core.py").write_text("def calculate():\n    return 1\n", encoding="utf-8")
+    (root / "service.py").write_text(
+        "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
+    )
+    source = ReferenceSourceStructureRepository()
+    stored = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    checkpoints = CheckpointApplicationService(
+        ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+    )
+    checkpoints.create(
+        CreateCheckpoint(
+            task_scope,
+            CheckpointContent(
+                "Assess the impact of a core calculation change.",
+                (),
+                "The calculation was changed and needs impact review.",
+                (),
+                (),
+                (),
+                (),
+                ("core.py",),
+                (),
+                (),
+                40,
+            ),
+            (_checkpoint_evidence(),),
+        )
+    )
+
+    packet = UnifiedContextService(checkpoints, None, source).get_context(
+        GetUnifiedContext(
+            task_scope,
+            checkpoint_source_impact=ContextCheckpointSourceImpact(
+                current_source_digest=stored.snapshot.source_digest
+            ),
+        )
+    )
+
+    assert any('"path":"core.py"' in item.content for item in packet.structural_items)
+    assert any('"path":"service.py"' in item.content for item in packet.structural_items)
+    assert any(
+        '"impact_direction":"dependents"' in item.content for item in packet.structural_items
+    )
+    assert all('"currentness":"current"' in item.content for item in packet.structural_items)
+    assert all(item.evidence_references for item in packet.structural_items)
+    assert "return core.calculate" not in "".join(item.content for item in packet.structural_items)
+
+
+def test_source_impact_honors_the_symbol_limit_for_a_file_start(tmp_path: Path) -> None:
+    project_scope = MemoryScope(
+        OwnerId.from_string("11111111-1111-4111-8111-111111111111"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("22222222-2222-4222-8222-222222222222"),
+        ProjectId.from_string("33333333-3333-4333-8333-333333333333"),
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "many.py").write_text(
+        "def first():\n    return 1\n\ndef second():\n    return 2\n", encoding="utf-8"
+    )
+    source = ReferenceSourceStructureRepository()
+    source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(project_scope, root))
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(
+            ReferenceCheckpointRepository(), clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)
+        ),
+        None,
+        source,
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            source_impact=ContextSourceImpactQuery(
+                None, relative_path="many.py", maximum_symbols=1
+            ),
+        )
+    )
+
+    symbols = [item for item in packet.structural_items if item.item_id.startswith("source:")]
+    assert len(symbols) == 1
+    assert packet.omissions[-1].detail == "maximum symbol count reached"
 
 
 def test_source_impact_can_select_an_immutable_historical_snapshot(tmp_path: Path) -> None:

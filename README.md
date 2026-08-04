@@ -382,6 +382,14 @@ agent from first asking “what could be affected?” after a fresh session. The
 bounded, and cited—not proof of runtime behavior, and not a substitute for tests or current
 verification.
 
+When a saved checkpoint names a supported relative file in `relevant_files`, the next automatic
+handoff also starts from the first matching file and includes a tiny, cited list of its proven
+static dependents. In practical terms, a checkpoint that says “I changed `core.py`” can bring the
+agent the bounded answer to “what saved code statically depends on it?” without a second request.
+The checkpoint chooses only the topic; the source snapshot remains the authority for every
+relationship. If the file is not indexed, ambiguous, or the compact budget is full, Mnemo omits
+the impact rather than inventing it.
+
 For a changed dbt `.sql` model with an active manifest, the same cue includes bounded downstream
 model identities from that manifest. Those are authoritative structural facts for that artifact,
 but the cue treats their currentness as **unknown** until the agent supplies matching manifest or
