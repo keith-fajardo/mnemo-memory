@@ -423,7 +423,10 @@ def main(data_directory: Path | None = None) -> None:
         # Construction is inert: FastEmbed is imported and model weights are requested only when
         # a caller explicitly sends semantic_knowledge_query after local semantic indexing.
         from mnemo_memory.packages.knowledge import LocalSemanticKnowledgeRetriever
-        from mnemo_memory.packages.skills_registry import KnowledgeDocumentProcedureRegistry
+        from mnemo_memory.packages.skills_registry import (
+            KnowledgeDocumentProcedureRegistry,
+            KnowledgeDocumentSkillRegistry,
+        )
 
         semantic_knowledge = LocalSemanticKnowledgeRetriever(
             runtime.knowledge_document_repository,
@@ -442,6 +445,7 @@ def main(data_directory: Path | None = None) -> None:
                         semantic_knowledge,
                         KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
                         DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
+                        KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository),
                     ),
                     runtime.repository,
                 ),

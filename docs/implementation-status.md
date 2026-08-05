@@ -895,6 +895,31 @@ strict typing for 187 source files, dependency/provenance validation for 86 entr
 validation for 99 product Python files. No database migration, dependency, scanner, context behavior,
 MCP surface, model call, UI, packaging, or team behavior was added.
 
+#### Issue 19B — Applicable skills in unified context — Complete
+
+This bounded issue allows one context request to select checked-in skills by exact applicability
+tags or by one exact checked-in agent name plus a concrete client. Procedures are assembled first,
+so mandatory checked-in project rules retain priority within the shared section and total budgets.
+Selected skills retain immutable skill and optional agent revision/digest provenance and remain
+untrusted evidence. This issue adds no prompt inference, generated skill, MCP tool, source scanner,
+database migration, dependency, model call, UI, packaging, or team behavior.
+
+Implemented explicit `skill_tags`/`skill_client` selection and exact `skill_agent_name` resolution
+on the unified context request. A request cannot combine tag and agent discovery, cannot use the
+wildcard client, and cannot discover a skill without a concrete supported client. The service
+resolves current project-scoped registry entries only, renders each selected skill as bounded
+`untrusted_evidence`, and cites its immutable document revision and digest; agent-selected skills
+also cite the exact agent revision and digest. The production MCP composition now supplies the live
+registry, but no transport parameter or new tool is exposed in this issue.
+
+Procedures are assembled before skills. A focused budget test proves a mandatory checked-in
+procedure remains present while a matching preference skill is omitted when both cannot fit, and
+the final selector independently protects mandatory procedures. All 16 focused procedural tests
+pass. The complete repository gate passes with 739 tests, strict typing for 187 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 99 product Python
+files. No database migration, dependency, prompt inference, generated skill, source scanner, MCP
+surface, model call, UI, packaging, or team behavior was added.
+
 The first procedural-memory slice reuses the immutable checked-in Markdown revision store rather
 than creating a second procedure source of truth. A document is eligible only when strict scalar
 frontmatter marks `mnemo_kind: procedure` and gives bounded literal `mnemo_tags`; callers must

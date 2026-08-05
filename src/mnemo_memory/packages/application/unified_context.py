@@ -57,8 +57,10 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OmissionNotice,
     OmissionReason,
+    ProjectAgent,
     ProjectClientProfile,
     ProjectProcedure,
+    ProjectSkill,
     ProvenanceNotice,
     RankingMetadata,
     ScopeLevel,
@@ -68,8 +70,10 @@ from mnemo_memory.packages.domain import (
     SourceTrustClass,
     ValidityState,
     VerificationStatus,
+    normalize_agent_client,
     normalize_knowledge_query,
     normalize_procedure_tags,
+    normalize_registry_name,
     unique_file_renames,
 )
 from mnemo_memory.packages.domain.dbt_manifest import ArtifactCurrentness, SourceStateFingerprint
@@ -79,6 +83,7 @@ from mnemo_memory.packages.storage.contracts import (
     KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
     ProjectProcedureRegistry,
+    ProjectSkillRegistry,
     SourceStructureRepository,
 )
 
@@ -400,6 +405,9 @@ class GetUnifiedContext:
     include_approved_events: bool = False
     procedure_tags: tuple[str, ...] = ()
     procedure_profile: ProjectClientProfile | None = None
+    skill_tags: tuple[str, ...] = ()
+    skill_client: str | None = None
+    skill_agent_name: str | None = None
     dbt_test_coverage: ContextDbtTestCoverageQuery | None = None
     dbt_selector: ContextDbtSelectorQuery | None = None
     dbt_freshness: ContextDbtFreshnessQuery | None = None
@@ -434,6 +442,21 @@ class GetUnifiedContext:
             not self.procedure_tags or self.procedure_profile.procedure_tags != self.procedure_tags
         ):
             raise ValueError("procedure profile must match explicit procedure tags")
+        if self.skill_tags:
+            object.__setattr__(self, "skill_tags", normalize_procedure_tags(self.skill_tags))
+        if self.skill_client is not None:
+            client = normalize_agent_client(self.skill_client)
+            if client == "any":
+                raise ValueError("skill client must be concrete")
+            object.__setattr__(self, "skill_client", client)
+        if self.skill_agent_name is not None:
+            object.__setattr__(
+                self, "skill_agent_name", normalize_registry_name(self.skill_agent_name)
+            )
+        if (self.skill_tags or self.skill_agent_name is not None) and self.skill_client is None:
+            raise ValueError("skill discovery requires a concrete client")
+        if self.skill_tags and self.skill_agent_name is not None:
+            raise ValueError("request skill tags or one agent, not both")
 
 
 class UnifiedContextService:
@@ -449,6 +472,7 @@ class UnifiedContextService:
         semantic_knowledge: SemanticKnowledgeRetrieverPort | None = None,
         procedures: ProjectProcedureRegistry | None = None,
         dbt_code_excerpts: DbtCodeExcerptReaderPort | None = None,
+        skills: ProjectSkillRegistry | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
@@ -458,6 +482,7 @@ class UnifiedContextService:
         self._semantic_knowledge = semantic_knowledge
         self._procedures = procedures
         self._dbt_code_excerpts = dbt_code_excerpts
+        self._skills = skills
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -473,6 +498,7 @@ class UnifiedContextService:
         packet = self._with_checkpoint_source_observation(packet, request)
         packet = self._with_requested_knowledge(packet, request)
         packet = self._with_requested_procedures(packet, request)
+        packet = self._with_requested_skills(packet, request)
         if (
             request.lineage is None
             and request.dbt_test_coverage is None
@@ -487,6 +513,8 @@ class UnifiedContextService:
             and request.knowledge_query is None
             and request.semantic_knowledge_query is None
             and not request.procedure_tags
+            and not request.skill_tags
+            and request.skill_agent_name is None
         ):
             return packet
         if request.lineage is not None:
@@ -500,6 +528,77 @@ class UnifiedContextService:
         if request.dbt_changes is not None:
             return self._with_dbt_changes(packet, request)
         return self._with_requested_source_facts(packet, request)
+
+    def _with_requested_skills(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach only explicitly applicable, compatible, checked-in skill revisions."""
+        if not request.skill_tags and request.skill_agent_name is None:
+            return packet
+        if self._skills is None:
+            return _with_omission(
+                packet, "skills", OmissionReason.LOWER_RANK, "skill registry is unavailable"
+            )
+        assert request.skill_client is not None
+        agent: ProjectAgent | None = None
+        tags = request.skill_tags
+        if request.skill_agent_name is not None:
+            agent = self._skills.get_current_agent(
+                _project_scope(request.scope), request.skill_agent_name, request.skill_client
+            )
+            if agent is None:
+                return _with_omission(
+                    packet,
+                    f"agent:{request.skill_agent_name}",
+                    OmissionReason.LOWER_RANK,
+                    "one compatible current checked-in agent was not found",
+                )
+            tags = agent.skill_tags
+        skills = self._skills.find_applicable_skills(
+            _project_scope(request.scope), tags, request.skill_client, 8
+        )
+        remaining = min(
+            request.budget.skills_and_procedures
+            - sum(item.token_estimate for item in packet.skills_and_procedures),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        items: list[ContextItem] = []
+        notices: list[ProvenanceNotice] = list(packet.provenance)
+        for rank, skill in enumerate(skills, start=1):
+            item, notice = _skill_context_item(request.scope, skill, rank, agent)
+            if item.token_estimate > remaining:
+                packet = _with_omission(
+                    packet,
+                    item.item_id,
+                    OmissionReason.TOKEN_BUDGET,
+                    "skill exceeds the remaining skills and procedures budget",
+                )
+                continue
+            items.append(item)
+            notices.append(notice)
+            remaining -= item.token_estimate
+        if not items:
+            return packet
+        return ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + sum(item.token_estimate for item in items),
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=packet.structural_items,
+            skills_and_procedures=(*packet.skills_and_procedures, *items),
+            provenance=tuple(notices),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
 
     def _with_requested_procedures(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -2608,6 +2707,98 @@ def _procedure_context_item(
 def _profile_evidence(profile: ProjectClientProfile) -> EvidenceReference:
     revision, document = profile.revision, profile.revision.document
     reference = f"agent-profile:{document.document_id}/revision/{revision.revision_id}"
+    return EvidenceReference(
+        EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),
+        EvidenceSourceType.REPOSITORY,
+        SourceTrustClass.USER_AUTHORED,
+        reference,
+        document.content_digest,
+        EvidenceLocation(f"mnemo:{reference}"),
+        revision.created_at,
+        VerificationStatus.UNVERIFIED,
+    )
+
+
+def _skill_context_item(
+    task_scope: MemoryScope,
+    skill: ProjectSkill,
+    rank: int,
+    agent: ProjectAgent | None,
+) -> tuple[ContextItem, ProvenanceNotice]:
+    """Render one exact checked-in skill revision as cited, untrusted evidence."""
+    revision, document = skill.revision, skill.revision.document
+    item_id = f"skill:{document.document_id}:revision:{revision.revision_id}"
+    content = json.dumps(
+        {
+            "applicability_tags": skill.applicability_tags,
+            "compatible_clients": skill.compatible_clients,
+            "document_path": document.relative_path,
+            "name": skill.name,
+            "revision_id": str(revision.revision_id),
+            "sections": tuple(
+                {"heading": section.heading, "content": section.content}
+                for section in document.sections
+            ),
+            "selected_by_agent": None
+            if agent is None
+            else {
+                "client": agent.client,
+                "document_path": agent.revision.document.relative_path,
+                "name": agent.name,
+                "revision_id": str(agent.revision.revision_id),
+                "version": agent.version,
+            },
+            "source_digest": skill.source_digest,
+            "trust": skill.trust.value,
+            "version": skill.version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    reference = f"skill:{document.document_id}/revision/{revision.revision_id}"
+    evidence = EvidenceReference(
+        EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),
+        EvidenceSourceType.REPOSITORY,
+        SourceTrustClass.USER_AUTHORED,
+        reference,
+        document.content_digest,
+        EvidenceLocation(f"mnemo:{reference}"),
+        revision.created_at,
+        VerificationStatus.UNVERIFIED,
+    )
+    evidence_references = (evidence,) if agent is None else (evidence, _agent_evidence(agent))
+    item = ContextItem(
+        item_id,
+        ContextItemType.SKILL,
+        task_scope,
+        content,
+        ContentRepresentation.UNTRUSTED_EVIDENCE,
+        (len(content) + 3) // 4,
+        evidence_references,
+        SourceTrustClass.USER_AUTHORED,
+        Sensitivity.NORMAL,
+        ValidityState.UNKNOWN,
+        RankingMetadata(rank, float(len(skill.applicability_tags)), "scoped-skill-tags"),
+        ConflictState.NONE,
+        revision.created_at,
+    )
+    return (
+        item,
+        ProvenanceNotice(
+            f"provenance:{item_id}",
+            item_id,
+            f"mnemo:skill/{document.document_id}/revision/{revision.revision_id}",
+            document.content_digest.removeprefix("sha256:"),
+            evidence_references,
+        ),
+    )
+
+
+def _agent_evidence(agent: ProjectAgent) -> EvidenceReference:
+    revision, document = agent.revision, agent.revision.document
+    reference = f"agent:{document.document_id}/revision/{revision.revision_id}"
     return EvidenceReference(
         EvidenceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
         SourceId(uuid5(_KNOWLEDGE_EVIDENCE_NAMESPACE, f"source:{document.document_id}")),

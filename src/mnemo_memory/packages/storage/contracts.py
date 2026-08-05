@@ -52,8 +52,10 @@ from mnemo_memory.packages.domain import (
     MemoryId,
     MemoryScope,
     OutboxJobId,
+    ProjectAgent,
     ProjectClientProfile,
     ProjectProcedure,
+    ProjectSkill,
     TaskActivityEvent,
     TaskActivityEventDeletion,
     TaskActivityEventExpiration,
@@ -769,6 +771,30 @@ class ProjectProcedureRegistry(Protocol):
     def find_current_client_profile(
         self, scope: MemoryScope, client: str
     ) -> ProjectClientProfile | None: ...
+
+
+class ProjectSkillRegistry(Protocol):
+    """Scoped live read port for current checked-in skill and agent revisions."""
+
+    def list_current_skills(
+        self, scope: MemoryScope, client: str, maximum_skills: int = 32
+    ) -> tuple[ProjectSkill, ...]: ...
+
+    def get_current_skill(
+        self, scope: MemoryScope, name: str, client: str
+    ) -> ProjectSkill | None: ...
+
+    def find_applicable_skills(
+        self,
+        scope: MemoryScope,
+        tags: tuple[str, ...],
+        client: str,
+        maximum_skills: int = 8,
+    ) -> tuple[ProjectSkill, ...]: ...
+
+    def get_current_agent(
+        self, scope: MemoryScope, name: str, client: str
+    ) -> ProjectAgent | None: ...
 
 
 def validate_knowledge_search(terms: tuple[str, ...], limit: int, maximum_documents: int) -> None:

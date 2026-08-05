@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
+from mnemo_memory.packages.application.unified_context import (
+    GetUnifiedContext,
+    UnifiedContextService,
+)
 from mnemo_memory.packages.domain import (
+    ContextBudget,
+    ContextItemType,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
     MemoryScope,
@@ -13,12 +20,20 @@ from mnemo_memory.packages.domain import (
     ProjectId,
     ProjectSkillTrust,
     ScopeLevel,
+    SessionId,
+    TaskId,
     Visibility,
     WorkspaceId,
 )
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
-from mnemo_memory.packages.skills_registry import KnowledgeDocumentSkillRegistry
-from mnemo_memory.packages.storage import ReferenceKnowledgeDocumentRepository
+from mnemo_memory.packages.skills_registry import (
+    KnowledgeDocumentProcedureRegistry,
+    KnowledgeDocumentSkillRegistry,
+)
+from mnemo_memory.packages.storage import (
+    ReferenceCheckpointRepository,
+    ReferenceKnowledgeDocumentRepository,
+)
 
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "procedural"
@@ -31,6 +46,19 @@ def _scope(seed: int = 1) -> MemoryScope:
         Visibility.PROJECT,
         WorkspaceId.from_string(f"00000000-0000-4000-8001-{seed:012d}"),
         ProjectId.from_string(f"00000000-0000-4000-8002-{seed:012d}"),
+    )
+
+
+def _task_scope(seed: int = 1) -> MemoryScope:
+    project = _scope(seed)
+    return MemoryScope(
+        project.owner_id,
+        ScopeLevel.TASK,
+        project.visibility,
+        project.workspace_id,
+        project.project_id,
+        SessionId.new(),
+        TaskId.new(),
     )
 
 
@@ -48,6 +76,15 @@ def _revision(
         1 if predecessor is None else predecessor.revision_number + 1,
         None if predecessor is None else predecessor.revision_id,
         NOW,
+    )
+
+
+def _context(repository: ReferenceKnowledgeDocumentRepository) -> UnifiedContextService:
+    return UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW),
+        None,
+        procedures=KnowledgeDocumentProcedureRegistry(repository),
+        skills=KnowledgeDocumentSkillRegistry(repository),
     )
 
 
@@ -233,3 +270,112 @@ def test_agent_resolution_prefers_exact_client_and_fails_closed_on_ambiguity() -
     )
     repository.apply_sync(_scope(), (duplicate,), ())
     assert registry.get_current_agent(_scope(), "reviewer", "codex") is None
+
+
+def test_context_discovers_only_requested_compatible_skills_with_exact_provenance() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    skill = _revision(
+        _scope(),
+        "skills/review.md",
+        "---\nmnemo_kind: skill\nmnemo_name: review\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: dbt, review\nmnemo_clients: codex\nmnemo_trust: checked_in\n---\n"
+        "# Review\nCheck the current manifest before changing a model.",
+    )
+    unrelated = _revision(
+        _scope(),
+        "skills/python.md",
+        "---\nmnemo_kind: skill\nmnemo_name: python\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: python\nmnemo_clients: codex\nmnemo_trust: checked_in\n---\n"
+        "# Python\nReview Python code.",
+    )
+    repository.apply_sync(_scope(), (unrelated, skill), ())
+
+    packet = _context(repository).get_context(
+        GetUnifiedContext(_task_scope(), skill_tags=("dbt",), skill_client="codex")
+    )
+
+    assert len(packet.skills_and_procedures) == 1
+    item = packet.skills_and_procedures[0]
+    assert item.item_type is ContextItemType.SKILL
+    assert item.content_representation.value == "untrusted_evidence"
+    assert '"name":"review"' in item.content
+    assert '"source_digest":"sha256:' in item.content
+    assert item.evidence_references[0].immutable_source_ref.startswith("skill:")
+    assert packet.provenance[-1].item_id == item.item_id
+    assert packet.declared_total_tokens <= packet.budget.total_limit
+
+
+def test_context_resolves_exact_agent_and_cites_agent_and_skill_revisions() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    skill_source = (FIXTURES / "skill.md").read_text(encoding="utf-8")
+    agent_source = (FIXTURES / "agent.md").read_text(encoding="utf-8")
+    skill = _revision(_scope(), "skills/reconciliation-review.md", skill_source)
+    agent = _revision(_scope(), "agents/reconciliation-agent.md", agent_source)
+    repository.apply_sync(_scope(), (skill, agent), ())
+
+    packet = _context(repository).get_context(
+        GetUnifiedContext(
+            _task_scope(), skill_agent_name="reconciliation-agent", skill_client="claude-code"
+        )
+    )
+
+    assert len(packet.skills_and_procedures) == 1
+    item = packet.skills_and_procedures[0]
+    assert '"selected_by_agent":{"client":"any"' in item.content
+    assert len(item.evidence_references) == 2
+    assert item.evidence_references[0].immutable_source_ref.startswith("skill:")
+    assert item.evidence_references[1].immutable_source_ref.startswith("agent:")
+    assert str(agent.revision_id) in item.content
+
+
+def test_mandatory_checked_in_procedure_keeps_budget_priority_over_skill() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    procedure = _revision(
+        _scope(),
+        "procedures/mandatory.md",
+        "---\nmnemo_kind: procedure\nmnemo_tags: review\nmnemo_mandatory: true\n---\n"
+        "# Mandatory review\nAlways validate current repository evidence.",
+    )
+    skill = _revision(
+        _scope(),
+        "skills/preference.md",
+        "---\nmnemo_kind: skill\nmnemo_name: preferred-style\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: review\nmnemo_clients: codex\nmnemo_trust: checked_in\n---\n"
+        "# Preferred style\nUse the remembered formatting preference.",
+    )
+    repository.apply_sync(_scope(), (procedure, skill), ())
+    context = _context(repository)
+    procedure_only = context.get_context(
+        GetUnifiedContext(_task_scope(), procedure_tags=("review",))
+    )
+    procedure_tokens = procedure_only.skills_and_procedures[0].token_estimate
+
+    packet = context.get_context(
+        GetUnifiedContext(
+            _task_scope(),
+            procedure_tags=("review",),
+            skill_tags=("review",),
+            skill_client="codex",
+            budget=ContextBudget(
+                skills_and_procedures=procedure_tokens,
+                total_limit=max(600, procedure_tokens),
+            ),
+        )
+    )
+
+    assert [item.item_type for item in packet.skills_and_procedures] == [
+        ContextItemType.MANDATORY_PROCEDURE
+    ]
+    assert any(omission.item_id.startswith("skill:") for omission in packet.omissions)
+
+
+def test_context_skill_discovery_requires_unambiguous_concrete_selection() -> None:
+    with pytest.raises(ValueError, match="concrete client"):
+        GetUnifiedContext(_scope(), skill_tags=("review",))
+    with pytest.raises(ValueError, match="not both"):
+        GetUnifiedContext(
+            _scope(),
+            skill_tags=("review",),
+            skill_agent_name="reviewer",
+            skill_client="codex",
+        )
