@@ -99,7 +99,14 @@ class DbtLineageGraph:
                 if edges:
                     truncated = True
                 continue
-            for edge in sorted(edges, key=lambda item: (str(item.parent_id), str(item.child_id))):
+            for edge in sorted(
+                edges,
+                key=lambda item: (
+                    str(item.parent_id),
+                    str(item.child_id),
+                    item.edge_type.value,
+                ),
+            ):
                 neighbor = edge.parent_id if upstream else edge.child_id
                 if neighbor in visited:
                     continue
@@ -117,6 +124,13 @@ class DbtLineageGraph:
             sorted(returned.values(), key=lambda item: (item.depth, str(item.node.unique_id)))
         )
         edges = tuple(
-            sorted(traversed_edges, key=lambda item: (str(item.parent_id), str(item.child_id)))
+            sorted(
+                traversed_edges,
+                key=lambda item: (
+                    str(item.parent_id),
+                    str(item.child_id),
+                    item.edge_type.value,
+                ),
+            )
         )
         return LineageTraversal(nodes=nodes, edges=edges, truncated=truncated)

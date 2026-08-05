@@ -225,6 +225,11 @@ matches it only when one active manifest node owns that path, then uses the mani
 dependencies to show impact. It never guesses lineage from the SQL text; ambiguous files are
 reported instead of being silently assigned to a model.
 
+To ask how one dbt resource reaches another, add `path_to_unique_id` to that same structured
+`dbt_lineage` request. Mnemo returns one deterministic shortest directed path, including the typed
+edge supporting each step. The path stays in the selected immutable snapshot and existing token,
+node, edge, and depth limits; no path produces a bounded omission instead of a broad graph replay.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

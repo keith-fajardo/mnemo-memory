@@ -1014,3 +1014,25 @@ upgrade failure proves rollback leaves its table and ledger unchanged. The compl
 with 563 tests, strict typing for 147 source files, schema validation, dependency/provenance
 validation for 86 entries, and architecture validation for 72 product Python
 files. No model call, external dependency, or MCP tool was added.
+
+#### Issue 15F — Complete
+
+The current bounded issue adds a deterministic directed shortest-path query over one exact scoped
+dbt snapshot. A caller supplies the existing start node or exact manifest file plus a destination
+node through the existing `get_context` `dbt_lineage` request. The application must choose one
+stable shortest path using only persisted typed manifest edges, respect node/edge/depth limits,
+preserve exact edge/node evidence and currentness, and distinguish no path from an unauthorized or
+unknown node without leaking another scope. This issue does not add selector syntax, freshness,
+test-coverage aggregation, changed-state indexing, code excerpts, a migration, dependency, model
+call, or MCP tool.
+
+Implemented one stable breadth-first shortest path over the persisted, typed dbt graph. The
+existing `get_context` `dbt_lineage` request now accepts `path_to_unique_id`, resolves both
+endpoints inside the same authorized snapshot, applies the existing node, edge, and depth limits,
+and returns ordered path nodes with exact manifest evidence, typed edge evidence, and snapshot
+currentness. A reachable path, a bounded no-path result, and an unknown or cross-scope endpoint
+remain distinct without disclosing another scope. Documentation and security guidance describe
+the bounded request and provenance contract. The complete repository gate passes with 566 tests,
+strict typing for 147 source files, schema validation, dependency/provenance validation for 86
+entries, and architecture validation for 72 product Python files. No model call, external
+dependency, migration, or MCP tool was added.

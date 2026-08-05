@@ -218,6 +218,11 @@ edge, and the shared graph count/cycle limits. Macro SQL is never normalized, pe
 returned. A macro identity in `depends_on.nodes`, a non-macro identity in `depends_on.macros`, an
 unknown endpoint, or a macro cycle rejects the artifact.
 
+Directed dbt paths resolve both endpoints inside one already-authorized snapshot before traversal.
+The search is breadth-first, deterministically ordered, and bounded by explicit node, edge, and
+depth limits. A missing, cross-scope, or unreachable endpoint cannot trigger a wider snapshot read
+or disclose whether a matching identity exists elsewhere.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

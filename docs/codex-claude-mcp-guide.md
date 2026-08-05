@@ -189,6 +189,11 @@ when it needs additional named source or deterministic dbt upstream/downstream f
 cites the exact checkpoint revision; a completed or abandoned checkpoint is not chosen as active
 work automatically.
 
+For a directed dbt path, the agent uses the same `dbt_lineage` object with its normal `unique_id`
+or exact `relative_path`, `direction`, and a `path_to_unique_id` destination. Mnemo returns one
+bounded deterministic shortest path with typed manifest-edge evidence; it does not infer a route
+from SQL or search another project.
+
 ## Scope, in practical terms
 
 Mnemo uses stable owner, workspace, project, session, and task identities internally. They prevent

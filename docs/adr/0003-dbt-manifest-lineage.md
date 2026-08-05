@@ -34,6 +34,11 @@ identity into the wrong field fails closed. Macro SQL is validated only by the e
 string limit and is then discarded. Node lineage maps validate ordinary edges only because dbt's
 macro call graph is separately authoritative in `depends_on.macros`.
 
+Issue 15F adds directed shortest-path selection over the persisted typed graph. Breadth-first
+search uses stable identity/edge-type ordering and hard node, edge, and depth bounds; it returns
+only the selected path and exact node/edge evidence. It never parses SQL to bridge disconnected
+resources. An unreachable destination is a normal bounded no-path result.
+
 ## Consequences
 
 The parser is standard-library-only, offline, bounded, and schema-version-adapted. It accepts

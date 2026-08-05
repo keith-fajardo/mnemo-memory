@@ -97,12 +97,15 @@ class ContextLineageQuery:
     current_source_state: SourceStateFingerprint | None = None
     require_current: bool = False
     relative_path: str | None = None
+    destination_unique_id: DbtNodeId | None = None
 
     def __post_init__(self) -> None:
         if (self.unique_id is None) == (self.relative_path is None):
             raise ValueError("dbt lineage requires exactly one unique_id or relative_path")
         if self.relative_path is not None:
             _validate_source_relative_path(self.relative_path)
+        if self.destination_unique_id is not None and self.destination_unique_id == self.unique_id:
+            raise ValueError("dbt path requires distinct start and destination nodes")
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,11 +581,20 @@ class UnifiedContextService:
                 True,
                 query.current_content_digest,
                 query.current_source_state,
+                query.destination_unique_id,
             )
         )
         if query.require_current and result.currentness is not ArtifactCurrentness.CURRENT:
             result_packet = _with_omission(
                 packet, "dbt-lineage", OmissionReason.STALE, "structural facts are not current"
+            )
+            return self._with_requested_source_facts(result_packet, request)
+        if not result.path_found:
+            result_packet = _with_omission(
+                packet,
+                "dbt-path",
+                OmissionReason.LOWER_RANK,
+                result.truncation_reason or "no directed dbt path",
             )
             return self._with_requested_source_facts(result_packet, request)
         supplemental = None
@@ -627,6 +639,7 @@ class UnifiedContextService:
                 )
             )
             content_value: dict[str, object] = {
+                "query_kind": "path" if result.destination_node is not None else "lineage",
                 "snapshot_id": str(result.snapshot.snapshot_id),
                 "start_node": str(result.start_node.unique_id),
                 "node_unique_id": str(item.node.unique_id),
@@ -637,6 +650,8 @@ class UnifiedContextService:
                 "relative_file": item.node.original_file_path,
                 "lineage_edge_types": sorted({edge.edge_type.value for edge in lineage_edges}),
             }
+            if result.destination_node is not None:
+                content_value["path_destination"] = str(result.destination_node.unique_id)
             evidence = [item.node.evidence]
             for edge in lineage_edges:
                 if edge.evidence not in evidence:

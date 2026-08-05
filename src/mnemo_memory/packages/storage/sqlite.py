@@ -2203,7 +2203,8 @@ class SQLiteCheckpointRepository:
                     "WHERE edge.snapshot_id = ? AND snapshot.owner_id = ? "
                     "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
                     + extra
-                    + " ORDER BY edge.parent_unique_id ASC, edge.child_unique_id ASC",
+                    + " ORDER BY edge.parent_unique_id ASC, edge.child_unique_id ASC, "
+                    "edge.edge_type ASC",
                     (
                         str(snapshot_id),
                         str(scope.owner_id),

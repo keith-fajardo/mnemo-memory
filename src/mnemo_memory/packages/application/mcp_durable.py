@@ -225,6 +225,10 @@ class DurableMcpContextPort:
                     raise ValueError("dbt_lineage requires exactly one unique_id or relative_path")
                 if has_relative_path and not isinstance(lineage["relative_path"], str):
                     raise ValueError("dbt_lineage.relative_path must be a string")
+                if "path_to_unique_id" in lineage and not isinstance(
+                    lineage["path_to_unique_id"], str
+                ):
+                    raise ValueError("dbt_lineage.path_to_unique_id must be a string")
                 dbt_query = ContextLineageQuery(
                     DbtNodeId(_string(lineage, "unique_id")) if has_unique_id else None,
                     direction,
@@ -239,6 +243,9 @@ class DurableMcpContextPort:
                     None,
                     bool(lineage.get("require_current", False)),
                     cast(str, lineage["relative_path"]) if has_relative_path else None,
+                    DbtNodeId(cast(str, lineage["path_to_unique_id"]))
+                    if "path_to_unique_id" in lineage
+                    else None,
                 )
                 return self._context_service.get_context(
                     GetUnifiedContext(

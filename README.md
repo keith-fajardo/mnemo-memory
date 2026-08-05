@@ -667,8 +667,9 @@ with exact supplemental-artifact evidence and within the existing structural tok
 Mnemo exposes exactly two local stdio MCP tools:
 
 - `save_checkpoint` creates, revises, completes, or abandons an explicit task checkpoint.
-- `get_context` returns a bounded packet, optionally including a structured dbt
-  upstream/downstream request. In an auto-memory-enabled repository both tools use the registered
+- `get_context` returns a bounded packet, optionally including a structured dbt upstream,
+  downstream, or directed shortest-path request. In an auto-memory-enabled repository both tools
+  use the registered
   project/task scope when all UUID fields are omitted; advanced callers may supply the complete
   explicit scope.
 

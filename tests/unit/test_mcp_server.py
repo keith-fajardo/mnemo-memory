@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -602,6 +603,73 @@ def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: 
         '"start_node":"model.mnemo_analytics.fct_orders"' in item.content
         for item in packet.structural_items
     )
+
+
+def test_durable_port_returns_a_bounded_dbt_path_through_the_existing_tool(
+    tmp_path: Path,
+) -> None:
+    config = LocalConfig.defaults(tmp_path / "manifest path")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 4, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                        "path_to_unique_id": "metric.mnemo_analytics.customer_value",
+                        "maximum_depth": 4,
+                    }
+                )
+            )
+        )
+
+    assert [json.loads(item.content)["node_unique_id"] for item in packet.structural_items] == [
+        "model.mnemo_analytics.mart_customer_value",
+        "semantic_model.mnemo_analytics.customer_value",
+        "metric.mnemo_analytics.customer_value",
+    ]
+    assert all(json.loads(item.content)["query_kind"] == "path" for item in packet.structural_items)
+
+
+def test_durable_port_rejects_a_non_string_dbt_path_destination(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(
+        LocalConfig.defaults(tmp_path / "invalid dbt path"), dbt_parser=DbtManifestParser()
+    ) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "unique_id": "model.mnemo_analytics.fct_orders",
+                        "direction": "downstream",
+                        "path_to_unique_id": 7,
+                    }
+                )
+            )
 
 
 def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) -> None:

@@ -47,3 +47,6 @@ performs no write. `mnemo dbt status` reports only safe aggregate active-snapsho
 No command executes dbt or contacts a warehouse. An optional structured `dbt_lineage` request to
 `get_context` selects direct/transitive upstream or downstream facts; the packet keeps structural
 facts within its 1,500-token section budget and labels every fact current, stale, or unknown.
+Adding `path_to_unique_id` selects one stable shortest directed path from that same start resource
+instead of returning the full reachable subgraph. Unknown endpoints, cross-scope snapshots, and
+unreachable destinations do not trigger broader retrieval.

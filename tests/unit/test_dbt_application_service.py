@@ -229,6 +229,66 @@ def test_queries_are_bounded_deterministic_and_scope_safe() -> None:
         )
 
 
+def test_directed_path_query_returns_one_stable_shortest_evidenced_path() -> None:
+    item, value = service(), scope()
+    snapshot = item.ingest(command(value)).snapshot
+    query = QueryLineage(
+        value,
+        DbtNodeId("source.mnemo_analytics.raw_orders"),
+        LineageDirection.DOWNSTREAM,
+        snapshot_id=snapshot.snapshot_id,
+        destination_unique_id=DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+    )
+
+    result = item.query(query)
+
+    assert result.path_found is True
+    assert result.destination_node is not None
+    assert [str(node.node.unique_id) for node in result.nodes] == [
+        "model.mnemo_analytics.stg_orders",
+        "model.mnemo_analytics.int_customer_orders",
+        "model.mnemo_analytics.fct_orders",
+        "model.mnemo_analytics.mart_customer_value",
+    ]
+    assert [node.depth for node in result.nodes] == [1, 2, 3, 4]
+    assert len(result.edges) == 4
+    assert all(edge.evidence for edge in result.edges)
+    assert item.query(query).nodes == result.nodes
+
+    absent = item.query(
+        QueryLineage(
+            value,
+            DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+            LineageDirection.DOWNSTREAM,
+            destination_unique_id=DbtNodeId("source.mnemo_analytics.raw_orders"),
+        )
+    )
+    assert absent.path_found is False
+    assert absent.nodes == ()
+    assert absent.truncation_reason == "no directed path"
+
+    bounded = item.query(
+        QueryLineage(
+            value,
+            DbtNodeId("source.mnemo_analytics.raw_orders"),
+            LineageDirection.DOWNSTREAM,
+            maximum_depth=2,
+            destination_unique_id=DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+        )
+    )
+    assert bounded.path_found is False and bounded.truncated
+    with pytest.raises(DbtApplicationNotFound):
+        item.query(
+            QueryLineage(
+                scope(2),
+                DbtNodeId("source.mnemo_analytics.raw_orders"),
+                LineageDirection.DOWNSTREAM,
+                snapshot_id=snapshot.snapshot_id,
+                destination_unique_id=DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+            )
+        )
+
+
 def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
     """One task request can combine task memory with project-scoped structural evidence."""
     item, project_scope = service(), scope()
@@ -299,6 +359,40 @@ def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
         if '"node_unique_id":"model.mnemo_analytics.mart_customer_value"' in structural_item.content
     )
     assert model["lineage_edge_types"] == ["dbt_macro_dependency"]
+
+    path = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("source.mnemo_analytics.raw_orders"),
+                LineageDirection.DOWNSTREAM,
+                destination_unique_id=DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+            ),
+        )
+    )
+    assert len(path.structural_items) == 4
+    assert all('"query_kind":"path"' in item.content for item in path.structural_items)
+    assert all(
+        '"path_destination":"model.mnemo_analytics.mart_customer_value"' in item.content
+        for item in path.structural_items
+    )
+
+    no_path = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+                LineageDirection.DOWNSTREAM,
+                destination_unique_id=DbtNodeId("source.mnemo_analytics.raw_orders"),
+            ),
+        )
+    )
+    assert no_path.structural_items == ()
+    assert any(omission.item_id == "dbt-path" for omission in no_path.omissions)
 
 
 def test_task_context_includes_bounded_matching_supplemental_dbt_evidence() -> None:

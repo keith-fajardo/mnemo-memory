@@ -231,7 +231,16 @@ class DbtManifestArtifact:
         object.__setattr__(
             self,
             "edges",
-            tuple(sorted(self.edges, key=lambda edge: (str(edge.parent_id), str(edge.child_id)))),
+            tuple(
+                sorted(
+                    self.edges,
+                    key=lambda edge: (
+                        str(edge.parent_id),
+                        str(edge.child_id),
+                        edge.edge_type.value,
+                    ),
+                )
+            ),
         )
 
     def normalized_json(self) -> str:

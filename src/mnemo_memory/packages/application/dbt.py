@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -165,12 +166,15 @@ class QueryLineage:
     include_disabled: bool = True
     current_content_digest: str | None = None
     current_source_state: SourceStateFingerprint | None = None
+    destination_unique_id: DbtNodeId | None = None
 
     def __post_init__(self) -> None:
         if self.maximum_depth is not None and self.maximum_depth < 0:
             raise ValueError("maximum_depth must be non-negative")
         if self.maximum_nodes < 1 or self.maximum_edges < 1:
             raise ValueError("lineage result limits must be positive")
+        if self.destination_unique_id == self.unique_id:
+            raise ValueError("dbt path requires distinct start and destination nodes")
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +227,8 @@ class LineageQueryResult:
     truncation_reason: str | None
     currentness: ArtifactCurrentness
     currentness_reason: str
+    destination_node: DbtManifestNode | None = None
+    path_found: bool = True
 
 
 class DbtManifestApplicationService:
@@ -395,6 +401,13 @@ class DbtManifestApplicationService:
             if snapshot is None:
                 raise ManifestSnapshotNotFound()
             start = self._repository.get_node(query.scope, snapshot.snapshot_id, query.unique_id)
+            destination = (
+                self._repository.get_node(
+                    query.scope, snapshot.snapshot_id, query.destination_unique_id
+                )
+                if query.destination_unique_id is not None
+                else None
+            )
         except (ManifestSnapshotNotFound, ManifestNodeNotFound) as error:
             raise DbtApplicationNotFound(
                 "dbt lineage node was not found in the authorized scope"
@@ -402,7 +415,13 @@ class DbtManifestApplicationService:
         except ProjectIndexRepositoryError as error:
             raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
 
-        nodes, edges, truncated, reason = self._traverse(query, snapshot, start)
+        if destination is None:
+            nodes, edges, truncated, reason = self._traverse(query, snapshot, start)
+            path_found = True
+        else:
+            nodes, edges, truncated, reason, path_found = self._shortest_path(
+                query, snapshot, start, destination
+            )
         currentness, currentness_reason = _currentness(
             snapshot, query.current_content_digest, query.current_source_state
         )
@@ -417,6 +436,121 @@ class DbtManifestApplicationService:
             truncation_reason=reason,
             currentness=currentness,
             currentness_reason=currentness_reason,
+            destination_node=destination,
+            path_found=path_found,
+        )
+
+    def _shortest_path(
+        self,
+        query: QueryLineage,
+        snapshot: DbtManifestSnapshot,
+        start: DbtManifestNode,
+        destination: DbtManifestNode,
+    ) -> tuple[
+        tuple[LineageNodeResult, ...],
+        tuple[DbtLineageEdge, ...],
+        bool,
+        str | None,
+        bool,
+    ]:
+        visited = {start.unique_id}
+        predecessors: dict[DbtNodeId, tuple[DbtNodeId, DbtLineageEdge]] = {}
+        queue: deque[tuple[DbtNodeId, int]] = deque(((start.unique_id, 0),))
+        scanned_edges = 0
+        truncated = False
+        reason: str | None = None
+        while queue:
+            node_id, depth = queue.popleft()
+            if query.maximum_depth is not None and depth >= query.maximum_depth:
+                truncated, reason = True, "maximum depth reached"
+                continue
+            adjacent = self._edges_batched(
+                query.scope, snapshot.snapshot_id, (node_id,), query.direction
+            )
+            candidate_ids = {
+                edge.parent_id if query.direction is LineageDirection.UPSTREAM else edge.child_id
+                for edge in adjacent
+                if (
+                    edge.parent_id
+                    if query.direction is LineageDirection.UPSTREAM
+                    else edge.child_id
+                )
+                not in visited
+            }
+            available = self._nodes_batched(query.scope, snapshot.snapshot_id, candidate_ids)
+            ordered_edges = sorted(
+                adjacent,
+                key=lambda edge: (
+                    str(
+                        edge.parent_id
+                        if query.direction is LineageDirection.UPSTREAM
+                        else edge.child_id
+                    ),
+                    edge.edge_type.value,
+                    str(edge.parent_id),
+                    str(edge.child_id),
+                ),
+            )
+            for edge in ordered_edges:
+                scanned_edges += 1
+                if scanned_edges > query.maximum_edges:
+                    truncated, reason = True, "maximum edge count reached"
+                    break
+                neighbor = (
+                    edge.parent_id
+                    if query.direction is LineageDirection.UPSTREAM
+                    else edge.child_id
+                )
+                if neighbor in visited:
+                    continue
+                node = available.get(neighbor)
+                if node is None:
+                    raise DbtApplicationStorageFailure("dbt project index graph is inconsistent")
+                visited.add(neighbor)
+                if not query.include_disabled and not node.enabled:
+                    continue
+                if len(predecessors) >= query.maximum_nodes:
+                    truncated, reason = True, "maximum node count reached"
+                    break
+                predecessors[neighbor] = (node_id, edge)
+                if neighbor == destination.unique_id:
+                    return (
+                        *self._reconstruct_path(query, snapshot, start, destination, predecessors),
+                        True,
+                    )
+                queue.append((neighbor, depth + 1))
+            if truncated and reason in {"maximum edge count reached", "maximum node count reached"}:
+                break
+        return (), (), truncated, reason or "no directed path", False
+
+    def _reconstruct_path(
+        self,
+        query: QueryLineage,
+        snapshot: DbtManifestSnapshot,
+        start: DbtManifestNode,
+        destination: DbtManifestNode,
+        predecessors: dict[DbtNodeId, tuple[DbtNodeId, DbtLineageEdge]],
+    ) -> tuple[tuple[LineageNodeResult, ...], tuple[DbtLineageEdge, ...], bool, None]:
+        path_ids = [destination.unique_id]
+        path_edges: list[DbtLineageEdge] = []
+        current = destination.unique_id
+        while current != start.unique_id:
+            previous, edge = predecessors[current]
+            path_edges.append(edge)
+            current = previous
+            if current != start.unique_id:
+                path_ids.append(current)
+        path_ids.reverse()
+        path_edges.reverse()
+        nodes = self._nodes_batched(query.scope, snapshot.snapshot_id, set(path_ids))
+        return (
+            tuple(
+                LineageNodeResult(nodes[node_id], depth)
+                for depth, node_id in enumerate(path_ids, 1)
+            ),
+            tuple(path_edges),
+            False,
+            None,
         )
 
     def _traverse(
@@ -486,7 +620,16 @@ class DbtManifestApplicationService:
             tuple(
                 sorted(result.values(), key=lambda value: (value.depth, str(value.node.unique_id)))
             ),
-            tuple(sorted(result_edges, key=lambda edge: (str(edge.parent_id), str(edge.child_id)))),
+            tuple(
+                sorted(
+                    result_edges,
+                    key=lambda edge: (
+                        str(edge.parent_id),
+                        str(edge.child_id),
+                        edge.edge_type.value,
+                    ),
+                )
+            ),
             truncated,
             reason,
         )
@@ -526,7 +669,16 @@ class DbtManifestApplicationService:
             except ProjectIndexRepositoryError as error:
                 raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
             result.extend(rows)
-        return tuple(sorted(result, key=lambda edge: (str(edge.parent_id), str(edge.child_id))))
+        return tuple(
+            sorted(
+                result,
+                key=lambda edge: (
+                    str(edge.parent_id),
+                    str(edge.child_id),
+                    edge.edge_type.value,
+                ),
+            )
+        )
 
 
 def _currentness(
