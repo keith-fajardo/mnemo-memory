@@ -45,4 +45,5 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0017_dbt_manifest_activations.sql"
     ).is_file()
+    assert package_files.joinpath("resources/migrations/0018_event_outbox.sql").is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

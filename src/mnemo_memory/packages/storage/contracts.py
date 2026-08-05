@@ -30,6 +30,7 @@ from mnemo_memory.packages.domain import (
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
     EventId,
+    EventOutboxJob,
     EvidenceReference,
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
@@ -39,6 +40,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
+    OutboxJobId,
     ProjectClientProfile,
     ProjectProcedure,
     knowledge_search_tokens,
@@ -99,6 +101,56 @@ class InvalidEpisodicEventScope(EpisodicEventRepositoryError):
 
 class EpisodicEventStorageFailure(EpisodicEventRepositoryError):
     pass
+
+
+class EventOutboxRepositoryError(Exception):
+    """Safe storage-neutral outcome for minimal event-delivery metadata."""
+
+
+class EventOutboxNotFound(EventOutboxRepositoryError):
+    pass
+
+
+class EventOutboxLeaseConflict(EventOutboxRepositoryError):
+    pass
+
+
+class EventOutboxStorageFailure(EventOutboxRepositoryError):
+    pass
+
+
+class EventOutboxRepository(Protocol):
+    def claim_event_jobs(
+        self,
+        scope: MemoryScope,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[EventOutboxJob, ...]: ...
+
+    def complete_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        completed_at: datetime,
+    ) -> EventOutboxJob: ...
+
+    def retry_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        now: datetime,
+        available_at: datetime,
+        failure_code: str,
+    ) -> EventOutboxJob: ...
+
+    def get_event_job(self, scope: MemoryScope, job_id: OutboxJobId) -> EventOutboxJob: ...
 
 
 class ApprovedEpisodicEventRepositoryError(Exception):

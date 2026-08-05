@@ -56,6 +56,10 @@ class EventId(Identifier):
     __slots__ = ()
 
 
+class OutboxJobId(Identifier):
+    __slots__ = ()
+
+
 class EvidenceId(Identifier):
     __slots__ = ()
 

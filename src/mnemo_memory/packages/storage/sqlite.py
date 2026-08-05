@@ -57,6 +57,8 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessResult,
     DbtSupplementalArtifactMetadata,
     EventId,
+    EventOutboxJob,
+    EventOutboxTopic,
     EvidenceReference,
     KnowledgeDocument,
     KnowledgeDocumentId,
@@ -70,6 +72,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
+    OutboxJobId,
     OwnerId,
     ProjectId,
     ScopeLevel,
@@ -117,6 +120,9 @@ from .contracts import (
     EpisodicEventPage,
     EpisodicEventStorageFailure,
     EpisodicEventStoreResult,
+    EventOutboxLeaseConflict,
+    EventOutboxNotFound,
+    EventOutboxStorageFailure,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
@@ -146,7 +152,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 17
+LATEST_SCHEMA_VERSION = 18
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -160,6 +166,17 @@ class SQLiteSchemaTooNewError(SQLiteMigrationError):
 
 def _timestamp() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _require_aware_datetime(value: datetime, name: str) -> None:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+
+
+def _outbox_timestamp(value: datetime) -> str:
+    """Canonicalize outbox times so SQLite's indexed text comparisons are chronological."""
+    _require_aware_datetime(value, "event outbox timestamp")
+    return value.astimezone(UTC).isoformat()
 
 
 def _migration_text(name: str) -> str:
@@ -447,6 +464,21 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 17:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 17
+            if version < 18:
+                # Recover an interrupted unreleased additive migration whose table exists but
+                # whose ledger entry was not committed.
+                outbox_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event_outbox'"
+                ).fetchone()
+                if outbox_table is None:
+                    _execute_sql_script(connection, _migration_text("0018_event_outbox.sql"))
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (18, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 18:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 18
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -887,6 +919,130 @@ class SQLiteCheckpointRepository:
             raise CheckpointSourceObservationNotFound("checkpoint source observation was not found")
         return self._checkpoint_source_observation_from_row(row, scope)
 
+    def claim_event_jobs(
+        self,
+        scope: MemoryScope,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[EventOutboxJob, ...]:
+        self._require_checkpoint_scope(scope)
+        EventOutboxJob.validate_worker_id(worker_id)
+        _require_aware_datetime(now, "now")
+        _require_aware_datetime(lease_expires_at, "lease_expires_at")
+        if not 1 <= limit <= 100:
+            raise ValueError("event outbox claim limit must be between 1 and 100")
+        if lease_expires_at <= now:
+            raise ValueError("event outbox lease must expire after claim time")
+        try:
+            with self._transaction() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM event_outbox WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "AND completed_at IS NULL AND available_at <= ? "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at <= ?) "
+                    "ORDER BY created_at ASC, job_id ASC LIMIT ?",
+                    (
+                        *self._scope_values(scope),
+                        _outbox_timestamp(now),
+                        _outbox_timestamp(now),
+                        limit,
+                    ),
+                ).fetchall()
+                claimed: list[EventOutboxJob] = []
+                for row in rows:
+                    job = self._event_outbox_from_row(row).claim(worker_id, lease_expires_at)
+                    connection.execute(
+                        "UPDATE event_outbox SET attempt_count = ?, lease_owner = ?, "
+                        "lease_expires_at = ? WHERE job_id = ?",
+                        (
+                            job.attempt_count,
+                            job.lease_owner,
+                            _outbox_timestamp(job.lease_expires_at)
+                            if job.lease_expires_at is not None
+                            else None,
+                            str(job.job_id),
+                        ),
+                    )
+                    claimed.append(job)
+                return tuple(claimed)
+        except (ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise EventOutboxStorageFailure("event outbox claim failed") from error
+
+    def complete_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        completed_at: datetime,
+    ) -> EventOutboxJob:
+        self._require_checkpoint_scope(scope)
+        EventOutboxJob.validate_worker_id(worker_id)
+        _require_aware_datetime(completed_at, "completed_at")
+        try:
+            with self._transaction() as connection:
+                job = self._scoped_event_outbox_job(connection, scope, job_id)
+                self._require_event_outbox_lease(job, worker_id, completed_at)
+                completed = job.complete(completed_at)
+                connection.execute(
+                    "UPDATE event_outbox SET completed_at = ?, lease_owner = NULL, "
+                    "lease_expires_at = NULL, last_failure_code = NULL WHERE job_id = ?",
+                    (_outbox_timestamp(completed_at), str(job_id)),
+                )
+                return completed
+        except (EventOutboxNotFound, EventOutboxLeaseConflict, ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise EventOutboxStorageFailure("event outbox completion failed") from error
+
+    def retry_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        now: datetime,
+        available_at: datetime,
+        failure_code: str,
+    ) -> EventOutboxJob:
+        self._require_checkpoint_scope(scope)
+        EventOutboxJob.validate_worker_id(worker_id)
+        EventOutboxJob.validate_failure_code(failure_code)
+        _require_aware_datetime(now, "now")
+        _require_aware_datetime(available_at, "available_at")
+        if available_at < now:
+            raise ValueError("event outbox retry cannot be scheduled in the past")
+        try:
+            with self._transaction() as connection:
+                job = self._scoped_event_outbox_job(connection, scope, job_id)
+                self._require_event_outbox_lease(job, worker_id, now)
+                retried = job.retry(available_at, failure_code)
+                connection.execute(
+                    "UPDATE event_outbox SET available_at = ?, lease_owner = NULL, "
+                    "lease_expires_at = NULL, last_failure_code = ? WHERE job_id = ?",
+                    (_outbox_timestamp(available_at), failure_code, str(job_id)),
+                )
+                return retried
+        except (EventOutboxNotFound, EventOutboxLeaseConflict, ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise EventOutboxStorageFailure("event outbox retry failed") from error
+
+    def get_event_job(self, scope: MemoryScope, job_id: OutboxJobId) -> EventOutboxJob:
+        self._require_checkpoint_scope(scope)
+        try:
+            with self._connect() as connection:
+                return self._scoped_event_outbox_job(connection, scope, job_id)
+        except EventOutboxNotFound:
+            raise
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise EventOutboxStorageFailure("event outbox read failed") from error
+
     def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
         self._require_checkpoint_scope(event.scope)
         try:
@@ -921,22 +1077,7 @@ class SQLiteCheckpointRepository:
                     if stored == event:
                         return EpisodicEventStoreResult(stored, idempotent=True)
                     raise InvalidEpisodicEventScope("event idempotency key conflicts")
-                connection.execute(
-                    "INSERT INTO checkpoint_lifecycle_events("
-                    "event_id,idempotency_key,event_kind,checkpoint_id,checkpoint_revision_id,"
-                    "revision_number,owner_id,visibility,workspace_id,project_id,session_id,task_id,"
-                    "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        str(event.event_id),
-                        event.idempotency_key,
-                        event.kind.value,
-                        str(event.checkpoint_id),
-                        str(event.revision_id),
-                        event.revision_number,
-                        *self._scope_values(event.scope),
-                        event.occurred_at.isoformat(),
-                    ),
-                )
+                self._insert_lifecycle_event(connection, event)
                 return EpisodicEventStoreResult(event, idempotent=False)
         except (InvalidEpisodicEventScope, ValueError, TypeError):
             raise
@@ -2800,6 +2941,17 @@ class SQLiteCheckpointRepository:
                 event.occurred_at.isoformat(),
             ),
         )
+        self._insert_event_outbox(
+            connection,
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.CHECKPOINT_LIFECYCLE,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
+            ),
+        )
 
     @staticmethod
     def _insert_approved_event(
@@ -2820,6 +2972,17 @@ class SQLiteCheckpointRepository:
             ),
         )
         SQLiteCheckpointRepository._insert_approved_event_evidence(connection, event)
+        SQLiteCheckpointRepository._insert_event_outbox(
+            connection,
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.APPROVED_EPISODIC,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
+            ),
+        )
 
     @staticmethod
     def _insert_approved_event_evidence(
@@ -2872,6 +3035,42 @@ class SQLiteCheckpointRepository:
                 "VALUES (?, ?)",
                 (str(governance.action_id), str(evidence.evidence_id)),
             )
+        SQLiteCheckpointRepository._insert_event_outbox(
+            connection,
+            EventOutboxJob.create(
+                scope=governance.scope,
+                topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+                source_event_id=governance.action_id,
+                event_kind=governance.kind.value,
+                occurred_at=governance.occurred_at,
+                created_at=governance.occurred_at,
+            ),
+        )
+
+    @staticmethod
+    def _insert_event_outbox(connection: sqlite3.Connection, job: EventOutboxJob) -> None:
+        connection.execute(
+            "INSERT INTO event_outbox("
+            "job_id,topic,source_event_id,event_kind,owner_id,visibility,workspace_id,project_id,"
+            "session_id,task_id,occurred_at,created_at,available_at,attempt_count,lease_owner,"
+            "lease_expires_at,completed_at,last_failure_code) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(job.job_id),
+                job.topic.value,
+                str(job.source_event_id),
+                job.event_kind,
+                *SQLiteCheckpointRepository._scope_values(job.scope),
+                _outbox_timestamp(job.occurred_at),
+                _outbox_timestamp(job.created_at),
+                _outbox_timestamp(job.available_at),
+                job.attempt_count,
+                job.lease_owner,
+                None if job.lease_expires_at is None else _outbox_timestamp(job.lease_expires_at),
+                None if job.completed_at is None else _outbox_timestamp(job.completed_at),
+                job.last_failure_code,
+            ),
+        )
 
     def _advance_current_pointer(
         self,
@@ -2968,6 +3167,68 @@ class SQLiteCheckpointRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
+
+    @staticmethod
+    def _event_outbox_from_row(row: sqlite3.Row) -> EventOutboxJob:
+        scope = MemoryScope(
+            owner_id=OwnerId.from_string(row["owner_id"]),
+            level=ScopeLevel.TASK,
+            visibility=Visibility(row["visibility"]),
+            workspace_id=(
+                None
+                if row["workspace_id"] is None
+                else WorkspaceId.from_string(row["workspace_id"])
+            ),
+            project_id=ProjectId.from_string(row["project_id"]),
+            session_id=SessionId.from_string(row["session_id"]),
+            task_id=TaskId.from_string(row["task_id"]),
+        )
+        return EventOutboxJob(
+            job_id=OutboxJobId.from_string(row["job_id"]),
+            scope=scope,
+            topic=EventOutboxTopic(row["topic"]),
+            source_event_id=EventId.from_string(row["source_event_id"]),
+            event_kind=row["event_kind"],
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            available_at=datetime.fromisoformat(row["available_at"]),
+            attempt_count=int(row["attempt_count"]),
+            lease_owner=row["lease_owner"],
+            lease_expires_at=(
+                None
+                if row["lease_expires_at"] is None
+                else datetime.fromisoformat(row["lease_expires_at"])
+            ),
+            completed_at=(
+                None if row["completed_at"] is None else datetime.fromisoformat(row["completed_at"])
+            ),
+            last_failure_code=row["last_failure_code"],
+        )
+
+    def _scoped_event_outbox_job(
+        self,
+        connection: sqlite3.Connection,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+    ) -> EventOutboxJob:
+        row = connection.execute(
+            "SELECT * FROM event_outbox WHERE job_id = ? AND owner_id = ? AND visibility = ? "
+            "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ?",
+            (str(job_id), *self._scope_values(scope)),
+        ).fetchone()
+        if row is None:
+            raise EventOutboxNotFound("event outbox job was not found")
+        return self._event_outbox_from_row(row)
+
+    @staticmethod
+    def _require_event_outbox_lease(job: EventOutboxJob, worker_id: str, now: datetime) -> None:
+        if (
+            job.completed_at is not None
+            or job.lease_owner != worker_id
+            or job.lease_expires_at is None
+            or job.lease_expires_at <= now
+        ):
+            raise EventOutboxLeaseConflict("event outbox lease is not owned by this worker")
 
     @staticmethod
     def _revision_from_row(

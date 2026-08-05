@@ -79,6 +79,7 @@ from .dbt_manifest import (
     UnsupportedManifestSchema,
 )
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
+from .event_outbox import EventOutboxJob, EventOutboxTopic
 from .identifiers import (
     AgentId,
     CheckpointId,
@@ -89,6 +90,7 @@ from .identifiers import (
     KnowledgeDocumentId,
     KnowledgeDocumentRevisionId,
     MemoryId,
+    OutboxJobId,
     OwnerId,
     ProjectId,
     RequestId,
@@ -209,6 +211,8 @@ __all__ = [
     "DbtSupplementalArtifactValidationError",
     "DurableClaim",
     "EventId",
+    "EventOutboxJob",
+    "EventOutboxTopic",
     "EvidenceId",
     "EvidenceLocation",
     "EvidenceReference",
@@ -242,6 +246,7 @@ __all__ = [
     "MemoryStatus",
     "OmissionNotice",
     "OmissionReason",
+    "OutboxJobId",
     "OverrideRequesterType",
     "OwnerId",
     "PacketSchemaVersion",

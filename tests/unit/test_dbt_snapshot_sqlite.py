@@ -155,7 +155,7 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
     assert "dbt_macro_dependency" not in sql
 
     item.migrate()
-    assert item.schema_version() == 17
+    assert item.schema_version() == 18
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:
@@ -181,8 +181,9 @@ def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path)
     item = repository(tmp_path)
     stored = item.store_and_activate(artifact(), DbtSnapshotId.new())
     with sqlite3.connect(item.path) as connection:
+        connection.execute("DROP TABLE event_outbox")
         connection.execute("DROP TABLE dbt_manifest_activations")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 17")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 17")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         item.migrate(fail_after_version=17)
@@ -197,7 +198,7 @@ def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path)
             is None
         )
     item.migrate()
-    assert item.schema_version() == 17
+    assert item.schema_version() == 18
     assert item.latest_transition(scope()) is None
     changed = item.store_and_activate(
         artifact(stamp=1),

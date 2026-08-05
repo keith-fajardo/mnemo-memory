@@ -1219,3 +1219,39 @@ edges remain unchanged. The complete repository gate passes with 589 tests, stri
 source files, schema validation, dependency/provenance validation for 86 entries, and architecture
 validation for 74 product Python files. No migration, dependency, model call, MCP tool, SQL/Jinja
 parser, warehouse/dbt execution, or durable source-content storage was added.
+
+### Issue 16 — Production episodic memory — In progress
+
+#### Issue 16A — Complete
+
+The current bounded issue adds a durable transactional outbox and retryable local job boundary for
+the canonical checkpoint-lifecycle and explicitly approved episodic/governance events that already
+exist. Each first event write must atomically enqueue one deterministic scoped job containing only
+event identity, kind/topic, scope IDs, and timestamps—never checkpoint content, summaries,
+evidence payloads, prompts, transcripts, tool bodies, source text, or exception text. Idempotent
+event retries and already-active no-op operations must not enqueue duplicates. Reference and SQLite
+repositories must support bounded oldest-first claims with expiring leases, owner-checked
+completion, and safe retry scheduling; a failed transaction must persist neither event nor job.
+The application runner invokes one explicitly supplied handler, treats delivery as at-least-once,
+requires handler idempotency by job ID, and records only bounded stable failure codes. Concurrency,
+lease expiry, restart, duplicate delivery, cross-scope isolation, and migration rollback require
+tests. This issue does not add model extraction, conversation capture, a daemon, network service,
+new MCP tool, retention/export/deletion behavior, dependency, or team mode. SQLite migration 0018
+is additive and forward-only with documented backup recovery.
+
+Implemented as an original Mnemo-owned event-delivery boundary. Checkpoint lifecycle events and
+explicitly approved episodic corrections/retractions now atomically enqueue deterministic,
+task-scoped jobs containing only event identity, topic/kind, scope metadata, delivery state, and
+timestamps. Idempotent event retries do not duplicate jobs. Reference and SQLite adapters provide
+bounded oldest-first claims, exclusive expiring leases, owner-checked completion, safe scheduled
+retry, restart persistence, and cross-scope non-disclosure; SQLite stores comparable timestamps in
+UTC and migration `0018_event_outbox.sql` is additive with transactional rollback and interrupted
+local-migration recovery. The bounded application runner accepts one explicit handler, documents
+job-ID idempotency, preserves at-least-once delivery, records only validated stable failure codes,
+and never persists exception text. Focused tests cover concurrent claimers, lease expiry,
+idempotent retry, restart, governance/checkpoint enqueue, reference and SQLite rollback, schema
+contents, cross-scope access, migration rollback, and duplicate handler delivery. The complete
+repository gate passes with 602 tests, strict typing for 154 source files, schema validation,
+dependency/provenance validation for 86 entries, and architecture validation for 76 product Python
+files. No model call, extraction, conversation capture, daemon, network/MCP surface, retention,
+export/deletion feature, dependency, team mode, or source-content storage was added.

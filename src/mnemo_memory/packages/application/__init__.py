@@ -75,6 +75,14 @@ from .dbt import (
     SourceFreshnessQueryResult,
     TestCoverageQueryResult,
 )
+from .event_outbox import (
+    EventOutboxApplicationError,
+    EventOutboxApplicationStorageFailure,
+    EventOutboxHandler,
+    EventOutboxHandlerFailure,
+    EventOutboxRunner,
+    EventOutboxRunResult,
+)
 from .knowledge import (
     KnowledgeApplicationConflict,
     KnowledgeApplicationError,
@@ -117,6 +125,12 @@ __all__ = [
     "DbtApplicationStorageFailure",
     "DbtManifestApplicationService",
     "DbtSupplementalArtifacts",
+    "EventOutboxApplicationError",
+    "EventOutboxApplicationStorageFailure",
+    "EventOutboxHandler",
+    "EventOutboxHandlerFailure",
+    "EventOutboxRunResult",
+    "EventOutboxRunner",
     "GetActiveManifestStatus",
     "GetApprovedEpisodicEventRecord",
     "GetCheckpoint",

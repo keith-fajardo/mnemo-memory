@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from threading import Lock
 from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
@@ -33,6 +34,8 @@ from mnemo_memory.packages.domain import (
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
     EventId,
+    EventOutboxJob,
+    EventOutboxTopic,
     EvidenceReference,
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
@@ -42,6 +45,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
+    OutboxJobId,
     ScopeLevel,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -77,6 +81,8 @@ from .contracts import (
     EpisodicEventNotFound,
     EpisodicEventPage,
     EpisodicEventStoreResult,
+    EventOutboxLeaseConflict,
+    EventOutboxNotFound,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
@@ -362,11 +368,128 @@ class ReferenceKnowledgeDocumentRepository:
             )
 
 
+class ReferenceEventOutboxRepository:
+    """Atomic in-memory reference for scoped at-least-once event delivery."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[OutboxJobId, EventOutboxJob] = {}
+        self._lock = Lock()
+
+    def claim_event_jobs(
+        self,
+        scope: MemoryScope,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> tuple[EventOutboxJob, ...]:
+        self._require_scope(scope)
+        EventOutboxJob.validate_worker_id(worker_id)
+        if not 1 <= limit <= 100:
+            raise ValueError("event outbox claim limit must be between 1 and 100")
+        if lease_expires_at <= now:
+            raise ValueError("event outbox lease must expire after claim time")
+        with self._lock:
+            eligible = sorted(
+                (
+                    job
+                    for job in self._jobs.values()
+                    if job.scope == scope
+                    and job.completed_at is None
+                    and job.available_at <= now
+                    and (job.lease_expires_at is None or job.lease_expires_at <= now)
+                ),
+                key=lambda job: (job.created_at, str(job.job_id)),
+            )[:limit]
+            claimed = tuple(job.claim(worker_id, lease_expires_at) for job in eligible)
+            self._jobs.update((job.job_id, job) for job in claimed)
+            return claimed
+
+    def complete_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        completed_at: datetime,
+    ) -> EventOutboxJob:
+        EventOutboxJob.validate_worker_id(worker_id)
+        with self._lock:
+            job = self._scoped_job(scope, job_id)
+            self._require_lease(job, worker_id, completed_at)
+            completed = job.complete(completed_at)
+            self._jobs[job_id] = completed
+            return completed
+
+    def retry_event_job(
+        self,
+        scope: MemoryScope,
+        job_id: OutboxJobId,
+        *,
+        worker_id: str,
+        now: datetime,
+        available_at: datetime,
+        failure_code: str,
+    ) -> EventOutboxJob:
+        EventOutboxJob.validate_worker_id(worker_id)
+        EventOutboxJob.validate_failure_code(failure_code)
+        if available_at < now:
+            raise ValueError("event outbox retry cannot be scheduled in the past")
+        with self._lock:
+            job = self._scoped_job(scope, job_id)
+            self._require_lease(job, worker_id, now)
+            retried = job.retry(available_at, failure_code)
+            self._jobs[job_id] = retried
+            return retried
+
+    def get_event_job(self, scope: MemoryScope, job_id: OutboxJobId) -> EventOutboxJob:
+        with self._lock:
+            return self._scoped_job(scope, job_id)
+
+    def _enqueue(self, job: EventOutboxJob) -> EventOutboxJob:
+        return self._enqueue_many((job,))[0]
+
+    def _enqueue_many(self, jobs: tuple[EventOutboxJob, ...]) -> tuple[EventOutboxJob, ...]:
+        with self._lock:
+            if len({job.job_id for job in jobs}) != len(jobs):
+                raise ValueError("event outbox batch contains duplicate jobs")
+            for job in jobs:
+                existing = self._jobs.get(job.job_id)
+                if existing is not None and existing != job:
+                    raise ValueError("event outbox job identity conflicts")
+            self._jobs.update((job.job_id, job) for job in jobs)
+            return tuple(self._jobs[job.job_id] for job in jobs)
+
+    def _scoped_job(self, scope: MemoryScope, job_id: OutboxJobId) -> EventOutboxJob:
+        self._require_scope(scope)
+        job = self._jobs.get(job_id)
+        if job is None or job.scope != scope:
+            raise EventOutboxNotFound("event outbox job was not found")
+        return job
+
+    @staticmethod
+    def _require_lease(job: EventOutboxJob, worker_id: str, now: datetime) -> None:
+        if (
+            job.completed_at is not None
+            or job.lease_owner != worker_id
+            or job.lease_expires_at is None
+            or job.lease_expires_at <= now
+        ):
+            raise EventOutboxLeaseConflict("event outbox lease is not owned by this worker")
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise ValueError("event outbox operations require explicit task scope")
+
+
 class ReferenceApprovedEpisodicEventRepository:
     """Append-only reference store for explicit, evidence-backed task facts."""
 
-    def __init__(self) -> None:
+    def __init__(self, outbox: ReferenceEventOutboxRepository | None = None) -> None:
         self._policy = ApprovedEpisodicEventSafetyPolicy()
+        self.outbox = outbox or ReferenceEventOutboxRepository()
         self._events: dict[EventId, ApprovedEpisodicEvent] = {}
         self._keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._governance: dict[EventId, ApprovedEpisodicEventGovernance] = {}
@@ -390,9 +513,15 @@ class ReferenceApprovedEpisodicEventRepository:
             raise ApprovedEpisodicEventConflict("approved episodic event key conflicts")
         if event.event_id in self._governance:
             raise ApprovedEpisodicEventConflict("retracted approved event cannot be restored")
-        self._events[event.event_id] = event
-        self._keys[key] = event.event_id
-        self._ordered.append(event.event_id)
+        state = self._snapshot()
+        try:
+            self._events[event.event_id] = event
+            self._keys[key] = event.event_id
+            self._ordered.append(event.event_id)
+            self.outbox._enqueue(self._event_job(event))
+        except BaseException:
+            self._restore(state)
+            raise
         return ApprovedEpisodicEventStoreResult(event, False)
 
     def get_approved_event(self, scope: MemoryScope, event_id: EventId) -> ApprovedEpisodicEvent:
@@ -464,11 +593,21 @@ class ReferenceApprovedEpisodicEventRepository:
         ):
             raise ApprovedEpisodicEventConflict("approved event replacement conflicts")
         self._require_unused_action_key(governance)
-        self._events[replacement.event_id] = replacement
-        self._keys[(replacement.scope, replacement.source_event_key)] = replacement.event_id
-        self._ordered.append(replacement.event_id)
-        self._governance[governance.target_event_id] = governance
-        self._action_keys[(governance.scope, governance.source_action_key)] = governance.action_id
+        state = self._snapshot()
+        try:
+            self._events[replacement.event_id] = replacement
+            self._keys[(replacement.scope, replacement.source_event_key)] = replacement.event_id
+            self._ordered.append(replacement.event_id)
+            self._governance[governance.target_event_id] = governance
+            self._action_keys[(governance.scope, governance.source_action_key)] = (
+                governance.action_id
+            )
+            self.outbox._enqueue_many(
+                (self._event_job(replacement), self._governance_job(governance))
+            )
+        except BaseException:
+            self._restore(state)
+            raise
         return ApprovedEpisodicEventGovernanceResult(
             self.get_approved_event_record(governance.scope, governance.target_event_id),
             self.get_approved_event_record(governance.scope, replacement.event_id),
@@ -498,10 +637,18 @@ class ReferenceApprovedEpisodicEventRepository:
         if target is None or target.scope != governance.scope:
             raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
         self._require_unused_action_key(governance)
-        self._governance[governance.target_event_id] = governance
-        self._action_keys[(governance.scope, governance.source_action_key)] = governance.action_id
-        del self._events[target.event_id]
-        del self._keys[(target.scope, target.source_event_key)]
+        state = self._snapshot()
+        try:
+            self._governance[governance.target_event_id] = governance
+            self._action_keys[(governance.scope, governance.source_action_key)] = (
+                governance.action_id
+            )
+            del self._events[target.event_id]
+            del self._keys[(target.scope, target.source_event_key)]
+            self.outbox._enqueue(self._governance_job(governance))
+        except BaseException:
+            self._restore(state)
+            raise
         return ApprovedEpisodicEventGovernanceResult(
             self.get_approved_event_record(governance.scope, governance.target_event_id),
             None,
@@ -563,6 +710,63 @@ class ReferenceApprovedEpisodicEventRepository:
         if (governance.scope, governance.source_action_key) in self._action_keys:
             raise ApprovedEpisodicEventConflict("approved event action key conflicts")
 
+    def _snapshot(
+        self,
+    ) -> tuple[
+        dict[EventId, ApprovedEpisodicEvent],
+        dict[tuple[MemoryScope, str], EventId],
+        dict[EventId, ApprovedEpisodicEventGovernance],
+        dict[tuple[MemoryScope, str], EventId],
+        list[EventId],
+    ]:
+        return (
+            dict(self._events),
+            dict(self._keys),
+            dict(self._governance),
+            dict(self._action_keys),
+            list(self._ordered),
+        )
+
+    def _restore(
+        self,
+        state: tuple[
+            dict[EventId, ApprovedEpisodicEvent],
+            dict[tuple[MemoryScope, str], EventId],
+            dict[EventId, ApprovedEpisodicEventGovernance],
+            dict[tuple[MemoryScope, str], EventId],
+            list[EventId],
+        ],
+    ) -> None:
+        (
+            self._events,
+            self._keys,
+            self._governance,
+            self._action_keys,
+            self._ordered,
+        ) = state
+
+    @staticmethod
+    def _event_job(event: ApprovedEpisodicEvent) -> EventOutboxJob:
+        return EventOutboxJob.create(
+            scope=event.scope,
+            topic=EventOutboxTopic.APPROVED_EPISODIC,
+            source_event_id=event.event_id,
+            event_kind=event.kind.value,
+            occurred_at=event.occurred_at,
+            created_at=event.occurred_at,
+        )
+
+    @staticmethod
+    def _governance_job(governance: ApprovedEpisodicEventGovernance) -> EventOutboxJob:
+        return EventOutboxJob.create(
+            scope=governance.scope,
+            topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+            source_event_id=governance.action_id,
+            event_kind=governance.kind.value,
+            occurred_at=governance.occurred_at,
+            created_at=governance.occurred_at,
+        )
+
     @staticmethod
     def _same_event_intent(first: ApprovedEpisodicEvent, second: ApprovedEpisodicEvent) -> bool:
         return (
@@ -590,8 +794,13 @@ class ReferenceApprovedEpisodicEventRepository:
 class ReferenceCheckpointLifecycleEventRepository:
     """Validate-before-mutate reference ledger backed by immutable checkpoint revisions."""
 
-    def __init__(self, checkpoints: CheckpointRepository) -> None:
+    def __init__(
+        self,
+        checkpoints: CheckpointRepository,
+        outbox: ReferenceEventOutboxRepository | None = None,
+    ) -> None:
         self._checkpoints = checkpoints
+        self.outbox = outbox or ReferenceEventOutboxRepository()
         self._events: dict[EventId, CheckpointLifecycleEvent] = {}
         self._keys: dict[str, EventId] = {}
         self._ordered: list[EventId] = []
@@ -617,9 +826,24 @@ class ReferenceCheckpointLifecycleEventRepository:
             raise InvalidEpisodicEventScope("event idempotency key conflicts")
         if event.event_id in self._events:
             raise InvalidEpisodicEventScope("event identity conflicts")
-        self._events[event.event_id] = event
-        self._keys[event.idempotency_key] = event.event_id
-        self._ordered.append(event.event_id)
+        state = self._snapshot()
+        try:
+            self._events[event.event_id] = event
+            self._keys[event.idempotency_key] = event.event_id
+            self._ordered.append(event.event_id)
+            self.outbox._enqueue(
+                EventOutboxJob.create(
+                    scope=event.scope,
+                    topic=EventOutboxTopic.CHECKPOINT_LIFECYCLE,
+                    source_event_id=event.event_id,
+                    event_kind=event.kind.value,
+                    occurred_at=event.occurred_at,
+                    created_at=event.occurred_at,
+                )
+            )
+        except BaseException:
+            self._restore(state)
+            raise
         return EpisodicEventStoreResult(event, idempotent=False)
 
     def get_event(self, scope: MemoryScope, event_id: EventId) -> CheckpointLifecycleEvent:
@@ -653,13 +877,25 @@ class ReferenceCheckpointLifecycleEventRepository:
 
     def _snapshot(
         self,
-    ) -> tuple[dict[EventId, CheckpointLifecycleEvent], dict[str, EventId], list[EventId]]:
+    ) -> tuple[
+        dict[EventId, CheckpointLifecycleEvent],
+        dict[str, EventId],
+        list[EventId],
+    ]:
         """Return private copies so the reference aggregate can roll back compound writes."""
-        return (dict(self._events), dict(self._keys), list(self._ordered))
+        return (
+            dict(self._events),
+            dict(self._keys),
+            list(self._ordered),
+        )
 
     def _restore(
         self,
-        state: tuple[dict[EventId, CheckpointLifecycleEvent], dict[str, EventId], list[EventId]],
+        state: tuple[
+            dict[EventId, CheckpointLifecycleEvent],
+            dict[str, EventId],
+            list[EventId],
+        ],
     ) -> None:
         self._events, self._keys, self._ordered = state
 
@@ -741,8 +977,9 @@ class ReferenceCheckpointRepository:
     def __init__(self) -> None:
         self._aggregates: dict[CheckpointId, CheckpointAggregate] = {}
         self._revisions: dict[CheckpointId, tuple[CheckpointRevision, ...]] = {}
-        self.events = ReferenceCheckpointLifecycleEventRepository(self)
-        self.approved_events = ReferenceApprovedEpisodicEventRepository()
+        self.outbox = ReferenceEventOutboxRepository()
+        self.events = ReferenceCheckpointLifecycleEventRepository(self, self.outbox)
+        self.approved_events = ReferenceApprovedEpisodicEventRepository(self.outbox)
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
