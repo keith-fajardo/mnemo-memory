@@ -210,6 +210,29 @@ stale consent, injection-triggered writes, and mutation authorization matrices.
 **Residual risk:** A compromised authorized client can act as the user; minimize capabilities and
 make writes inspectable and reversible where possible.
 
+### Cross-scope or tampered episodic export
+
+**Scenario:** An export retrieves payloads before authorization, mixes another task's data, includes
+expired or deleted content, omits anti-resurrection tombstones, or is modified without detection
+before a future import.
+
+**Required controls:** Require one exact task scope before any storage query; derive dependent
+review/governance payloads only from already-authorized candidate identities; exclude every memory
+or source identity carrying an expiration or deletion tombstone; include all matching payload-free
+expiration, purge, and deletion records; validate candidate/source, review, governance, revision,
+purge, and dependent-deletion relationships; reject duplicates and cross-scope objects. Use a
+versioned schema, stable identity ordering, canonical UTF-8 JSON, and a SHA-256 digest over the full
+content. Treat any future import as untrusted input and reapply policy rather than granting
+authority from the export itself.
+
+**Verification:** Reference/SQLite byte parity at one timestamp, unrelated-scope fixtures,
+review/correction replay, expired/purged/deleted fixtures, JSON round trip, restart, duplicate and
+relationship corruption, non-canonical ordering, and content/digest tampering.
+
+**Residual risk:** This slice returns an in-memory bundle and cannot revoke or repair a copy after
+the user delivers it elsewhere. Import, stored-export cleanup, encryption, and backup handling are
+separate work.
+
 ### Deletion propagation
 
 **Scenario:** Deleted or consent-withdrawn content remains in indexes, embeddings, caches, jobs,

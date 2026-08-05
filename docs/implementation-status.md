@@ -1220,7 +1220,7 @@ source files, schema validation, dependency/provenance validation for 86 entries
 validation for 74 product Python files. No migration, dependency, model call, MCP tool, SQL/Jinja
 parser, warehouse/dbt execution, or durable source-content storage was added.
 
-### Issue 16 — Production episodic memory — In progress
+### Issue 16 — Production episodic memory — Complete
 
 #### Issue 16A — Complete
 
@@ -1594,3 +1594,40 @@ The complete repository gate passes with 713 tests, strict typing for 175 source
 dependency/provenance validation for 86 entries, and architecture validation for 90 product Python
 files. No export, backup cleanup, filesystem/knowledge/checkpoint deletion, automatic
 scheduler/daemon, API/CLI/MCP surface, dependency, or team mode was added.
+
+#### Issue 16K — Complete
+
+The current bounded issue adds one portable, integrity-verifiable export for the production
+episodic slice. One exact task scope returns a versioned canonical bundle containing every
+currently permitted minimized task event and non-expired/non-deleted candidate payload, its review
+and governance action stream, the deterministically replayed revision chain, and all matching
+payload-free memory/source expiration, purge, and deletion tombstones. Every nested object retains
+its exact scope, evidence, retention, source, and extraction/governance provenance. Arrays have
+stable identity ordering; canonical UTF-8 JSON and a SHA-256 content digest make identical state at
+one export time byte-identical and tampering detectable. Authorization is applied in every scoped
+storage query before payload reconstruction. Expired, purged, and deleted payloads never enter the
+bundle, while their tombstones remain exportable so an eventual importer cannot resurrect them.
+Reference and SQLite must produce the same bundle, including after restart, and malformed,
+cross-scope, duplicate, inconsistent, or digest-mismatched bundles fail closed. This issue adds no
+filesystem output, import, CLI/API/MCP surface, checkpoint/approved-fact/knowledge/structural export,
+backup behavior, migration, dependency, model call, or team mode.
+
+Implemented the versioned `EpisodicExportBundle` domain contract, strict revision serialization,
+one authorization-first export service, and matching Reference/SQLite projections. The bundle
+canonically orders live minimized events, live candidates, reviews, governance streams, and replayed
+revision chains, includes every matching memory/source expiration, purge, and deletion tombstone,
+and computes one SHA-256 digest over canonical UTF-8 JSON. It rejects unsupported versions, naive
+times, cross-scope state, duplicates, non-canonical ordering, unavailable sources, inconsistent
+review/governance/revision/purge/deletion relationships, malformed JSON, and digest mismatch.
+SQLite discovers payloads only through the exact authorized scope or already-authorized candidate
+identities; both adapters exclude expired/deleted source and memory payloads before reconstruction
+and produce byte-identical output at the same export time. Three focused tests cover strict revision
+round-trip, complete mixed-state Reference/SQLite parity, scope isolation, current/rejected/
+corrected state, retention and deletion tombstones, SQLite restart, deterministic bytes and digest,
+changed export time, tampering, duplicates, relationship omission, non-canonical order, and invalid
+scope. Product and threat contracts now define export integrity and its user-controlled-copy
+boundary. The complete repository gate passes with 716 tests, strict typing for 178 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 92 product Python
+files. No filesystem output, import, CLI/API/MCP surface, checkpoint/approved-fact/knowledge/
+structural export, stored-export cleanup, backup behavior, migration, dependency, model call, or
+team mode was added.

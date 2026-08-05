@@ -37,6 +37,7 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicDeletionCause,
+    EpisodicExportBundle,
     EpisodicMemoryCandidate,
     EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
@@ -135,6 +136,7 @@ from .contracts import (
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidEpisodicExportScope,
     InvalidEpisodicMemoryCandidateScope,
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
@@ -1409,6 +1411,68 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self, scope: MemoryScope, event_id: EventId
     ) -> TaskActivityEventDeletion:
         return self._reference_task_activity_events._get_task_activity_deletion(scope, event_id)
+
+    def export_episodic_state(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> EpisodicExportBundle:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidEpisodicExportScope("episodic export requires exact task scope")
+        _require_aware_datetime(exported_at, "exported_at")
+        activity = self._reference_task_activity_events
+        task_events = tuple(
+            event
+            for event_id, event in activity._events.items()
+            if event.scope == scope
+            and event_id not in activity._expirations
+            and event_id not in activity._deletions
+        )
+        task_ids = {item.event_id for item in task_events}
+        candidates = tuple(
+            candidate
+            for memory_id, candidate in self._candidates.items()
+            if candidate.scope == scope
+            and candidate.source_event_id in task_ids
+            and memory_id not in self._expirations
+            and memory_id not in self._deletions
+        )
+        candidate_ids = {item.memory_id for item in candidates}
+        reviews = tuple(
+            review for memory_id, review in self._reviews.items() if memory_id in candidate_ids
+        )
+        governance_actions = tuple(
+            self._governance[action_id]
+            for memory_id in sorted(candidate_ids, key=str)
+            for action_id in self._governance_order.get(memory_id, ())
+        )
+        revisions = tuple(
+            revision
+            for memory_id in sorted(candidate_ids, key=str)
+            if (base := self._active.get(memory_id)) is not None
+            for revision in self._revisions_for(base)
+        )
+        return EpisodicExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            task_events=task_events,
+            candidates=candidates,
+            reviews=reviews,
+            governance_actions=governance_actions,
+            revisions=revisions,
+            memory_expirations=tuple(
+                item for item in self._expirations.values() if item.scope == scope
+            ),
+            memory_purges=tuple(item for item in self._purges.values() if item.scope == scope),
+            task_expirations=tuple(
+                item for item in activity._expirations.values() if item.scope == scope
+            ),
+            task_purges=tuple(item for item in activity._purges.values() if item.scope == scope),
+            memory_deletions=tuple(
+                item for item in self._deletions.values() if item.scope == scope
+            ),
+            task_deletions=tuple(
+                item for item in activity._deletions.values() if item.scope == scope
+            ),
+        )
 
     def _validate_memory_deletion(
         self,

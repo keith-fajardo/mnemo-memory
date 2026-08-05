@@ -1,6 +1,7 @@
 """Episodic-memory behavior over pure domain and storage contracts."""
 
 from .deletion import EpisodicDeletionService
+from .export import EpisodicExportService
 from .extraction import (
     EpisodicCandidateExtractionError,
     EpisodicCandidateExtractionResult,
@@ -20,6 +21,7 @@ __all__ = [
     "EpisodicCandidateExtractionResult",
     "EpisodicCandidateExtractionService",
     "EpisodicDeletionService",
+    "EpisodicExportService",
     "EpisodicPurgeSweepResult",
     "EpisodicRetentionService",
     "EpisodicRetentionSweepResult",

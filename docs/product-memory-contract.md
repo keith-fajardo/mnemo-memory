@@ -209,6 +209,17 @@ Rebuildable embeddings and indexes need not be exported if they can be reproduce
 Exports are scoped, integrity-verifiable, and clearly become the user's responsibility after
 delivery.
 
+The production episodic export is one versioned exact-task-scope bundle. It contains currently
+permitted minimized task events and non-expired/non-deleted candidates, their review and governance
+action streams, deterministically replayed revision chains, and matching payload-free memory/source
+expiration, purge, and deletion tombstones. It retains evidence, retention, source, extraction,
+model/prompt, correction, and scope provenance already present on those canonical objects. Stable
+identity ordering, canonical UTF-8 JSON, and a SHA-256 content digest make identical scoped state at
+one export time byte-identical and tampering detectable. Authorization is applied before payload
+reconstruction; excluded content never enters the bundle, while tombstones remain so a future
+importer can prevent resurrection. This service returns the bundle but does not persist an export
+file or claim checkpoint, approved-fact, knowledge, structural, backup, or team-import support.
+
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical
 data, indexes, embeddings, caches, jobs, derived summaries, and controlled exports. Source

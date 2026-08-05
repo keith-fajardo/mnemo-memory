@@ -100,6 +100,7 @@ from .episodic_deletion import (
     TaskActivityEventDeletion,
 )
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
+from .episodic_export import EPISODIC_EXPORT_FORMAT, EpisodicExportBundle
 from .episodic_retention import (
     EpisodicMemoryExpiration,
     EpisodicMemoryPurge,
@@ -184,6 +185,7 @@ from .task_activity_retention import (
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
+    "EPISODIC_EXPORT_FORMAT",
     "ActiveEpisodicMemory",
     "AgentId",
     "ApprovedEpisodicEvent",
@@ -250,6 +252,7 @@ __all__ = [
     "EpisodicCandidateReviewAction",
     "EpisodicCandidateReviewDecision",
     "EpisodicDeletionCause",
+    "EpisodicExportBundle",
     "EpisodicExtractionPort",
     "EpisodicExtractionProposal",
     "EpisodicExtractionRequest",

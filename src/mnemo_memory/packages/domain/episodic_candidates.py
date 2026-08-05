@@ -889,6 +889,72 @@ class EpisodicMemoryRevision:
             raise ValueError("episodic memory revision requires evidence")
         object.__setattr__(self, "evidence_references", evidence)
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "revision_id": str(self.revision_id),
+            "memory_id": str(self.memory_id),
+            "revision_number": self.revision_number,
+            "predecessor_revision_id": (
+                None if self.predecessor_revision_id is None else str(self.predecessor_revision_id)
+            ),
+            "scope": self.scope.to_dict(),
+            "claim": self.claim,
+            "sensitivity": (None if self.sensitivity is None else self.sensitivity.value),
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "evidence_references": [item.to_dict() for item in self.evidence_references],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        expected = {
+            "revision_id",
+            "memory_id",
+            "revision_number",
+            "predecessor_revision_id",
+            "scope",
+            "claim",
+            "sensitivity",
+            "status",
+            "created_at",
+            "evidence_references",
+        }
+        if set(value) != expected:
+            raise ValueError("episodic memory revision fields are invalid")
+        scope = value["scope"]
+        evidence = value["evidence_references"]
+        predecessor = value["predecessor_revision_id"]
+        claim = value["claim"]
+        sensitivity = value["sensitivity"]
+        strings = tuple(
+            value[name] for name in ("revision_id", "memory_id", "status", "created_at")
+        )
+        if (
+            not isinstance(scope, Mapping)
+            or not isinstance(evidence, list)
+            or not all(isinstance(item, Mapping) for item in evidence)
+            or not all(isinstance(item, str) for item in strings)
+            or (predecessor is not None and not isinstance(predecessor, str))
+            or (claim is not None and not isinstance(claim, str))
+            or (sensitivity is not None and not isinstance(sensitivity, str))
+        ):
+            raise TypeError("episodic memory revision serialization is invalid")
+        revision_number = value["revision_number"]
+        if isinstance(revision_number, bool) or not isinstance(revision_number, int):
+            raise TypeError("episodic memory revision number is invalid")
+        return cls(
+            EventId.from_string(str(value["revision_id"])),
+            MemoryId.from_string(str(value["memory_id"])),
+            revision_number,
+            (None if predecessor is None else EventId.from_string(predecessor)),
+            MemoryScope.from_dict(scope),
+            claim,
+            None if sensitivity is None else Sensitivity(sensitivity),
+            EpisodicMemoryRevisionStatus(str(value["status"])),
+            _parse_datetime(value["created_at"], "created_at"),
+            tuple(EvidenceReference.from_dict(item) for item in evidence),
+        )
+
 
 def replay_episodic_memory_revisions(
     active: ActiveEpisodicMemory,

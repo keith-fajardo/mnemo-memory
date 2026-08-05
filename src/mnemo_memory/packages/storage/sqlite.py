@@ -61,6 +61,7 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicDeletionCause,
+    EpisodicExportBundle,
     EpisodicMemoryCandidate,
     EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
@@ -159,6 +160,7 @@ from .contracts import (
     EpisodicEventPage,
     EpisodicEventStorageFailure,
     EpisodicEventStoreResult,
+    EpisodicExportStorageFailure,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidatePage,
@@ -191,6 +193,7 @@ from .contracts import (
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidEpisodicExportScope,
     InvalidEpisodicMemoryCandidateScope,
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
@@ -2783,6 +2786,161 @@ class SQLiteCheckpointRepository:
             raise
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise EpisodicDeletionStorageFailure("task activity deletion read failed") from error
+
+    def export_episodic_state(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> EpisodicExportBundle:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidEpisodicExportScope("episodic export requires exact task scope")
+        _require_aware_datetime(exported_at, "exported_at")
+        try:
+            with self._connect() as connection:
+                scope_values = self._scope_values(scope)
+                task_rows = connection.execute(
+                    "SELECT event.* FROM task_activity_events AS event "
+                    "WHERE event.owner_id = ? AND event.visibility = ? "
+                    "AND event.workspace_id IS ? AND event.project_id = ? "
+                    "AND event.session_id = ? AND event.task_id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM task_activity_event_expirations "
+                    "AS expiration WHERE expiration.event_id = event.event_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM task_activity_event_deletions "
+                    "AS deletion WHERE deletion.event_id = event.event_id) "
+                    "ORDER BY event.event_id ASC",
+                    scope_values,
+                ).fetchall()
+                task_events = tuple(
+                    self._task_activity_event_from_row(connection, row, scope) for row in task_rows
+                )
+                candidate_rows = connection.execute(
+                    "SELECT candidate.* FROM episodic_memory_candidates AS candidate "
+                    "JOIN task_activity_events AS source "
+                    "ON source.event_id = candidate.source_event_id "
+                    "WHERE candidate.owner_id = ? AND candidate.visibility = ? "
+                    "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
+                    "AND candidate.session_id = ? AND candidate.task_id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM episodic_memory_expirations "
+                    "AS expiration WHERE expiration.memory_id = candidate.memory_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM episodic_memory_deletions "
+                    "AS deletion WHERE deletion.memory_id = candidate.memory_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM task_activity_event_expirations "
+                    "AS expiration WHERE expiration.event_id = source.event_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM task_activity_event_deletions "
+                    "AS deletion WHERE deletion.event_id = source.event_id) "
+                    "ORDER BY candidate.memory_id ASC",
+                    scope_values,
+                ).fetchall()
+                candidates = tuple(
+                    self._episodic_candidate_from_row(connection, row, scope)
+                    for row in candidate_rows
+                )
+                candidate_ids = tuple(str(item.memory_id) for item in candidates)
+                reviews: tuple[EpisodicCandidateReviewAction, ...] = ()
+                governance_actions: tuple[EpisodicMemoryGovernanceAction, ...] = ()
+                revisions: tuple[EpisodicMemoryRevision, ...] = ()
+                if candidate_ids:
+                    placeholders = ",".join("?" for _ in candidate_ids)
+                    review_rows = connection.execute(
+                        "SELECT * FROM episodic_candidate_reviews WHERE candidate_id IN ("
+                        + placeholders
+                        + ") ORDER BY candidate_id ASC",
+                        candidate_ids,
+                    ).fetchall()
+                    reviews = tuple(
+                        self._episodic_review_from_row(connection, row, scope)
+                        for row in review_rows
+                    )
+                    governance_rows = connection.execute(
+                        "SELECT * FROM episodic_memory_governance WHERE memory_id IN ("
+                        + placeholders
+                        + ") ORDER BY memory_id ASC, action_sequence ASC",
+                        candidate_ids,
+                    ).fetchall()
+                    governance_actions = tuple(
+                        self._episodic_memory_governance_from_row(connection, row, scope)
+                        for row in governance_rows
+                    )
+                    active_rows = connection.execute(
+                        "SELECT * FROM active_episodic_memories WHERE memory_id IN ("
+                        + placeholders
+                        + ") ORDER BY memory_id ASC",
+                        candidate_ids,
+                    ).fetchall()
+                    revisions = tuple(
+                        revision
+                        for row in active_rows
+                        for revision in self._episodic_memory_revisions(
+                            connection,
+                            self._active_episodic_memory_from_row(connection, row, scope),
+                        )
+                    )
+                memory_expiration_rows = connection.execute(
+                    "SELECT * FROM episodic_memory_expirations WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY memory_id ASC",
+                    scope_values,
+                ).fetchall()
+                memory_expirations = tuple(
+                    self._episodic_memory_expiration_from_row(row, scope)
+                    for row in memory_expiration_rows
+                )
+                memory_purges = tuple(
+                    self._episodic_memory_purge_from_row(row, scope)
+                    for row in memory_expiration_rows
+                    if row["purge_id"] is not None
+                )
+                task_expiration_rows = connection.execute(
+                    "SELECT * FROM task_activity_event_expirations WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY event_id ASC",
+                    scope_values,
+                ).fetchall()
+                task_expirations = tuple(
+                    self._task_activity_expiration_from_row(row, scope)
+                    for row in task_expiration_rows
+                )
+                task_purges = tuple(
+                    self._task_activity_purge_from_row(row, scope)
+                    for row in task_expiration_rows
+                    if row["purge_id"] is not None
+                )
+                memory_deletion_rows = connection.execute(
+                    "SELECT * FROM episodic_memory_deletions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY memory_id ASC",
+                    scope_values,
+                ).fetchall()
+                memory_deletions = tuple(
+                    self._episodic_memory_deletion_from_row(row, scope)
+                    for row in memory_deletion_rows
+                )
+                task_deletion_rows = connection.execute(
+                    "SELECT * FROM task_activity_event_deletions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY event_id ASC",
+                    scope_values,
+                ).fetchall()
+                task_deletions = tuple(
+                    self._task_activity_deletion_from_row(row, scope) for row in task_deletion_rows
+                )
+                return EpisodicExportBundle.create(
+                    scope=scope,
+                    exported_at=exported_at,
+                    task_events=task_events,
+                    candidates=candidates,
+                    reviews=reviews,
+                    governance_actions=governance_actions,
+                    revisions=revisions,
+                    memory_expirations=memory_expirations,
+                    memory_purges=memory_purges,
+                    task_expirations=task_expirations,
+                    task_purges=task_purges,
+                    memory_deletions=memory_deletions,
+                    task_deletions=task_deletions,
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicExportStorageFailure(
+                "episodic export storage operation failed"
+            ) from error
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent

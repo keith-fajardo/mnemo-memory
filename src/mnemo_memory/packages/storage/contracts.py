@@ -31,6 +31,7 @@ from mnemo_memory.packages.domain import (
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
+    EpisodicExportBundle,
     EpisodicMemoryCandidate,
     EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
@@ -338,6 +339,24 @@ class EpisodicDeletionConflict(EpisodicDeletionRepositoryError):
 
 class EpisodicDeletionStorageFailure(EpisodicDeletionRepositoryError):
     pass
+
+
+class EpisodicExportRepositoryError(Exception):
+    """Expected outcome for one exact-scope episodic export."""
+
+
+class InvalidEpisodicExportScope(EpisodicExportRepositoryError):
+    pass
+
+
+class EpisodicExportStorageFailure(EpisodicExportRepositoryError):
+    """Safe failure while reading one exact-scope episodic export."""
+
+
+class EpisodicExportRepository(Protocol):
+    def export_episodic_state(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> EpisodicExportBundle: ...
 
 
 class KnowledgeDocumentRepositoryError(Exception):
