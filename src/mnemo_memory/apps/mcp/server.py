@@ -35,6 +35,7 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
+from mnemo_memory.packages.context_engine import UnifiedContextEngine
 from mnemo_memory.packages.domain import MemoryScope, SourceStateFingerprint
 
 SERVER_NAME = "mnemo-local"
@@ -64,6 +65,18 @@ def create_server(port: McpContextPort) -> FastMCP:
         task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
         checkpoint_id: Annotated[
             str | None, Field(default=None, min_length=36, max_length=36)
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=512,
+                description=(
+                    "Optional transient natural-language retrieval query. It is classified "
+                    "deterministically and is never persisted."
+                ),
+            ),
         ] = None,
         dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         dbt_test_coverage: Annotated[dict[str, object] | None, Field(default=None)] = None,
@@ -147,6 +160,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "session_id": session_id,
                 "task_id": task_id,
                 "checkpoint_id": checkpoint_id,
+                "query": query,
                 "dbt_lineage": dbt_lineage,
                 "dbt_test_coverage": dbt_test_coverage,
                 "dbt_selector": dbt_selector,
@@ -359,15 +373,18 @@ def main(data_directory: Path | None = None) -> None:
         create_server(
             DurableMcpContextPort(
                 runtime.checkpoint_service,
-                UnifiedContextService(
-                    runtime.checkpoint_service,
-                    runtime.dbt_manifest_service,
-                    runtime.source_structure_repository,
+                UnifiedContextEngine(
+                    UnifiedContextService(
+                        runtime.checkpoint_service,
+                        runtime.dbt_manifest_service,
+                        runtime.source_structure_repository,
+                        runtime.repository,
+                        runtime.knowledge_document_repository,
+                        semantic_knowledge,
+                        KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
+                        DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
+                    ),
                     runtime.repository,
-                    runtime.knowledge_document_repository,
-                    semantic_knowledge,
-                    KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
-                    DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
                 ),
                 observer.observe,
                 None if binding is None else binding.checkpoint_scope,

@@ -98,6 +98,7 @@ from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
 )
+from mnemo_memory.packages.context_engine import UnifiedContextEngine
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeFile,
@@ -249,13 +250,16 @@ def _automatic_context_attachment(
                     runtime.knowledge_document_repository
                 )
                 profile = procedures.find_current_client_profile(project_scope, client)
-            packet = UnifiedContextService(
-                runtime.checkpoint_service,
-                runtime.dbt_manifest_service,
-                runtime.source_structure_repository,
+            packet = UnifiedContextEngine(
+                UnifiedContextService(
+                    runtime.checkpoint_service,
+                    runtime.dbt_manifest_service,
+                    runtime.source_structure_repository,
+                    runtime.repository,
+                    runtime.knowledge_document_repository,
+                    procedures=procedures,
+                ),
                 runtime.repository,
-                runtime.knowledge_document_repository,
-                procedures=procedures,
             ).get_context(
                 GetUnifiedContext(
                     scope,
@@ -307,16 +311,20 @@ def _automatic_prompt_context_attachment(
                 runtime.knowledge_document_repository,
                 FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
             )
-            service = UnifiedContextService(
-                runtime.checkpoint_service,
-                runtime.dbt_manifest_service,
-                runtime.source_structure_repository,
+            service = UnifiedContextEngine(
+                UnifiedContextService(
+                    runtime.checkpoint_service,
+                    runtime.dbt_manifest_service,
+                    runtime.source_structure_repository,
+                    runtime.repository,
+                    runtime.knowledge_document_repository,
+                    semantic_knowledge=semantic,
+                ),
                 runtime.repository,
-                runtime.knowledge_document_repository,
-                semantic_knowledge=semantic,
             )
             request = GetUnifiedContext(
                 scope,
+                query=prompt,
                 budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
                 include_lifecycle_events=True,
                 include_approved_events=True,
@@ -328,15 +336,19 @@ def _automatic_prompt_context_attachment(
             except LocalEmbeddingError:
                 # Semantic search is optional. Existing lexical memory remains available when
                 # the local model runtime or its projection is unavailable.
-                packet = UnifiedContextService(
-                    runtime.checkpoint_service,
-                    runtime.dbt_manifest_service,
-                    runtime.source_structure_repository,
+                packet = UnifiedContextEngine(
+                    UnifiedContextService(
+                        runtime.checkpoint_service,
+                        runtime.dbt_manifest_service,
+                        runtime.source_structure_repository,
+                        runtime.repository,
+                        runtime.knowledge_document_repository,
+                    ),
                     runtime.repository,
-                    runtime.knowledge_document_repository,
                 ).get_context(
                     GetUnifiedContext(
                         scope,
+                        query=prompt,
                         budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
                         include_lifecycle_events=True,
                         include_approved_events=True,

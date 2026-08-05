@@ -183,6 +183,22 @@ links, newly orphaned evidence, and task-activity outbox job while preserving pa
 and candidate tombstones. Event retry cannot restore expired or purged content. This lifecycle does
 not apply to arbitrary conversations, source documents, checkpoints, exports, or backups.
 
+## Context selection
+
+Context planning is deterministic and inspectable. A bounded transient query may select memory
+categories through literal intent rules, but it cannot change scope, authority, consent, or
+mutation policy and is never persisted as memory. Exact task scope is supplied to the episodic
+repository before any lexical, temporal, confidence, or type-priority score is computed. Only
+active, non-expired, non-deleted memories returned by that authorized read become candidates.
+
+Episodic ranking uses a documented stable formula and deterministic tie breakers. Every selected
+item remains untrusted evidence, retains its complete evidence references, source trust,
+sensitivity, observed time, rank, score, and retrieval method, and receives a matching provenance
+notice. The episodic section limit and packet total limit are both hard bounds; a candidate that
+does not fit produces a bounded omission rather than truncation or budget overflow. Candidate
+retrieval itself is bounded, and storage failure yields only a payload-free omission. Retrieval
+does not update access time, retention, confidence, or any canonical record.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is

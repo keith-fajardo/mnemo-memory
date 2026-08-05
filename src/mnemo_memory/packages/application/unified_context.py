@@ -397,8 +397,14 @@ class GetUnifiedContext:
     dbt_selector: ContextDbtSelectorQuery | None = None
     dbt_freshness: ContextDbtFreshnessQuery | None = None
     dbt_changes: ContextDbtChangesQuery | None = None
+    query: str | None = None
 
     def __post_init__(self) -> None:
+        if self.query is not None:
+            query = " ".join(self.query.split())
+            if not query or len(query) > 512:
+                raise ValueError("context query must contain between 1 and 512 characters")
+            object.__setattr__(self, "query", query)
         if (
             sum(
                 query is not None

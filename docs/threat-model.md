@@ -60,9 +60,22 @@ keys; deny-by-default multi-project requests; provenance showing included scope.
 must resolve one explicitly enabled canonical project directory to its stored internal task scope
 before querying and must not accept an absent binding as a wildcard.
 
+The context engine passes the complete task scope to the active-episodic repository before it
+normalizes query terms or computes lexical, temporal, confidence, and type-priority scores. The
+repository excludes inactive, retracted, expired, purged, and deleted identities inside that
+scoped query. No broad candidate pool, post-ranking scope filter, or query-derived scope exists.
+The transient query is bounded and is neither persisted nor included as a packet field. Candidate
+reads stop at 50 items; a further page is disclosed only as a payload-free lower-rank omission.
+Every included memory carries the original scope and evidence plus rank, score, retrieval method,
+source trust, and matching provenance. Section and total token limits are enforced before packet
+construction. Expected storage failure returns a sanitized omission and cannot widen the read.
+
 **Verification:** Adversarial unit, repository-contract, integration, cache, export, and local CLI
 tests with identical text across projects, including enabled and unregistered directories. Required
-result is zero leaked IDs, metadata, counts, or payloads.
+result is zero leaked IDs, metadata, counts, or payloads. Context-engine tests additionally record
+the exact scope passed before scoring, compare same-text isolation, verify stable ranking and
+provenance, exercise zero-token and 50-candidate bounds, and ensure storage errors do not expose
+their payload.
 
 **Residual risk:** Team authorization is not designed; team mode must not reuse personal-mode
 nullability.

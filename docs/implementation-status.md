@@ -1631,3 +1631,44 @@ dependency/provenance validation for 86 entries, and architecture validation for
 files. No filesystem output, import, CLI/API/MCP surface, checkpoint/approved-fact/knowledge/
 structural export, stored-export cleanup, backup behavior, migration, dependency, model call, or
 team mode was added.
+
+### Issue 17 — Unified context engine — In progress
+
+#### Issue 17A — Complete
+
+The current bounded issue adds the first production context-engine slice around the already
+implemented unified packet assembler. A bounded transient query is classified deterministically
+into an explainable retrieval plan, and the plan always includes exact-task resumption context.
+The engine retrieves only active episodic memories through the caller's complete task scope before
+performing lexical, temporal, confidence, or type-priority scoring. It emits stable ranked context
+items with complete evidence provenance, respects both the episodic section and total hard token
+budgets, and records budget omissions without persisting the query. The production MCP and
+automatic-memory composition paths use this engine, while existing explicit knowledge, source,
+dbt, and procedure requests continue through their current authoritative services.
+
+This issue adds no vector fusion, cross-category reranking, conflict detection, deduplication,
+client-specific renderer, `explain_context` tool, new persistence, model call, dependency, API/UI,
+or team mode.
+
+Implemented the first production `packages/context_engine` component with a deterministic,
+inspectable query planner and an authorization-first episodic packet enricher. A bounded transient
+query selects literal intent categories without a model call or persistence; complete task scope is
+sent to the active-memory repository before lexical, temporal, confidence, or kind-priority
+scoring. Stable score and identity tie breakers produce ranked untrusted context items that retain
+scope, sensitivity, evidence, source trust, observation time, retrieval method, and one matching
+provenance notice. Both the episodic section and total packet budget are enforced before inclusion;
+non-fitting and beyond-50 candidates receive bounded omissions, and expected storage failure
+degrades to one sanitized omission. The stdio MCP schema now accepts the transient query and routes
+even a no-option `get_context` through the engine when configured. Installed MCP composition plus
+automatic session and prompt attachments use the new engine, while the existing canonical packet
+assembler remains unchanged for explicit checkpoint, knowledge, procedure, source, and dbt facts.
+
+Three focused tests cover deterministic multi-intent planning, project-scope exclusion, query
+validation/non-persistence, exact scope-before-score behavior, stable lexical/temporal ranking,
+cross-scope isolation, evidence/provenance completeness, hard zero-token and candidate bounds, and
+sanitized storage failure; MCP schema coverage verifies the new query input. The product contract
+and threat model record the retrieval and privacy controls. The complete repository gate passes
+with 719 tests, strict typing for 181 source files, dependency/provenance validation for 86 entries,
+and architecture validation for 94 product Python files. No vector fusion, cross-category
+reranking, conflict detection, deduplication, client renderer, `explain_context`, persistence,
+model call, dependency, API/UI, or team mode was added.

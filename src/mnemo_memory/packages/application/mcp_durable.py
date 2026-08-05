@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import cast
+from typing import Protocol, cast
 
 from mnemo_memory.packages.application.checkpoints import (
     AbandonCheckpoint,
@@ -39,7 +39,6 @@ from mnemo_memory.packages.application.unified_context import (
     ContextSourceImpactQuery,
     ContextSourceOverviewQuery,
     GetUnifiedContext,
-    UnifiedContextService,
 )
 from mnemo_memory.packages.domain import (
     ApprovedEventKind,
@@ -49,6 +48,7 @@ from mnemo_memory.packages.domain import (
     CheckpointRevisionId,
     CodeSnapshotId,
     ContextBudget,
+    ContextPacket,
     DbtNodeId,
     DbtSnapshotId,
     EvidenceReference,
@@ -65,13 +65,17 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.domain.identifiers import Identifier
 
 
+class UnifiedContextPort(Protocol):
+    def get_context(self, request: GetUnifiedContext) -> ContextPacket: ...
+
+
 class DurableMcpContextPort:
     """Thin MCP translation layer; lifecycle and persistence remain in application services."""
 
     def __init__(
         self,
         service: CheckpointApplicationService,
-        context_service: UnifiedContextService | None = None,
+        context_service: UnifiedContextPort | None = None,
         after_checkpoint_save: Callable[[CheckpointView], object] | None = None,
         default_scope: MemoryScope | None = None,
         current_dbt_source_state: (
@@ -111,6 +115,7 @@ class DurableMcpContextPort:
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
             source_overview = request.get("source_overview")
+            query = request.get("query")
             knowledge_query = request.get("knowledge_query")
             semantic_knowledge_query = request.get("semantic_knowledge_query")
             procedure_tags = request.get("procedure_tags", [])
@@ -122,6 +127,8 @@ class DurableMcpContextPort:
                 raise ValueError("include_approved_events must be a boolean")
             if source_query is not None and not isinstance(source_query, str):
                 raise ValueError("source_query must be a string")
+            if query is not None and not isinstance(query, str):
+                raise ValueError("query must be a string")
             if knowledge_query is not None and not isinstance(knowledge_query, str):
                 raise ValueError("knowledge_query must be a string")
             if semantic_knowledge_query is not None and not isinstance(
@@ -240,6 +247,7 @@ class DurableMcpContextPort:
                 or dbt_freshness is not None
                 or dbt_changes is not None
                 or source_query is not None
+                or query is not None
                 or impact is not None
                 or changes is not None
                 or overview is not None
@@ -262,6 +270,7 @@ class DurableMcpContextPort:
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            query=query,
                             source_query=source_query,
                             budget=budget,
                             source_impact=impact,
@@ -293,6 +302,7 @@ class DurableMcpContextPort:
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            query=query,
                             dbt_changes=changes_query,
                             source_query=source_query,
                             budget=budget,
@@ -329,6 +339,7 @@ class DurableMcpContextPort:
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            query=query,
                             dbt_freshness=freshness_query,
                             source_query=source_query,
                             budget=budget,
@@ -367,6 +378,7 @@ class DurableMcpContextPort:
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            query=query,
                             dbt_selector=selector_query,
                             source_query=source_query,
                             budget=budget,
@@ -404,6 +416,7 @@ class DurableMcpContextPort:
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            query=query,
                             dbt_test_coverage=coverage_query,
                             source_query=source_query,
                             budget=budget,
@@ -470,6 +483,7 @@ class DurableMcpContextPort:
                     GetUnifiedContext(
                         scope=scope,
                         checkpoint_id=checkpoint,
+                        query=query,
                         lineage=dbt_query,
                         source_query=source_query,
                         budget=budget,
@@ -479,6 +493,17 @@ class DurableMcpContextPort:
                         knowledge_query=knowledge_query,
                         semantic_knowledge_query=semantic_knowledge_query,
                         procedure_tags=tuple(cast(list[str], procedure_tags)),
+                        include_lifecycle_events=include_lifecycle_events,
+                        include_approved_events=include_approved_events,
+                    )
+                ).to_dict()
+            if self._context_service is not None:
+                return self._context_service.get_context(
+                    GetUnifiedContext(
+                        scope=scope,
+                        checkpoint_id=checkpoint,
+                        query=query,
+                        budget=budget,
                         include_lifecycle_events=include_lifecycle_events,
                         include_approved_events=include_approved_events,
                     )
