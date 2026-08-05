@@ -6,9 +6,9 @@ This threat model covers the planned personal, local-first path through native C
 Code MCP integration, explicit checkpoints, SQLite, and dbt structural projections. It specifies
 required controls before those features exist; it does not claim they are implemented.
 
-The pure team authorization contract is now included. Team persistence, remote MCP, hosted sync,
-OAuth, row-level security, and production operations remain deferred and require threat-model
-revisions before exposure.
+The pure team authorization contract and PostgreSQL authority control plane are now included.
+Remote MCP, hosted sync, OAuth, team memory data, and production operations remain deferred and
+require threat-model revisions before exposure.
 
 ## Security objectives
 
@@ -110,8 +110,10 @@ maintainer, contributor, and viewer. Workspace ownership management remains owne
 project requires its owner, a workspace owner/admin, or one exact active project membership.
 Owner-only item visibility has no administrator bypass. Every missing, inactive, principal,
 workspace, or project mismatch produces a typed denial; policy never searches for a nearby match.
-PostgreSQL RLS must later reproduce these decisions beneath application authorization, using
-transaction-local authenticated identity and scope rather than caller-controlled row fields.
+PostgreSQL RLS reproduces these decisions beneath application authorization, using transaction-local
+authenticated identity, workspace, and a closed operation rather than caller-controlled row fields.
+The runtime database role is not the schema owner, a superuser, or `BYPASSRLS`; all authority tables
+force RLS and missing, malformed, or cross-workspace transaction settings deny rows.
 
 **Verification:** Pure domain round trips reject unknown fields and invalid identity/role values.
 The complete operation matrix is tested for every workspace and project role. Adversarial tests
@@ -120,9 +122,11 @@ missing private-project grant, suspended project grant, owner-only data, private
 administrator behavior, and deterministic repeated decisions. Later storage and service issues
 must run the same matrix against PostgreSQL RLS and remote request composition before team exposure.
 
-**Residual risk:** The canonical policy and a non-durable control-plane repository contract now
-exist. No team database, authentication mapping, authorized mutation service, RLS, or remote
-surface exists yet; therefore team mode remains unavailable.
+**Residual risk:** The canonical policy, durable PostgreSQL authority schema, and real-database RLS
+parity suite now exist. The service credential must remain infrastructure-only, and the later
+authenticated application boundary must derive transaction identity from verified authentication,
+not request fields. No authenticated team service or remote surface exists yet; therefore team mode
+remains unavailable.
 
 ### Team authority races and audit gaps
 
@@ -144,9 +148,10 @@ second-owner rejection, atomic owner transfer, stale compare-and-set updates, or
 project membership, wrong-workspace reads, bounded audit pages, and a two-thread competing update
 with one state winner and one audit append.
 
-**Residual risk:** The executable reference adapter is not durable and does not authenticate or
-authorize its actor. A PostgreSQL transaction, database constraints/RLS, authenticated application
-composition, audit retention, and failure-injected parity tests are required before team use.
+**Residual risk:** PostgreSQL now supplies atomic transactions, database constraints, forced RLS,
+and a failure-injected parity suite, but it does not authenticate its actor. Authenticated
+application composition, audit retention/deletion policy, and operational recovery remain required
+before team use.
 
 ### Prompt injection through retrieved content
 

@@ -1485,6 +1485,51 @@ architecture validation for 110 product Python files, and the isolated installed
 workflow. No database, migration, RLS, authenticated service, network surface, dependency, import,
 shared knowledge behavior, or usable team mode was added.
 
+#### Issue 21C — PostgreSQL team control plane and RLS parity — Complete
+
+The current bounded issue implements Issue 21B's repository contract in one dedicated PostgreSQL
+schema and transaction adapter. The initial forward-only migration must enforce exact foreign keys,
+one active workspace owner, active parent membership for active project grants, request
+idempotency, atomic payload-free audit append, and restrictive forced row-level security. Every
+runtime transaction must set an exact authenticated principal, workspace, and closed operation in
+transaction-local database settings; missing or malformed settings default-deny. The database
+authorization function and RLS policies must match Issue 21A's complete role matrix, including
+private projects and owner-only item visibility, and a non-owner/non-`BYPASSRLS` runtime role must
+pass cross-tenant tests. Migration-owner access is limited to schema maintenance and never used by
+the runtime adapter. The optional pure-Python PostgreSQL driver and its complete permissively
+licensed dependency graph must be pinned and registered. This issue adds no pgvector data,
+personal-data parity/import, application/API/MCP service, OAuth, listener, secret store, backup,
+deletion workflow, quotas, dashboards, shared knowledge, or usable team mode.
+
+Implemented the Issue 21B repository in a dedicated `mnemo_team` PostgreSQL schema with an atomic
+forward-only migration, exact foreign keys, deferrable owner/project-authority constraints,
+workspace/request idempotency, and append-only payload-free audit records. All five authority/audit
+tables enable and force row-level security. Every adapter transaction sets one exact principal,
+workspace, closed operation, and statement timeout with transaction-local settings; missing,
+malformed, unknown, and cross-workspace settings deny access. The runtime role is separately
+provisioned and rejected if it is the schema owner, a superuser, or `BYPASSRLS`; it receives only
+explicit table, sequence, schema, and policy-function privileges and cannot update audit rows.
+
+The PostgreSQL authorization function matches the complete Issue 21A workspace and private-project
+role matrices, including owner-only visibility with no administrator bypass. The durable adapter
+implements atomic creation, compare-and-set membership/project changes, ownership transfer,
+idempotent retry, exact-key reads, and bounded audit pagination while translating database failures
+to payload-free storage outcomes. Migration failure rolls the schema back completely; ADR 0012
+documents the forward-recovery boundary, runtime credential trust, connection-pool requirements,
+dependency choice, and remaining risks. The optional pure-Python `pg8000==1.31.5` transport and its
+complete permissively licensed dependency graph are pinned and registered; personal installs do
+not acquire the team extra or import the driver.
+
+`npm run check` now starts an isolated real PostgreSQL server and requires migration, runtime-role,
+durability, RLS parity, cross-tenant, private-project, and missing/malformed-context tests to pass.
+The complete gate passes with 826 default tests plus 3 mandatory real-PostgreSQL tests, strict
+typing for 211 source files, dependency/provenance validation for 92 entries, architecture
+validation for 111 product Python files, schema validation, and the isolated installed-package MCP
+workflow. The clean default install also explicitly marks the delayed optional FastEmbed import for
+typing without changing semantic runtime behavior. No pgvector data, personal-data parity/import,
+authenticated application/API/MCP service, OAuth, listener, secret store, backup, deletion
+workflow, quotas, dashboards, shared knowledge, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

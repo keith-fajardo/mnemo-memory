@@ -65,7 +65,7 @@ class FastEmbedLocalProvider:
     def _get_model(self) -> _FastEmbedModel:
         if self._model is None:
             try:
-                from fastembed import TextEmbedding
+                from fastembed import TextEmbedding  # type: ignore[import-not-found]
             except ImportError as error:
                 raise LocalEmbeddingError("MNEMO_SEMANTIC_LOCAL_RUNTIME_NOT_INSTALLED") from error
             try:

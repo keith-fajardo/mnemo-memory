@@ -403,25 +403,14 @@ def test_project_membership_requires_exact_project_and_active_workspace_membersh
     )
 
     suspended_workspace_member = replace(workspace_member, status=MembershipStatus.SUSPENDED)
-    repository.set_workspace_membership(
-        suspended_workspace_member,
-        expected=workspace_member,
-        audit_event=audit(
-            workspace.workspace_id,
-            workspace.owner_id,
-            TeamAuditAction.WORKSPACE_MEMBERSHIP_CHANGED,
-            subject_principal_id=member_id,
-        ),
-    )
-    with pytest.raises(TeamControlPlaneInvalidMutation, match="active workspace"):
-        repository.set_project_membership(
-            replace(membership, role=ProjectRole.MAINTAINER),
-            expected=membership,
+    with pytest.raises(TeamControlPlaneInvalidMutation, match="project authority"):
+        repository.set_workspace_membership(
+            suspended_workspace_member,
+            expected=workspace_member,
             audit_event=audit(
                 workspace.workspace_id,
                 workspace.owner_id,
-                TeamAuditAction.PROJECT_MEMBERSHIP_CHANGED,
-                project_id=project.project_id,
+                TeamAuditAction.WORKSPACE_MEMBERSHIP_CHANGED,
                 subject_principal_id=member_id,
             ),
         )
@@ -441,6 +430,28 @@ def test_project_membership_requires_exact_project_and_active_workspace_membersh
         repository.get_project_membership(workspace.workspace_id, project.project_id, member_id)
         == suspended_project_member
     )
+    repository.set_workspace_membership(
+        suspended_workspace_member,
+        expected=workspace_member,
+        audit_event=audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.WORKSPACE_MEMBERSHIP_CHANGED,
+            subject_principal_id=member_id,
+        ),
+    )
+    with pytest.raises(TeamControlPlaneInvalidMutation, match="active workspace"):
+        repository.set_project_membership(
+            replace(suspended_project_member, status=MembershipStatus.ACTIVE),
+            expected=suspended_project_member,
+            audit_event=audit(
+                workspace.workspace_id,
+                workspace.owner_id,
+                TeamAuditAction.PROJECT_MEMBERSHIP_CHANGED,
+                project_id=project.project_id,
+                subject_principal_id=member_id,
+            ),
+        )
 
 
 def test_audit_reads_are_exact_bounded_and_do_not_disclose_another_workspace() -> None:

@@ -39,6 +39,10 @@ class TeamControlPlaneInvalidMutation(TeamControlPlaneError):
     pass
 
 
+class TeamControlPlaneStorageFailure(TeamControlPlaneError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class TeamMutationResult:
     audit_event: TeamAuditEvent
@@ -236,6 +240,22 @@ class ReferenceTeamControlPlaneRepository:
             if current is None and membership.status is not MembershipStatus.ACTIVE:
                 raise TeamControlPlaneInvalidMutation(
                     "a new workspace membership must start active"
+                )
+            if membership.status is MembershipStatus.SUSPENDED and (
+                any(
+                    project.owner_id == membership.principal_id
+                    and project.workspace_id == membership.workspace_id
+                    for project in self._projects.values()
+                )
+                or any(
+                    project_membership.workspace_id == membership.workspace_id
+                    and project_membership.principal_id == membership.principal_id
+                    and project_membership.status is MembershipStatus.ACTIVE
+                    for project_membership in self._project_memberships.values()
+                )
+            ):
+                raise TeamControlPlaneInvalidMutation(
+                    "workspace membership cannot be suspended while project authority is active"
                 )
             if current == membership:
                 raise TeamControlPlaneInvalidMutation("workspace membership mutation is a no-op")

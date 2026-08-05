@@ -94,9 +94,13 @@ Every committed authority mutation carries one immutable, payload-free audit eve
 atomic operation. It records only request/event, workspace/project/principal, actor, action, and
 time identities. The same request and canonical mutation may be replayed idempotently; a reused
 request with different state is a conflict. Audit reads require the exact workspace and are capped
-at 100 records per page. These are storage-neutral requirements; the current reference adapter is
-not durable, and the PostgreSQL adapter, authenticated application service, and RLS parity remain
-required before team mode exists.
+at 100 records per page. The PostgreSQL team control-plane adapter now implements these requirements
+in a dedicated schema with forced row-level security. Every runtime transaction is bound to one
+principal, workspace, and closed operation through transaction-local settings; absent or malformed
+values deny access. Runtime uses a non-owner, non-superuser, non-`BYPASSRLS` role and cannot update
+audit rows. This durable storage boundary does not authenticate a principal by itself; the
+authenticated application service, remote transport controls, personal-data migration, and
+operations requirements remain required before team mode exists.
 
 ## Evidence requirements
 

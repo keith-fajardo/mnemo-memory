@@ -1,6 +1,6 @@
 schema_version = 1
 scope = "All current Mnemo toolchain components, locked packages, and CI actions"
-last_reviewed = "2026-08-02"
+last_reviewed = "2026-08-06"
 approval_authority = "Mnemo maintainers under docs/product-ownership-policy.md"
 approved_licenses = [
     "Apache-2.0",
@@ -13,6 +13,7 @@ approved_licenses = [
     "BSD-3-Clause",
     "ISC",
     "MIT",
+    "MIT-0",
     "MIT-CMU",
     "MPL-2.0 AND MIT",
     "MPL-2.0",
@@ -30,6 +31,71 @@ owner = "Mnemo maintainers"
 purpose = "Issue 1 runtime for tooling and tests"
 replacement_boundary = "Python runtime boundary; another supported 3.12 patch may replace it after lockfile and CI verification"
 direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "pg8000"
+version = "1.31.5"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/pg8000/1.31.5/"
+author = "pg8000 contributors"
+owner = "Mnemo maintainers"
+purpose = "Optional synchronous PostgreSQL transport for the Mnemo-owned team storage adapter"
+replacement_boundary = "Team PostgreSQL adapter boundary; domain, policy, and repository contracts do not import pg8000"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "python-dateutil"
+version = "2.9.0.post0"
+license = "Apache-2.0 OR BSD-3-Clause"
+source_url = "https://pypi.org/project/python-dateutil/2.9.0.post0/"
+author = "Gustavo Niemeyer and python-dateutil contributors"
+owner = "pg8000"
+purpose = "PostgreSQL timestamp and interval conversion required by pg8000"
+replacement_boundary = "Transitive pg8000 dependency; removed or replaced with the team database transport"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "six"
+version = "1.17.0"
+license = "MIT"
+source_url = "https://pypi.org/project/six/1.17.0/"
+author = "Benjamin Peterson"
+owner = "python-dateutil"
+purpose = "Compatibility helper required transitively by python-dateutil"
+replacement_boundary = "Transitive python-dateutil dependency; removed with the pg8000 dependency graph"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "scramp"
+version = "1.4.15"
+license = "MIT-0"
+source_url = "https://pypi.org/project/scramp/1.4.15/"
+author = "Scramp contributors"
+owner = "pg8000"
+purpose = "SCRAM authentication protocol support required by pg8000"
+replacement_boundary = "Transitive pg8000 authentication dependency; removed or replaced with the team database transport"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "asn1crypto"
+version = "1.5.1"
+license = "MIT"
+source_url = "https://pypi.org/project/asn1crypto/1.5.1/"
+author = "Will Bond and asn1crypto contributors"
+owner = "scramp"
+purpose = "Certificate parsing used by pg8000's transitive SCRAM channel-binding support"
+replacement_boundary = "Transitive Scramp dependency; removed with the pg8000 dependency graph"
+direct = false
 approved = true
 
 [[dependencies]]

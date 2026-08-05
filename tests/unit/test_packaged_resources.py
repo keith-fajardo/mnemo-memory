@@ -68,6 +68,9 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0028_project_index_sync_status.sql"
     ).is_file()
+    assert package_files.joinpath(
+        "resources/postgres_migrations/0001_team_control_plane.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()
     assert package_files.joinpath("resources/web/index.html").is_file()
     assert package_files.joinpath("resources/web/app.js").is_file()

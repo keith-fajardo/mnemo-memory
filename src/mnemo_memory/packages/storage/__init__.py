@@ -89,6 +89,16 @@ from .contracts import (
     TaskActivityRetentionRepository,
     TaskActivityRetentionStorageFailure,
 )
+from .postgres import (
+    POSTGRES_TEAM_SCHEMA_VERSION,
+    PostgreSQLConnection,
+    PostgreSQLConnectionFactory,
+    PostgreSQLCursor,
+    PostgreSQLTeamControlPlaneRepository,
+    PostgreSQLTeamMigrationError,
+    PostgreSQLTeamMigrationRunner,
+    PostgreSQLTeamSchemaTooNewError,
+)
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
     ReferenceCheckpointLifecycleEventRepository,
@@ -115,10 +125,12 @@ from .team import (
     TeamControlPlaneInvalidMutation,
     TeamControlPlaneNotFound,
     TeamControlPlaneRepository,
+    TeamControlPlaneStorageFailure,
     TeamMutationResult,
 )
 
 __all__ = [
+    "POSTGRES_TEAM_SCHEMA_VERSION",
     "ActiveEpisodicMemoryNotFound",
     "ActiveEpisodicMemoryPage",
     "ActiveSnapshotConflict",
@@ -186,6 +198,13 @@ __all__ = [
     "KnowledgeDocumentSyncStoreResult",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
+    "PostgreSQLConnection",
+    "PostgreSQLConnectionFactory",
+    "PostgreSQLCursor",
+    "PostgreSQLTeamControlPlaneRepository",
+    "PostgreSQLTeamMigrationError",
+    "PostgreSQLTeamMigrationRunner",
+    "PostgreSQLTeamSchemaTooNewError",
     "ProjectIndexRepository",
     "ProjectProcedureRegistry",
     "ProjectSkillRegistry",
@@ -227,5 +246,6 @@ __all__ = [
     "TeamControlPlaneInvalidMutation",
     "TeamControlPlaneNotFound",
     "TeamControlPlaneRepository",
+    "TeamControlPlaneStorageFailure",
     "TeamMutationResult",
 ]
