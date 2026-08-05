@@ -1365,3 +1365,41 @@ dependency/provenance validation for 86 entries, and architecture validation for
 files. No model SDK, network call, automatic job invocation, approval/activation, correction,
 context retrieval, transport surface, daemon, retention execution, export/deletion behavior,
 dependency, or team mode was added.
+
+#### Issue 16E — Complete
+
+The current bounded issue adds explicit user review for one exact-scope episodic candidate. One
+strict append-only action may approve or reject a still-pending candidate using a caller-owned
+idempotency key, bounded reason, user actor, action time, and verified user-authored evidence.
+Every extracted candidate requires this action: confidence never grants authority, sensitive
+candidates cannot bypass review, and model/provider output cannot construct or authorize it.
+Approval deterministically creates one active evidence-bearing episodic-memory record that retains
+the candidate kind, source-event link, source scope/evidence/retention, confidence, and extraction
+provenance plus review provenance; rejection creates no active payload. Repeated identical review
+is idempotent while competing, cross-scope, non-user, under-evidenced, prohibited, or secret-bearing
+actions fail closed without partial state. Reference and SQLite review must be atomic, scoped,
+durable, and independently revalidate candidate safety. Migration 0021 is additive and
+forward-only with rollback coverage. This issue adds no candidate correction or revision chain,
+automatic approval/job invocation, context retrieval/ranking, API/CLI/MCP surface, daemon,
+retention execution, export/deletion behavior, dependency, or team mode.
+
+Implemented strict deterministic `EpisodicCandidateReviewAction` and
+`ActiveEpisodicMemory` contracts. A review is always a user action with exact task scope, a
+caller-owned idempotency key, bounded reason, timestamp, and verified user-correction evidence;
+non-user or under-evidenced actions cannot be constructed. Candidate confidence and sensitivity
+never activate memory. Reference and SQLite repositories re-run candidate and review content
+safety, accept exactly one append-only approval or rejection, make identical delivery idempotent,
+and reject competing decisions, reused scoped action keys, secret-bearing reasons, evidence
+identity conflicts, and cross-scope access. Approval atomically retains candidate identity,
+source-event scope/evidence/retention, confidence, extraction provenance, and review evidence in an
+active claim; rejection stores no active marker. Additive forward-only migration
+`0021_episodic_candidate_reviews.sql` persists scoped review/evidence rows and a minimal active
+marker guarded by approval/candidate triggers. Nine focused tests cover strict serialization,
+user/evidence authority, no confidence-based activation, approval, rejection, idempotency,
+competing decisions and keys, secret rejection, scope isolation, SQLite restart durability,
+transactional activation failure, and migration rollback with candidate preservation. The product
+and threat contracts record the explicit review boundary. The complete repository gate passes with
+663 tests, strict typing for 167 source files, schema validation, dependency/provenance validation
+for 86 entries, and architecture validation for 85 product Python files. No correction or revision
+chain, automatic approval/job invocation, context retrieval, transport surface, daemon, retention
+execution, export/deletion behavior, dependency, or team mode was added.

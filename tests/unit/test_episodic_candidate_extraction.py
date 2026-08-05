@@ -483,9 +483,12 @@ def test_candidate_migration_is_forward_only_atomic_and_preserves_source_event(
     source = _event(_scope())
     sqlite.append_task_activity_event(source)
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE active_episodic_memories")
+        connection.execute("DROP TABLE episodic_candidate_review_evidence")
+        connection.execute("DROP TABLE episodic_candidate_reviews")
         connection.execute("DROP TABLE episodic_memory_candidate_evidence")
         connection.execute("DROP TABLE episodic_memory_candidates")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 20")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         sqlite.migrate(fail_after_version=20)
@@ -501,7 +504,7 @@ def test_candidate_migration_is_forward_only_atomic_and_preserves_source_event(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 20
+    assert sqlite.schema_version() == 21
     with sqlite3.connect(sqlite.path) as connection:
         columns = {
             row[1]

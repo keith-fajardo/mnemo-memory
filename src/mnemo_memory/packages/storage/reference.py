@@ -8,6 +8,7 @@ from threading import Lock
 from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
+    ActiveEpisodicMemory,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEventGovernanceKind,
@@ -33,6 +34,8 @@ from mnemo_memory.packages.domain import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
+    EpisodicCandidateReviewAction,
+    EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
     EventId,
     EventOutboxJob,
@@ -61,12 +64,15 @@ from mnemo_memory.packages.domain.dbt_manifest import (
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
 from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
+    EpisodicCandidateReviewSafetyPolicy,
     EpisodicMemoryCandidateSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
     TaskActivityEventSafetyPolicy,
 )
 
 from .contracts import (
+    ActiveEpisodicMemoryNotFound,
+    ActiveEpisodicMemoryPage,
     ActiveSnapshotConflict,
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventGovernanceResult,
@@ -91,6 +97,10 @@ from .contracts import (
     EpisodicMemoryCandidatePage,
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryReviewConflict,
+    EpisodicMemoryReviewNotFound,
+    EpisodicMemoryReviewRejected,
+    EpisodicMemoryReviewResult,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
     InvalidAbandonmentReason,
@@ -584,11 +594,17 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self,
         activity_events: TaskActivityEventRepository,
         policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
+        review_policy: EpisodicCandidateReviewSafetyPolicy | None = None,
     ) -> None:
         self._activity_events = activity_events
         self._policy = policy or EpisodicMemoryCandidateSafetyPolicy()
+        self._review_policy = review_policy or EpisodicCandidateReviewSafetyPolicy()
         self._candidates: dict[MemoryId, EpisodicMemoryCandidate] = {}
         self._ordered: list[MemoryId] = []
+        self._reviews: dict[MemoryId, EpisodicCandidateReviewAction] = {}
+        self._review_keys: dict[tuple[MemoryScope, str], MemoryId] = {}
+        self._active: dict[MemoryId, ActiveEpisodicMemory] = {}
+        self._active_ordered: list[MemoryId] = []
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -665,6 +681,77 @@ class ReferenceEpisodicMemoryCandidateRepository:
             )
         )
         return EpisodicMemoryCandidatePage(
+            items[offset : offset + limit],
+            offset + limit if offset + limit < len(items) else None,
+        )
+
+    def review_episodic_memory_candidate(
+        self, action: EpisodicCandidateReviewAction
+    ) -> EpisodicMemoryReviewResult:
+        self._require_scope(action.scope)
+        candidate = self.get_episodic_memory_candidate(action.scope, action.candidate_id)
+        if not self._review_policy.assess(candidate, action).accepted:
+            raise EpisodicMemoryReviewRejected(
+                "episodic memory review was rejected by safety policy"
+            )
+        existing = self._reviews.get(action.candidate_id)
+        if existing is not None:
+            if existing == action:
+                return EpisodicMemoryReviewResult(
+                    existing, self._active.get(action.candidate_id), True
+                )
+            raise EpisodicMemoryReviewConflict("episodic candidate already has a different review")
+        key = (action.scope, action.source_action_key)
+        if key in self._review_keys:
+            raise EpisodicMemoryReviewConflict("episodic review action key conflicts")
+        active = (
+            ActiveEpisodicMemory.approve(candidate, action)
+            if action.decision is EpisodicCandidateReviewDecision.APPROVED
+            else None
+        )
+        reviews = dict(self._reviews)
+        review_keys = dict(self._review_keys)
+        active_values = dict(self._active)
+        active_ordered = list(self._active_ordered)
+        reviews[action.candidate_id] = action
+        review_keys[key] = action.candidate_id
+        if active is not None:
+            active_values[active.memory_id] = active
+            active_ordered.append(active.memory_id)
+        self._reviews, self._review_keys = reviews, review_keys
+        self._active, self._active_ordered = active_values, active_ordered
+        return EpisodicMemoryReviewResult(action, active, False)
+
+    def get_episodic_memory_review(
+        self, scope: MemoryScope, candidate_id: MemoryId
+    ) -> EpisodicCandidateReviewAction:
+        self._require_scope(scope)
+        action = self._reviews.get(candidate_id)
+        if action is None or action.scope != scope:
+            raise EpisodicMemoryReviewNotFound("episodic memory review was not found")
+        return action
+
+    def get_active_episodic_memory(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> ActiveEpisodicMemory:
+        self._require_scope(scope)
+        memory = self._active.get(memory_id)
+        if memory is None or memory.scope != scope:
+            raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
+        return memory
+
+    def list_active_episodic_memories(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ActiveEpisodicMemoryPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("memory offset must be non-negative and limit must be positive")
+        items = tuple(
+            self._active[memory_id]
+            for memory_id in reversed(self._active_ordered)
+            if self._active[memory_id].scope == scope
+        )
+        return ActiveEpisodicMemoryPage(
             items[offset : offset + limit],
             offset + limit if offset + limit < len(items) else None,
         )

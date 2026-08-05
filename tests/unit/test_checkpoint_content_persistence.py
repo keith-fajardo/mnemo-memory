@@ -337,7 +337,7 @@ def test_singleton_legacy_checkpoint_migrates_to_canonical_payload(tmp_path: Pat
             "SELECT evidence_id FROM checkpoint_revision_evidence"
         ).fetchall()
     assert links == [(str(legacy.evidence_references[0].evidence_id),)]
-    assert repository.schema_version() == 20
+    assert repository.schema_version() == 21
 
 
 def test_empty_and_independent_legacy_chains_preserve_each_scope(tmp_path: Path) -> None:
@@ -411,7 +411,7 @@ def test_legacy_replacement_chain_preserves_canonical_content_and_history(tmp_pa
     )
 
     reopened = SQLiteCheckpointRepository(repository.path, base_directory=tmp_path)
-    assert reopened.schema_version() == 20
+    assert reopened.schema_version() == 21
     _, reopened_revisions = read_v2_rows(reopened.path)
     assert [json.loads(row["payload_json"]) for row in reopened_revisions] == [
         json.loads(row["payload_json"]) for row in revisions

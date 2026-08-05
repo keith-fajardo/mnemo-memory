@@ -1,6 +1,8 @@
 """Storage contracts and the local SQLite personal-profile adapter."""
 
 from .contracts import (
+    ActiveEpisodicMemoryNotFound,
+    ActiveEpisodicMemoryPage,
     ActiveSnapshotConflict,
     ApprovedEpisodicEventRecord,
     ApprovedEpisodicEventRecordPage,
@@ -18,6 +20,12 @@ from .contracts import (
     EpisodicMemoryCandidateRepository,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryReviewConflict,
+    EpisodicMemoryReviewNotFound,
+    EpisodicMemoryReviewRejected,
+    EpisodicMemoryReviewRepository,
+    EpisodicMemoryReviewResult,
+    EpisodicMemoryReviewStorageFailure,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
     EventOutboxRepository,
@@ -67,6 +75,8 @@ from .sqlite import (
 )
 
 __all__ = [
+    "ActiveEpisodicMemoryNotFound",
+    "ActiveEpisodicMemoryPage",
     "ActiveSnapshotConflict",
     "ApprovedEpisodicEventRecord",
     "ApprovedEpisodicEventRecordPage",
@@ -84,6 +94,12 @@ __all__ = [
     "EpisodicMemoryCandidateRepository",
     "EpisodicMemoryCandidateStorageFailure",
     "EpisodicMemoryCandidateStoreResult",
+    "EpisodicMemoryReviewConflict",
+    "EpisodicMemoryReviewNotFound",
+    "EpisodicMemoryReviewRejected",
+    "EpisodicMemoryReviewRepository",
+    "EpisodicMemoryReviewResult",
+    "EpisodicMemoryReviewStorageFailure",
     "EventOutboxLeaseConflict",
     "EventOutboxNotFound",
     "EventOutboxRepository",

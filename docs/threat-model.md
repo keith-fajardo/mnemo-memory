@@ -100,6 +100,12 @@ scope, evidence, retention, identity, provenance versions, and inactive status i
 require verified non-inference evidence, pass deterministic content safety before an atomic write,
 and cannot enter context until a later explicit approval workflow exists. Deterministic identity
 makes duplicate delivery idempotent and changed retry output a conflict rather than an overwrite.
+Every extracted candidate remains inactive regardless of confidence or sensitivity until one
+exact-scope user review with verified user-correction evidence approves it. Approval atomically
+adds an active marker and preserves both source and review provenance; rejection creates no active
+payload. Duplicate review is idempotent, while competing decisions, action-key reuse, unsafe
+content, and cross-scope targets fail closed. Storage re-runs candidate and review safety so a
+caller cannot bypass the review boundary by writing directly to an adapter.
 
 **Verification:** Conflicting-source, repeated-claim, low-confidence, source-deletion, correction,
 and model-output tests. Frequency must not increase authority.

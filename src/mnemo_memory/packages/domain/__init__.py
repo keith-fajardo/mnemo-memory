@@ -79,6 +79,9 @@ from .dbt_manifest import (
     UnsupportedManifestSchema,
 )
 from .episodic_candidates import (
+    ActiveEpisodicMemory,
+    EpisodicCandidateReviewAction,
+    EpisodicCandidateReviewDecision,
     EpisodicExtractionPort,
     EpisodicExtractionProposal,
     EpisodicExtractionRequest,
@@ -160,6 +163,7 @@ from .task_activity_events import (
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
+    "ActiveEpisodicMemory",
     "AgentId",
     "ApprovedEpisodicEvent",
     "ApprovedEpisodicEventGovernance",
@@ -222,6 +226,8 @@ __all__ = [
     "DbtSupplementalArtifactMetadata",
     "DbtSupplementalArtifactValidationError",
     "DurableClaim",
+    "EpisodicCandidateReviewAction",
+    "EpisodicCandidateReviewDecision",
     "EpisodicExtractionPort",
     "EpisodicExtractionProposal",
     "EpisodicExtractionRequest",

@@ -131,6 +131,13 @@ fields from the canonical source event, records configured extractor/provider/mo
 versions, and persists only inactive candidates after deterministic safety validation. Extraction
 does not itself authorize approval, activation, retrieval, or automatic event capture.
 
+Candidate review is an explicit, exact-scope user action backed by verified user-correction
+evidence. Confidence, repetition, provider identity, and sensitivity never substitute for that
+authority. Approval retains the candidate identity and extraction provenance, activates the claim,
+and adds the review evidence to its source evidence; rejection records only the review and creates
+no active memory. Identical review delivery is idempotent, while a competing decision fails rather
+than replacing the first action.
+
 ## Retention defaults
 
 These conservative personal-mode defaults apply until changed through a versioned policy:

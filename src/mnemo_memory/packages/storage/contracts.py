@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Protocol
 
 from mnemo_memory.packages.domain import (
+    ActiveEpisodicMemory,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEventLifecycleStatus,
@@ -29,6 +30,7 @@ from mnemo_memory.packages.domain import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
+    EpisodicCandidateReviewAction,
     EpisodicMemoryCandidate,
     EventId,
     EventOutboxJob,
@@ -228,6 +230,30 @@ class EpisodicMemoryCandidateStorageFailure(EpisodicMemoryCandidateRepositoryErr
     pass
 
 
+class EpisodicMemoryReviewRepositoryError(Exception):
+    """Expected outcome for explicit review and activation of one candidate."""
+
+
+class EpisodicMemoryReviewNotFound(EpisodicMemoryReviewRepositoryError):
+    pass
+
+
+class EpisodicMemoryReviewConflict(EpisodicMemoryReviewRepositoryError):
+    pass
+
+
+class EpisodicMemoryReviewRejected(EpisodicMemoryReviewRepositoryError):
+    pass
+
+
+class EpisodicMemoryReviewStorageFailure(EpisodicMemoryReviewRepositoryError):
+    pass
+
+
+class ActiveEpisodicMemoryNotFound(EpisodicMemoryReviewRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -313,6 +339,37 @@ class EpisodicMemoryCandidateRepository(Protocol):
         offset: int = 0,
         limit: int = 50,
     ) -> EpisodicMemoryCandidatePage: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryReviewResult:
+    action: EpisodicCandidateReviewAction
+    active_memory: ActiveEpisodicMemory | None
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveEpisodicMemoryPage:
+    items: tuple[ActiveEpisodicMemory, ...]
+    next_offset: int | None
+
+
+class EpisodicMemoryReviewRepository(Protocol):
+    def review_episodic_memory_candidate(
+        self, action: EpisodicCandidateReviewAction
+    ) -> EpisodicMemoryReviewResult: ...
+
+    def get_episodic_memory_review(
+        self, scope: MemoryScope, candidate_id: MemoryId
+    ) -> EpisodicCandidateReviewAction: ...
+
+    def get_active_episodic_memory(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> ActiveEpisodicMemory: ...
+
+    def list_active_episodic_memories(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ActiveEpisodicMemoryPage: ...
 
 
 @dataclass(frozen=True, slots=True)
