@@ -156,6 +156,8 @@ async def _call_launcher(
         tools = await session.list_tools()
         if [tool.name for tool in tools.tools] != [
             "get_context",
+            "list_skills",
+            "get_skill",
             "explain_context",
             "save_checkpoint",
         ]:

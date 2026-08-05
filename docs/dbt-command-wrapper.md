@@ -136,4 +136,5 @@ exit code always wins over Mnemo’s strict status.
 | Want no wrapping | Do not load the shell hook, or remove its one line from your shell profile. Manual `mnemo-memory dbt ingest` remains available. |
 
 Manual `mnemo-memory dbt ingest` and `mnemo-memory dbt status` remain supported. The wrapper does
-not add an MCP tool; the MCP inventory is `get_context`, `explain_context`, and `save_checkpoint`.
+not add an MCP tool; the MCP inventory is `get_context`, `list_skills`, `get_skill`,
+`explain_context`, and `save_checkpoint`.

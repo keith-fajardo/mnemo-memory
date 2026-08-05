@@ -115,6 +115,8 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
             assert initialized.serverInfo.name == "mnemo-local"
             assert [tool.name for tool in (await session.list_tools()).tools] == [
                 "get_context",
+                "list_skills",
+                "get_skill",
                 "explain_context",
                 "save_checkpoint",
             ]

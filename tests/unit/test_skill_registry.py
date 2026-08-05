@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
+from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
@@ -379,3 +380,40 @@ def test_context_skill_discovery_requires_unambiguous_concrete_selection() -> No
             skill_agent_name="reviewer",
             skill_client="codex",
         )
+
+
+def test_mcp_lists_metadata_gets_exact_skill_and_passes_context_selection() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    skill = _revision(
+        _scope(),
+        "skills/review.md",
+        "---\nmnemo_kind: skill\nmnemo_name: review\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: dbt, review\nmnemo_clients: codex\nmnemo_trust: checked_in\n---\n"
+        "# Review\nCheck the current manifest.",
+    )
+    repository.apply_sync(_scope(), (skill,), ())
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
+    registry = KnowledgeDocumentSkillRegistry(repository)
+    port = DurableMcpContextPort(
+        checkpoints,
+        _context(repository),
+        default_scope=_task_scope(),
+        skills=registry,
+    )
+
+    listed = port.list_skills({"client": "codex", "maximum_skills": 8})
+    assert listed["client"] == "codex"
+    assert len(listed["skills"]) == 1  # type: ignore[arg-type]
+    metadata = listed["skills"][0]  # type: ignore[index]
+    assert metadata["name"] == "review"
+    assert metadata["revision_id"] == str(skill.revision_id)
+    assert metadata["source_digest"] == skill.document.content_digest
+    assert "sections" not in metadata
+    retrieved = port.get_skill({"client": "codex", "name": "review"})
+    assert retrieved["skill"]["content_representation"] == "untrusted_evidence"  # type: ignore[index]
+    assert retrieved["skill"]["sections"][0]["content"] == "Check the current manifest."  # type: ignore[index]
+    assert port.get_skill({"client": "claude-code", "name": "review"})["skill"] is None
+    packet = port.get_context({"skill_tags": ["dbt"], "skill_client": "codex"})
+    assert len(packet["skills_and_procedures"]) == 1  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+        port.list_skills({"client": "any"})

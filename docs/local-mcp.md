@@ -13,7 +13,8 @@ or transcript capture.
 
 ## Tools
 
-Exactly three tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context` may
+Exactly five tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context`,
+`list_skills`, and `get_skill` may
 omit all scope fields: the local MCP process resolves the repository's registered stable scope from
 its working directory. Users and agents must not guess UUIDs. Advanced callers may instead provide
 all five explicit task-scope fields (`owner_id`, `workspace_id`, `project_id`, `session_id`, and
@@ -29,6 +30,14 @@ canonical packet), `rendered_context` (deterministic client-labeled line records
 `rendered_for`. Pass only the nested `context_packet` to `explain_context`. Rendering does not add
 retrieval, change ranking or budgets, call a model, or treat retrieved content as instructions.
 Automatic-memory hooks use the matching renderer for their configured client.
+
+`list_skills` requires `client` (`codex` or `claude-code`) and returns at most 32 current compatible
+skill metadata records without Markdown content. `get_skill` requires the same concrete client plus
+one exact bounded skill name and returns either that current checked-in revision or `null`. Its
+Markdown sections are labeled `untrusted_evidence`; both responses include exact source digest and
+revision provenance. Neither tool scans files or mutates state. `get_context` can discover the same
+skills with explicit `skill_tags` plus `skill_client`, or with `skill_agent_name` plus
+`skill_client`; those selector forms are mutually exclusive.
 
 An optional bounded `query` is transient and never stored in the packet or as memory. Mnemo uses
 deterministic literal intent rules: specialized terms select their existing category indexes, while

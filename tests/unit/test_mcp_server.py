@@ -110,21 +110,25 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     tools = asyncio.run(list_tools())
     assert [tool.name for tool in tools] == [
         "get_context",
+        "list_skills",
+        "get_skill",
         "explain_context",
         "save_checkpoint",
     ]
     assert tools[0].annotations is not None and tools[0].annotations.readOnlyHint is True
     assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is True
-    assert tools[2].annotations is not None and tools[2].annotations.readOnlyHint is False
+    assert tools[2].annotations is not None and tools[2].annotations.readOnlyHint is True
+    assert tools[3].annotations is not None and tools[3].annotations.readOnlyHint is True
+    assert tools[4].annotations is not None and tools[4].annotations.readOnlyHint is False
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
-    assert "operation" in tools[2].inputSchema["properties"]
-    assert "lessons" in tools[2].inputSchema["properties"]
-    assert "record_lesson" in tools[2].inputSchema["properties"]["operation"]["pattern"]
+    assert "operation" in tools[4].inputSchema["properties"]
+    assert "lessons" in tools[4].inputSchema["properties"]
+    assert "record_lesson" in tools[4].inputSchema["properties"]["operation"]["pattern"]
     assert (
         "without resending the complete checkpoint"
-        in tools[2].inputSchema["properties"]["operation"]["description"]
+        in tools[4].inputSchema["properties"]["operation"]["description"]
     )
-    assert "exactly one" in tools[2].inputSchema["properties"]["lessons"]["description"]
+    assert "exactly one" in tools[4].inputSchema["properties"]["lessons"]["description"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "query" in tools[0].inputSchema["properties"]
     assert "knowledge_query" in tools[0].inputSchema["properties"]
@@ -137,15 +141,22 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "dbt_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
+    assert "skill_tags" in tools[0].inputSchema["properties"]
+    assert "skill_client" in tools[0].inputSchema["properties"]
+    assert "skill_agent_name" in tools[0].inputSchema["properties"]
     assert tools[0].inputSchema["properties"]["render_for"]["anyOf"][0]["pattern"] == (
         "^(codex|claude-code)$"
     )
-    assert "record_event" in tools[2].inputSchema["properties"]["operation"]["pattern"]
-    assert "event_summary" in tools[2].inputSchema["properties"]
-    assert set(tools[1].inputSchema["properties"]) == {"context_packet"}
+    assert "record_event" in tools[4].inputSchema["properties"]["operation"]["pattern"]
+    assert "event_summary" in tools[4].inputSchema["properties"]
+    assert set(tools[3].inputSchema["properties"]) == {"context_packet"}
+    assert set(tools[1].inputSchema["required"]) == {"client"}
+    assert set(tools[2].inputSchema["required"]) == {"name", "client"}
     for name in IDS:
         assert name not in tools[0].inputSchema.get("required", [])
+        assert name not in tools[1].inputSchema.get("required", [])
         assert name not in tools[2].inputSchema.get("required", [])
+        assert name not in tools[4].inputSchema.get("required", [])
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -1066,6 +1077,8 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert initialized.serverInfo.version == SERVER_VERSION
             assert [tool.name for tool in (await session.list_tools()).tools] == [
                 "get_context",
+                "list_skills",
+                "get_skill",
                 "explain_context",
                 "save_checkpoint",
             ]

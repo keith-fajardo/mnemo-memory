@@ -866,7 +866,7 @@ files. Milestone 6 is complete; no new connector, parser, persistence, retrieval
 model/provider, dependency, MCP/CLI surface, UI, packaging, procedural memory, or team behavior was
 added by the exit audit.
 
-### Procedural memory — In progress
+### Procedural memory — Complete
 
 #### Issue 19A — Versioned checked-in skill and agent registry — Complete
 
@@ -920,6 +920,42 @@ dependency/provenance validation for 86 entries, and architecture validation for
 files. No database migration, dependency, prompt inference, generated skill, source scanner, MCP
 surface, model call, UI, packaging, or team behavior was added.
 
+#### Issue 19C — Scoped MCP skill discovery — Complete
+
+This bounded issue passes explicit skill tags/client or an exact agent/client through `get_context`
+and adds two read-only stdio tools: metadata-only `list_skills` and exact-name `get_skill`. Both use
+the existing registered-project default or require all five task-scope UUIDs, accept only Codex or
+Claude Code as concrete clients, query the current scope before returning anything, and expose
+immutable revision/digest provenance. `get_skill` returns one checked-in Markdown skill as untrusted
+evidence; neither tool executes content, scans source files, infers from prompts, calls a model, or
+mutates state. This issue updates the declared MCP inventory but adds no dependency, migration, UI,
+packaging, or team behavior.
+
+Implemented `skill_tags`, `skill_client`, and `skill_agent_name` on the MCP `get_context` schema
+and translation path. Added read-only `list_skills` and `get_skill` tools to the Codex/Claude Code
+stdio surface. Both resolve the same registered-project binding when UUIDs are omitted, otherwise
+require the complete five-ID task scope, and authorize the project before reading the live current
+registry. Listing returns at most 32 compatible metadata records without content; exact retrieval
+returns one compatible current skill or `null`, with source path, immutable revision ID, SHA-256
+digest, checked-in trust, and sections explicitly labeled `untrusted_evidence`. Tool schemas reject
+unknown fields and accept only concrete supported clients.
+
+All affected tool inventories, client connection tests, durability/restart tests, cross-client
+benchmark checks, and user documentation now declare the five-tool surface. The 70 focused
+registry/MCP/Codex/Claude/durability tests pass. The live cross-client benchmark passes on Codex CLI
+0.146.0 and Claude Code 2.1.221 with preserved client configuration, zero cross-scope disclosure,
+no model call, failure degradation intact, 84.63% context savings, and 81.58% total-input savings
+on its fixture.
+
+Milestone 7 exit evidence is complete: exact applicability and compatibility gate every selected
+skill; current repository revisions replace stale registry results immediately while immutable
+predecessors remain retrievable; a mandatory checked-in procedure retains budget priority over a
+matching preference skill; and checked-in skill/agent fixtures preserve their scalar frontmatter
+and Markdown sections without rewrite or semantic loss. The complete repository gate passes with
+740 tests, strict typing for 187 source files, dependency/provenance validation for 86 entries, and
+architecture validation for 99 product Python files. No dependency, migration, generated skill,
+prompt inference, source execution, model call, UI, packaging, or team behavior was added.
+
 The first procedural-memory slice reuses the immutable checked-in Markdown revision store rather
 than creating a second procedure source of truth. A document is eligible only when strict scalar
 frontmatter marks `mnemo_kind: procedure` and gives bounded literal `mnemo_tags`; callers must
@@ -928,8 +964,9 @@ existing `skills_and_procedures` packet section with immutable revision/digest p
 structured token-budget omissions. Optional `mnemo_mandatory: true` prioritizes a checked-in
 project playbook over matching optional playbooks; it cannot override scope policy, user/system
 instructions, or verified current dbt/source facts. Markdown remains untrusted evidence and is
-never executed. Discovery of third-party skills, agent definitions, and automatic applicability
-classification remain future work.
+never executed. At that first slice boundary, skill/agent registry discovery and explicit
+applicability remained for the bounded issues completed above; automatic prompt-based applicability
+remains deliberately out of scope.
 
 An enabled project may now designate one checked-in automatic profile for `codex`, `claude-code`,
 or `any`. It supplies literal procedure tags for that client at fresh-session attachment time, so
@@ -1919,7 +1956,8 @@ The existing `get_context` default response remains the canonical packet. Its op
 packet round-trips through the same strict domain contract and can be passed to `explain_context`.
 Automatic-memory session and prompt attachments validate their bounded canonical packet and use
 the configured client's renderer before hook output. Invalid input returns no attachment, and the
-hook remains fail open. No tool was added and the exact three-tool inventory is unchanged.
+hook remains fail open. No tool was added in that issue and the then-current three-tool inventory
+was unchanged.
 
 Renderer tests prove deterministic Codex/Claude labels, exact content and provenance preservation,
 JSON quoting of embedded newlines/sentinels, omissions, canonical immutability, and automatic

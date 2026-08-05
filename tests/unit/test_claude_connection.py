@@ -96,6 +96,8 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
             assert initialized.serverInfo.name == "mnemo-local"
             assert [tool.name for tool in (await session.list_tools()).tools] == [
                 "get_context",
+                "list_skills",
+                "get_skill",
                 "explain_context",
                 "save_checkpoint",
             ]

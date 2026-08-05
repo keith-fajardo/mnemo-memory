@@ -482,10 +482,48 @@ profile revision that selected it. Use `codex` or `claude-code` instead of `any`
 clients should receive different procedures. Keep one applicable profile per client: multiple
 matching profiles intentionally produce no automatic selection, rather than a filename-based guess.
 
-Mnemo cannot safely learn an arbitrary role name from a client hook, so a future named-agent
-registry is separate work. The client profile above is the simple, reliable default for a whole
-project: it gives your ordinary coding client its project's procedure without an extra prompt or
-per-agent configuration.
+Mnemo cannot safely learn an arbitrary role name from a client hook, so the client profile above
+remains the reliable automatic default for a whole project. Named agents are available only when a
+caller explicitly requests one through the registry described next.
+
+#### Add on-demand versioned skills and named agents
+
+Use a checked-in Markdown skill when a workflow should be discovered only for a matching task and
+client:
+
+```markdown
+---
+mnemo_kind: skill
+mnemo_name: reconciliation-review
+mnemo_version: 1.2.0
+mnemo_tags: dbt, reconciliation
+mnemo_clients: codex, claude-code
+mnemo_trust: checked_in
+---
+
+# Reconciliation review
+
+Compare the documented grain before approving a reconciliation change.
+```
+
+An optional named agent may declare the exact tags it needs:
+
+```markdown
+---
+mnemo_kind: agent
+mnemo_name: reconciliation-agent
+mnemo_version: 2.0.1
+mnemo_client: any
+mnemo_skill_tags: reconciliation, dbt
+---
+```
+
+The normal repository Markdown sync imports these files without modifying them. `list_skills`
+returns compatible metadata; `get_skill` returns one exact current revision with source digest;
+and `get_context` accepts either `skill_tags` plus `skill_client`, or `skill_agent_name` plus
+`skill_client`. Skill Markdown remains untrusted evidence. Mnemo loads only applicable skills,
+retains predecessor revisions after changes, and keeps mandatory project procedures ahead of
+skills under budget pressure.
 
 ### Optional: add one Obsidian vault
 

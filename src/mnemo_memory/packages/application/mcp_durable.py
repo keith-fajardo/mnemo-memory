@@ -55,6 +55,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ProjectId,
+    ProjectSkill,
     ScopeLevel,
     SessionId,
     SourceStateFingerprint,
@@ -63,6 +64,7 @@ from mnemo_memory.packages.domain import (
     WorkspaceId,
 )
 from mnemo_memory.packages.domain.identifiers import Identifier
+from mnemo_memory.packages.storage import ProjectSkillRegistry
 
 
 class UnifiedContextPort(Protocol):
@@ -81,12 +83,14 @@ class DurableMcpContextPort:
         current_dbt_source_state: (
             Callable[[MemoryScope], SourceStateFingerprint | None] | None
         ) = None,
+        skills: ProjectSkillRegistry | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
         self._after_checkpoint_save = after_checkpoint_save
         self._default_scope = default_scope
         self._current_dbt_source_state = current_dbt_source_state
+        self._skills = skills
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -119,6 +123,9 @@ class DurableMcpContextPort:
             knowledge_query = request.get("knowledge_query")
             semantic_knowledge_query = request.get("semantic_knowledge_query")
             procedure_tags = request.get("procedure_tags", [])
+            skill_tags = request.get("skill_tags", [])
+            skill_client = request.get("skill_client")
+            skill_agent_name = request.get("skill_agent_name")
             include_lifecycle_events = request.get("include_lifecycle_events", False)
             include_approved_events = request.get("include_approved_events", False)
             if not isinstance(include_lifecycle_events, bool):
@@ -141,6 +148,16 @@ class DurableMcpContextPort:
                 or any(not isinstance(tag, str) for tag in procedure_tags)
             ):
                 raise ValueError("procedure_tags must be an array of at most 8 strings")
+            if (
+                not isinstance(skill_tags, list)
+                or len(skill_tags) > 8
+                or any(not isinstance(tag, str) for tag in skill_tags)
+            ):
+                raise ValueError("skill_tags must be an array of at most 8 strings")
+            if skill_client is not None and not isinstance(skill_client, str):
+                raise ValueError("skill_client must be a string")
+            if skill_agent_name is not None and not isinstance(skill_agent_name, str):
+                raise ValueError("skill_agent_name must be a string")
             if source_impact is not None and not isinstance(source_impact, Mapping):
                 raise ValueError("source_impact must be an object")
             if source_impact is not None:
@@ -254,6 +271,8 @@ class DurableMcpContextPort:
                 or knowledge_query is not None
                 or semantic_knowledge_query is not None
                 or procedure_tags
+                or skill_tags
+                or skill_agent_name is not None
             ):
                 if self._context_service is None:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
@@ -279,6 +298,9 @@ class DurableMcpContextPort:
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
                             procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            skill_tags=tuple(cast(list[str], skill_tags)),
+                            skill_client=skill_client,
+                            skill_agent_name=skill_agent_name,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -312,6 +334,9 @@ class DurableMcpContextPort:
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
                             procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            skill_tags=tuple(cast(list[str], skill_tags)),
+                            skill_client=skill_client,
+                            skill_agent_name=skill_agent_name,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -349,6 +374,9 @@ class DurableMcpContextPort:
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
                             procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            skill_tags=tuple(cast(list[str], skill_tags)),
+                            skill_client=skill_client,
+                            skill_agent_name=skill_agent_name,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -388,6 +416,9 @@ class DurableMcpContextPort:
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
                             procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            skill_tags=tuple(cast(list[str], skill_tags)),
+                            skill_client=skill_client,
+                            skill_agent_name=skill_agent_name,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -426,6 +457,9 @@ class DurableMcpContextPort:
                             knowledge_query=knowledge_query,
                             semantic_knowledge_query=semantic_knowledge_query,
                             procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            skill_tags=tuple(cast(list[str], skill_tags)),
+                            skill_client=skill_client,
+                            skill_agent_name=skill_agent_name,
                             include_lifecycle_events=include_lifecycle_events,
                             include_approved_events=include_approved_events,
                         )
@@ -493,6 +527,9 @@ class DurableMcpContextPort:
                         knowledge_query=knowledge_query,
                         semantic_knowledge_query=semantic_knowledge_query,
                         procedure_tags=tuple(cast(list[str], procedure_tags)),
+                        skill_tags=tuple(cast(list[str], skill_tags)),
+                        skill_client=skill_client,
+                        skill_agent_name=skill_agent_name,
                         include_lifecycle_events=include_lifecycle_events,
                         include_approved_events=include_approved_events,
                     )
@@ -518,6 +555,42 @@ class DurableMcpContextPort:
                     include_approved_events,
                 )
             ).to_dict()
+        except Exception as error:
+            raise _mcp_error(error) from error
+
+    def list_skills(self, request: dict[str, object]) -> dict[str, object]:
+        """List bounded current skill metadata in one explicitly resolved project scope."""
+        try:
+            if self._skills is None:
+                raise CheckpointApplicationStorageFailure("skill registry is unavailable")
+            scope = _project_scope(_scope(request, self._default_scope))
+            client = _concrete_client(request)
+            maximum_skills = _integer(request.get("maximum_skills", 32))
+            if not 1 <= maximum_skills <= 32:
+                raise ValueError("maximum_skills must be between 1 and 32")
+            skills = self._skills.list_current_skills(scope, client, maximum_skills)
+            return {
+                "client": client,
+                "scope": scope.to_dict(),
+                "skills": [_skill_metadata(skill) for skill in skills],
+            }
+        except Exception as error:
+            raise _mcp_error(error) from error
+
+    def get_skill(self, request: dict[str, object]) -> dict[str, object]:
+        """Return one exact current checked-in skill without executing its Markdown."""
+        try:
+            if self._skills is None:
+                raise CheckpointApplicationStorageFailure("skill registry is unavailable")
+            scope = _project_scope(_scope(request, self._default_scope))
+            client = _concrete_client(request)
+            name = _string(request, "name")
+            skill = self._skills.get_current_skill(scope, name, client)
+            return {
+                "client": client,
+                "scope": scope.to_dict(),
+                "skill": None if skill is None else _skill_detail(skill),
+            }
         except Exception as error:
             raise _mcp_error(error) from error
 
@@ -620,6 +693,51 @@ class DurableMcpContextPort:
             # A durable checkpoint has already succeeded. Do not disclose parser/storage details
             # or turn an optional local index refresh into a failed save response.
             return
+
+
+def _skill_metadata(skill: ProjectSkill) -> dict[str, object]:
+    revision, document = skill.revision, skill.revision.document
+    return {
+        "applicability_tags": list(skill.applicability_tags),
+        "compatible_clients": list(skill.compatible_clients),
+        "document_path": document.relative_path,
+        "name": skill.name,
+        "revision_id": str(revision.revision_id),
+        "source_digest": skill.source_digest,
+        "trust": skill.trust.value,
+        "version": skill.version,
+    }
+
+
+def _skill_detail(skill: ProjectSkill) -> dict[str, object]:
+    return {
+        **_skill_metadata(skill),
+        "content_representation": "untrusted_evidence",
+        "document_id": str(skill.revision.document.document_id),
+        "sections": [
+            {"content": section.content, "heading": section.heading, "level": section.level}
+            for section in skill.revision.document.sections
+        ],
+        "title": skill.revision.document.title,
+    }
+
+
+def _project_scope(scope: MemoryScope) -> MemoryScope:
+    assert scope.workspace_id is not None and scope.project_id is not None
+    return MemoryScope(
+        scope.owner_id,
+        ScopeLevel.PROJECT,
+        scope.visibility,
+        scope.workspace_id,
+        scope.project_id,
+    )
+
+
+def _concrete_client(request: Mapping[str, object]) -> str:
+    client = _string(request, "client")
+    if client not in {"codex", "claude-code"}:
+        raise ValueError("client must be codex or claude-code")
+    return client
 
 
 def _scope(request: Mapping[str, object], default: MemoryScope | None = None) -> MemoryScope:

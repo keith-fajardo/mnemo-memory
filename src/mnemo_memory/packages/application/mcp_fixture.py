@@ -48,6 +48,12 @@ class FixtureMcpContextPort:
             "durability": "fixture-only",
         }
 
+    def list_skills(self, request: dict[str, object]) -> dict[str, object]:
+        return {"client": request.get("client"), "skills": []}
+
+    def get_skill(self, request: dict[str, object]) -> dict[str, object]:
+        return {"client": request.get("client"), "skill": None}
+
 
 def _id(request: dict[str, object], name: str) -> str:
     value = request.get(name)

@@ -512,6 +512,45 @@ Keep at most one matching profile for a client. If two match, Mnemo safely attac
 than guessing which file wins. This is how a project can make a reconciliation workflow available
 to its normal coding agent without a repeated prompt or an extra `CLAUDE.md`/`AGENTS.md` reminder.
 
+#### Versioned skills and named agents
+
+For an on-demand workflow rather than a mandatory/automatic procedure, use strict skill
+frontmatter:
+
+```markdown
+---
+mnemo_kind: skill
+mnemo_name: reconciliation-review
+mnemo_version: 1.2.0
+mnemo_tags: dbt, reconciliation
+mnemo_clients: codex, claude-code
+mnemo_trust: checked_in
+---
+
+# Reconciliation review
+
+Compare the documented grain before approving a reconciliation change.
+```
+
+An optional named agent can select those exact tags without copying skill content:
+
+```markdown
+---
+mnemo_kind: agent
+mnemo_name: reconciliation-agent
+mnemo_version: 2.0.1
+mnemo_client: any
+mnemo_skill_tags: reconciliation, dbt
+---
+```
+
+After the normal repository Markdown sync, `list_skills` returns compatible metadata and
+`get_skill` returns one exact current skill as cited untrusted evidence. `get_context` accepts
+either `skill_tags` plus `skill_client`, or `skill_agent_name` plus `skill_client`. It loads only
+applicable compatible skills, never every skill, and a mandatory checked-in procedure retains
+budget priority. Updating a file creates a new current immutable revision while retaining its
+predecessor; Mnemo does not rewrite imported skill or agent files.
+
 When the durable checkpoint already names relevant files, the small automatic session packet also
 looks up current same-project notes using those **file stems** (for example, `reconciliation` from
 `models/reconciliation.sql`). That gives a fresh agent a cited note about the file it is resuming
@@ -685,7 +724,7 @@ with exact supplemental-artifact evidence and within the existing structural tok
 
 ## What the MCP tools do
 
-Mnemo exposes exactly three local stdio MCP tools:
+Mnemo exposes exactly five local stdio MCP tools:
 
 - `save_checkpoint` creates, revises, completes, or abandons an explicit task checkpoint.
 - `get_context` returns a bounded packet, optionally including a structured dbt upstream,
@@ -697,6 +736,10 @@ Mnemo exposes exactly three local stdio MCP tools:
   semantic search.
 - `explain_context` validates a packet returned by `get_context` and reports its sources, ranks,
   omissions, conflicts, staleness, and token accounting without repeating retrieved content.
+- `list_skills` returns bounded metadata for current checked-in skills compatible with Codex or
+  Claude Code in the resolved project scope; it does not return Markdown bodies.
+- `get_skill` returns one exact compatible checked-in skill with immutable revision/digest
+  provenance and labels its Markdown as untrusted evidence.
 
 `get_context` returns the canonical structured packet by default. Its optional `render_for` value
 (`codex` or `claude-code`) returns that unchanged packet beside deterministic, client-labeled line

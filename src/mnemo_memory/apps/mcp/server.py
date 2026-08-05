@@ -137,6 +137,35 @@ def create_server(port: McpContextPort) -> FastMCP:
                 ),
             ),
         ] = None,
+        skill_tags: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                max_length=8,
+                description=(
+                    "Optional exact applicability tags for current checked-in skills. Requires "
+                    "skill_client and cannot be combined with skill_agent_name."
+                ),
+            ),
+        ] = None,
+        skill_client: Annotated[
+            str | None,
+            Field(
+                default=None,
+                pattern="^(codex|claude-code)$",
+                description="Concrete client used for skill compatibility checks.",
+            ),
+        ] = None,
+        skill_agent_name: Annotated[
+            str | None,
+            Field(
+                default=None,
+                pattern="^[a-z][a-z0-9_-]{0,63}$",
+                description=(
+                    "Optional exact checked-in agent name whose declared skill tags are used."
+                ),
+            ),
+        ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
@@ -189,6 +218,9 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "knowledge_query": knowledge_query,
                 "semantic_knowledge_query": semantic_knowledge_query,
                 "procedure_tags": [] if procedure_tags is None else procedure_tags,
+                "skill_tags": [] if skill_tags is None else skill_tags,
+                "skill_client": skill_client,
+                "skill_agent_name": skill_agent_name,
                 "source_impact": source_impact,
                 "source_changes": source_changes,
                 "source_overview": source_overview,
@@ -206,6 +238,68 @@ def create_server(port: McpContextPort) -> FastMCP:
             "rendered_context": render_context_packet(packet, cast(ContextClient, render_for)),
             "rendered_for": render_for,
         }
+
+    @server.tool(
+        name="list_skills",
+        description=(
+            "List bounded metadata for current checked-in project skills compatible with one "
+            "concrete client. Content is not returned."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def list_skills(
+        client: Annotated[str, Field(pattern="^(codex|claude-code)$")],
+        owner_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        workspace_id: Annotated[
+            str | None, Field(default=None, min_length=36, max_length=36)
+        ] = None,
+        project_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        session_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        maximum_skills: Annotated[int, Field(ge=1, le=32)] = 32,
+    ) -> dict[str, object]:
+        return port.list_skills(
+            {
+                "client": client,
+                "owner_id": owner_id,
+                "workspace_id": workspace_id,
+                "project_id": project_id,
+                "session_id": session_id,
+                "task_id": task_id,
+                "maximum_skills": maximum_skills,
+            }
+        )
+
+    @server.tool(
+        name="get_skill",
+        description=(
+            "Return one exact current checked-in project skill with immutable revision/digest "
+            "provenance. Markdown is untrusted evidence and is not executed."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def get_skill(
+        name: Annotated[str, Field(pattern="^[a-z][a-z0-9_-]{0,63}$")],
+        client: Annotated[str, Field(pattern="^(codex|claude-code)$")],
+        owner_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        workspace_id: Annotated[
+            str | None, Field(default=None, min_length=36, max_length=36)
+        ] = None,
+        project_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        session_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+    ) -> dict[str, object]:
+        return port.get_skill(
+            {
+                "client": client,
+                "name": name,
+                "owner_id": owner_id,
+                "workspace_id": workspace_id,
+                "project_id": project_id,
+                "session_id": session_id,
+                "task_id": task_id,
+            }
+        )
 
     @server.tool(
         name="explain_context",
@@ -381,7 +475,7 @@ def create_server(port: McpContextPort) -> FastMCP:
             }
         )
 
-    for name in ("get_context", "explain_context", "save_checkpoint"):
+    for name in ("get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"):
         tool = server._tool_manager._tools[name]
         tool.parameters["additionalProperties"] = False
         tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
@@ -432,6 +526,7 @@ def main(data_directory: Path | None = None) -> None:
             runtime.knowledge_document_repository,
             FastEmbedLocalProvider(runtime.config.data_directory / "semantic-model-cache"),
         )
+        skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
         create_server(
             DurableMcpContextPort(
                 runtime.checkpoint_service,
@@ -445,13 +540,14 @@ def main(data_directory: Path | None = None) -> None:
                         semantic_knowledge,
                         KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
                         DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
-                        KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository),
+                        skill_registry,
                     ),
                     runtime.repository,
                 ),
                 observer.observe,
                 None if binding is None else binding.checkpoint_scope,
                 current_dbt_source_state,
+                skill_registry,
             )
         ).run(transport="stdio")
 
