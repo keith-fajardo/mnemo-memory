@@ -1081,7 +1081,7 @@ def dbt_shell_hook(shell: str = typer.Argument(...)) -> None:
     raise typer.BadParameter("supported shells: zsh, bash, fish")
 
 
-@mcp_app.command("serve", help="Serve exactly get_context and save_checkpoint over stdio.")
+@mcp_app.command("serve", help="Serve Mnemo's five scoped context/checkpoint tools over stdio.")
 def mcp_serve(
     stdio: bool = typer.Option(False, "--stdio"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008

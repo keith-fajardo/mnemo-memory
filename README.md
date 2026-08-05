@@ -345,6 +345,17 @@ mnemo-memory init
 mnemo-memory status
 ```
 
+Start the loopback service and open `http://127.0.0.1:8765/` for the local onboarding and health
+dashboard:
+
+```bash
+mnemo-memory start
+```
+
+The dashboard loads only packaged local assets. It shows connection/project readiness and bounded
+index counts, never memory content, absolute project paths, scope IDs, credentials, or command
+output. Stop it with `mnemo-memory stop`.
+
 This creates a local database, normally **outside** your repository:
 
 - macOS: `~/Library/Application Support/Mnemo`

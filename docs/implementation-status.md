@@ -975,6 +975,37 @@ Exact-client profiles take precedence over `any`; multiple equally matching prof
 The profile revision/digest remains cited alongside each selected procedure. Mnemo does not infer
 an arbitrary named-agent role from hook events, inspect prompts, or execute project Markdown.
 
+### Settings, inspection, and packaging — In progress
+
+#### Issue 20A — Loopback onboarding and health dashboard — Complete
+
+This bounded issue serves one dependency-free local dashboard from the existing loopback-only API.
+It provides a non-mutating onboarding checklist, lifecycle readiness, sanitized Codex/Claude Code
+connection health, current-project registration state, bounded source/dbt/knowledge index counts,
+and fixed privacy guarantees. It returns no owner/scope IDs, absolute paths, document or memory
+content, process diagnostics, credentials, or command output. The HTML uses packaged local assets
+only and a restrictive content-security policy. This issue does not add settings mutation, memory
+browsing/mutation, job retry, backup/upgrade/uninstall behavior, network exposure, dependency,
+model call, or team behavior.
+
+Implemented a packaged, responsive HTML/CSS/JavaScript dashboard served by the existing FastAPI
+process at `/` and a sanitized `/api/dashboard` status endpoint. The dashboard shows a three-step
+setup checklist, local store/schema readiness, boolean Codex and Claude Code availability and owned
+registration health, current-project registration, and bounded current source/dbt/knowledge counts.
+Index staleness remains truthfully `unknown` unless a separate exact currentness observation exists.
+The production launcher now starts the packaged `mnemo_memory.apps.api.server` module correctly.
+
+All assets are local package resources. Responses set no-store, no-referrer, no-sniff, frame denial,
+and a CSP limited to same-origin scripts/styles/connect calls with all other sources denied. The
+status contract excludes data-directory/project paths, scope and snapshot IDs, process metadata,
+document/memory payloads, command output, credentials, and exception text; failure yields bounded
+status labels and does not affect agent operation. Thirty focused lifecycle/resource tests pass,
+including packaged-asset loading, CSP, sanitized API composition, registered-project counts, and
+path/ID non-disclosure. The complete repository gate passes with 742 tests, strict typing for 188
+source files, dependency/provenance validation for 86 entries, and architecture validation for 100
+product Python files. No dependency, model call, settings mutation, memory mutation, job retry,
+backup, installer change, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

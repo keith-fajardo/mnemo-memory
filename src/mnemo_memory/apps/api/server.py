@@ -8,6 +8,7 @@ from pathlib import Path
 import uvicorn
 
 from mnemo_memory.apps.api.app import create_app
+from mnemo_memory.apps.api.dashboard import build_dashboard_status
 from mnemo_memory.packages.application import build_lifecycle_service, resolve_local_config
 
 
@@ -19,7 +20,10 @@ def main() -> None:
     service = build_lifecycle_service(config)
     service.initialize()
     uvicorn.run(
-        create_app(service), host=config.host, port=config.port, log_level=config.log_level.lower()
+        create_app(service, lambda: build_dashboard_status(config)),
+        host=config.host,
+        port=config.port,
+        log_level=config.log_level.lower(),
     )
 
 

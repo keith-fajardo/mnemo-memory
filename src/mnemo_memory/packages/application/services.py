@@ -61,7 +61,7 @@ class LifecycleService:
             [
                 sys.executable,
                 "-m",
-                "apps.api.server",
+                "mnemo_memory.apps.api.server",
                 "--data-dir",
                 str(self.config.data_directory),
             ],

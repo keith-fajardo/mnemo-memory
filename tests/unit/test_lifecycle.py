@@ -8,8 +8,10 @@ import pytest
 from fastapi.routing import APIRoute
 from typer.testing import CliRunner
 
+import mnemo_memory.apps.api.dashboard as dashboard_module
 import mnemo_memory.apps.cli.main as cli_main
 from mnemo_memory.apps.api.app import create_app
+from mnemo_memory.apps.api.dashboard import build_dashboard_status
 from mnemo_memory.apps.cli.main import app
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -101,6 +103,76 @@ def test_lifecycle_api_exposes_only_local_readiness_endpoints(tmp_path: Path) ->
     assert routes["/version"]()["profile"] == "personal"
     assert app.docs_url is None
     assert app.redoc_url is None
+
+
+def test_loopback_dashboard_serves_packaged_assets_and_sanitized_status(tmp_path: Path) -> None:
+    value = service(tmp_path)
+    value.initialize()
+    details = {
+        "connections": {
+            "codex": {"available": True, "connected": True, "status": "connected"},
+            "claude_code": {
+                "available": True,
+                "connected": False,
+                "status": "available",
+            },
+        },
+        "indexes": {},
+        "privacy": {"exposure": "loopback_only"},
+        "project": {"registered": False},
+    }
+    dashboard = create_app(value, lambda: details)
+    routes = {
+        route.path: route.endpoint for route in dashboard.routes if isinstance(route, APIRoute)
+    }
+
+    page = routes["/"]()
+    script = routes["/assets/app.js"]()
+    status = routes["/api/dashboard"]()
+
+    assert "Mnemo Memory" in page.body.decode()
+    assert 'src="/assets/app.js"' in page.body.decode()
+    assert page.headers["content-security-policy"].startswith("default-src 'none'")
+    assert 'fetch("/api/dashboard"' in script.body.decode()
+    assert status["lifecycle"]["initialized"] is True
+    assert status["connections"] == details["connections"]
+    encoded = json.dumps(status)
+    assert str(value.config.data_directory) not in encoded
+    assert "process" not in encoded
+
+
+def test_dashboard_status_reports_only_bounded_current_project_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "private project name"
+    project.mkdir()
+    config = LocalConfig.defaults(tmp_path / "dashboard data")
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    with build_checkpoint_runtime(config) as runtime:
+        assert runtime.source_structure_repository is not None
+        runtime.source_structure_repository.store_and_activate(
+            SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+        )
+    monkeypatch.setattr(
+        dashboard_module,
+        "_codex_status",
+        lambda: {"available": True, "connected": True, "status": "connected"},
+    )
+    monkeypatch.setattr(
+        dashboard_module,
+        "_claude_status",
+        lambda: {"available": False, "connected": False, "status": "not_installed"},
+    )
+
+    result = build_dashboard_status(config, project_directory=project)
+
+    assert result["project"] == {"registered": True}
+    assert result["indexes"]["source"]["status"] == "ready"  # type: ignore[index]
+    assert result["indexes"]["source"]["files"] == 0  # type: ignore[index]
+    assert result["indexes"]["knowledge"] == {"status": "empty", "documents": 0}  # type: ignore[index]
+    encoded = json.dumps(result, sort_keys=True)
+    assert str(project) not in encoded
+    assert str(binding.scope.project_id) not in encoded
 
 
 def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None:

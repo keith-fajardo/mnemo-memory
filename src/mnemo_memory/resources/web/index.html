@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Mnemo Memory</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand-mark" aria-hidden="true">M</div>
+      <div>
+        <p class="eyebrow">LOCAL CONTEXT PLATFORM</p>
+        <h1>Mnemo Memory</h1>
+      </div>
+      <span id="service-state" class="pill">Checking…</span>
+    </header>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">START HERE</p>
+          <h2>Give every fresh session the right context.</h2>
+          <p>Mnemo stays on this machine, resolves the current project, and returns compact cited memory to your coding agent.</p>
+        </div>
+        <button id="refresh" type="button">Refresh health</button>
+      </section>
+      <section aria-labelledby="onboarding-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">ONBOARDING</p><h2 id="onboarding-heading">Three checks, then work normally</h2></div>
+          <span id="progress" class="progress">0 / 3 ready</span>
+        </div>
+        <div id="onboarding" class="grid three"></div>
+      </section>
+      <section aria-labelledby="indexes-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">PROJECT SIGNAL</p><h2 id="indexes-heading">Local indexes</h2></div>
+          <span class="quiet">Counts only · no source bodies</span>
+        </div>
+        <div id="indexes" class="grid three"></div>
+      </section>
+      <section class="privacy" aria-labelledby="privacy-heading">
+        <div><p class="eyebrow">PRIVACY BOUNDARY</p><h2 id="privacy-heading">Local by default</h2></div>
+        <ul id="privacy-list"></ul>
+      </section>
+      <p id="error" role="alert" hidden>Dashboard status is temporarily unavailable. Mnemo memory and your coding agent continue to work independently.</p>
+    </main>
+    <footer>Mnemo personal profile · loopback only · <span id="version">version unknown</span></footer>
+  </body>
+</html>

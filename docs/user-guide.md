@@ -551,6 +551,14 @@ project checkpoint, structural memory, and repository documentation remain.
 
 ## Use task memory while working
 
+### Check setup in the local dashboard
+
+Run `mnemo-memory start`, then open `http://127.0.0.1:8765/`. The loopback-only dashboard shows
+whether the store is initialized, whether Codex or Claude Code owns the Mnemo registration, whether
+the current project is enabled, and bounded source/dbt/knowledge index counts. It uses packaged
+local assets and does not display memory/document content, absolute paths, scope IDs, credentials,
+or subprocess output. Run `mnemo-memory stop` when you no longer want the local web process.
+
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),
 and the latest bounded source-change summary
