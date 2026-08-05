@@ -22,10 +22,13 @@ from mnemo_memory.packages.application.command_wrapper import (
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
+    DbtApplicationNotFound,
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
+    IngestCatalog,
     IngestManifest,
+    IngestRunResults,
 )
 from mnemo_memory.packages.domain import DbtSnapshotId, MemoryScope
 
@@ -37,6 +40,7 @@ class DbtBeforeState:
     manifest_path: Path | None
     previous_digest: str | None = None
     expected_active_snapshot_id: DbtSnapshotId | None = None
+    expected_active_content_digest: str | None = None
     skip_code: str | None = None
 
 
@@ -104,6 +108,7 @@ class DbtManifestHooks:
             manifest_path,
             previous,
             active.snapshot_id if active else None,
+            active.metadata.content_digest if active else None,
         )
 
     def after_dbt(self, _: CommandContext, state: object, result: CommandResult) -> HookOutcome:
@@ -120,23 +125,84 @@ class DbtManifestHooks:
         try:
             raw = state.manifest_path.read_bytes()
             digest = sha256(raw).hexdigest()
-            if digest == state.previous_digest:
-                return HookOutcome(HookStatus.UNCHANGED, "MNEMO_DBT_MANIFEST_UNCHANGED")
-            stored = self._service_factory().ingest(
-                IngestManifest(
-                    state.scope,
-                    raw,
-                    "manifest.json",
-                    self._clock(),
-                    expected_active_snapshot_id=state.expected_active_snapshot_id,
+            service = self._service_factory()
+            if (
+                digest == state.previous_digest
+                and digest == state.expected_active_content_digest
+                and state.expected_active_snapshot_id is not None
+            ):
+                snapshot_id = state.expected_active_snapshot_id
+                manifest_changed = False
+            else:
+                stored = service.ingest(
+                    IngestManifest(
+                        state.scope,
+                        raw,
+                        "manifest.json",
+                        self._clock(),
+                        expected_active_snapshot_id=state.expected_active_snapshot_id,
+                    )
                 )
+                snapshot_id = stored.snapshot.snapshot_id
+                manifest_changed = not stored.idempotent
+            supplemental, supplemental_changed = self._ingest_supplemental(
+                service, state, snapshot_id
             )
         except DbtApplicationConflict:
             return HookOutcome(HookStatus.FAILED, "MNEMO_DBT_ACTIVE_SNAPSHOT_CONFLICT")
         except (DbtApplicationInvalidManifest, DbtApplicationStorageFailure, OSError, ValueError):
             return HookOutcome(HookStatus.FAILED, "MNEMO_DBT_MANIFEST_ACTIVATION_FAILED")
+        changed = manifest_changed or supplemental_changed
         return HookOutcome(
-            HookStatus.UNCHANGED if stored.idempotent else HookStatus.ACTIVATED,
-            "MNEMO_DBT_MANIFEST_UNCHANGED" if stored.idempotent else "MNEMO_DBT_MANIFEST_ACTIVATED",
-            metadata=(("snapshot", str(stored.snapshot.snapshot_id)),),
+            HookStatus.ACTIVATED if changed else HookStatus.UNCHANGED,
+            (
+                "MNEMO_DBT_MANIFEST_ACTIVATED"
+                if manifest_changed
+                else (
+                    "MNEMO_DBT_SUPPLEMENTAL_ACTIVATED"
+                    if supplemental_changed
+                    else "MNEMO_DBT_MANIFEST_UNCHANGED"
+                )
+            ),
+            metadata=(("snapshot", str(snapshot_id)), *supplemental),
         )
+
+    def _ingest_supplemental(
+        self,
+        service: DbtManifestApplicationService,
+        state: DbtBeforeState,
+        snapshot_id: DbtSnapshotId,
+    ) -> tuple[tuple[tuple[str, str], ...], bool]:
+        assert state.scope is not None and state.manifest_path is not None
+        metadata: list[tuple[str, str]] = []
+        changed = False
+        for kind, filename in (("catalog", "catalog.json"), ("run_results", "run_results.json")):
+            path = state.manifest_path.with_name(filename)
+            if not path.is_file():
+                metadata.append((kind, "unavailable"))
+                continue
+            try:
+                raw = path.read_bytes()
+                observed_at = self._clock()
+                stored = (
+                    service.ingest_catalog(
+                        IngestCatalog(state.scope, snapshot_id, raw, filename, observed_at)
+                    )
+                    if kind == "catalog"
+                    else service.ingest_run_results(
+                        IngestRunResults(state.scope, snapshot_id, raw, filename, observed_at)
+                    )
+                )
+            except (
+                DbtApplicationConflict,
+                DbtApplicationInvalidManifest,
+                DbtApplicationNotFound,
+                DbtApplicationStorageFailure,
+                OSError,
+                ValueError,
+            ):
+                metadata.append((kind, "invalid_or_unavailable"))
+                continue
+            metadata.append((kind, "unchanged" if stored.idempotent else "activated"))
+            changed = changed or not stored.idempotent
+        return tuple(metadata), changed

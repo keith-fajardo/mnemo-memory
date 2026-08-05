@@ -562,9 +562,14 @@ dbt run --select orders+
 ```
 
 The shell function runs the real dbt executable with the exact arguments, then Mnemo ingests a
-changed valid `target/manifest.json` only after dbt succeeds. If the project is not enabled, dbt
-still runs normally; Mnemo prints one reminder to run `mnemo-memory dbt enable` and does nothing
-else. For CI or agent scripts, use the explicit equivalent:
+changed valid `target/manifest.json` only after dbt succeeds. It also attaches supported sibling
+`catalog.json` and `run_results.json` projections to that exact manifest snapshot. Missing or
+invalid supplemental files are reported safely and do not invalidate the manifest. A lineage
+request can then include bounded relation columns and matching node run status with exact evidence;
+raw artifacts, comments, statistics, messages, adapter responses, compiled SQL, and environment
+values are not retained. If the project is not enabled, dbt still runs normally; Mnemo prints one
+reminder to run `mnemo-memory dbt enable` and does nothing else. For CI or agent scripts, use the
+explicit equivalent:
 
 ```bash
 mnemo-memory dbt exec -- run --select orders+

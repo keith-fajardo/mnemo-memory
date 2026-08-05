@@ -837,6 +837,12 @@ def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manif
     (project / "dbt_project.yml").write_text("name: synthetic\n")
     fixture = Path("tests/fixtures/dbt/manifest-v12.json")
     target.joinpath("manifest.json").write_bytes(fixture.read_bytes())
+    target.joinpath("catalog.json").write_bytes(
+        Path("tests/fixtures/dbt/catalog-v1.json").read_bytes()
+    )
+    target.joinpath("run_results.json").write_bytes(
+        Path("tests/fixtures/dbt/run-results-v6.json").read_bytes()
+    )
     second = tmp_path / "another dbt project"
     second.mkdir()
     (second / "dbt_project.yml").write_text("name: synthetic\n")
@@ -850,6 +856,8 @@ def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manif
     result = json.loads(first.output)
     assert result["enabled"] is True
     assert result["existing_manifest"] == "activated"
+    assert result["catalog"] == "activated"
+    assert result["run_results"] == "activated"
     assert "scope" not in result
     assert (data_dir / "config.json").exists()
 
@@ -873,7 +881,10 @@ def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manif
         app, ["dbt", "status", "--project-dir", str(project), "--data-dir", str(data_dir)]
     )
     assert status.exit_code == 0, status.output
-    assert json.loads(status.output)["active"] is True
+    status_value = json.loads(status.output)
+    assert status_value["active"] is True
+    assert status_value["catalog"] == "available"
+    assert status_value["run_results"] == "available"
 
     disabled = runner.invoke(
         app, ["dbt", "disable", "--project-dir", str(project), "--data-dir", str(data_dir)]

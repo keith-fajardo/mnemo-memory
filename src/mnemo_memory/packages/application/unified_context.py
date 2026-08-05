@@ -14,7 +14,9 @@ from mnemo_memory.packages.application.checkpoints import (
     GetCheckpointContext,
 )
 from mnemo_memory.packages.application.dbt import (
+    DbtApplicationError,
     DbtManifestApplicationService,
+    GetDbtSupplementalArtifacts,
     LineageDirection,
     QueryLineage,
     ResolveManifestFile,
@@ -583,6 +585,30 @@ class UnifiedContextService:
                 packet, "dbt-lineage", OmissionReason.STALE, "structural facts are not current"
             )
             return self._with_requested_source_facts(result_packet, request)
+        supplemental = None
+        try:
+            supplemental = self._dbt.get_supplemental(
+                GetDbtSupplementalArtifacts(
+                    _project_scope(request.scope), result.snapshot.snapshot_id
+                )
+            )
+        except DbtApplicationError:
+            packet = _with_omission(
+                packet,
+                "dbt-supplemental",
+                OmissionReason.LOWER_RANK,
+                "supplemental dbt facts are unavailable",
+            )
+        catalog_by_id = (
+            {relation.unique_id: relation for relation in supplemental.catalog.relations}
+            if supplemental is not None and supplemental.catalog is not None
+            else {}
+        )
+        run_by_id = (
+            {node.unique_id: node for node in supplemental.run_results.results}
+            if supplemental is not None and supplemental.run_results is not None
+            else {}
+        )
         facts: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
         remaining = min(
@@ -591,17 +617,47 @@ class UnifiedContextService:
             request.budget.total_limit - packet.declared_total_tokens,
         )
         for item in result.nodes:
+            content_value: dict[str, object] = {
+                "snapshot_id": str(result.snapshot.snapshot_id),
+                "start_node": str(result.start_node.unique_id),
+                "node_unique_id": str(item.node.unique_id),
+                "resource_type": item.node.raw_resource_type,
+                "direction": result.direction.value,
+                "depth": item.depth,
+                "currentness": result.currentness.value,
+                "relative_file": item.node.original_file_path,
+            }
+            evidence = [item.node.evidence]
+            relation = catalog_by_id.get(item.node.unique_id)
+            if relation is not None:
+                columns = relation.columns[:12]
+                content_value["catalog"] = {
+                    "relation_type": relation.relation_type,
+                    "database": relation.database,
+                    "schema": relation.schema_name,
+                    "name": relation.name,
+                    "column_count": len(relation.columns),
+                    "columns": [
+                        {
+                            "index": column.index,
+                            "name": column.name,
+                            "data_type": column.data_type,
+                        }
+                        for column in columns
+                    ],
+                    "columns_omitted": len(relation.columns) - len(columns),
+                }
+                evidence.append(relation.evidence)
+            node_run = run_by_id.get(item.node.unique_id)
+            if node_run is not None:
+                content_value["latest_run"] = {
+                    "status": node_run.status.value,
+                    "execution_time_seconds": node_run.execution_time_seconds,
+                    "failures": node_run.failures,
+                }
+                evidence.append(node_run.evidence)
             content = json.dumps(
-                {
-                    "snapshot_id": str(result.snapshot.snapshot_id),
-                    "start_node": str(result.start_node.unique_id),
-                    "node_unique_id": str(item.node.unique_id),
-                    "resource_type": item.node.raw_resource_type,
-                    "direction": result.direction.value,
-                    "depth": item.depth,
-                    "currentness": result.currentness.value,
-                    "relative_file": item.node.original_file_path,
-                },
+                content_value,
                 sort_keys=True,
                 separators=(",", ":"),
             )
@@ -621,7 +677,7 @@ class UnifiedContextService:
                 content=content,
                 content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
                 token_estimate=tokens,
-                evidence_references=(item.node.evidence,),
+                evidence_references=tuple(evidence),
                 source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
                 sensitivity=Sensitivity.NORMAL,
                 validity=ValidityState.CURRENT
@@ -639,7 +695,7 @@ class UnifiedContextService:
                     context_item.item_id,
                     f"mnemo:dbt/snapshot/{result.snapshot.snapshot_id}/node/{item.node.unique_id}",
                     hashlib.sha256(content.encode()).hexdigest(),
-                    (item.node.evidence,),
+                    tuple(evidence),
                 )
             )
         omissions = packet.omissions

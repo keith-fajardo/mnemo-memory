@@ -14,12 +14,13 @@ dbt run -s orders+
 Mnemo wraps that invocation as:
 
 ```text
-check configured project → run the exact real dbt command → ingest a changed valid manifest → return dbt's exit code
+check configured project → run the exact real dbt command → ingest valid local artifacts → return dbt's exit code
 ```
 
 If dbt fails or is interrupted, Mnemo does **not** activate a manifest, even if a file was written.
-If the manifest is unchanged, it does nothing. If ingestion fails in the default mode, dbt’s own
-result remains the result you see and the prior Mnemo snapshot stays active.
+If the manifest is unchanged, Mnemo can still attach a newly generated `catalog.json` or
+`run_results.json` to that exact snapshot. If ingestion fails in the default mode, dbt’s own result
+remains the result you see and the prior Mnemo snapshot stays active.
 
 ## The simple setup: once per machine, once per repository
 
@@ -46,7 +47,8 @@ mnemo-memory dbt enable
 
 `enable` initializes the personal Mnemo profile if necessary, creates private stable identities,
 binds this canonical project directory, and ingests an existing valid `target/manifest.json` when
-one is present. You do not need to create, see, or remember UUIDs. The binding is stored locally
+one is present. Matching sibling `catalog.json` and `run_results.json` files are minimized and
+attached when valid. You do not need to create, see, or remember UUIDs. The binding is stored locally
 with restrictive permissions. It stores the path-to-scope mapping only; it does not read or store
 `profiles.yml`, credentials, environment variables, SQL, or manifest content.
 
@@ -97,6 +99,13 @@ manifest limits/schema rules, and compares the digest with the pre-run digest:
 - **missing** → leave the prior snapshot unchanged and report unavailable;
 - **invalid, storage failure, or competing snapshot update** → leave the prior snapshot unchanged
   and report a safe failure.
+
+After a valid manifest is selected, Mnemo independently checks sibling `catalog.json` and
+`run_results.json` files. Valid supported artifacts attach only to that manifest snapshot. Missing,
+malformed, unsupported, or mismatched supplemental files produce bounded statuses and do not
+invalidate the manifest. Mnemo retains relation/column identities and node run status/timing only;
+warehouse comments, statistics, adapter messages, compiled SQL, environment values, and arbitrary
+arguments are discarded.
 
 The command’s default summary is written to stderr so dbt’s normal stdout remains usable. Add
 `--json-summary` when an automation needs a structured wrapper result.

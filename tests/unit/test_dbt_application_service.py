@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.dbt import (
@@ -16,7 +18,10 @@ from mnemo_memory.packages.application.dbt import (
     DbtApplicationNotFound,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
+    GetDbtSupplementalArtifacts,
+    IngestCatalog,
     IngestManifest,
+    IngestRunResults,
     LineageDirection,
     QueryLineage,
     ResolveManifestFile,
@@ -49,6 +54,8 @@ from mnemo_memory.packages.storage import (
 from mnemo_memory.packages.storage.sqlite import SQLiteCheckpointRepository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
+CATALOG_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "catalog-v1.json"
+RUN_RESULTS_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "run-results-v6.json"
 STAMP = datetime(2026, 8, 2, tzinfo=UTC)
 
 
@@ -80,7 +87,56 @@ def command(
 
 
 def service() -> DbtManifestApplicationService:
-    return DbtManifestApplicationService(ReferenceProjectIndexRepository(), DbtManifestParser())
+    return DbtManifestApplicationService(
+        ReferenceProjectIndexRepository(),
+        DbtManifestParser(),
+        DbtCatalogParser(),
+        DbtRunResultsParser(),
+    )
+
+
+def test_supplemental_ingestion_is_exact_scoped_and_idempotent() -> None:
+    item, value = service(), scope()
+    snapshot = item.ingest(command(value)).snapshot
+    catalog = IngestCatalog(
+        value,
+        snapshot.snapshot_id,
+        CATALOG_FIXTURE.read_bytes(),
+        "catalog.json",
+        STAMP,
+    )
+    runs = IngestRunResults(
+        value,
+        snapshot.snapshot_id,
+        RUN_RESULTS_FIXTURE.read_bytes(),
+        "run_results.json",
+        STAMP,
+    )
+
+    assert item.ingest_catalog(catalog).idempotent is False
+    assert item.ingest_catalog(catalog).idempotent is True
+    assert item.ingest_run_results(runs).idempotent is False
+    saved = item.get_supplemental(GetDbtSupplementalArtifacts(value, snapshot.snapshot_id))
+    assert saved.catalog is not None and len(saved.catalog.relations) == 2
+    assert saved.run_results is not None and len(saved.run_results.results) == 2
+    with pytest.raises(DbtApplicationNotFound):
+        item.get_supplemental(GetDbtSupplementalArtifacts(scope(2), snapshot.snapshot_id))
+
+
+def test_supplemental_ingestion_rejects_invalid_or_mismatched_artifacts() -> None:
+    item, value = service(), scope()
+    snapshot = item.ingest(command(value)).snapshot
+    with pytest.raises(DbtApplicationInvalidManifest):
+        item.ingest_catalog(
+            IngestCatalog(value, snapshot.snapshot_id, b"not json", "catalog.json", STAMP)
+        )
+    unknown = CATALOG_FIXTURE.read_text().replace(
+        "model.mnemo_analytics.fct_orders", "model.mnemo_analytics.unknown_model"
+    )
+    with pytest.raises(DbtApplicationConflict):
+        item.ingest_catalog(
+            IngestCatalog(value, snapshot.snapshot_id, unknown, "catalog.json", STAMP)
+        )
 
 
 def test_ingestion_is_idempotent_replaces_active_and_preserves_prior_snapshot() -> None:
@@ -199,6 +255,76 @@ def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
     assert all(
         structural_item.source_scope == task_scope for structural_item in packet.structural_items
     )
+
+
+def test_task_context_includes_bounded_matching_supplemental_dbt_evidence() -> None:
+    item, project_scope = service(), scope()
+    snapshot = item.ingest(command(project_scope)).snapshot
+    catalog_value = json.loads(CATALOG_FIXTURE.read_text())
+    catalog_value["nodes"]["model.mnemo_analytics.fct_orders"]["columns"] = {
+        f"column_{index}": {
+            "type": "TEXT",
+            "index": index,
+            "name": f"column_{index}",
+            "comment": "secret-that-must-not-be-retained",
+        }
+        for index in range(15)
+    }
+    item.ingest_catalog(
+        IngestCatalog(
+            project_scope,
+            snapshot.snapshot_id,
+            json.dumps(catalog_value),
+            "catalog.json",
+            STAMP,
+        )
+    )
+    item.ingest_run_results(
+        IngestRunResults(
+            project_scope,
+            snapshot.snapshot_id,
+            RUN_RESULTS_FIXTURE.read_bytes(),
+            "run_results.json",
+            STAMP,
+        )
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+
+    packet = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+                LineageDirection.UPSTREAM,
+            ),
+        )
+    )
+
+    fact = next(
+        fact
+        for fact in packet.structural_items
+        if '"node_unique_id":"model.mnemo_analytics.fct_orders"' in fact.content
+    )
+    content = json.loads(fact.content)
+    assert content["catalog"]["column_count"] == 15
+    assert len(content["catalog"]["columns"]) == 12
+    assert content["catalog"]["columns_omitted"] == 3
+    assert '"status":"success"' in fact.content
+    assert len(fact.evidence_references) == 3
+    assert "secret-that-must-not-be-retained" not in fact.content
+    assert "compiled_code" not in fact.content
+    notice = next(notice for notice in packet.provenance if notice.item_id == fact.item_id)
+    assert notice.evidence_references == fact.evidence_references
 
 
 def test_task_context_can_resolve_an_unambiguous_dbt_file_to_authoritative_lineage() -> None:

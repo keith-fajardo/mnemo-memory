@@ -202,7 +202,10 @@ The supplemental dbt adapters accept only explicit caller scope and source ident
 reviewed schema versions, finite timings, unique resource identities, and configured byte/resource/
 string limits. Their tests include unsupported versions, mismatched and duplicate identities,
 malformed timing/status data, non-standard numeric constants, absolute source identities, and
-hostile size limits.
+hostile size limits. Lifecycle attachment additionally requires an exact same-scope manifest
+snapshot and accepts supplemental failure without replacing that manifest. Context selection maps
+only exact node identities, caps rendered columns, preserves artifact evidence, and applies the
+existing structural token budget before returning any supplemental fact.
 
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.

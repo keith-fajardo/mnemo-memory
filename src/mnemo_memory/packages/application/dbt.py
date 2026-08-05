@@ -8,6 +8,11 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Protocol
 
+from mnemo_memory.packages.domain.dbt_artifacts import (
+    DbtCatalogArtifact,
+    DbtRunResultsArtifact,
+    DbtSupplementalArtifactError,
+)
 from mnemo_memory.packages.domain.dbt_manifest import (
     ArtifactCurrentness,
     DbtLineageEdge,
@@ -26,6 +31,7 @@ from mnemo_memory.packages.storage.contracts import (
     ManifestSnapshotNotFound,
     ProjectIndexRepository,
     ProjectIndexRepositoryError,
+    SupplementalArtifactConflict,
 )
 
 
@@ -39,6 +45,28 @@ class DbtManifestParserPort(Protocol):
         ingested_at: datetime,
         source_state: SourceStateFingerprint | None,
     ) -> DbtManifestArtifact: ...
+
+
+class DbtCatalogParserPort(Protocol):
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtCatalogArtifact: ...
+
+
+class DbtRunResultsParserPort(Protocol):
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtRunResultsArtifact: ...
 
 
 class DbtApplicationError(Exception):
@@ -86,6 +114,42 @@ class IngestManifest:
 class IngestManifestResult:
     snapshot: DbtManifestSnapshot
     idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IngestCatalog:
+    scope: MemoryScope
+    snapshot_id: DbtSnapshotId
+    raw_catalog: bytes | str
+    source_identity: str
+    ingested_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IngestRunResults:
+    scope: MemoryScope
+    snapshot_id: DbtSnapshotId
+    raw_run_results: bytes | str
+    source_identity: str
+    ingested_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IngestSupplementalResult:
+    content_digest: str
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GetDbtSupplementalArtifacts:
+    scope: MemoryScope
+    snapshot_id: DbtSnapshotId
+
+
+@dataclass(frozen=True, slots=True)
+class DbtSupplementalArtifacts:
+    catalog: DbtCatalogArtifact | None
+    run_results: DbtRunResultsArtifact | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,10 +229,16 @@ class DbtManifestApplicationService:
     """Coordinates authoritative parsing with immutable scoped snapshot storage."""
 
     def __init__(
-        self, repository: ProjectIndexRepository, parser: DbtManifestParserPort | None = None
+        self,
+        repository: ProjectIndexRepository,
+        parser: DbtManifestParserPort | None = None,
+        catalog_parser: DbtCatalogParserPort | None = None,
+        run_results_parser: DbtRunResultsParserPort | None = None,
     ) -> None:
         self._repository = repository
         self._parser = parser
+        self._catalog_parser = catalog_parser
+        self._run_results_parser = run_results_parser
 
     def ingest(self, command: IngestManifest) -> IngestManifestResult:
         if self._parser is None:
@@ -196,6 +266,87 @@ class DbtManifestApplicationService:
         except ProjectIndexRepositoryError as error:
             raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
         return IngestManifestResult(snapshot=stored.snapshot, idempotent=stored.idempotent)
+
+    def ingest_catalog(self, command: IngestCatalog) -> IngestSupplementalResult:
+        if self._catalog_parser is None:
+            raise DbtApplicationInvalidManifest("dbt catalog ingestion parser is unavailable")
+        try:
+            artifact = self._catalog_parser.parse_for_ingestion(
+                command.raw_catalog,
+                scope=command.scope,
+                source_identity=command.source_identity,
+                ingested_at=command.ingested_at,
+            )
+        except (DbtSupplementalArtifactError, TypeError, ValueError) as error:
+            raise DbtApplicationInvalidManifest("dbt catalog is invalid or unsupported") from error
+        return self._store_catalog(command, artifact)
+
+    def ingest_run_results(self, command: IngestRunResults) -> IngestSupplementalResult:
+        if self._run_results_parser is None:
+            raise DbtApplicationInvalidManifest("dbt run-results ingestion parser is unavailable")
+        try:
+            artifact = self._run_results_parser.parse_for_ingestion(
+                command.raw_run_results,
+                scope=command.scope,
+                source_identity=command.source_identity,
+                ingested_at=command.ingested_at,
+            )
+        except (DbtSupplementalArtifactError, TypeError, ValueError) as error:
+            raise DbtApplicationInvalidManifest(
+                "dbt run-results is invalid or unsupported"
+            ) from error
+        return self._store_run_results(command, artifact)
+
+    def get_supplemental(self, query: GetDbtSupplementalArtifacts) -> DbtSupplementalArtifacts:
+        try:
+            return DbtSupplementalArtifacts(
+                self._repository.get_catalog_projection(query.scope, query.snapshot_id),
+                self._repository.get_run_results_projection(query.scope, query.snapshot_id),
+            )
+        except ManifestSnapshotNotFound as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest snapshot was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+
+    def _store_catalog(
+        self, command: IngestCatalog, artifact: DbtCatalogArtifact
+    ) -> IngestSupplementalResult:
+        try:
+            stored = self._repository.store_catalog_projection(
+                command.scope, command.snapshot_id, artifact
+            )
+        except ManifestSnapshotNotFound as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest snapshot was not found in the authorized scope"
+            ) from error
+        except SupplementalArtifactConflict as error:
+            raise DbtApplicationConflict(
+                "dbt catalog does not match the selected manifest snapshot"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        return IngestSupplementalResult(stored.content_digest, stored.idempotent)
+
+    def _store_run_results(
+        self, command: IngestRunResults, artifact: DbtRunResultsArtifact
+    ) -> IngestSupplementalResult:
+        try:
+            stored = self._repository.store_run_results_projection(
+                command.scope, command.snapshot_id, artifact
+            )
+        except ManifestSnapshotNotFound as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest snapshot was not found in the authorized scope"
+            ) from error
+        except SupplementalArtifactConflict as error:
+            raise DbtApplicationConflict(
+                "dbt run-results do not match the selected manifest snapshot"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        return IngestSupplementalResult(stored.content_digest, stored.idempotent)
 
     def get_active_status(self, query: GetActiveManifestStatus) -> ManifestStatus:
         try:

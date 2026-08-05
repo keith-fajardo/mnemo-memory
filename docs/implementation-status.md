@@ -940,3 +940,30 @@ durability and confirm excluded warehouse comments, owners, adapter payloads, an
 absent from the database dump. The complete gate passed with 554 tests, strict typing for 147 source
 files, schema validation, dependency/provenance validation for 86 entries, and architecture
 validation for 72 product Python files. No dependency was added.
+
+#### Issue 15C — Complete
+
+The current bounded issue integrates the minimized supplemental dbt projections with the existing
+manifest lifecycle and context path. Successful wrapped dbt commands and explicit local manifest
+ingestion must attach sibling `catalog.json` and `run_results.json` only to the exact authorized
+manifest snapshot. A missing, malformed, unsupported, or mismatched supplemental artifact must be
+reported with a bounded safe status and must not invalidate an otherwise valid manifest snapshot.
+The existing `get_context` dbt-lineage response may include only bounded matching relation columns
+and latest node execution status, each with exact immutable supplemental evidence and subject to the
+existing structural token budget. This issue does not add a new MCP tool, dbt execution behavior,
+warehouse access, model call, dependency, broad artifact replay, or support for another artifact
+schema.
+
+Implemented application ports and local composition for catalog/run-results ingestion, plus
+fail-soft sibling discovery in explicit ingestion, project enablement, and successful wrapped dbt
+commands. An unchanged manifest can receive a newly generated supplemental projection only when
+its digest still matches the exact active snapshot. Missing, invalid, unsupported, or mismatched
+supplemental artifacts return bounded statuses without displacing a valid manifest. `dbt status`
+reports projection availability, and the existing dbt-lineage context path now adds at most twelve
+ordered columns plus matching run status, execution time, and failure count, each with its exact
+artifact evidence and under the existing structural token budget. Cross-scope reads and
+attachments fail closed; excluded secret-bearing comments, adapter messages, compiled code, and
+environment payloads are neither persisted nor returned. The complete gate passed with 559 tests,
+strict typing for 147 source files, schema validation, dependency/provenance validation for 86
+entries, and architecture validation for 72 product Python files. No dependency or MCP tool was
+added.

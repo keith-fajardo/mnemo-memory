@@ -34,7 +34,7 @@ Raw artifact SHA-256 identifies exact input; a normalized graph SHA-256 identifi
 projection. Optional Git/tree/target data is supplied by a later outer adapter. Without matching
 repository evidence, currentness is explicitly `unknown`, never assumed current.
 
-## Deferred work
+## Supplemental artifacts
 
 Issue 15A adds separate standard-library-only adapters for the current public catalog v1 and
 run-results v6 schemas. Catalog parsing retains only exact relation identity/type and ordered
@@ -52,8 +52,15 @@ current; an identical retry reselects the retained version without duplicating r
 prevent detached catalog relations, columns, results, or timing rows. The raw artifact remains
 outside canonical storage.
 
-Incremental command-hook ingestion, freshness artifacts, context-packet retrieval, general code
-graphs, and model-assisted behavior remain deferred to later bounded issues.
+Issue 15C integrates them without changing manifest lineage authority. Successful wrapped dbt
+commands and explicit local manifest ingestion inspect only sibling `catalog.json` and
+`run_results.json`; missing, invalid, unsupported, or mismatched supplemental files fail softly
+after a valid manifest is selected. Existing bounded lineage context may include at most twelve
+ordered columns per matching relation and the matching node's current stored run status, execution
+time, and failure count. Every included projection carries its exact artifact evidence and remains
+subject to the structural token budget.
+
+Freshness artifacts and model-assisted behavior remain deferred to later bounded issues.
 
 ## References reviewed
 

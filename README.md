@@ -271,7 +271,7 @@ not run Cargo, read `Cargo.lock`, or infer version, feature, build, development,
 or workspace-inherited dependencies.
 
 > Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
-> project intentionally does not yet provide automatic transcript capture, catalog/run-results ingestion,
+> project intentionally does not yet provide automatic transcript capture, dbt source-freshness ingestion,
 > semantic cross-language call graphs, embeddings, a UI, or team workspaces.
 >
 > The multi-language source-structure work described below is currently in this development branch; it is
@@ -624,7 +624,8 @@ mnemo-memory dbt enable
 
 Mnemo finds `dbt_project.yml`, initializes its personal profile when needed, creates private
 stable identities, binds this one repository locally, and ingests `target/manifest.json` if a
-valid one already exists. You do not need to generate, copy, or remember UUIDs. Mnemo does not
+valid one already exists. Supported sibling `catalog.json` and `run_results.json` artifacts are
+minimized and attached to that exact snapshot. You do not need to generate, copy, or remember UUIDs. Mnemo does not
 write `dbt_project.yml`, `profiles.yml`, warehouse credentials, or any shell profile.
 
 If you have already enabled automatic task memory for this same repository, dbt enablement reuses
@@ -658,6 +659,8 @@ short reminder to run `mnemo-memory dbt enable` and skips ingestion.
 the same manifest is safe and idempotent. A changed manifest becomes a new immutable snapshot and
 atomically becomes active; older snapshots remain available for provenance. Mnemo stores a bounded
 structural projection, not raw SQL, compiled SQL, macro bodies, credentials, or the full manifest.
+`get_context` lineage results may add bounded matching relation columns and node run status, each
+with exact supplemental-artifact evidence and within the existing structural token budget.
 
 ## What the MCP tools do
 

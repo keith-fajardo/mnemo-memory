@@ -28,6 +28,7 @@ from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
     LocalExecutableResolver,
     SubprocessExecutor,
 )
+from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -49,14 +50,19 @@ from mnemo_memory.packages.application import (
     CorrectApprovedEpisodicEvent,
     DbtApplicationConflict,
     DbtApplicationInvalidManifest,
+    DbtApplicationNotFound,
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
     GetApprovedEpisodicEventRecord,
     GetCheckpointContext,
+    GetDbtSupplementalArtifacts,
+    IngestCatalog,
     IngestManifest,
+    IngestRunResults,
     KnowledgeDocumentApplicationService,
     ListApprovedEpisodicEventRecords,
+    LocalConfig,
     LocalRuntimeError,
     RetractApprovedEpisodicEvent,
     SynchronizeKnowledgeDocuments,
@@ -92,6 +98,7 @@ from mnemo_memory.packages.domain import (
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
+    DbtSnapshotId,
     EventId,
     EvidenceId,
     EvidenceLocation,
@@ -565,19 +572,71 @@ def _initialize_dbt_profile(data_dir: Path | None) -> tuple[Path, LocalDbtProjec
     return config.data_directory, LocalDbtProjectBindingStore(config.data_directory)
 
 
-def _ingest_existing_manifest(data_directory: Path, binding: DbtProjectBinding) -> tuple[str, bool]:
+def _dbt_runtime(config: LocalConfig) -> CheckpointRuntime:
+    return build_checkpoint_runtime(
+        config,
+        dbt_parser=DbtManifestParser(),
+        dbt_catalog_parser=DbtCatalogParser(),
+        dbt_run_results_parser=DbtRunResultsParser(),
+    )
+
+
+def _ingest_supplemental_artifacts(
+    service: DbtManifestApplicationService,
+    scope: MemoryScope,
+    snapshot_id: DbtSnapshotId,
+    artifact_directory: Path,
+    observed_at: datetime,
+) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for kind, filename in (("catalog", "catalog.json"), ("run_results", "run_results.json")):
+        path = artifact_directory / filename
+        if not path.is_file():
+            statuses[kind] = "unavailable"
+            continue
+        try:
+            stored = (
+                service.ingest_catalog(
+                    IngestCatalog(scope, snapshot_id, path.read_bytes(), filename, observed_at)
+                )
+                if kind == "catalog"
+                else service.ingest_run_results(
+                    IngestRunResults(scope, snapshot_id, path.read_bytes(), filename, observed_at)
+                )
+            )
+        except (
+            DbtApplicationConflict,
+            DbtApplicationInvalidManifest,
+            DbtApplicationNotFound,
+            DbtApplicationStorageFailure,
+            OSError,
+            ValueError,
+        ):
+            statuses[kind] = "invalid_or_unavailable"
+            continue
+        statuses[kind] = "unchanged" if stored.idempotent else "activated"
+    return statuses
+
+
+def _ingest_existing_manifest(
+    data_directory: Path, binding: DbtProjectBinding
+) -> tuple[str, bool, dict[str, str]]:
     manifest = binding.project_root / "target" / "manifest.json"
     if not manifest.is_file():
-        return "unavailable", False
+        return "unavailable", False, {"catalog": "unavailable", "run_results": "unavailable"}
     try:
-        with build_checkpoint_runtime(
-            resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
-        ) as runtime:
+        observed_at = datetime.now(UTC)
+        with _dbt_runtime(resolve_local_config(data_directory)) as runtime:
             assert runtime.dbt_manifest_service is not None
             stored = runtime.dbt_manifest_service.ingest(
-                IngestManifest(
-                    binding.scope, manifest.read_bytes(), "manifest.json", datetime.now(UTC)
-                )
+                IngestManifest(binding.scope, manifest.read_bytes(), "manifest.json", observed_at)
+            )
+            supplemental = _ingest_supplemental_artifacts(
+                runtime.dbt_manifest_service,
+                binding.scope,
+                stored.snapshot.snapshot_id,
+                manifest.parent,
+                observed_at,
             )
     except (
         DbtApplicationConflict,
@@ -585,8 +644,12 @@ def _ingest_existing_manifest(data_directory: Path, binding: DbtProjectBinding) 
         DbtApplicationStorageFailure,
         OSError,
     ):
-        return "invalid_or_unavailable", False
-    return ("unchanged" if stored.idempotent else "activated"), True
+        return (
+            "invalid_or_unavailable",
+            False,
+            {"catalog": "unavailable", "run_results": "unavailable"},
+        )
+    return ("unchanged" if stored.idempotent else "activated"), True, supplemental
 
 
 @dbt_app.command("enable", help="Enable Mnemo for this dbt project; no UUIDs are needed normally.")
@@ -622,16 +685,21 @@ def dbt_enable(
         elif automatic_scope is not None and automatic_scope != binding.scope:
             raise typer.BadParameter("MNEMO_DBT_PROJECT_SCOPE_CONFLICT")
 
-        manifest_status, ingested = (
+        manifest_status, ingested, supplemental = (
             _ingest_existing_manifest(data_directory, binding)
             if ingest_existing
-            else ("not_requested", False)
+            else (
+                "not_requested",
+                False,
+                {"catalog": "not_requested", "run_results": "not_requested"},
+            )
         )
         _show(
             {
                 "enabled": True,
                 "project_root": str(binding.project_root),
                 "existing_manifest": manifest_status,
+                **supplemental,
                 "ingested": ingested,
             }
         )
@@ -741,9 +809,7 @@ def dbt_ingest(
             if binding is None:
                 raise typer.BadParameter("MNEMO_DBT_PROJECT_NOT_ENABLED")
             scope = binding.scope
-        with build_checkpoint_runtime(
-            resolve_local_config(data_dir), dbt_parser=DbtManifestParser()
-        ) as runtime:
+        with _dbt_runtime(resolve_local_config(data_dir)) as runtime:
             assert runtime.dbt_manifest_service is not None
             command = IngestManifest(
                 scope,
@@ -767,11 +833,19 @@ def dbt_ingest(
                 }
             else:
                 stored = runtime.dbt_manifest_service.ingest(command)
+                supplemental = _ingest_supplemental_artifacts(
+                    runtime.dbt_manifest_service,
+                    scope,
+                    stored.snapshot.snapshot_id,
+                    manifest.parent,
+                    command.ingested_at,
+                )
                 result = {
                     "snapshot_id": str(stored.snapshot.snapshot_id),
                     "nodes": stored.snapshot.node_count,
                     "edges": stored.snapshot.edge_count,
                     "idempotent": stored.idempotent,
+                    **supplemental,
                 }
         _show(result) if json_output else typer.echo(json.dumps(result, sort_keys=True))
     except Exception as error:
@@ -809,6 +883,13 @@ def dbt_status(
     ) as runtime:
         assert runtime.dbt_manifest_service is not None
         status = runtime.dbt_manifest_service.get_active_status(GetActiveManifestStatus(scope))
+        supplemental = (
+            runtime.dbt_manifest_service.get_supplemental(
+                GetDbtSupplementalArtifacts(scope, status.snapshot.snapshot_id)
+            )
+            if status.snapshot is not None
+            else None
+        )
     result: dict[str, object] = {
         "enabled": True,
         "active": status.snapshot is not None,
@@ -816,11 +897,16 @@ def dbt_status(
         "reason": status.reason,
     }
     if status.snapshot is not None:
+        assert supplemental is not None
         result.update(
             {
                 "snapshot_id": str(status.snapshot.snapshot_id),
                 "nodes": status.snapshot.node_count,
                 "edges": status.snapshot.edge_count,
+                "catalog": "available" if supplemental.catalog is not None else "unavailable",
+                "run_results": (
+                    "available" if supplemental.run_results is not None else "unavailable"
+                ),
             }
         )
     _show(result) if json_output else typer.echo(json.dumps(result, sort_keys=True))
@@ -858,7 +944,7 @@ def dbt_exec(
     config = resolve_local_config(data_dir)
 
     def dbt_service() -> DbtManifestApplicationService:
-        with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        with _dbt_runtime(config) as runtime:
             assert runtime.dbt_manifest_service is not None
             return runtime.dbt_manifest_service
 

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -20,6 +21,7 @@ from mnemo_memory.packages.application.dbt import (
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
     GetActiveManifestStatus,
+    GetDbtSupplementalArtifacts,
     IngestManifest,
 )
 from mnemo_memory.packages.domain import (
@@ -34,6 +36,8 @@ from mnemo_memory.packages.storage import ReferenceProjectIndexRepository
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
 FIXTURE = Path("tests/fixtures/dbt/manifest-v12.json")
+CATALOG_FIXTURE = Path("tests/fixtures/dbt/catalog-v1.json")
+RUN_RESULTS_FIXTURE = Path("tests/fixtures/dbt/run-results-v6.json")
 
 
 def scope() -> MemoryScope:
@@ -54,7 +58,7 @@ def test_dbt_hook_activates_changed_manifest_and_skips_failed_or_unchanged(tmp_p
     manifest = target / "manifest.json"
     store = LocalDbtProjectBindingStore(tmp_path / "memory")
     store.set(DbtProjectBinding(project.resolve(), scope()))
-    service = DbtManifestApplicationService(ReferenceProjectIndexRepository(), DbtManifestParser())
+    service = _service()
     hooks = DbtManifestHooks(store, lambda: service, lambda: NOW)
     context = CommandContext(
         Path(__file__).resolve(), ("run",), project.resolve(), "dbt", "hook-1", NOW
@@ -116,6 +120,57 @@ def test_dbt_hook_keeps_the_prior_snapshot_for_missing_invalid_failed_or_interru
         == "MNEMO_DBT_COMMAND_NOT_SUCCESSFUL"
     )
     assert service.get_active_status(GetActiveManifestStatus(scope())).snapshot == prior
+
+
+def test_dbt_hook_attaches_new_supplemental_artifacts_to_an_unchanged_manifest(
+    tmp_path: Path,
+) -> None:
+    _, manifest, hooks, service, context = _configured_hook(tmp_path)
+    manifest.write_bytes(FIXTURE.read_bytes())
+    assert (
+        hooks.after_dbt(context, hooks.before_dbt(context), _success()).status
+        is HookStatus.ACTIVATED
+    )
+    snapshot = service.get_active_status(GetActiveManifestStatus(scope())).snapshot
+    assert snapshot is not None
+
+    manifest.with_name("catalog.json").write_bytes(CATALOG_FIXTURE.read_bytes())
+    manifest.with_name("run_results.json").write_bytes(RUN_RESULTS_FIXTURE.read_bytes())
+    before = hooks.before_dbt(context)
+    outcome = hooks.after_dbt(context, before, _success())
+
+    assert outcome.status is HookStatus.ACTIVATED
+    assert outcome.code == "MNEMO_DBT_SUPPLEMENTAL_ACTIVATED"
+    assert dict(outcome.metadata) == {
+        "snapshot": str(snapshot.snapshot_id),
+        "catalog": "activated",
+        "run_results": "activated",
+    }
+    supplemental = service.get_supplemental(
+        GetDbtSupplementalArtifacts(scope(), snapshot.snapshot_id)
+    )
+    assert supplemental.catalog is not None
+    assert supplemental.run_results is not None
+
+
+def test_dbt_hook_keeps_a_valid_manifest_when_supplemental_artifacts_are_invalid(
+    tmp_path: Path,
+) -> None:
+    _, manifest, hooks, service, context = _configured_hook(tmp_path)
+    manifest.write_bytes(FIXTURE.read_bytes())
+    manifest.with_name("catalog.json").write_text("private path and malformed {json")
+
+    outcome = hooks.after_dbt(context, hooks.before_dbt(context), _success())
+
+    assert outcome.status is HookStatus.ACTIVATED
+    assert dict(outcome.metadata)["catalog"] == "invalid_or_unavailable"
+    assert "private path" not in outcome.code
+    snapshot = service.get_active_status(GetActiveManifestStatus(scope())).snapshot
+    assert snapshot is not None
+    assert (
+        service.get_supplemental(GetDbtSupplementalArtifacts(scope(), snapshot.snapshot_id)).catalog
+        is None
+    )
 
 
 def test_dbt_hook_rejects_a_competing_activation_without_replacing_the_winner(
@@ -207,12 +262,21 @@ def _configured_hook(
     manifest = target / "manifest.json"
     store = LocalDbtProjectBindingStore(tmp_path / "memory")
     store.set(DbtProjectBinding(project.resolve(), scope()))
-    service = DbtManifestApplicationService(ReferenceProjectIndexRepository(), DbtManifestParser())
+    service = _service()
     hooks = DbtManifestHooks(store, lambda: service, lambda: NOW)
     context = CommandContext(
         Path(__file__).resolve(), ("run",), project.resolve(), "dbt", "hook-1", NOW
     )
     return project.resolve(), manifest, hooks, service, context
+
+
+def _service() -> DbtManifestApplicationService:
+    return DbtManifestApplicationService(
+        ReferenceProjectIndexRepository(),
+        DbtManifestParser(),
+        DbtCatalogParser(),
+        DbtRunResultsParser(),
+    )
 
 
 def _success() -> CommandResult:

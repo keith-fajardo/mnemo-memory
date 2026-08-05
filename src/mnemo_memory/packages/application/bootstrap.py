@@ -8,8 +8,10 @@ from datetime import UTC, datetime
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.config import LocalConfig
 from mnemo_memory.packages.application.dbt import (
+    DbtCatalogParserPort,
     DbtManifestApplicationService,
     DbtManifestParserPort,
+    DbtRunResultsParserPort,
 )
 from mnemo_memory.packages.application.knowledge import KnowledgeDocumentApplicationService
 from mnemo_memory.packages.application.services import LifecycleService
@@ -69,7 +71,11 @@ class LocalRuntimeError(RuntimeError):
 
 
 def build_checkpoint_runtime(
-    config: LocalConfig, *, dbt_parser: DbtManifestParserPort | None = None
+    config: LocalConfig,
+    *,
+    dbt_parser: DbtManifestParserPort | None = None,
+    dbt_catalog_parser: DbtCatalogParserPort | None = None,
+    dbt_run_results_parser: DbtRunResultsParserPort | None = None,
 ) -> CheckpointRuntime:
     """Open the configured SQLite profile, migrate it, and compose canonical use cases."""
     try:
@@ -96,7 +102,14 @@ def build_checkpoint_runtime(
             event_repository=repository,
             approved_event_repository=repository,
         ),
-        DbtManifestApplicationService(repository, dbt_parser) if dbt_parser is not None else None,
+        DbtManifestApplicationService(
+            repository, dbt_parser, dbt_catalog_parser, dbt_run_results_parser
+        )
+        if any(
+            parser is not None
+            for parser in (dbt_parser, dbt_catalog_parser, dbt_run_results_parser)
+        )
+        else None,
         source_repository,
         KnowledgeDocumentApplicationService(
             knowledge_repository,

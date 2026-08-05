@@ -205,6 +205,16 @@ class DbtCatalogParser:
             ),
         )
 
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtCatalogArtifact:
+        return self.parse(raw, DbtSupplementalParseRequest(scope, source_identity, ingested_at))
+
     @staticmethod
     def _column(column_key: str, value: object, unique_id: str) -> DbtCatalogColumn:
         if not column_key.strip():
@@ -278,6 +288,16 @@ class DbtRunResultsParser:
                 metadata, normalized_digest=normalized_digest(preliminary.normalized_json())
             ),
         )
+
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtRunResultsArtifact:
+        return self.parse(raw, DbtSupplementalParseRequest(scope, source_identity, ingested_at))
 
     @staticmethod
     def _result(
