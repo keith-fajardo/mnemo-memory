@@ -64,8 +64,22 @@ Requests require an authenticated owner and an explicit workspace/project select
 malformed, unauthorized, or ambiguous scope fails closed. Candidate generation must execute
 inside the authorized scope; post-retrieval filtering is prohibited. Cross-project context is
 allowed only through an explicit authorized multi-project request whose omissions and scope are
-visible in the result. Team authorization design is deferred; personal-mode nullability must not
-be treated as a team-mode authorization rule.
+visible in the result. Personal-mode nullability must not be treated as a team-mode authorization
+rule.
+
+A team request requires a non-null workspace ID and an authenticated principal identity mapped to
+Mnemo's owner-identity type at the authentication boundary. The deterministic team policy accepts
+only one exact active workspace membership. Workspace owners may perform the closed team operation
+set; admins may perform every operation except workspace ownership management; editors may read and
+contribute; viewers may read. Workspace-visible projects use that role matrix. Private projects
+also require the principal to be the project owner, a workspace owner/admin, or have one exact
+active project membership: maintainer, contributor, or viewer. Maintainers may read, contribute,
+manage the project, and approve sources; contributors may read and contribute; viewers may read.
+An owner-visible item remains accessible only to its item owner, regardless of an administrator's
+role. Missing, suspended, mismatched, cross-workspace, and cross-project claims are explicit denials
+and cannot trigger a broad lookup. This application policy is the canonical authorization contract;
+the later PostgreSQL adapter must enforce an equivalent restrictive row-level policy as a second
+boundary.
 
 ## Evidence requirements
 

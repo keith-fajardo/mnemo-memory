@@ -6,9 +6,9 @@ This threat model covers the planned personal, local-first path through native C
 Code MCP integration, explicit checkpoints, SQLite, and dbt structural projections. It specifies
 required controls before those features exist; it does not claim they are implemented.
 
-Team tenancy, remote MCP, hosted sync, UI, automatic task-event capture, automatic extraction-job
-invocation, candidate approval/activation, and backup infrastructure are deferred and require
-threat-model revisions.
+The pure team authorization contract is now included. Team persistence, remote MCP, hosted sync,
+OAuth, row-level security, and production operations remain deferred and require threat-model
+revisions before exposure.
 
 ## Security objectives
 
@@ -94,8 +94,35 @@ their payload. Final-selection tests cover exact duplicate evidence merging, sou
 mandatory-item protection, deterministic digest conflicts, declared conflict state, and exact token
 reconciliation.
 
-**Residual risk:** Team authorization is not designed; team mode must not reuse personal-mode
-nullability.
+**Residual risk:** Personal SQLite supplies no team isolation; team mode must not reuse it or treat
+personal-mode nullability as authorization.
+
+### Cross-tenant team authorization
+
+**Scenario:** A caller supplies a membership from another workspace or project, uses a suspended
+membership, exploits a broad administrator role to read an owner-only item, or relies on missing
+scope as a wildcard before storage or ranking.
+
+**Required controls:** Team requests require an authenticated principal, non-null workspace, exact
+scope, and one exact active workspace membership before any project or item rule is evaluated. The
+closed workspace roles are owner, admin, editor, and viewer; the closed project roles are
+maintainer, contributor, and viewer. Workspace ownership management remains owner-only. A private
+project requires its owner, a workspace owner/admin, or one exact active project membership.
+Owner-only item visibility has no administrator bypass. Every missing, inactive, principal,
+workspace, or project mismatch produces a typed denial; policy never searches for a nearby match.
+PostgreSQL RLS must later reproduce these decisions beneath application authorization, using
+transaction-local authenticated identity and scope rather than caller-controlled row fields.
+
+**Verification:** Pure domain round trips reject unknown fields and invalid identity/role values.
+The complete operation matrix is tested for every workspace and project role. Adversarial tests
+cover absent membership, suspended membership, wrong principal, wrong workspace, wrong project,
+missing private-project grant, suspended project grant, owner-only data, private-project owner and
+administrator behavior, and deterministic repeated decisions. Later storage and service issues
+must run the same matrix against PostgreSQL RLS and remote request composition before team exposure.
+
+**Residual risk:** The current issue defines and tests only the canonical pure policy. No team
+database, authentication mapping, remote surface, membership mutation, or audit log exists yet;
+therefore team mode remains unavailable.
 
 ### Prompt injection through retrieved content
 

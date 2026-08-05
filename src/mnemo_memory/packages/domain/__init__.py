@@ -192,6 +192,15 @@ from .task_activity_retention import (
     TaskActivityEventPurge,
     TaskActivityEventRetentionTarget,
 )
+from .team import (
+    MembershipStatus,
+    ProjectMembership,
+    ProjectRole,
+    TeamProject,
+    TeamProjectVisibility,
+    WorkspaceMembership,
+    WorkspaceRole,
+)
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
@@ -307,6 +316,7 @@ __all__ = [
     "ManifestCycleError",
     "ManifestLimitError",
     "ManifestValidationError",
+    "MembershipStatus",
     "MemoryClassification",
     "MemoryId",
     "MemoryScope",
@@ -320,7 +330,9 @@ __all__ = [
     "ProjectAgent",
     "ProjectClientProfile",
     "ProjectId",
+    "ProjectMembership",
     "ProjectProcedure",
+    "ProjectRole",
     "ProjectSkill",
     "ProjectSkillTrust",
     "ProvenanceNotice",
@@ -343,6 +355,8 @@ __all__ = [
     "TaskActivityEventPurge",
     "TaskActivityEventRetentionTarget",
     "TaskId",
+    "TeamProject",
+    "TeamProjectVisibility",
     "TokenEstimator",
     "UnsupportedDbtSupplementalSchema",
     "UnsupportedManifestSchema",
@@ -350,6 +364,8 @@ __all__ = [
     "VerificationStatus",
     "Visibility",
     "WorkspaceId",
+    "WorkspaceMembership",
+    "WorkspaceRole",
     "active_episodic_memory_at_revision",
     "knowledge_search_tokens",
     "knowledge_section_digest",

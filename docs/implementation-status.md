@@ -1428,6 +1428,35 @@ gate. Every Milestone 8 build item and exit condition now has executable evidenc
 complete. No new installer format, restore command, package publication, runtime dependency, model
 call, non-loopback exposure, team behavior, or incremental feature was added.
 
+### Team workspace and production hardening — In progress
+
+#### Issue 21A — Team authorization kernel — Complete
+
+This first Milestone 9 issue defines the storage-independent authorization contract required before
+adding PostgreSQL or any remote surface. It must model exact active workspace membership, workspace
+roles, project visibility, explicit private-project membership, and a closed operation set. A pure
+deterministic policy must deny absent, inactive, mismatched, cross-workspace, and cross-project
+claims before storage or ranking; owner-only item visibility must remain owner-only regardless of
+workspace role. The role/operation matrix and every denial reason must be explicit, serializable,
+and covered by a cross-tenant test matrix. This issue adds no database, RLS policy, API/MCP route,
+OAuth, network listener, migration, dependency, audit log, team import, or mutable membership
+service.
+
+Implemented strict immutable workspace membership, project membership, project visibility, and
+role contracts plus one pure deny-by-default authorization policy over a closed operation set.
+Every team request now requires an exact active workspace membership before project evaluation;
+private-project grants, workspace-visible projects, project ownership, owner-only item visibility,
+and workspace-only administration follow explicit role matrices with typed payload-free denial
+reasons. Cross-principal, cross-workspace, cross-project, missing, suspended, owner-only, and
+complete role/operation cases are covered by the adversarial matrix. ADR 0010, the product memory
+contract, and threat model establish this policy as the application contract that later PostgreSQL
+RLS must reproduce. The complete repository gate passes with 818 tests, strict typing for 206
+source files, dependency/provenance validation for 87 registered entries, architecture validation
+for 109 product Python files, and the isolated installed-package MCP workflow. No database, RLS
+policy, authentication, network surface, migration, dependency, audit log, team import, or mutable
+membership service was added; team mode remains unavailable until the remaining Milestone 9 issues
+are complete.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

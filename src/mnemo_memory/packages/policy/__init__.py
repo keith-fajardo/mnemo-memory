@@ -14,6 +14,13 @@ from .episodic_candidates import (
 )
 from .knowledge import KnowledgeDocumentSafetyDecision, KnowledgeDocumentSafetyPolicy
 from .task_activity import TaskActivityEventSafetyPolicy
+from .team import (
+    TeamAuthorizationDecision,
+    TeamAuthorizationPolicy,
+    TeamAuthorizationReason,
+    TeamAuthorizationRequest,
+    TeamOperation,
+)
 
 __all__ = [
     "ApprovedEpisodicEventSafetyDecision",
@@ -28,4 +35,9 @@ __all__ = [
     "KnowledgeDocumentSafetyDecision",
     "KnowledgeDocumentSafetyPolicy",
     "TaskActivityEventSafetyPolicy",
+    "TeamAuthorizationDecision",
+    "TeamAuthorizationPolicy",
+    "TeamAuthorizationReason",
+    "TeamAuthorizationRequest",
+    "TeamOperation",
 ]
