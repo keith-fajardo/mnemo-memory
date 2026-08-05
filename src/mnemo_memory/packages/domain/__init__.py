@@ -172,6 +172,15 @@ from .models import (
     Visibility,
 )
 from .procedures import ProjectClientProfile, ProjectProcedure, normalize_procedure_tags
+from .skills import (
+    ProjectAgent,
+    ProjectSkill,
+    ProjectSkillTrust,
+    normalize_agent_client,
+    normalize_registry_name,
+    normalize_registry_version,
+    normalize_skill_clients,
+)
 from .task_activity_events import (
     TaskActivityActor,
     TaskActivityEvent,
@@ -306,9 +315,12 @@ __all__ = [
     "OverrideRequesterType",
     "OwnerId",
     "PacketSchemaVersion",
+    "ProjectAgent",
     "ProjectClientProfile",
     "ProjectId",
     "ProjectProcedure",
+    "ProjectSkill",
+    "ProjectSkillTrust",
     "ProvenanceNotice",
     "RankingMetadata",
     "RequestId",
@@ -339,8 +351,12 @@ __all__ = [
     "active_episodic_memory_at_revision",
     "knowledge_search_tokens",
     "knowledge_section_digest",
+    "normalize_agent_client",
     "normalize_knowledge_query",
     "normalize_procedure_tags",
+    "normalize_registry_name",
+    "normalize_registry_version",
+    "normalize_skill_clients",
     "replay_episodic_memory_revisions",
     "unique_file_renames",
 ]

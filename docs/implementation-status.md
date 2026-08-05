@@ -868,6 +868,33 @@ added by the exit audit.
 
 ### Procedural memory — In progress
 
+#### Issue 19A — Versioned checked-in skill and agent registry — Complete
+
+This bounded issue defines strict scalar frontmatter contracts for Mnemo `skill` and `agent`
+documents and exposes their current immutable revisions through one scope-first registry. Skills
+declare a bounded name, version, applicability tags, compatible clients, checked-in trust, and
+source digest; agents declare a bounded name, version, compatible client, and the exact skill tags
+they request. Only synchronized checked-in Markdown is eligible. The registry reads the repository's
+current revision on every request, retains history in the existing immutable document store, and
+does not add a second cache, database, source scanner, model call, context attachment, or MCP tool.
+Existing source files are parsed without rewriting them.
+
+Implemented pure domain contracts and one live `KnowledgeDocumentSkillRegistry` over the existing
+immutable knowledge repository. Strict `skill` frontmatter now records name, semantic version,
+applicability tags, concrete Codex/Claude Code compatibility, checked-in trust, revision, and exact
+SHA-256 source digest. Strict `agent` frontmatter records name, semantic version, concrete/any
+client compatibility, and requested skill tags. Registry calls require project scope, select only
+current synchronized Markdown, reject malformed or non-checked-in entries, fail closed on duplicate
+names, prefer exact-client agents over `any`, and perform no prompt inference or source execution.
+Because the registry has no second cache, a synchronized revision is visible on the next call while
+the repository retains its predecessor revision. Checked-in fixture imports preserve the parsed
+frontmatter and Markdown sections without source rewrites or semantic loss.
+
+All 12 focused procedural registry tests pass. The complete repository gate passes with 735 tests,
+strict typing for 187 source files, dependency/provenance validation for 86 entries, and architecture
+validation for 99 product Python files. No database migration, dependency, scanner, context behavior,
+MCP surface, model call, UI, packaging, or team behavior was added.
+
 The first procedural-memory slice reuses the immutable checked-in Markdown revision store rather
 than creating a second procedure source of truth. A document is eligible only when strict scalar
 frontmatter marks `mnemo_kind: procedure` and gives bounded literal `mnemo_tags`; callers must
