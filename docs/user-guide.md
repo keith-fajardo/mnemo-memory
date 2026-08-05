@@ -16,6 +16,12 @@ command or chat message. You can opt into lifecycle hooks so the connected agent
 handoff at a new session and is reminded to save the next one; you do not have to remember a
 separate request.
 
+Releases produced by this checkout's gated PyPI workflows include a registry-accepted publish
+attestation for both the wheel and source distribution. PyPI's provenance view binds each artifact
+digest to this repository and its exact release workflow. That establishes how the uploaded bytes
+were published; it does not replace reviewing the project, pinning the version you intend to
+install, or treating all installed software as privileged code.
+
 ## Does Mnemo remember an entire codebase?
 
 `mnemo-memory init` only creates your private local store; it does not guess which directory you

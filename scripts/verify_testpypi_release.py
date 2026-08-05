@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import shutil
@@ -13,12 +14,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
+from urllib.parse import quote
 
 DISTRIBUTION_NAME = "mnemo-unified-context"
 DISTRIBUTION_VERSION = "0.1.0a2"
 WHEEL_FILENAME = "mnemo_unified_context-0.1.0a2-py3-none-any.whl"
 SDIST_FILENAME = "mnemo_unified_context-0.1.0a2.tar.gz"
 EXPECTED_FILENAMES = frozenset({WHEEL_FILENAME, SDIST_FILENAME})
+PYPI_PUBLISH_PREDICATE = "https://docs.pypi.org/attestations/publish/v1"
 
 
 class VerificationError(ValueError):
@@ -143,6 +146,120 @@ class UploadedArtifact:
     url: str
 
 
+def _statement(value: object, registry_name: str) -> Mapping[str, object]:
+    if not isinstance(value, str) or not value:
+        raise VerificationError(f"{registry_name} provenance statement is missing")
+    try:
+        payload = base64.b64decode(value, validate=True)
+        statement = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise VerificationError(f"{registry_name} provenance statement is invalid") from error
+    if not isinstance(statement, dict):
+        raise VerificationError(f"{registry_name} provenance statement must be an object")
+    return statement
+
+
+def validate_provenance(
+    provenance: Mapping[str, object],
+    artifact: UploadedArtifact,
+    expected_repository: str,
+    expected_workflow: str,
+    registry_name: str = "TestPyPI",
+) -> None:
+    """Require registry-accepted signed publish provenance bound to one exact artifact."""
+    if provenance.get("version") != 1:
+        raise VerificationError(f"{registry_name} provenance version is invalid")
+    bundles = provenance.get("attestation_bundles")
+    if not isinstance(bundles, list) or not bundles:
+        raise VerificationError(f"{registry_name} provenance has no attestation bundles")
+    matching = 0
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            raise VerificationError(f"{registry_name} provenance bundle is invalid")
+        publisher = bundle.get("publisher")
+        attestations = bundle.get("attestations")
+        if not isinstance(publisher, dict) or not isinstance(attestations, list):
+            raise VerificationError(f"{registry_name} provenance bundle is incomplete")
+        if (
+            publisher.get("kind") != "GitHub"
+            or publisher.get("repository") != expected_repository
+            or publisher.get("workflow") != expected_workflow
+        ):
+            continue
+        for attestation in attestations:
+            if not isinstance(attestation, dict) or attestation.get("version") != 1:
+                raise VerificationError(f"{registry_name} attestation is invalid")
+            envelope = attestation.get("envelope")
+            material = attestation.get("verification_material")
+            if not isinstance(envelope, dict) or not isinstance(material, dict):
+                raise VerificationError(f"{registry_name} attestation is incomplete")
+            signature = envelope.get("signature")
+            certificate = material.get("certificate")
+            transparency = material.get("transparency_entries")
+            if (
+                not isinstance(signature, str)
+                or not signature
+                or not isinstance(certificate, str)
+                or not certificate
+                or not isinstance(transparency, list)
+                or not transparency
+            ):
+                raise VerificationError(
+                    f"{registry_name} attestation lacks signed verification material"
+                )
+            statement = _statement(envelope.get("statement"), registry_name)
+            if statement.get("predicateType") != PYPI_PUBLISH_PREDICATE:
+                continue
+            subjects = statement.get("subject")
+            expected_subject = {
+                "name": artifact.filename,
+                "digest": {"sha256": artifact.sha256},
+            }
+            if subjects != [expected_subject]:
+                raise VerificationError(
+                    f"{registry_name} provenance subject does not match {artifact.filename}"
+                )
+            matching += 1
+    if matching != 1:
+        raise VerificationError(
+            f"{registry_name} must expose exactly one expected publish attestation for "
+            f"{artifact.filename}"
+        )
+
+
+def verify_registry_provenance(
+    artifacts: tuple[UploadedArtifact, ...],
+    *,
+    provenance_base_url: str,
+    expected_repository: str,
+    expected_workflow: str,
+    registry_name: str,
+    timeout_seconds: float,
+    deadline_seconds: float,
+    retry_interval_seconds: float,
+) -> None:
+    for artifact in artifacts:
+        url = (
+            provenance_base_url.rstrip("/")
+            + f"/{quote(DISTRIBUTION_NAME, safe='')}/{quote(DISTRIBUTION_VERSION, safe='')}"
+            + f"/{quote(artifact.filename, safe='')}/provenance"
+        )
+        provenance = poll_metadata(
+            url,
+            timeout_seconds,
+            deadline_seconds,
+            retry_interval_seconds,
+            registry_name=f"{registry_name} provenance for {artifact.filename}",
+        )
+        validate_provenance(
+            provenance,
+            artifact,
+            expected_repository,
+            expected_workflow,
+            registry_name,
+        )
+
+
 def validate_metadata(
     metadata: Mapping[str, object], hashes: Mapping[str, str], registry_name: str = "TestPyPI"
 ) -> tuple[UploadedArtifact, ...]:
@@ -224,6 +341,9 @@ def parse_args() -> argparse.Namespace:
         default="https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a2/json",
     )
     parser.add_argument("--registry-name", default="TestPyPI")
+    parser.add_argument("--provenance-base-url", default="https://test.pypi.org/integrity")
+    parser.add_argument("--expected-repository", default="keith-fajardo/mnemo-memory")
+    parser.add_argument("--expected-workflow", default="publish-testpypi.yml")
     parser.add_argument("--request-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--deadline-seconds", type=float, default=120.0)
     parser.add_argument("--retry-interval-seconds", type=float, default=3.0)
@@ -249,6 +369,16 @@ def main() -> None:
             registry_name=args.registry_name,
         )
         artifacts = validate_metadata(metadata, hashes, args.registry_name)
+        verify_registry_provenance(
+            artifacts,
+            provenance_base_url=args.provenance_base_url,
+            expected_repository=args.expected_repository,
+            expected_workflow=args.expected_workflow,
+            registry_name=args.registry_name,
+            timeout_seconds=args.request_timeout_seconds,
+            deadline_seconds=args.deadline_seconds,
+            retry_interval_seconds=args.retry_interval_seconds,
+        )
         shutil.rmtree(args.download_dir, ignore_errors=True)
         download_verified_artifacts(artifacts, args.download_dir, args.request_timeout_seconds)
     except VerificationError as error:

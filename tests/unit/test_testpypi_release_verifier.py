@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import urllib.error
@@ -9,9 +10,12 @@ from scripts.verify_testpypi_release import (
     DISTRIBUTION_NAME,
     DISTRIBUTION_VERSION,
     EXPECTED_FILENAMES,
+    PYPI_PUBLISH_PREDICATE,
+    UploadedArtifact,
     VerificationError,
     poll_metadata,
     validate_metadata,
+    validate_provenance,
 )
 
 
@@ -50,6 +54,51 @@ def metadata(*, filenames: set[str] | None = None, digest: str = "a" * 64) -> di
                 "digests": {"sha256": digest},
             }
             for filename in sorted(filenames or EXPECTED_FILENAMES)
+        ],
+    }
+
+
+def provenance(
+    artifact: UploadedArtifact,
+    *,
+    repository: str = "keith-fajardo/mnemo-memory",
+    workflow: str = "publish-testpypi.yml",
+    digest: str | None = None,
+) -> dict[str, object]:
+    statement = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [
+            {
+                "name": artifact.filename,
+                "digest": {"sha256": digest or artifact.sha256},
+            }
+        ],
+        "predicateType": PYPI_PUBLISH_PREDICATE,
+        "predicate": None,
+    }
+    encoded = base64.b64encode(
+        json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
+    ).decode()
+    return {
+        "version": 1,
+        "attestation_bundles": [
+            {
+                "publisher": {
+                    "kind": "GitHub",
+                    "repository": repository,
+                    "workflow": workflow,
+                },
+                "attestations": [
+                    {
+                        "version": 1,
+                        "envelope": {"signature": "signed", "statement": encoded},
+                        "verification_material": {
+                            "certificate": "certificate",
+                            "transparency_entries": [{}],
+                        },
+                    }
+                ],
+            }
         ],
     }
 
@@ -116,3 +165,52 @@ def test_unexpected_metadata_file_set_fails_immediately() -> None:
 
     with pytest.raises(VerificationError, match="filenames do not match"):
         validate_metadata(metadata(filenames={"unexpected.whl"}), hashes)
+
+
+def test_registry_provenance_is_bound_to_artifact_and_trusted_workflow() -> None:
+    artifact = UploadedArtifact("package.whl", "a" * 64, "https://files.test/package.whl")
+
+    validate_provenance(
+        provenance(artifact),
+        artifact,
+        "keith-fajardo/mnemo-memory",
+        "publish-testpypi.yml",
+    )
+    with pytest.raises(VerificationError, match="exactly one expected"):
+        validate_provenance(
+            provenance(artifact, repository="attacker/fork"),
+            artifact,
+            "keith-fajardo/mnemo-memory",
+            "publish-testpypi.yml",
+        )
+    with pytest.raises(VerificationError, match="subject does not match"):
+        validate_provenance(
+            provenance(artifact, digest="b" * 64),
+            artifact,
+            "keith-fajardo/mnemo-memory",
+            "publish-testpypi.yml",
+        )
+
+
+def test_registry_provenance_requires_signature_certificate_and_transparency() -> None:
+    artifact = UploadedArtifact("package.whl", "a" * 64, "https://files.test/package.whl")
+    value = provenance(artifact)
+    bundles = value["attestation_bundles"]
+    assert isinstance(bundles, list)
+    bundle = bundles[0]
+    assert isinstance(bundle, dict)
+    attestations = bundle["attestations"]
+    assert isinstance(attestations, list)
+    attestation = attestations[0]
+    assert isinstance(attestation, dict)
+    material = attestation["verification_material"]
+    assert isinstance(material, dict)
+    material["transparency_entries"] = []
+
+    with pytest.raises(VerificationError, match="signed verification material"):
+        validate_provenance(
+            value,
+            artifact,
+            "keith-fajardo/mnemo-memory",
+            "publish-testpypi.yml",
+        )

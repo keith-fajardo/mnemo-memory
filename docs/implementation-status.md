@@ -1356,6 +1356,38 @@ architecture validation for 107 product Python files. No new job type, scheduler
 background daemon, payload browser, migration, dependency, model call, non-loopback exposure, or
 team behavior was added.
 
+#### Issue 20M — Signed PyPI release artifacts — Complete
+
+This bounded issue replaces the existing unsigned uv upload steps in the already manual,
+environment-gated TestPyPI and PyPI workflows with the pinned official PyPA publishing action.
+The action must publish only the already built, inspected, checksum-bound wheel and source
+distribution through the existing trusted-publisher identity and generate a Sigstore-backed PyPI
+publish attestation for each artifact. Post-upload verification must require registry-accepted
+provenance bound to the expected filename, SHA-256 digest, repository, and workflow. This issue does
+not trigger a workflow, publish a release, change a version, add a runtime dependency, create a new
+distribution format, or change install/upgrade behavior.
+
+The manual TestPyPI and PyPI workflows now transfer the existing checksum-bound three-file release
+bundle into a publish job whose only elevated permission is GitHub OIDC. That job revalidates the
+flat bundle, copies only the exact wheel and source distribution into a two-file publish directory,
+and invokes the official PyPA publishing action pinned to reviewed commit
+`cef221092ed1bacb1cc03d23a2d87d1d172e277b`. Trusted Publishing generates a Sigstore-backed PyPI
+publish attestation for each distribution without a long-lived package-index credential.
+
+The existing standard-library registry verifier now polls the PyPI Integrity API for both expected
+artifacts after upload. It requires a registry-accepted publish attestation with a nonempty
+signature, certificate, and transparency entry, then binds the decoded statement to the exact
+filename and SHA-256 digest from the original release bundle and to the expected GitHub repository
+and workflow. The post-upload TestPyPI job now checks out the exact triggering commit before running
+that verifier. Archive verification also requires every migration through `0028`, preventing a
+signed but operationally incomplete distribution from passing the release gate.
+
+Focused workflow, YAML, verifier, archive, and dependency-register validation passes with 17 tests.
+The complete repository gate passes with 806 tests, strict typing for 203 source files,
+dependency/provenance validation for 87 registered entries, and architecture validation for 107
+product Python files. No release workflow was triggered, no artifact was published, and no version,
+runtime dependency, distribution format, install behavior, or upgrade behavior changed.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

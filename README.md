@@ -916,3 +916,11 @@ uv build --no-sources
 The verified package target is Python 3.12 on macOS and Linux. Built-artifact verification runs
 outside the source checkout so migrations and schemas are proven to load from the installed
 `mnemo_memory` package.
+
+The manual, environment-gated TestPyPI and PyPI workflows build and verify the wheel and source
+distribution once, bind them to a SHA-256 checksum bundle, and publish only those two artifacts
+through PyPI Trusted Publishing. The publishing action is pinned to an exact reviewed commit and
+requests a Sigstore-backed PyPI publish attestation for each artifact. After upload, the workflow
+requires PyPI's Integrity API to expose registry-accepted provenance whose subject digest,
+repository, and workflow match the staged release before the release verification can pass. No
+long-lived package-index token is stored in the workflow.

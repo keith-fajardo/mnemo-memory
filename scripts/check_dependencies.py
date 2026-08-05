@@ -121,17 +121,25 @@ def validate_node_lock() -> None:
 
 
 def validate_ci_actions(dependencies: list[dict[str, object]]) -> None:
-    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
-    used_actions = set(re.findall(r"uses: ([^@\s]+)@([^\s]+)", workflow))
+    workflow_directory = REPOSITORY_ROOT / ".github/workflows"
+    ci_workflow = (workflow_directory / "ci.yml").read_text()
+    required_ci_actions = set(re.findall(r"uses: ([^@\s]+)@([^\s]+)", ci_workflow))
+    all_used_actions = {
+        action
+        for path in workflow_directory.glob("*.yml")
+        for action in re.findall(r"uses: ([^@\s]+)@([^\s]+)", path.read_text())
+    }
     registered_actions = {
         (str(dependency["name"]), str(dependency["version"]))
         for dependency in dependencies
         if dependency["ecosystem"] == "github-action"
     }
-    if used_actions != registered_actions:
+    missing_ci = required_ci_actions - registered_actions
+    unused_registered = registered_actions - all_used_actions
+    if missing_ci or unused_registered:
         raise AssertionError(
-            f"CI Action register mismatch; missing={sorted(used_actions - registered_actions)}, "
-            f"extra={sorted(registered_actions - used_actions)}"
+            f"CI Action register mismatch; missing_ci={sorted(missing_ci)}, "
+            f"unused_registered={sorted(unused_registered)}"
         )
 
 

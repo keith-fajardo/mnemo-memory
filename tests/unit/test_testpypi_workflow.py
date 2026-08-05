@@ -40,9 +40,12 @@ def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencie
     assert "uv publish dist/*" not in value
     assert "uv publish release/*.whl" not in value
     assert "uv publish release/*.tar.gz" not in value
-    assert "uv publish \\" in value
-    assert "release/mnemo_unified_context-0.1.0a2-py3-none-any.whl" in value
-    assert "release/mnemo_unified_context-0.1.0a2.tar.gz" in value
+    assert "uv publish" not in value
+    assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in value
+    assert "packages-dir: publish-release/" in value
+    assert "attestations: true" in value
+    assert "cp release/mnemo_unified_context-0.1.0a2-py3-none-any.whl publish-release/" in value
+    assert "cp release/mnemo_unified_context-0.1.0a2.tar.gz publish-release/" in value
     assert "uv publish build-output" not in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "test.pypi.org/simple" not in value
@@ -61,8 +64,7 @@ def test_testpypi_workflow_isolates_oidc_to_the_publish_job() -> None:
     assert "if: github.ref == 'refs/heads/main'" in value
     assert value.count("id-token: write") == 1
     assert value.count("environment: testpypi") == 1
-    assert "--trusted-publishing always" in value
-    assert "--publish-url https://test.pypi.org/legacy/" in value
+    assert "repository-url: https://test.pypi.org/legacy/" in value
     assert "UV_PUBLISH_" not in value
     assert "--username" not in value
     assert "--password" not in value
@@ -77,11 +79,16 @@ def test_testpypi_workflow_isolates_oidc_to_the_publish_job() -> None:
     assert "--text-path pyproject.toml" in value
     assert "--text-path README.md" in value
     assert "--text-path docs" in value
+    assert "--provenance-base-url https://test.pypi.org/integrity" in value
+    assert "--expected-repository keith-fajardo/mnemo-memory" in value
+    assert "--expected-workflow publish-testpypi.yml" in value
 
 
 def test_testpypi_workflow_uses_bounded_standard_library_post_upload_verification() -> None:
     value = workflow()
 
+    assert "verify-testpypi:" in value
+    assert "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" in value
     assert "scripts/verify_testpypi_release.py" in value
     assert "--request-timeout-seconds 10" in value
     assert "--deadline-seconds 120" in value

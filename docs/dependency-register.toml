@@ -878,6 +878,19 @@ direct = true
 approved = true
 
 [[dependencies]]
+ecosystem = "github-action"
+name = "pypa/gh-action-pypi-publish"
+version = "cef221092ed1bacb1cc03d23a2d87d1d172e277b"
+license = "BSD-3-Clause"
+source_url = "https://github.com/pypa/gh-action-pypi-publish/tree/v1.14.0"
+author = "Python Packaging Authority contributors"
+owner = "Mnemo release engineering"
+purpose = "Trusted Publishing upload and Sigstore-backed PyPI publish attestations"
+replacement_boundary = "Manual environment-gated TestPyPI and PyPI publication step only"
+direct = true
+approved = true
+
+[[dependencies]]
 ecosystem = "pypi"
 name = "fastembed"
 version = "0.8.0"

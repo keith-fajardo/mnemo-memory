@@ -472,6 +472,35 @@ configured path or Git diagnostics.
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 
+### Unsigned or substituted release artifacts
+
+**Scenario:** A release job uploads bytes other than the inspected wheel and source distribution,
+uses a compromised long-lived package-index credential, or leaves users unable to distinguish an
+artifact published by the intended repository workflow from an unsigned substitute.
+
+**Required controls:** The manual, protected-environment release workflows build and inspect one
+wheel and one source distribution once, record their SHA-256 digests in the transferred release
+bundle, and recheck the exact flat three-file bundle before publication. Only the two
+checksum-matching distributions are copied into the publish directory. The publish job receives
+only GitHub OIDC permission and uses the official PyPA publishing action pinned to an exact reviewed
+commit; it requests a Sigstore-backed PyPI publish attestation for each distribution through
+Trusted Publishing. No long-lived PyPI token is stored. Post-upload verification requires PyPI's
+Integrity API to return registry-accepted signed provenance with exactly one matching publish
+subject for each expected filename and digest and with the expected repository and workflow
+identity.
+
+**Verification:** Static workflow tests require the manual trigger, protected environment,
+least-privilege OIDC job, exact action commit, attestation setting, flat artifact allowlist, and
+post-upload provenance arguments. The standard-library verifier rejects missing signatures,
+certificates, transparency entries, publish predicates, artifact subjects, digests, repository
+identity, or workflow identity. Release-archive tests require every packaged migration and schema,
+and the dependency register and workflow YAML checks cover the pinned action.
+
+**Residual risk:** The release path trusts GitHub Actions, PyPI, Sigstore infrastructure, and the
+reviewed third-party publishing action. Registry acceptance proves publisher identity and artifact
+binding, not that signed code is benign; users still need a trusted project source and appropriate
+version review.
+
 ## Security gates and ownership
 
 Changes affecting a threat above must update its required controls and verification. Security tests
