@@ -13,7 +13,7 @@ or transcript capture.
 
 ## Tools
 
-Exactly two tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context` may
+Exactly three tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context` may
 omit all scope fields: the local MCP process resolves the repository's registered stable scope from
 its working directory. Users and agents must not guess UUIDs. Advanced callers may instead provide
 all five explicit task-scope fields (`owner_id`, `workspace_id`, `project_id`, `session_id`, and
@@ -22,6 +22,13 @@ optional `active_task_checkpoint_tokens` / `total_tokens` budgets. It returns th
 versioned context packet. With no active checkpoint it returns a valid empty packet. Completed and
 abandoned checkpoints are excluded from automatic selection. The active-checkpoint section is hard
 limited to 600 tokens by default and structured token-budget omissions are preserved.
+
+`explain_context` accepts the complete structured packet returned by `get_context`. It validates
+the packet and returns only source/evidence metadata, ranks and retrieval methods, exclusions,
+conflicts, staleness, and token accounting. It never repeats checkpoint, memory, note, or code
+content; does not include evidence locations or the transient query; and performs no retrieval or
+mutation. Inputs above 128 KiB or packets that fail the canonical invariants are rejected with one
+sanitized error.
 
 For an enabled source-memory project, `get_context` can also accept a bounded
 `"source_overview"` object. It selects the scoped active (or an explicitly named immutable)

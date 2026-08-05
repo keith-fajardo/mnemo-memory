@@ -154,7 +154,11 @@ async def _call_launcher(
         if initialized.serverInfo.name != "mnemo-local":
             raise RuntimeError("unexpected MCP server identity")
         tools = await session.list_tools()
-        if [tool.name for tool in tools.tools] != ["get_context", "save_checkpoint"]:
+        if [tool.name for tool in tools.tools] != [
+            "get_context",
+            "explain_context",
+            "save_checkpoint",
+        ]:
             raise RuntimeError("unexpected MCP tool inventory")
         result = await session.call_tool(action, payload, read_timeout_seconds=timedelta(seconds=8))
         if result.isError or not isinstance(result.structuredContent, dict):

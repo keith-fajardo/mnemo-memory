@@ -15,6 +15,7 @@ quality benchmark.
 
 For local use, initialize Mnemo, connect either client, run `mnemo dbt ingest MANIFEST` with explicit
 scope IDs, save a checkpoint, then request `get_context` with an optional structured `dbt_lineage`
-object. The server returns the existing two MCP tools only. Raw SQL, manifest bodies, warehouse
+object. The server also exposes content-free `explain_context` and mutating `save_checkpoint`. Raw
+SQL, manifest bodies, warehouse
 credentials, dbt execution, file watching, catalog/run-results artifacts, automatic transcript
 capture, general code graphs, embeddings, UI, and team support remain out of scope.

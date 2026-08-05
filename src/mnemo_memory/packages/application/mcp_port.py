@@ -1,4 +1,4 @@
-"""Replaceable application port for Issue 7's two MCP operations."""
+"""Replaceable application port for context retrieval and checkpoint persistence."""
 
 from __future__ import annotations
 

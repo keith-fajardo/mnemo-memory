@@ -96,6 +96,27 @@ data labels and that tool/mutation decisions are unchanged.
 **Residual risk:** A downstream model may still follow malicious prose; minimize excerpts, surface
 source trust, and test each renderer/client.
 
+### Forged or oversized context explanation
+
+**Scenario:** A caller submits a fabricated or oversized packet to `explain_context`, treats
+structural validation as proof that Mnemo retrieved it, or causes the explanation to repeat
+content-bearing claims, code, notes, checkpoint text, query text, or evidence locations.
+
+**Required controls:** Explanation accepts only one strict canonical packet and rejects input above
+128 KiB before domain parsing. It performs no storage read, ranking, authorization decision, or
+mutation. Output contains only identities/scopes, source and evidence metadata, rank/score/method,
+validity/observation time, omissions, conflicts, and token accounting. It explicitly labels its
+basis as a caller-supplied canonical packet; it is not authenticity, authentication,
+authorization, or mutation evidence. Parser errors are replaced by one payload-free code.
+
+**Verification:** Complete populated-packet explanation, content/location/query absence, source and
+rank preservation, conflicts, omissions, staleness, token reconciliation, malformed structure,
+declared-budget mismatch, oversize input, and read-only MCP annotation tests.
+
+**Residual risk:** Without a signed packet or server-held request record, explanation cannot prove
+origin. The current local tool makes no such claim; any future authenticity feature needs a
+separate threat review and key-management design.
+
 ### Poisoned memories
 
 **Scenario:** Incorrect assistant claims, malicious source content, repeated low-trust assertions,

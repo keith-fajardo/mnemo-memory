@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import UTC, datetime
@@ -35,15 +36,16 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
-from mnemo_memory.packages.context_engine import UnifiedContextEngine
-from mnemo_memory.packages.domain import MemoryScope, SourceStateFingerprint
+from mnemo_memory.packages.context_engine import UnifiedContextEngine, explain_context_packet
+from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceStateFingerprint
 
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
+_MAX_EXPLAIN_PACKET_BYTES = 131_072
 
 
 def create_server(port: McpContextPort) -> FastMCP:
-    """Create the two-tool protocol adapter around an explicitly supplied application port."""
+    """Create the local context/checkpoint tools around an explicitly supplied application port."""
     server = FastMCP(SERVER_NAME, instructions="Local Mnemo checkpoint tools.")
     server._mcp_server.version = SERVER_VERSION
 
@@ -179,6 +181,38 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "total_tokens": total_tokens,
             }
         )
+
+    @server.tool(
+        name="explain_context",
+        description=(
+            "Explain sources, ranks, exclusions, conflicts, staleness, and token use for an "
+            "already returned canonical context packet without repeating its retrieved content."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def explain_context(
+        context_packet: Annotated[
+            dict[str, object],
+            Field(
+                description=(
+                    "The complete structured packet returned by get_context. The explanation "
+                    "validates this input but performs no new retrieval."
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
+        try:
+            encoded = json.dumps(
+                context_packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+            if len(encoded) > _MAX_EXPLAIN_PACKET_BYTES:
+                raise ValueError
+            packet = ContextPacket.from_dict(context_packet)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "MNEMO_INVALID_CONTEXT_PACKET: context packet is invalid or too large"
+            ) from None
+        return explain_context_packet(packet).to_dict()
 
     @server.tool(
         name="save_checkpoint",
@@ -322,7 +356,7 @@ def create_server(port: McpContextPort) -> FastMCP:
             }
         )
 
-    for name in ("get_context", "save_checkpoint"):
+    for name in ("get_context", "explain_context", "save_checkpoint"):
         tool = server._tool_manager._tools[name]
         tool.parameters["additionalProperties"] = False
         tool.fn_metadata.arg_model.model_config["extra"] = "forbid"

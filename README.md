@@ -394,8 +394,9 @@ mnemo-memory disconnect claude-code
 ### 3. Use it deliberately during work
 
 In a compatible client session, work normally. The opt-in lifecycle hook asks the agent to retrieve
-context when a session starts and to save a handoff before it stops or compacts. The agent uses the
-two MCP tools; there is no separate “remember this directory” command after the one-time
+context when a session starts and to save a handoff before it stops or compacts. The agent uses
+`get_context` and `save_checkpoint`; it can use `explain_context` to inspect selection metadata.
+There is no separate “remember this directory” command after the one-time
 `--auto-memory` opt-in. For a local terminal walkthrough, run `mnemo-memory agent` (or its
 `mnemo-memory guide` alias).
 
@@ -684,14 +685,16 @@ with exact supplemental-artifact evidence and within the existing structural tok
 
 ## What the MCP tools do
 
-Mnemo exposes exactly two local stdio MCP tools:
+Mnemo exposes exactly three local stdio MCP tools:
 
 - `save_checkpoint` creates, revises, completes, or abandons an explicit task checkpoint.
 - `get_context` returns a bounded packet, optionally including a structured dbt upstream,
-  downstream, or directed shortest-path request. In an auto-memory-enabled repository both tools
-  use the registered
+  downstream, or directed shortest-path request. In an auto-memory-enabled repository the
+  retrieval and checkpoint tools use the registered
   project/task scope when all UUID fields are omitted; advanced callers may supply the complete
   explicit scope.
+- `explain_context` validates a packet returned by `get_context` and reports its sources, ranks,
+  omissions, conflicts, staleness, and token accounting without repeating retrieved content.
 
 A checkpoint has a stable logical ID and immutable revisions. Revision, completion, and
 abandonment requests include the current revision ID, so two clients cannot silently overwrite one
@@ -708,8 +711,8 @@ with structured omissions when needed.
 | --- | --- |
 | `mnemo-memory init` | Create/open the local Mnemo database. It does not inspect the current repository or save a checkpoint. |
 | `mnemo-memory status` | Show whether that local store is initialized and usable. |
-| `mnemo-memory connect codex` | Make Mnemo’s two MCP tools available to Codex. |
-| `mnemo-memory connect claude-code` | Make the same two MCP tools available to Claude Code. |
+| `mnemo-memory connect codex` | Make Mnemo’s three MCP tools available to Codex. |
+| `mnemo-memory connect claude-code` | Make the same three MCP tools available to Claude Code. |
 | `mnemo-memory agent` | Run a deterministic interactive setup guide; it does not use a model or change a client registration. |
 | `mnemo-memory dbt enable` | Enable Mnemo for the dbt project in this directory. It creates private local IDs for you. |
 | `mnemo-memory dbt status` | Show whether this enabled dbt project has an active saved snapshot. |

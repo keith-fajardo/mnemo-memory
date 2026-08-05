@@ -4,10 +4,12 @@ Mnemo is connected to Codex and Claude Code as a **local MCP server**. You may h
 plugin, but Mnemo does not install an editor extension or change either client’s model. It registers
 one local tool server named `mnemo-memory`.
 
-That server provides exactly two tools:
+That server provides exactly three tools:
 
 - `save_checkpoint` — explicitly save, revise, complete, or abandon a task handoff.
 - `get_context` — retrieve the matching saved handoff and optional dbt lineage facts.
+- `explain_context` — inspect sources, ranks, omissions, conflicts, staleness, and token use for a
+  returned packet without repeating its retrieved content.
 
 The server starts when the client needs it and reads the local Mnemo database. It does not upload
 that database, capture every conversation, or call a model on its own.
@@ -82,8 +84,8 @@ codex mcp get mnemo-memory --json
 codex mcp list --json
 ```
 
-Restart Codex after registration. In a coding session, it can then discover `save_checkpoint` and
-`get_context`.
+Restart Codex after registration. In a coding session, it can then discover `save_checkpoint`,
+`get_context`, and `explain_context`.
 
 To remove only Mnemo’s owned registration:
 

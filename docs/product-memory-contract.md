@@ -199,6 +199,13 @@ does not fit produces a bounded omission rather than truncation or budget overfl
 retrieval itself is bounded, and storage failure yields only a payload-free omission. Retrieval
 does not update access time, retention, confidence, or any canonical record.
 
+A content-free explanation may be derived from a canonical packet after strict packet and budget
+validation. It reports item identity/type/scope, source and evidence metadata, ranks, retrieval
+methods, omissions, conflicts, validity, and token accounting, but never repeats retrieved content,
+query text, or evidence locations. Explanation performs no retrieval or mutation and cannot prove
+that a caller-supplied packet originated from Mnemo; its output labels that basis and is never
+authentication, authorization, or mutation evidence.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is

@@ -108,18 +108,23 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
             )
 
     tools = asyncio.run(list_tools())
-    assert [tool.name for tool in tools] == ["get_context", "save_checkpoint"]
+    assert [tool.name for tool in tools] == [
+        "get_context",
+        "explain_context",
+        "save_checkpoint",
+    ]
     assert tools[0].annotations is not None and tools[0].annotations.readOnlyHint is True
-    assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is False
+    assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is True
+    assert tools[2].annotations is not None and tools[2].annotations.readOnlyHint is False
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
-    assert "operation" in tools[1].inputSchema["properties"]
-    assert "lessons" in tools[1].inputSchema["properties"]
-    assert "record_lesson" in tools[1].inputSchema["properties"]["operation"]["pattern"]
+    assert "operation" in tools[2].inputSchema["properties"]
+    assert "lessons" in tools[2].inputSchema["properties"]
+    assert "record_lesson" in tools[2].inputSchema["properties"]["operation"]["pattern"]
     assert (
         "without resending the complete checkpoint"
-        in tools[1].inputSchema["properties"]["operation"]["description"]
+        in tools[2].inputSchema["properties"]["operation"]["description"]
     )
-    assert "exactly one" in tools[1].inputSchema["properties"]["lessons"]["description"]
+    assert "exactly one" in tools[2].inputSchema["properties"]["lessons"]["description"]
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "query" in tools[0].inputSchema["properties"]
     assert "knowledge_query" in tools[0].inputSchema["properties"]
@@ -132,11 +137,12 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "dbt_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
-    assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
-    assert "event_summary" in tools[1].inputSchema["properties"]
+    assert "record_event" in tools[2].inputSchema["properties"]["operation"]["pattern"]
+    assert "event_summary" in tools[2].inputSchema["properties"]
+    assert set(tools[1].inputSchema["properties"]) == {"context_packet"}
     for name in IDS:
         assert name not in tools[0].inputSchema.get("required", [])
-        assert name not in tools[1].inputSchema.get("required", [])
+        assert name not in tools[2].inputSchema.get("required", [])
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -1057,6 +1063,7 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert initialized.serverInfo.version == SERVER_VERSION
             assert [tool.name for tool in (await session.list_tools()).tools] == [
                 "get_context",
+                "explain_context",
                 "save_checkpoint",
             ]
             created = await session.call_tool("save_checkpoint", save_payload())
@@ -1067,6 +1074,25 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             packet = ContextPacket.from_dict(context.structuredContent or {})
             assert packet.active_task_checkpoint is not None
             assert str(result["checkpoint_revision_id"]) in packet.provenance[0].source_reference
+            explanation = await session.call_tool(
+                "explain_context", {"context_packet": context.structuredContent or {}}
+            )
+            assert explanation.isError is False
+            explained = explanation.structuredContent or {}
+            assert explained["included"][0]["item_id"] == packet.active_task_checkpoint.item_id
+            assert packet.active_task_checkpoint.content not in json.dumps(explained)
+            malformed = await session.call_tool(
+                "explain_context", {"context_packet": {"unexpected": True}}
+            )
+            assert malformed.isError is True
+            assert "MNEMO_INVALID_CONTEXT_PACKET" in str(malformed.content)
+            oversized_marker = "must-not-escape" + "x" * 131_072
+            oversized = await session.call_tool(
+                "explain_context", {"context_packet": {"padding": oversized_marker}}
+            )
+            assert oversized.isError is True
+            assert "MNEMO_INVALID_CONTEXT_PACKET" in str(oversized.content)
+            assert "must-not-escape" not in str(oversized.content)
             invalid = await session.call_tool("save_checkpoint", {"operation": "invalid"})
             assert invalid.isError is True
             still_valid = await session.call_tool("get_context", IDS)

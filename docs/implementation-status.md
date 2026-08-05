@@ -1672,3 +1672,38 @@ with 719 tests, strict typing for 181 source files, dependency/provenance valida
 and architecture validation for 94 product Python files. No vector fusion, cross-category
 reranking, conflict detection, deduplication, client renderer, `explain_context`, persistence,
 model call, dependency, API/UI, or team mode was added.
+
+#### Issue 17B — Complete
+
+The current bounded issue adds a content-free explanation for an already assembled canonical
+context packet. One read-only `explain_context` MCP tool accepts only that strict packet, validates
+its existing provenance and budget invariants, and returns included item identities/types/scopes,
+source and evidence metadata, ranks and retrieval methods, token accounting, exclusions,
+conflicts, and staleness without repeating claims, note text, code, checkpoint content, query text,
+or evidence locations. The input is byte-bounded before parsing and cannot retrieve, persist, rank,
+authorize, or mutate anything. This issue updates the public MCP inventory from two tools to three
+without changing `get_context` or `save_checkpoint` behavior.
+
+This issue adds no new retrieval, reranking, conflict inference, renderer, persistence, model call,
+dependency, API/UI, or team mode.
+
+Implemented a deterministic content-free `ContextExplanation` projection and the third local MCP
+tool, `explain_context`. The read-only tool accepts one packet returned by `get_context`, rejects
+inputs above 128 KiB before parsing, revalidates the packet's strict provenance and hard-budget
+invariants, and reports item identity/type/scope, source trust, sensitivity, validity, observed
+time, rank/score/retrieval method, source reference/digest, payload-free evidence metadata,
+omissions, conflicts, explicit non-current items, and complete token accounting. It never returns
+the packet's checkpoint, memory, note, code, or procedure content, query text, or evidence location;
+it performs no retrieval, authorization decision, ranking, persistence, or mutation. The output
+labels its basis as a caller-supplied canonical packet so structural validation cannot be mistaken
+for proof of origin. Malformed, inconsistent, and oversized input produces one sanitized error.
+
+The production server, installed-launcher benchmark, Codex/Claude connection smoke tests, local MCP
+guide, client guide, README, dbt wrapper guide, and context benchmark now use the three-tool
+inventory. Four context-engine tests cover selection plus full explanation metadata and content
+absence; stdio tests cover successful explanation, read-only safety annotations, malformed input,
+oversize rejection, and error redaction. The product contract and threat model record the
+authenticity and denial-of-service boundary. The complete repository gate passes with 720 tests,
+strict typing for 182 source files, dependency/provenance validation for 86 entries, and
+architecture validation for 95 product Python files. No new retrieval, reranking, conflict
+inference, renderer, persistence, model call, dependency, API/UI, or team mode was added.

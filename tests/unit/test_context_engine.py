@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -12,9 +15,12 @@ from mnemo_memory.packages.context_engine import (
     QueryIntent,
     RetrievalCategory,
     UnifiedContextEngine,
+    explain_context_packet,
 )
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
+    ConflictNotice,
+    ConflictState,
     ContextBudget,
     ContextPacket,
     DurableClaim,
@@ -28,6 +34,8 @@ from mnemo_memory.packages.domain import (
     MemoryId,
     MemoryScope,
     MemoryStatus,
+    OmissionNotice,
+    OmissionReason,
     OwnerId,
     PacketSchemaVersion,
     ProjectId,
@@ -40,6 +48,7 @@ from mnemo_memory.packages.domain import (
     SourceId,
     SourceTrustClass,
     TaskId,
+    ValidityState,
     VerificationStatus,
     Visibility,
     WorkspaceId,
@@ -275,3 +284,78 @@ def test_engine_enforces_hard_budget_bounds_and_degrades_on_storage_failure() ->
     ).get_context(GetUnifiedContext(scope))
     assert unavailable.omissions[0].detail == "episodic memory storage is unavailable"
     assert "fixture payload" not in str(unavailable.to_dict())
+
+
+def test_explanation_reports_selection_metadata_without_repeating_content() -> None:
+    scope = _scope()
+    first = _memory(
+        scope,
+        4,
+        "Sensitive decision content must not appear in the explanation.",
+        kind=EpisodicMemoryKind.DECISION,
+        confidence=0.91,
+        activated_at=NOW - timedelta(days=2),
+    )
+    second = _memory(
+        scope,
+        5,
+        "A stale conflicting claim that also must remain absent.",
+        kind=EpisodicMemoryKind.OUTCOME,
+        confidence=0.81,
+        activated_at=NOW - timedelta(days=40),
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, (first, second))
+    ).get_context(GetUnifiedContext(scope, query="decision"))
+    stale = replace(packet.episodic_memories[1], validity=ValidityState.STALE)
+    items = (packet.episodic_memories[0], stale)
+    packet = replace(
+        packet,
+        episodic_memories=items,
+        conflicts=(
+            ConflictNotice(
+                "conflict:episodic-fixture",
+                tuple(item.item_id for item in items),
+                tuple(evidence for item in items for evidence in item.evidence_references),
+                ConflictState.UNRESOLVED,
+            ),
+        ),
+        omissions=(
+            OmissionNotice(
+                "episodic-memory:omitted",
+                OmissionReason.LOWER_RANK,
+                "candidate fell below the bounded selection cutoff",
+            ),
+        ),
+    )
+
+    explanation = explain_context_packet(packet).to_dict()
+    encoded = json.dumps(explanation, sort_keys=True)
+
+    assert explanation["basis"] == "caller_supplied_canonical_packet"
+    assert explanation["request_id"] == str(packet.request_id)
+    included = explanation["included"]
+    assert isinstance(included, list) and len(included) == 2
+    assert included[0]["rank"] == 1
+    assert included[0]["source_reference"].startswith("mnemo:episodic/")
+    assert included[0]["evidence"][0]["evidence_id"] == str(
+        first.memory.evidence_references[0].evidence_id
+    )
+    exclusions = cast(list[dict[str, object]], explanation["exclusions"])
+    conflicts = cast(list[dict[str, object]], explanation["conflicts"])
+    staleness = cast(dict[str, object], explanation["staleness"])
+    accounting = cast(dict[str, object], explanation["token_accounting"])
+    assert exclusions[0]["reason"] == "lower_rank"
+    assert conflicts[0]["state"] == "unresolved"
+    assert staleness["non_current_items"] == [
+        {
+            "item_id": stale.item_id,
+            "validity": "stale",
+            "observed_at": stale.observed_at.isoformat(),
+        }
+    ]
+    assert accounting["computed_total"] == packet.computed_total_tokens
+    assert "Sensitive decision content" not in encoded
+    assert "stale conflicting claim" not in encoded
+    assert '"content"' not in encoded
+    assert '"location"' not in encoded

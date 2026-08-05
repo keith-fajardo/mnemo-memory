@@ -177,6 +177,7 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
         listed = cast(dict[str, object], process_a.call("tools/list", {})["result"])
         assert [tool["name"] for tool in cast(list[dict[str, object]], listed["tools"])] == [
             "get_context",
+            "explain_context",
             "save_checkpoint",
         ]
         oversized = process_a.tool("save_checkpoint", save_payload(token_estimate=601))
