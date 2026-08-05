@@ -14,7 +14,11 @@ from mnemo_memory.connectors.automatic_memory.git_observation import (
 )
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
-from mnemo_memory.packages.application import LocalConfig, build_checkpoint_runtime
+from mnemo_memory.packages.application import (
+    EventOutboxInspectionService,
+    LocalConfig,
+    build_checkpoint_runtime,
+)
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
@@ -53,6 +57,12 @@ def build_dashboard_status(
             "staleness": "unknown",
             "last_sync_at": None,
         },
+    }
+    jobs: dict[str, object] = {
+        "status": "not_registered",
+        "pending": 0,
+        "processing": 0,
+        "failed": 0,
     }
     if binding is not None:
         try:
@@ -93,6 +103,23 @@ def build_dashboard_status(
                         "last_sync_at": _timestamp(runtime.repository.last_sync_at(binding.scope)),
                     },
                 }
+                try:
+                    job_status = EventOutboxInspectionService(runtime.repository).status(
+                        binding.scope
+                    )
+                    jobs = {
+                        "status": "attention" if job_status.failed else "ready",
+                        "pending": job_status.pending,
+                        "processing": job_status.processing,
+                        "failed": job_status.failed,
+                    }
+                except Exception:
+                    jobs = {
+                        "status": "unavailable",
+                        "pending": 0,
+                        "processing": 0,
+                        "failed": 0,
+                    }
         except Exception:
             indexes = {
                 "knowledge": {
@@ -117,12 +144,19 @@ def build_dashboard_status(
                     "last_sync_at": None,
                 },
             }
+            jobs = {
+                "status": "unavailable",
+                "pending": 0,
+                "processing": 0,
+                "failed": 0,
+            }
     return {
         "connections": {
             "claude_code": _claude_status(),
             "codex": _codex_status(),
         },
         "indexes": indexes,
+        "jobs": jobs,
         "privacy": {
             "exposure": "loopback_only",
             "model_calls": "disabled_by_default",

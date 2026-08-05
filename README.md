@@ -358,8 +358,10 @@ mnemo-memory start
 ```
 
 The dashboard loads only packaged local assets. Its health response shows connection/project
-readiness and bounded index counts without memory content, absolute project paths, scope IDs,
-credentials, or command output. The Approved Memory section explicitly displays bounded
+readiness, bounded index counts, honest freshness and last-sync state, and content-free event-job
+counts without memory content, absolute project paths, scope or job IDs, credentials, or command
+output. **Retry failed** explicitly requeues at most 100 failed jobs for only the current project;
+it preserves attempt counts and never claims that a handler succeeded. The Approved Memory section explicitly displays bounded
 decision/failure/tool-outcome facts for the current registered project task, including retained
 evidence and correction/retraction lineage; it never retrieves another project. Confirmed
 same-origin controls can append an evidence-backed correction or erase an active fact's retained

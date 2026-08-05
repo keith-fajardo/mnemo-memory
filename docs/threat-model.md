@@ -380,6 +380,13 @@ mode-0700/0600 permissions, symlink rejection, atomic non-overwriting publicatio
 cleanup are covered by tests. Runtime versions are intentionally disclosed and must be reviewed
 before a user shares the archive.
 
+The local dashboard reduces durable event delivery to exact-project pending, processing, and
+failed counts. It never returns job, source, session, task, or owner identities, failure details,
+or payloads. Manual retry requires the same-origin mutation header and a registered project
+binding, requeues at most 100 failed jobs whose leases are absent or expired, preserves attempt
+counts, and does not claim handler success. Active leases and every other project remain unchanged;
+storage and adapter failures return only bounded codes.
+
 ### Compromised connectors
 
 **Scenario:** A connector returns forged scope/source metadata, reads beyond registration, supplies

@@ -123,6 +123,21 @@ class EventOutboxJob:
             last_failure_code=failure_code,
         )
 
+    def requeue_failed(self, available_at: datetime) -> EventOutboxJob:
+        """Make one failed, unleased or expired job available without claiming success."""
+        _require_aware(available_at, "available_at")
+        if self.completed_at is not None or self.last_failure_code is None:
+            raise ValueError("only an incomplete failed outbox job can be requeued")
+        if self.lease_expires_at is not None and self.lease_expires_at > available_at:
+            raise ValueError("an active outbox lease cannot be requeued")
+        return replace(
+            self,
+            available_at=available_at,
+            lease_owner=None,
+            lease_expires_at=None,
+            last_failure_code=None,
+        )
+
     @staticmethod
     def validate_worker_id(worker_id: str) -> None:
         if not isinstance(worker_id, str) or _WORKER.fullmatch(worker_id) is None:

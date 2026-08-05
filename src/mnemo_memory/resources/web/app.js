@@ -52,6 +52,14 @@ function render(data) {
     card("dbt lineage", dbt.status, `${dbt.nodes} nodes · ${dbt.relationships} relationships · ${indexDetail(dbt)}`, null),
     card("Project knowledge", knowledge.status, `${knowledge.documents} current documents · ${indexDetail(knowledge)}`, null),
   );
+  const jobs = data.jobs;
+  byId("jobs-state").textContent = jobs.status;
+  byId("retry-jobs").disabled = jobs.failed === 0;
+  byId("jobs").replaceChildren(
+    card("Pending", jobs.pending === 0 ? "ready" : "queued", `${jobs.pending} jobs waiting`, null),
+    card("Processing", jobs.processing === 0 ? "ready" : "active", `${jobs.processing} jobs leased`, null),
+    card("Failed", jobs.failed === 0 ? "ready" : "attention", `${jobs.failed} jobs need attention`, null),
+  );
   const privacy = byId("privacy-list");
   privacy.replaceChildren(...[
     "The personal profile uses local SQLite storage.",
@@ -273,7 +281,23 @@ async function refresh() {
   }
 }
 
+async function retryJobs() {
+  if (!window.confirm("Retry failed jobs for this project now?")) return;
+  byId("jobs-state").textContent = "Requeueing…";
+  const response = await fetch("/api/jobs/retry", {
+    method: "POST",
+    headers: {"X-Mnemo-Intent": "retry-jobs"},
+  });
+  if (!response.ok) { byId("jobs-state").textContent = "Retry unavailable"; return; }
+  const result = await response.json();
+  byId("jobs-state").textContent = `${result.requeued} requeued`;
+  await refresh();
+}
+
 byId("refresh").addEventListener("click", refresh);
+byId("retry-jobs").addEventListener("click", () => {
+  retryJobs().catch(() => { byId("jobs-state").textContent = "Retry unavailable"; });
+});
 byId("export-memories").addEventListener("click", () => {
   exportMemories().catch(() => { byId("memories-state").textContent = "Export failed"; });
 });

@@ -90,6 +90,8 @@ from .event_outbox import (
     EventOutboxApplicationStorageFailure,
     EventOutboxHandler,
     EventOutboxHandlerFailure,
+    EventOutboxInspectionService,
+    EventOutboxRetryResult,
     EventOutboxRunner,
     EventOutboxRunResult,
 )
@@ -153,6 +155,8 @@ __all__ = [
     "EventOutboxApplicationStorageFailure",
     "EventOutboxHandler",
     "EventOutboxHandlerFailure",
+    "EventOutboxInspectionService",
+    "EventOutboxRetryResult",
     "EventOutboxRunResult",
     "EventOutboxRunner",
     "GetActiveManifestStatus",

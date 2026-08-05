@@ -190,6 +190,7 @@ from .contracts import (
     EpisodicMemoryReviewStorageFailure,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
+    EventOutboxProjectStatus,
     EventOutboxStorageFailure,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
@@ -1211,6 +1212,81 @@ class SQLiteCheckpointRepository:
         except sqlite3.Error as error:
             raise EventOutboxStorageFailure("event outbox claim failed") from error
 
+    def get_project_event_job_status(
+        self, scope: MemoryScope, *, now: datetime
+    ) -> EventOutboxProjectStatus:
+        self._require_event_project_scope(scope)
+        _require_aware_datetime(now, "event outbox status time")
+        timestamp = _outbox_timestamp(now)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT "
+                    "SUM(CASE WHEN (lease_expires_at IS NULL OR lease_expires_at <= ?) "
+                    "AND last_failure_code IS NULL THEN 1 ELSE 0 END) AS pending, "
+                    "SUM(CASE WHEN lease_expires_at > ? THEN 1 ELSE 0 END) AS processing, "
+                    "SUM(CASE WHEN (lease_expires_at IS NULL OR lease_expires_at <= ?) "
+                    "AND last_failure_code IS NOT NULL THEN 1 ELSE 0 END) AS failed "
+                    "FROM event_outbox WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND completed_at IS NULL",
+                    (
+                        timestamp,
+                        timestamp,
+                        timestamp,
+                        str(scope.owner_id),
+                        scope.visibility.value,
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise EventOutboxStorageFailure("event outbox status read failed") from error
+        assert row is not None
+        return EventOutboxProjectStatus(
+            int(row["pending"] or 0),
+            int(row["processing"] or 0),
+            int(row["failed"] or 0),
+        )
+
+    def requeue_failed_project_event_jobs(
+        self, scope: MemoryScope, *, requested_at: datetime, limit: int
+    ) -> int:
+        self._require_event_project_scope(scope)
+        _require_aware_datetime(requested_at, "event outbox retry time")
+        if not 1 <= limit <= 100:
+            raise ValueError("event outbox retry limit must be between 1 and 100")
+        timestamp = _outbox_timestamp(requested_at)
+        try:
+            with self._transaction() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM event_outbox WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND completed_at IS NULL "
+                    "AND last_failure_code IS NOT NULL "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at <= ?) "
+                    "ORDER BY created_at ASC, job_id ASC LIMIT ?",
+                    (
+                        str(scope.owner_id),
+                        scope.visibility.value,
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        timestamp,
+                        limit,
+                    ),
+                ).fetchall()
+                jobs = tuple(
+                    self._event_outbox_from_row(row).requeue_failed(requested_at) for row in rows
+                )
+                connection.executemany(
+                    "UPDATE event_outbox SET available_at = ?, lease_owner = NULL, "
+                    "lease_expires_at = NULL, last_failure_code = NULL WHERE job_id = ?",
+                    [(timestamp, str(job.job_id)) for job in jobs],
+                )
+                return len(jobs)
+        except (ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise EventOutboxStorageFailure("event outbox retry failed") from error
+
     def complete_event_job(
         self,
         scope: MemoryScope,
@@ -1280,6 +1356,11 @@ class SQLiteCheckpointRepository:
             raise
         except (sqlite3.Error, ValueError, TypeError) as error:
             raise EventOutboxStorageFailure("event outbox read failed") from error
+
+    @staticmethod
+    def _require_event_project_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise ValueError("event outbox inspection requires explicit project scope")
 
     def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
         self._require_checkpoint_scope(event.scope)

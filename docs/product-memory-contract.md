@@ -114,6 +114,11 @@ require an intentional user action or a narrowly authorized client action visibl
 Read-only retrieval does not imply write consent. Connector permissions are source-specific,
 least-privilege, revocable, and cannot be expanded by retrieved content or model output.
 
+Personal event-job inspection is a content-free aggregate over one explicitly registered project.
+An explicit retry action may only clear the last bounded failure code and make an incomplete job
+with no active lease immediately available; it preserves the attempt count and cannot record
+completion or handler effects. The surface never exposes job/source/task identities or payloads.
+
 An explicitly submitted task-activity event is a minimized summary with category, actor,
 sensitivity, retention, scope, and evidence metadata. It is not authorization to retain a raw
 conversation, prompt, command, tool argument/body/result, source body, or hidden model trace, and

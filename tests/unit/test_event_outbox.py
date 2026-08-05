@@ -12,6 +12,7 @@ import pytest
 
 from mnemo_memory.packages.application import (
     EventOutboxHandlerFailure,
+    EventOutboxInspectionService,
     EventOutboxRunner,
 )
 from mnemo_memory.packages.domain import (
@@ -70,6 +71,16 @@ def _scope() -> MemoryScope:
         ProjectId.new(),
         SessionId.new(),
         TaskId.new(),
+    )
+
+
+def _project_scope(task_scope: MemoryScope) -> MemoryScope:
+    return MemoryScope(
+        task_scope.owner_id,
+        ScopeLevel.PROJECT,
+        task_scope.visibility,
+        task_scope.workspace_id,
+        task_scope.project_id,
     )
 
 
@@ -229,6 +240,91 @@ def test_concurrent_claimers_do_not_receive_the_same_job(adapter: str, tmp_path:
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(executor.map(claim, ("worker-a", "worker-b")))
     assert sorted(len(result) for result in results) == [0, 1]
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_project_job_status_and_manual_retry_are_scoped_and_content_free(
+    adapter: str, tmp_path: Path
+) -> None:
+    events, outbox = _repositories(adapter, tmp_path)
+    task_scope = _scope()
+    foreign_scope = _scope()
+    for index in range(3):
+        events.append_approved_event(
+            _event(task_scope, f"decision:status:{index}", NOW + timedelta(seconds=index))
+        )
+    events.append_approved_event(_event(foreign_scope, "decision:foreign", NOW))
+
+    processing = outbox.claim_event_jobs(
+        task_scope,
+        worker_id="worker-processing",
+        now=NOW + timedelta(seconds=3),
+        lease_expires_at=NOW + timedelta(seconds=30),
+        limit=1,
+    )[0]
+    failed = outbox.claim_event_jobs(
+        task_scope,
+        worker_id="worker-failed",
+        now=NOW + timedelta(seconds=3),
+        lease_expires_at=NOW + timedelta(seconds=30),
+        limit=1,
+    )[0]
+    outbox.retry_event_job(
+        task_scope,
+        failed.job_id,
+        worker_id="worker-failed",
+        now=NOW + timedelta(seconds=4),
+        available_at=NOW + timedelta(seconds=60),
+        failure_code="TEMPORARY_HANDLER_FAILURE",
+    )
+    service = EventOutboxInspectionService(outbox, clock=lambda: NOW + timedelta(seconds=5))
+
+    status = service.status(_project_scope(task_scope))
+    assert (status.pending, status.processing, status.failed) == (1, 1, 1)
+    assert service.status(_project_scope(foreign_scope)).pending == 1
+    assert service.retry_failed(_project_scope(task_scope)).requeued == 1
+    updated = outbox.get_event_job(task_scope, failed.job_id)
+    assert updated.attempt_count == 1
+    assert updated.last_failure_code is None
+    assert updated.available_at == NOW + timedelta(seconds=5)
+    assert outbox.get_event_job(task_scope, processing.job_id).lease_owner == "worker-processing"
+    assert service.status(_project_scope(task_scope)).failed == 0
+    assert service.retry_failed(_project_scope(foreign_scope)).requeued == 0
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_manual_retry_never_breaks_an_active_failed_job_lease(adapter: str, tmp_path: Path) -> None:
+    events, outbox = _repositories(adapter, tmp_path)
+    task_scope = _scope()
+    events.append_approved_event(_event(task_scope, "decision:leased-failure", NOW))
+    first = outbox.claim_event_jobs(
+        task_scope,
+        worker_id="worker-first",
+        now=NOW + timedelta(seconds=1),
+        lease_expires_at=NOW + timedelta(seconds=10),
+        limit=1,
+    )[0]
+    outbox.retry_event_job(
+        task_scope,
+        first.job_id,
+        worker_id="worker-first",
+        now=NOW + timedelta(seconds=2),
+        available_at=NOW + timedelta(seconds=3),
+        failure_code="TEMPORARY_HANDLER_FAILURE",
+    )
+    claimed = outbox.claim_event_jobs(
+        task_scope,
+        worker_id="worker-active",
+        now=NOW + timedelta(seconds=3),
+        lease_expires_at=NOW + timedelta(seconds=30),
+        limit=1,
+    )[0]
+    service = EventOutboxInspectionService(outbox, clock=lambda: NOW + timedelta(seconds=4))
+
+    status = service.status(_project_scope(task_scope))
+    assert (status.pending, status.processing, status.failed) == (0, 1, 0)
+    assert service.retry_failed(_project_scope(task_scope)).requeued == 0
+    assert outbox.get_event_job(task_scope, claimed.job_id).lease_owner == "worker-active"
 
 
 def test_sqlite_outbox_survives_repository_restart(tmp_path: Path) -> None:

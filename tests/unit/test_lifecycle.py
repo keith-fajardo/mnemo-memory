@@ -1,17 +1,19 @@
 import json
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import mnemo_memory.apps.api.dashboard as dashboard_module
 import mnemo_memory.apps.cli.main as cli_main
 from mnemo_memory.apps.api.app import create_app
 from mnemo_memory.apps.api.dashboard import build_dashboard_status
+from mnemo_memory.apps.api.jobs import EventJobControlError, retry_failed_event_jobs
 from mnemo_memory.apps.cli.main import app
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -141,6 +143,7 @@ def test_loopback_dashboard_serves_packaged_assets_and_sanitized_status(tmp_path
     assert '"X-Mnemo-Intent": "retract-memory"' in script.body.decode()
     assert '"X-Mnemo-Intent": "pin-memory"' in script.body.decode()
     assert '"X-Mnemo-Intent": "export-memories"' in script.body.decode()
+    assert '"X-Mnemo-Intent": "retry-jobs"' in script.body.decode()
     assert status["lifecycle"]["initialized"] is True
     assert status["connections"] == details["connections"]
     encoded = json.dumps(status)
@@ -184,9 +187,100 @@ def test_dashboard_status_reports_only_bounded_current_project_counts(
     }
     assert result["indexes"]["source"]["staleness"] == "unknown"  # type: ignore[index]
     assert isinstance(result["indexes"]["source"]["last_sync_at"], str)  # type: ignore[index]
+    assert result["jobs"] == {"status": "ready", "pending": 0, "processing": 0, "failed": 0}
     encoded = json.dumps(result, sort_keys=True)
     assert str(project) not in encoded
     assert str(binding.scope.project_id) not in encoded
+
+
+def test_job_retry_api_requires_same_origin_intent_and_sanitizes_failures(tmp_path: Path) -> None:
+    lifecycle = service(tmp_path)
+    lifecycle.initialize()
+    calls: list[bool] = []
+
+    def retry() -> dict[str, object]:
+        calls.append(True)
+        return {"requeued": 2}
+
+    client = TestClient(
+        create_app(lifecycle, retry_failed_jobs=retry),
+        base_url="http://127.0.0.1:8765",
+    )
+    assert client.post("/api/jobs/retry").status_code == 403
+    response = client.post(
+        "/api/jobs/retry",
+        headers={
+            "Origin": "http://127.0.0.1:8765",
+            "X-Mnemo-Intent": "retry-jobs",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"requeued": 2}
+    assert calls == [True]
+
+    def unavailable() -> dict[str, object]:
+        raise EventJobControlError("private job detail")
+
+    failed = TestClient(
+        create_app(lifecycle, retry_failed_jobs=unavailable),
+        base_url="http://127.0.0.1:8765",
+    ).post(
+        "/api/jobs/retry",
+        headers={
+            "Origin": "http://127.0.0.1:8765",
+            "X-Mnemo-Intent": "retry-jobs",
+        },
+    )
+    assert failed.status_code == 503
+    assert failed.json() == {"detail": "MNEMO_JOB_RETRY_UNAVAILABLE"}
+    assert "private job detail" not in failed.text
+
+
+def test_job_retry_adapter_resolves_only_the_registered_project(tmp_path: Path) -> None:
+    project = tmp_path / "registered"
+    project.mkdir()
+    config = LocalConfig.defaults(tmp_path / "job profile")
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    observed_at = datetime(2026, 8, 5, 7, tzinfo=UTC)
+    evidence = EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        "synthetic://job-control",
+        "sha256:" + "b" * 64,
+        EvidenceLocation("fixture://job-control"),
+        observed_at,
+        VerificationStatus.VERIFIED,
+    )
+    job_now = datetime.now(UTC) + timedelta(seconds=1)
+    with build_checkpoint_runtime(config) as runtime:
+        runtime.checkpoint_service.create(
+            CreateCheckpoint(
+                binding.checkpoint_scope,
+                CheckpointContent("job retry", (), "active", ("retry",), (), (), (), (), (), (), 8),
+                (evidence,),
+            )
+        )
+        claimed = runtime.repository.claim_event_jobs(
+            binding.checkpoint_scope,
+            worker_id="dashboard-test",
+            now=job_now,
+            lease_expires_at=job_now + timedelta(seconds=30),
+            limit=1,
+        )[0]
+        runtime.repository.retry_event_job(
+            binding.checkpoint_scope,
+            claimed.job_id,
+            worker_id="dashboard-test",
+            now=job_now + timedelta(seconds=1),
+            available_at=job_now + timedelta(hours=1),
+            failure_code="TEMPORARY_HANDLER_FAILURE",
+        )
+
+    assert retry_failed_event_jobs(config, project_directory=project) == {"requeued": 1}
+    status = build_dashboard_status(config, project_directory=project)
+    assert status["jobs"] == {"status": "ready", "pending": 1, "processing": 0, "failed": 0}
 
 
 def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None:

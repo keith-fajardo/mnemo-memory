@@ -135,6 +135,7 @@ from .contracts import (
     EpisodicMemoryReviewResult,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
+    EventOutboxProjectStatus,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
@@ -461,6 +462,61 @@ class ReferenceEventOutboxRepository:
         self._jobs: dict[OutboxJobId, EventOutboxJob] = {}
         self._lock = Lock()
 
+    def get_project_event_job_status(
+        self, scope: MemoryScope, *, now: datetime
+    ) -> EventOutboxProjectStatus:
+        self._require_project_scope(scope)
+        _require_aware_datetime(now, "event outbox status time")
+        with self._lock:
+            jobs = tuple(
+                job
+                for job in self._jobs.values()
+                if self._matches_project(job.scope, scope) and job.completed_at is None
+            )
+            processing = tuple(
+                job
+                for job in jobs
+                if job.lease_expires_at is not None and job.lease_expires_at > now
+            )
+            processing_ids = {job.job_id for job in processing}
+            failed = tuple(
+                job
+                for job in jobs
+                if job.job_id not in processing_ids and job.last_failure_code is not None
+            )
+            failed_ids = {job.job_id for job in failed}
+            return EventOutboxProjectStatus(
+                pending=sum(
+                    job.job_id not in processing_ids and job.job_id not in failed_ids
+                    for job in jobs
+                ),
+                processing=len(processing),
+                failed=len(failed),
+            )
+
+    def requeue_failed_project_event_jobs(
+        self, scope: MemoryScope, *, requested_at: datetime, limit: int
+    ) -> int:
+        self._require_project_scope(scope)
+        _require_aware_datetime(requested_at, "event outbox retry time")
+        if not 1 <= limit <= 100:
+            raise ValueError("event outbox retry limit must be between 1 and 100")
+        with self._lock:
+            failed = sorted(
+                (
+                    job
+                    for job in self._jobs.values()
+                    if self._matches_project(job.scope, scope)
+                    and job.completed_at is None
+                    and job.last_failure_code is not None
+                    and (job.lease_expires_at is None or job.lease_expires_at <= requested_at)
+                ),
+                key=lambda job: (job.created_at, str(job.job_id)),
+            )[:limit]
+            updated = tuple(job.requeue_failed(requested_at) for job in failed)
+            self._jobs.update((job.job_id, job) for job in updated)
+            return len(updated)
+
     def claim_event_jobs(
         self,
         scope: MemoryScope,
@@ -579,6 +635,20 @@ class ReferenceEventOutboxRepository:
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise ValueError("event outbox operations require explicit task scope")
+
+    @staticmethod
+    def _require_project_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise ValueError("event outbox inspection requires explicit project scope")
+
+    @staticmethod
+    def _matches_project(task_scope: MemoryScope, project_scope: MemoryScope) -> bool:
+        return (
+            task_scope.owner_id == project_scope.owner_id
+            and task_scope.visibility is project_scope.visibility
+            and task_scope.workspace_id == project_scope.workspace_id
+            and task_scope.project_id == project_scope.project_id
+        )
 
 
 class ReferenceTaskActivityEventRepository:

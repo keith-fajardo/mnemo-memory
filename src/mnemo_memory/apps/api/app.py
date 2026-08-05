@@ -8,6 +8,7 @@ from importlib import resources
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
+from mnemo_memory.apps.api.jobs import EventJobControlError, EventJobProjectNotFound
 from mnemo_memory.apps.api.memories import (
     ApprovedMemoryActionConflict,
     ApprovedMemoryActionError,
@@ -49,6 +50,7 @@ def create_app(
     retract_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
     set_approved_memory_pin: Callable[[str, object], dict[str, object]] | None = None,
     approved_memory_export: Callable[[], str] | None = None,
+    retry_failed_jobs: Callable[[], dict[str, object]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -187,6 +189,18 @@ def create_app(
         if set_approved_memory_pin is None:
             raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE")
         return _memory_action(lambda: set_approved_memory_pin(event_id, value))
+
+    @app.post("/api/jobs/retry")
+    def retry_jobs(request: Request) -> dict[str, object]:
+        _require_memory_write(request, service, "retry-jobs")
+        if retry_failed_jobs is None:
+            raise HTTPException(status_code=503, detail="MNEMO_JOB_RETRY_UNAVAILABLE")
+        try:
+            return retry_failed_jobs()
+        except EventJobProjectNotFound:
+            raise HTTPException(status_code=404, detail="MNEMO_JOB_PROJECT_NOT_FOUND") from None
+        except EventJobControlError:
+            raise HTTPException(status_code=503, detail="MNEMO_JOB_RETRY_UNAVAILABLE") from None
 
     return app
 

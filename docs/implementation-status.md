@@ -1325,6 +1325,37 @@ dependency/provenance validation for 86 entries, and architecture validation for
 Python files. No scheduler, durable job queue, retry control, release workflow, dependency, model
 call, non-loopback exposure, or team behavior was added.
 
+#### Issue 20L — Failed-job visibility and explicit retry — Complete
+
+This bounded issue exposes content-free pending, processing, and failed counts for the existing
+durable event outbox in the exact registered project and adds one explicit bounded retry action for
+failed, unleased jobs. Retry may only make existing jobs immediately available; it must preserve
+attempt counts, never synthesize handler success, never reveal job/source/task identities or
+payloads, and never cross project scope. This issue adds no new job type, scheduler, handler,
+background daemon, payload browser, migration, dependency, model call, non-loopback exposure, or
+team behavior.
+
+Implemented one content-free `EventOutboxProjectStatus` contract and exact-project Reference/SQLite
+queries over the existing durable event outbox. Pending, active-lease, and failed counts are
+mutually exclusive; completed jobs and every other owner/workspace/project are excluded before
+aggregation. The dashboard returns counts only, with no job, source, session, task, owner, failure,
+or payload data.
+
+The same application service supports an explicit bounded requeue of at most 100 failed jobs. It
+selects only incomplete jobs with absent or expired leases, makes them immediately available,
+clears only their last bounded failure code, and preserves attempt counts. Active leases are never
+broken and requeue never records completion or handler effects. The loopback POST endpoint requires
+the registered current project, same-origin request, explicit intent header, and user confirmation;
+failures expose stable codes only. No second queue, scheduler, worker, handler, or job type was
+introduced.
+
+All 53 focused outbox, dashboard, API, memory-browser, exact-project, active-lease, and sanitized-
+failure tests pass across Reference and SQLite. The complete repository gate passes with 804 tests,
+strict typing for 203 source files, dependency/provenance validation for 86 entries, and
+architecture validation for 107 product Python files. No new job type, scheduler, handler,
+background daemon, payload browser, migration, dependency, model call, non-loopback exposure, or
+team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

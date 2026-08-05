@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from mnemo_memory.packages.domain import EventOutboxJob, MemoryScope
+from mnemo_memory.packages.domain import EventOutboxJob, MemoryScope, ScopeLevel
 from mnemo_memory.packages.storage.contracts import (
     EventOutboxLeaseConflict,
+    EventOutboxProjectStatus,
     EventOutboxRepository,
     EventOutboxRepositoryError,
 )
@@ -21,6 +22,50 @@ class EventOutboxApplicationError(Exception):
 
 class EventOutboxApplicationStorageFailure(EventOutboxApplicationError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class EventOutboxRetryResult:
+    requeued: int
+
+
+class EventOutboxInspectionService:
+    """Content-free exact-project status and explicit failed-job requeue."""
+
+    def __init__(
+        self,
+        repository: EventOutboxRepository,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._repository = repository
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def status(self, scope: MemoryScope) -> EventOutboxProjectStatus:
+        self._require_project_scope(scope)
+        try:
+            return self._repository.get_project_event_job_status(scope, now=self._clock())
+        except EventOutboxRepositoryError as error:
+            raise EventOutboxApplicationStorageFailure("event outbox status failed") from error
+
+    def retry_failed(
+        self, scope: MemoryScope, *, maximum_jobs: int = 100
+    ) -> EventOutboxRetryResult:
+        self._require_project_scope(scope)
+        if not 1 <= maximum_jobs <= 100:
+            raise ValueError("event outbox retry limit must be between 1 and 100")
+        try:
+            count = self._repository.requeue_failed_project_event_jobs(
+                scope, requested_at=self._clock(), limit=maximum_jobs
+            )
+        except EventOutboxRepositoryError as error:
+            raise EventOutboxApplicationStorageFailure("event outbox retry failed") from error
+        return EventOutboxRetryResult(count)
+
+    @staticmethod
+    def _require_project_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.PROJECT:
+            raise ValueError("event outbox inspection requires explicit project scope")
 
 
 class EventOutboxHandlerFailure(Exception):

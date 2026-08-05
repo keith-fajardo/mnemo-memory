@@ -635,9 +635,12 @@ project checkpoint, structural memory, and repository documentation remain.
 
 Run `mnemo-memory start`, then open `http://127.0.0.1:8765/`. The loopback-only dashboard shows
 whether the store is initialized, whether Codex or Claude Code owns the Mnemo registration, whether
-the current project is enabled, and bounded source/dbt/knowledge index counts. It uses packaged
-local assets. Its health response excludes memory/document content, absolute paths, scope IDs,
-credentials, and subprocess output. The Approved Memory section is the explicit content-bearing
+the current project is enabled, and bounded source/dbt/knowledge index counts with honest freshness
+and last-sync state. It also shows content-free pending, processing, and failed event-job counts.
+**Retry failed** requeues at most 100 failed jobs in this project after confirmation; active leases
+remain untouched, attempt counts remain, and requeueing does not claim successful processing. It
+uses packaged local assets. Its health response excludes memory/document content, absolute paths,
+scope or job IDs, credentials, and subprocess output. The Approved Memory section is the explicit content-bearing
 view: it lists only the current registered project task's bounded approved facts, retained evidence,
 and correction or payload-free retraction lineage. For an active fact, **Correct** appends a new
 immutable replacement after an explicit confirmation; **Erase fact** removes that fact and its

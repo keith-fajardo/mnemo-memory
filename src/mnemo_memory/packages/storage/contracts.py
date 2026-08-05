@@ -138,7 +138,26 @@ class EventOutboxStorageFailure(EventOutboxRepositoryError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class EventOutboxProjectStatus:
+    pending: int
+    processing: int
+    failed: int
+
+    def __post_init__(self) -> None:
+        if min(self.pending, self.processing, self.failed) < 0:
+            raise ValueError("event outbox status counts cannot be negative")
+
+
 class EventOutboxRepository(Protocol):
+    def get_project_event_job_status(
+        self, scope: MemoryScope, *, now: datetime
+    ) -> EventOutboxProjectStatus: ...
+
+    def requeue_failed_project_event_jobs(
+        self, scope: MemoryScope, *, requested_at: datetime, limit: int
+    ) -> int: ...
+
     def claim_event_jobs(
         self,
         scope: MemoryScope,
