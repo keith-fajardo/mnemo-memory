@@ -120,9 +120,33 @@ missing private-project grant, suspended project grant, owner-only data, private
 administrator behavior, and deterministic repeated decisions. Later storage and service issues
 must run the same matrix against PostgreSQL RLS and remote request composition before team exposure.
 
-**Residual risk:** The current issue defines and tests only the canonical pure policy. No team
-database, authentication mapping, remote surface, membership mutation, or audit log exists yet;
-therefore team mode remains unavailable.
+**Residual risk:** The canonical policy and a non-durable control-plane repository contract now
+exist. No team database, authentication mapping, authorized mutation service, RLS, or remote
+surface exists yet; therefore team mode remains unavailable.
+
+### Team authority races and audit gaps
+
+**Scenario:** Two administrators overwrite the same membership, a delayed request restores a
+suspended grant, ownership transfer creates zero or two owners, a project grant points to another
+workspace, or authority state commits without the audit record that should describe it. Reusing an
+idempotency identity with a different payload could otherwise conceal the second request.
+
+**Required controls:** Team authority mutations compare the exact current record supplied by the
+caller and reject stale state. Workspace creation produces one active owner membership, and only
+the dedicated atomic transfer may change that owner. Projects and project memberships require
+exact existing parents; active project grants require an active workspace grant. Each successful
+mutation and its payload-free audit event commit as one operation. An exact workspace/request
+ledger distinguishes an identical retry from a different canonical mutation. Exact-key reads never
+fall back to another workspace or project, and audit materialization is capped at 100 records.
+
+**Verification:** Reference repository tests cover identical retry, changed-payload replay,
+second-owner rejection, atomic owner transfer, stale compare-and-set updates, orphan and inactive
+project membership, wrong-workspace reads, bounded audit pages, and a two-thread competing update
+with one state winner and one audit append.
+
+**Residual risk:** The executable reference adapter is not durable and does not authenticate or
+authorize its actor. A PostgreSQL transaction, database constraints/RLS, authenticated application
+composition, audit retention, and failure-injected parity tests are required before team use.
 
 ### Prompt injection through retrieved content
 

@@ -81,6 +81,23 @@ and cannot trigger a broad lookup. This application policy is the canonical auth
 the later PostgreSQL adapter must enforce an equivalent restrictive row-level policy as a second
 boundary.
 
+Team authority state changes are compare-and-set operations over exact composite identities. A
+workspace is created with exactly one active owner membership. Ordinary membership updates cannot
+create or change the owner role; ownership transfer atomically updates the workspace, promotes one
+active successor, demotes the former owner to admin, and records the change. Projects require an
+existing workspace and active workspace-member owner. A new project membership must start active,
+and an active project membership requires an active workspace membership. Project visibility may
+change without changing identity or ownership. Suspended membership remains stored authority state
+but never authorizes access.
+
+Every committed authority mutation carries one immutable, payload-free audit event in the same
+atomic operation. It records only request/event, workspace/project/principal, actor, action, and
+time identities. The same request and canonical mutation may be replayed idempotently; a reused
+request with different state is a conflict. Audit reads require the exact workspace and are capped
+at 100 records per page. These are storage-neutral requirements; the current reference adapter is
+not durable, and the PostgreSQL adapter, authenticated application service, and RLS parity remain
+required before team mode exists.
+
 ## Evidence requirements
 
 Every durable memory includes:

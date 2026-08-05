@@ -1457,6 +1457,34 @@ policy, authentication, network surface, migration, dependency, audit log, team 
 membership service was added; team mode remains unavailable until the remaining Milestone 9 issues
 are complete.
 
+#### Issue 21B — Team control-plane storage contract — Complete
+
+The current bounded issue defines the durable, storage-neutral state transitions that PostgreSQL
+must later implement: workspace creation with exactly one active owner, explicit non-owner
+workspace membership changes, atomic ownership transfer, project creation and visibility changes,
+and exact project membership changes. Every successful authority mutation must atomically append a
+strict payload-free audit event and identical request retries must be idempotent; stale writes,
+cross-workspace/project records, orphan projects or project members, implicit owner changes, and a
+second workspace owner must fail closed. Exact-key reads and bounded audit pagination are required.
+A thread-safe reference adapter and repository contract tests establish semantics without claiming
+team durability. This issue adds no database, migration, RLS, application/API service, invitation,
+email, OAuth, remote listener, dependency, personal import, knowledge sharing, or usable team mode.
+
+Implemented strict workspace and payload-free audit domain contracts plus a storage-neutral team
+control-plane repository and thread-safe reference adapter. Workspace creation atomically establishes
+one active owner; ordinary writes cannot create or mutate that owner; ownership transfer promotes
+one active successor, demotes the former owner, updates the workspace, and appends one audit event.
+Workspace/project memberships and project visibility use exact compare-and-set state, reject stale,
+orphaned, inactive-parent, cross-scope, implicit-owner, and no-op mutations, and append audit only on
+success. An exact request ledger makes identical canonical retries idempotent and rejects a changed
+payload under the same request. Audit records contain only typed identities, action, and time, and
+exact-workspace pagination is capped at 100. ADR 0011, the product contract, and threat model define
+the transaction and residual-risk boundary. The complete repository gate passes with 826 tests,
+strict typing for 208 source files, dependency/provenance validation for 87 registered entries,
+architecture validation for 110 product Python files, and the isolated installed-package MCP
+workflow. No database, migration, RLS, authenticated service, network surface, dependency, import,
+shared knowledge behavior, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

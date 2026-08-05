@@ -108,6 +108,15 @@ from .sqlite import (
     SQLiteSchemaTooNewError,
     SQLiteSourceStructureRepository,
 )
+from .team import (
+    ReferenceTeamControlPlaneRepository,
+    TeamAuditPage,
+    TeamControlPlaneConflict,
+    TeamControlPlaneInvalidMutation,
+    TeamControlPlaneNotFound,
+    TeamControlPlaneRepository,
+    TeamMutationResult,
+)
 
 __all__ = [
     "ActiveEpisodicMemoryNotFound",
@@ -190,6 +199,7 @@ __all__ = [
     "ReferenceProjectIndexRepository",
     "ReferenceSourceStructureRepository",
     "ReferenceTaskActivityEventRepository",
+    "ReferenceTeamControlPlaneRepository",
     "SQLiteCheckpointRepository",
     "SQLiteKnowledgeDocumentRepository",
     "SQLiteMigrationError",
@@ -212,4 +222,10 @@ __all__ = [
     "TaskActivityRetentionNotFound",
     "TaskActivityRetentionRepository",
     "TaskActivityRetentionStorageFailure",
+    "TeamAuditPage",
+    "TeamControlPlaneConflict",
+    "TeamControlPlaneInvalidMutation",
+    "TeamControlPlaneNotFound",
+    "TeamControlPlaneRepository",
+    "TeamMutationResult",
 ]
