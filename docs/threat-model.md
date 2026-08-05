@@ -112,6 +112,12 @@ owners, and statistics plus run-result environment values, adapter responses, me
 code, relation SQL, arbitrary arguments, and thread identifiers are never retained in its domain
 artifacts.
 
+The personal-profile content-safety boundary always runs Mnemo's deterministic classifier first.
+At most eight explicitly supplied classifiers may strengthen sensitivity or reject content; they
+cannot override a deterministic rejection, and invalid results or classifier failures reject with
+stable content-free codes. Knowledge passages are checked again immediately before the local
+embedding provider is invoked, so rejection produces neither a provider call nor a vector row.
+
 **Verification:** Synthetic secret corpus across ingestion, job retry, logging, retrieval, export,
 and deletion paths. Confirm no raw value or reversible encoding appears.
 

@@ -13,17 +13,20 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    Sensitivity,
     Visibility,
     WorkspaceId,
 )
 from mnemo_memory.packages.knowledge import (
     KnowledgeDocumentParser,
     KnowledgeDocumentParseRequest,
+    LocalEmbeddingError,
     LocalSemanticKnowledgeIndexer,
     LocalSemanticKnowledgeRetriever,
     SemanticKnowledgeIndexRequest,
     SemanticKnowledgeSearchRequest,
 )
+from mnemo_memory.packages.policy import ContentSafetyDecision, ContentSafetyPolicy
 from mnemo_memory.packages.storage import (
     KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
@@ -58,6 +61,23 @@ class FakeLocalEmbeddingProvider:
 class NoQueryProvider(FakeLocalEmbeddingProvider):
     def embed_query(self, query: str) -> tuple[float, ...]:
         raise AssertionError("an unindexed semantic request must not initialize a local model")
+
+
+class CountingEmbeddingProvider(FakeLocalEmbeddingProvider):
+    def __init__(self) -> None:
+        self.passage_calls = 0
+
+    def embed_passages(self, passages: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.passage_calls += 1
+        return super().embed_passages(passages)
+
+
+class RejectingClassifier:
+    def classify(self, values: tuple[str, ...]) -> ContentSafetyDecision:
+        assert values
+        return ContentSafetyDecision(
+            False, Sensitivity.PROHIBITED, "MNEMO_FIXTURE_EMBEDDING_REJECTED"
+        )
 
 
 def scope(seed: int = 1) -> MemoryScope:
@@ -161,6 +181,25 @@ def test_unindexed_semantic_request_does_not_initialize_the_local_runtime(
     assert result.matches == ()
     assert result.indexed_section_count == 0
     assert result.unindexed_section_count == 1
+
+
+def test_local_semantic_index_rechecks_content_before_provider_or_vector_storage(
+    repository: KnowledgeDocumentRepository,
+) -> None:
+    document = revision("notes/billing.md", "# Invoices\nReconcile the invoice total.")
+    repository.apply_sync(scope(), (document,), ())
+    provider = CountingEmbeddingProvider()
+    indexer = LocalSemanticKnowledgeIndexer(
+        repository,
+        provider,
+        ContentSafetyPolicy((RejectingClassifier(),)),
+    )
+
+    with pytest.raises(LocalEmbeddingError, match=r"^MNEMO_FIXTURE_EMBEDDING_REJECTED$"):
+        indexer.index(SemanticKnowledgeIndexRequest(scope()))
+
+    assert provider.passage_calls == 0
+    assert repository.list_current_section_embeddings(scope(), provider.model_id, 128) == ()
 
 
 def test_current_document_path_lookup_is_scope_first(

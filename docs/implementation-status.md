@@ -1255,3 +1255,38 @@ repository gate passes with 602 tests, strict typing for 154 source files, schem
 dependency/provenance validation for 86 entries, and architecture validation for 76 product Python
 files. No model call, extraction, conversation capture, daemon, network/MCP surface, retention,
 export/deletion feature, dependency, team mode, or source-content storage was added.
+
+#### Issue 16B — Complete
+
+The current bounded issue adds one composed, content-free classification boundary before the
+existing approved-event and knowledge-document persistence paths and immediately before local
+knowledge embedding. Mnemo's deterministic high-confidence secret classifier is mandatory and
+always runs first; callers may supply a bounded ordered set of additional classifiers, but no
+classifier may weaken or bypass a deterministic rejection. Decisions expose only acceptance,
+sensitivity, and a bounded stable code, never matched content. Rejection must persist and embed
+nothing, must not invoke later classifiers or the embedding provider, and must surface only a safe
+code. Existing default behavior remains deterministic and dependency-free. Focused tests require
+secret-corpus coverage across both ingestion paths and embedding, ordered classifier composition,
+fail-closed invalid classifier results, and proof that optional classifiers cannot override the
+mandatory gate. This issue does not add event kinds, conversation/tool capture, model calls,
+candidate extraction, an API/CLI/MCP surface, a worker/daemon, migration, retention/export/deletion
+behavior, dependency, or team mode.
+
+Implemented one dependency-free `ContentSafetyPolicy` with a mandatory deterministic
+high-confidence secret classifier followed by at most eight explicitly supplied classifiers.
+Decisions contain only acceptance, sensitivity, and a validated stable code. Deterministic
+rejection stops the chain before optional classifiers; later classifiers can only strengthen
+sensitivity or reject, and exceptions, malformed output, oversized input, or invalid configuration
+fail closed without retaining payloads. The existing approved-event/governance policies now check
+summaries, source keys, and persisted evidence references, while knowledge policy checks paths,
+titles, frontmatter keys/values, and section headings/content. Both Reference and SQLite adapters
+accept the same composed policy without changing safe defaults. Local semantic indexing rechecks
+every pending passage immediately before the provider and vector write. Focused tests cover the
+secret corpus, content-free results, ordered composition, non-bypass, sensitivity monotonicity,
+invalid/failing classifiers, bounds, both persistence adapters, evidence metadata, and zero
+provider/vector effects after rejection. The threat model records the implemented boundary. The
+complete repository gate passes with 622 tests, strict typing for 156 source files, schema
+validation, dependency/provenance validation for 86 entries, and architecture validation for 77
+product Python files. No event kind, conversation/tool capture, model call, candidate extraction,
+transport surface, daemon, migration, retention/export/deletion behavior, dependency, or team mode
+was added.

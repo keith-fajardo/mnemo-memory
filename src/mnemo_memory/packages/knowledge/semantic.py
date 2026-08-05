@@ -18,6 +18,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     knowledge_section_digest,
 )
+from mnemo_memory.packages.policy import ContentSafetyPolicy
 from mnemo_memory.packages.storage import KnowledgeDocumentRepository
 
 
@@ -93,10 +94,14 @@ class LocalSemanticKnowledgeIndexer:
     """Build an idempotent local vector projection for only current scoped sections."""
 
     def __init__(
-        self, repository: KnowledgeDocumentRepository, provider: LocalEmbeddingProvider
+        self,
+        repository: KnowledgeDocumentRepository,
+        provider: LocalEmbeddingProvider,
+        safety_policy: ContentSafetyPolicy | None = None,
     ) -> None:
         self._repository = repository
         self._provider = provider
+        self._safety_policy = safety_policy or ContentSafetyPolicy()
 
     def index(self, request: SemanticKnowledgeIndexRequest) -> SemanticKnowledgeIndexResult:
         sections = self._repository.iter_current_sections(request.scope, request.maximum_documents)
@@ -114,7 +119,11 @@ class LocalSemanticKnowledgeIndexer:
             or prior.section_digest != knowledge_section_digest(item.section)
         )
         if pending:
-            vectors = self._provider.embed_passages(tuple(_section_text(item) for item in pending))
+            passages = tuple(_section_text(item) for item in pending)
+            safety = self._safety_policy.assess(*passages)
+            if not safety.accepted:
+                raise LocalEmbeddingError(safety.code or "MNEMO_SEMANTIC_CONTENT_REJECTED")
+            vectors = self._provider.embed_passages(passages)
             if len(vectors) != len(pending):
                 raise LocalEmbeddingError("MNEMO_SEMANTIC_LOCAL_RESULT_INVALID")
             self._repository.store_section_embeddings(

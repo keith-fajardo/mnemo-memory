@@ -17,13 +17,19 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    Sensitivity,
     Visibility,
     WorkspaceId,
 )
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
+from mnemo_memory.packages.policy import (
+    ContentSafetyDecision,
+    KnowledgeDocumentSafetyPolicy,
+)
 from mnemo_memory.packages.storage import (
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
+    KnowledgeDocumentRepository,
     KnowledgeDocumentSecretRejected,
     ReferenceKnowledgeDocumentRepository,
     SQLiteKnowledgeDocumentRepository,
@@ -31,6 +37,14 @@ from mnemo_memory.packages.storage import (
 )
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
+
+
+class RejectingKnowledgeClassifier:
+    def classify(self, values: tuple[str, ...]) -> ContentSafetyDecision:
+        assert values
+        return ContentSafetyDecision(
+            False, Sensitivity.PROHIBITED, "MNEMO_FIXTURE_KNOWLEDGE_REJECTED"
+        )
 
 
 def scope(seed: int = 1) -> MemoryScope:
@@ -89,6 +103,29 @@ def test_reference_repository_stores_immutable_revisions_and_scopes_reads() -> N
     assert repository.list_active_documents(scope())[0].revision_number == 2
     with pytest.raises(KnowledgeDocumentNotFound):
         repository.get_current_revision(scope(2), first.document.document_id)
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_pluggable_classifier_rejection_prevents_knowledge_persistence(
+    adapter: str, tmp_path: Path
+) -> None:
+    policy = KnowledgeDocumentSafetyPolicy((RejectingKnowledgeClassifier(),))
+    repository: KnowledgeDocumentRepository
+    if adapter == "reference":
+        repository = ReferenceKnowledgeDocumentRepository(policy)
+    else:
+        repository = SQLiteKnowledgeDocumentRepository(
+            tmp_path / "classified-knowledge.sqlite3",
+            base_directory=tmp_path,
+            policy=policy,
+        )
+        repository.migrate()
+    item = revision("notes/safe.md", "# Safe\nOrdinary bounded content.")
+
+    with pytest.raises(KnowledgeDocumentSecretRejected):
+        repository.apply_sync(scope(), (item,), ())
+
+    assert repository.list_active_documents(scope()) == ()
 
 
 def test_reference_repository_rejects_stale_or_secret_writes_without_partial_state() -> None:

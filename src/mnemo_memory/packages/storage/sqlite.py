@@ -200,8 +200,19 @@ def resolve_database_path(path: Path, base_directory: Path | None = None) -> Pat
 
 
 class SQLiteCheckpointRepository:
-    def __init__(self, path: Path, *, base_directory: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        base_directory: Path | None = None,
+        approved_event_policy: ApprovedEpisodicEventSafetyPolicy | None = None,
+        knowledge_document_policy: KnowledgeDocumentSafetyPolicy | None = None,
+    ) -> None:
         self.path = resolve_database_path(path, base_directory)
+        self._approved_event_policy = approved_event_policy or ApprovedEpisodicEventSafetyPolicy()
+        self._knowledge_document_policy = (
+            knowledge_document_policy or KnowledgeDocumentSafetyPolicy()
+        )
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1139,7 +1150,7 @@ class SQLiteCheckpointRepository:
         self, event: ApprovedEpisodicEvent
     ) -> ApprovedEpisodicEventStoreResult:
         self._require_approved_episodic_scope(event.scope)
-        if not ApprovedEpisodicEventSafetyPolicy().assess_event(event).accepted:
+        if not self._approved_event_policy.assess_event(event).accepted:
             raise ApprovedEpisodicEventSecretRejected(
                 "approved episodic event was rejected by deterministic secret policy"
             )
@@ -1226,7 +1237,7 @@ class SQLiteCheckpointRepository:
         governance: ApprovedEpisodicEventGovernance,
     ) -> ApprovedEpisodicEventGovernanceResult:
         self._validate_approved_governance(replacement.scope, governance)
-        policy = ApprovedEpisodicEventSafetyPolicy()
+        policy = self._approved_event_policy
         if (
             not policy.assess_event(replacement).accepted
             or not policy.assess_governance(governance).accepted
@@ -1303,7 +1314,7 @@ class SQLiteCheckpointRepository:
         self, governance: ApprovedEpisodicEventGovernance
     ) -> ApprovedEpisodicEventGovernanceResult:
         self._validate_approved_governance(governance.scope, governance)
-        if not ApprovedEpisodicEventSafetyPolicy().assess_governance(governance).accepted:
+        if not self._approved_event_policy.assess_governance(governance).accepted:
             raise ApprovedEpisodicEventSecretRejected(
                 "approved episodic event retraction was rejected by secret policy"
             )
@@ -3951,7 +3962,12 @@ class _KnowledgeOperations:
                             (revision_row["revision_id"],),
                         )
                 for revision in revisions:
-                    _KnowledgeOperations._store_knowledge_revision(connection, scope, revision)
+                    _KnowledgeOperations._store_knowledge_revision(
+                        connection,
+                        scope,
+                        revision,
+                        backend._knowledge_document_policy,
+                    )
                 _KnowledgeOperations._rebuild_knowledge_search_index(connection, scope)
                 rows = connection.execute(
                     "SELECT source.document_id, source.relative_path, source.content_digest, "
@@ -3988,9 +4004,10 @@ class _KnowledgeOperations:
         connection: sqlite3.Connection,
         scope: MemoryScope,
         revision: KnowledgeDocumentRevision,
+        policy: KnowledgeDocumentSafetyPolicy,
     ) -> None:
         document = revision.document
-        safety = KnowledgeDocumentSafetyPolicy().assess(document)
+        safety = policy.assess(document)
         if not safety.accepted:
             raise KnowledgeDocumentSecretRejected(
                 "knowledge document was rejected by safety policy"
@@ -4212,8 +4229,18 @@ class _KnowledgeOperations:
 class SQLiteKnowledgeDocumentRepository:
     """Scoped SQLite adapter for immutable local knowledge document revisions."""
 
-    def __init__(self, path: Path, *, base_directory: Path | None = None) -> None:
-        self._backend = SQLiteCheckpointRepository(path, base_directory=base_directory)
+    def __init__(
+        self,
+        path: Path,
+        *,
+        base_directory: Path | None = None,
+        policy: KnowledgeDocumentSafetyPolicy | None = None,
+    ) -> None:
+        self._backend = SQLiteCheckpointRepository(
+            path,
+            base_directory=base_directory,
+            knowledge_document_policy=policy,
+        )
 
     def migrate(self, *, fail_after_version: int | None = None) -> None:
         self._backend.migrate(fail_after_version=fail_after_version)

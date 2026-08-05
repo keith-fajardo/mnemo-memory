@@ -487,8 +487,12 @@ class ReferenceEventOutboxRepository:
 class ReferenceApprovedEpisodicEventRepository:
     """Append-only reference store for explicit, evidence-backed task facts."""
 
-    def __init__(self, outbox: ReferenceEventOutboxRepository | None = None) -> None:
-        self._policy = ApprovedEpisodicEventSafetyPolicy()
+    def __init__(
+        self,
+        outbox: ReferenceEventOutboxRepository | None = None,
+        policy: ApprovedEpisodicEventSafetyPolicy | None = None,
+    ) -> None:
+        self._policy = policy or ApprovedEpisodicEventSafetyPolicy()
         self.outbox = outbox or ReferenceEventOutboxRepository()
         self._events: dict[EventId, ApprovedEpisodicEvent] = {}
         self._keys: dict[tuple[MemoryScope, str], EventId] = {}

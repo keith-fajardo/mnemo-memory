@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    Sensitivity,
     SessionId,
     SourceId,
     SourceTrustClass,
@@ -29,6 +31,10 @@ from mnemo_memory.packages.domain import (
     VerificationStatus,
     Visibility,
     WorkspaceId,
+)
+from mnemo_memory.packages.policy import (
+    ApprovedEpisodicEventSafetyPolicy,
+    ContentSafetyDecision,
 )
 from mnemo_memory.packages.storage import (
     ReferenceApprovedEpisodicEventRepository,
@@ -44,6 +50,14 @@ from mnemo_memory.packages.storage.contracts import (
 )
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
+
+
+class RejectingApprovedEventClassifier:
+    def classify(self, values: tuple[str, ...]) -> ContentSafetyDecision:
+        assert values
+        return ContentSafetyDecision(
+            False, Sensitivity.PROHIBITED, "MNEMO_FIXTURE_APPROVED_EVENT_REJECTED"
+        )
 
 
 def _scope() -> MemoryScope:
@@ -145,6 +159,31 @@ def test_approved_event_contract_is_scoped_immutable_idempotent_and_ordered(
     assert page.next_offset == 1
     assert repository.list_approved_events(item_scope, offset=1).items == (first,)
     assert all(item.evidence_references for item in page.items)
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_pluggable_classifier_rejection_prevents_approved_event_persistence(
+    adapter: str, tmp_path: Path
+) -> None:
+    policy = ApprovedEpisodicEventSafetyPolicy((RejectingApprovedEventClassifier(),))
+    if adapter == "reference":
+        repository: ApprovedEpisodicEventRepository = ReferenceApprovedEpisodicEventRepository(
+            policy=policy
+        )
+    else:
+        sqlite = SQLiteCheckpointRepository(
+            tmp_path / "classified-approved.sqlite3",
+            base_directory=tmp_path,
+            approved_event_policy=policy,
+        )
+        sqlite.migrate()
+        repository = sqlite
+    item_scope = _scope()
+
+    with pytest.raises(ApprovedEpisodicEventSecretRejected):
+        repository.append_approved_event(_event(item_scope))
+
+    assert repository.list_approved_events(item_scope).items == ()
 
 
 def test_approved_event_contract_preserves_scope_non_disclosure_and_conflict(
@@ -289,6 +328,29 @@ def test_approved_event_and_governance_reject_high_confidence_secrets_before_sto
     with pytest.raises(ApprovedEpisodicEventSecretRejected):
         repository.retract_approved_event(secret_retraction)
     assert repository.list_approved_events(item_scope).items == (original,)
+
+
+def test_approved_event_rejects_secrets_in_persisted_evidence_metadata(
+    repository: ApprovedEpisodicEventRepository,
+) -> None:
+    item_scope = _scope()
+    evidence = replace(
+        _evidence(),
+        immutable_source_ref="fixture://ghp_abcdefghijklmnopqrstuvwxyz123456",
+    )
+    event = ApprovedEpisodicEvent.create(
+        scope=item_scope,
+        kind=ApprovedEventKind.DECISION,
+        summary="Use the verified source grain.",
+        source_event_key="decision:evidence-secret",
+        occurred_at=NOW,
+        evidence_references=(evidence,),
+    )
+
+    with pytest.raises(ApprovedEpisodicEventSecretRejected):
+        repository.append_approved_event(event)
+
+    assert repository.list_approved_event_records(item_scope).items == ()
 
 
 def test_sqlite_approved_events_are_durable_and_fail_atomically(tmp_path: Path) -> None:

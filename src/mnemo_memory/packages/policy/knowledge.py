@@ -7,31 +7,12 @@ policy can add a reviewed classifier, but must not weaken these deterministic ch
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
-from mnemo_memory.packages.domain import KnowledgeDocument
+from mnemo_memory.packages.domain import KnowledgeDocument, Sensitivity
 
-_HIGH_CONFIDENCE_SECRET_PATTERNS = (
-    re.compile(r"-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(
-        r"(?im)^\s*(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{16,}"
-    ),
-)
-
-
-def contains_high_confidence_secret(*values: str) -> bool:
-    """Return a content-free deterministic decision shared by persistence boundaries."""
-    if any(not isinstance(value, str) for value in values):
-        raise TypeError("secret policy values must be strings")
-    return any(
-        pattern.search(value) is not None
-        for value in values
-        for pattern in _HIGH_CONFIDENCE_SECRET_PATTERNS
-    )
+from .content_safety import ContentSafetyClassifier, ContentSafetyPolicy
+from .content_safety import contains_high_confidence_secret as contains_high_confidence_secret
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,25 +20,33 @@ class KnowledgeDocumentSafetyDecision:
     """A content-free safety result suitable for diagnostics and tests."""
 
     accepted: bool
+    sensitivity: Sensitivity
     code: str | None = None
 
     def __post_init__(self) -> None:
-        if self.accepted != (self.code is None):
+        if self.accepted != (self.code is None) or (
+            self.accepted == (self.sensitivity is Sensitivity.PROHIBITED)
+        ):
             raise ValueError("knowledge safety decisions must have one consistent code state")
 
 
 class KnowledgeDocumentSafetyPolicy:
     """Reject high-confidence secrets without exposing matched content."""
 
+    def __init__(self, additional_classifiers: tuple[ContentSafetyClassifier, ...] = ()) -> None:
+        self._content_safety = ContentSafetyPolicy(additional_classifiers)
+
     def assess(self, document: KnowledgeDocument) -> KnowledgeDocumentSafetyDecision:
         if not isinstance(document, KnowledgeDocument) or not document.is_untrusted:
             raise TypeError("knowledge safety policy requires an untrusted knowledge document")
-        # The future repository persists frontmatter and section payloads, so both enter this
-        # deterministic gate. Link targets are kept metadata-only and cannot carry a secret value.
         values = (
-            *tuple(value for _, value in document.frontmatter),
-            *(item.content for item in document.sections),
+            document.relative_path,
+            document.title,
+            *(value for pair in document.frontmatter for value in pair),
+            *(value for item in document.sections for value in (item.heading, item.content)),
         )
-        if contains_high_confidence_secret(*values):
-            return KnowledgeDocumentSafetyDecision(False, "MNEMO_KNOWLEDGE_SECRET_REJECTED")
-        return KnowledgeDocumentSafetyDecision(True)
+        decision = self._content_safety.assess(*values)
+        code = decision.code
+        if code == "MNEMO_CONTENT_SECRET_REJECTED":
+            code = "MNEMO_KNOWLEDGE_SECRET_REJECTED"
+        return KnowledgeDocumentSafetyDecision(decision.accepted, decision.sensitivity, code)
