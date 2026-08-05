@@ -70,6 +70,7 @@ from mnemo_memory.packages.application import (
     ListApprovedEpisodicEventRecords,
     LocalConfig,
     LocalRuntimeError,
+    PersonalSettingsStore,
     RetractApprovedEpisodicEvent,
     SynchronizeKnowledgeDocuments,
     build_checkpoint_runtime,
@@ -218,6 +219,23 @@ def _service(data_dir: Path | None) -> LifecycleService:
     return build_lifecycle_service(resolve_local_config(data_dir))
 
 
+def _automatic_budget(data_directory: Path, ceiling: ContextBudget) -> ContextBudget:
+    configured = PersonalSettingsStore(data_directory).load().context_budget
+    return ContextBudget(
+        active_task_checkpoint=min(
+            configured.active_task_checkpoint, ceiling.active_task_checkpoint
+        ),
+        episodic_memories=min(configured.episodic_memories, ceiling.episodic_memories),
+        knowledge=min(configured.knowledge, ceiling.knowledge),
+        structural=min(configured.structural, ceiling.structural),
+        skills_and_procedures=min(configured.skills_and_procedures, ceiling.skills_and_procedures),
+        provenance_and_conflicts=min(
+            configured.provenance_and_conflicts, ceiling.provenance_and_conflicts
+        ),
+        total_limit=min(configured.total_limit, ceiling.total_limit),
+    )
+
+
 def _automatic_context_attachment(
     data_directory: Path, scope: MemoryScope, client: ClientName = "codex"
 ) -> str | None:
@@ -264,7 +282,7 @@ def _automatic_context_attachment(
             ).get_context(
                 GetUnifiedContext(
                     scope,
-                    budget=_AUTOMATIC_SESSION_CONTEXT_BUDGET,
+                    budget=_automatic_budget(data_directory, _AUTOMATIC_SESSION_CONTEXT_BUDGET),
                     include_lifecycle_events=True,
                     include_approved_events=True,
                     source_changes=ContextSourceChangeQuery(
@@ -326,7 +344,7 @@ def _automatic_prompt_context_attachment(
             request = GetUnifiedContext(
                 scope,
                 query=prompt,
-                budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
+                budget=_automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET),
                 include_lifecycle_events=True,
                 include_approved_events=True,
                 knowledge_query=prompt,
@@ -350,7 +368,7 @@ def _automatic_prompt_context_attachment(
                     GetUnifiedContext(
                         scope,
                         query=prompt,
-                        budget=_AUTOMATIC_PROMPT_CONTEXT_BUDGET,
+                        budget=_automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET),
                         include_lifecycle_events=True,
                         include_approved_events=True,
                         knowledge_query=prompt,
@@ -388,6 +406,8 @@ def _refresh_project_knowledge(
     This app composition function owns the connector-to-service bridge. It intentionally returns
     no document payload, and callers keep the client lifecycle fail-open when it raises.
     """
+    if not PersonalSettingsStore(data_directory).load().repository_knowledge_sync_enabled:
+        return
     discovered = MarkdownSourceDiscovery().discover(
         MarkdownSourceDiscoveryRequest(binding.scope, binding.project_root)
     )

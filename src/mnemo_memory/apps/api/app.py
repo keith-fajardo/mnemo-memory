@@ -5,10 +5,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from importlib import resources
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from mnemo_memory.packages.application.services import APP_VERSION, LifecycleService
+from mnemo_memory.packages.application.settings import (
+    PersonalSettings,
+    PersonalSettingsError,
+    PersonalSettingsStore,
+)
 
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -29,6 +34,7 @@ def _web_asset(name: str) -> str:
 def create_app(
     service: LifecycleService,
     dashboard_status: Callable[[], dict[str, object]] | None = None,
+    settings_store: PersonalSettingsStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -90,4 +96,32 @@ def create_app(
             **details,
         }
 
+    @app.get("/api/settings")
+    def get_settings() -> dict[str, object]:
+        store = settings_store or PersonalSettingsStore(service.config.data_directory)
+        try:
+            return store.load().to_dict()
+        except PersonalSettingsError:
+            raise HTTPException(status_code=503, detail="MNEMO_SETTINGS_UNAVAILABLE") from None
+
+    @app.put("/api/settings")
+    def put_settings(request: Request, value: dict[str, object]) -> dict[str, object]:
+        if request.headers.get("x-mnemo-intent") != "update-settings" or not _same_origin(
+            request, service.config.host, service.config.port
+        ):
+            raise HTTPException(status_code=403, detail="MNEMO_SETTINGS_WRITE_FORBIDDEN")
+        store = settings_store or PersonalSettingsStore(service.config.data_directory)
+        try:
+            return store.save(PersonalSettings.from_dict(value)).to_dict()
+        except PersonalSettingsError:
+            raise HTTPException(status_code=422, detail="MNEMO_SETTINGS_INVALID") from None
+
     return app
+
+
+def _same_origin(request: Request, host: str, port: int) -> bool:
+    origin = request.headers.get("origin")
+    allowed = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+    if host == "::1":
+        allowed.add(f"http://[::1]:{port}")
+    return origin in allowed

@@ -56,6 +56,46 @@ function render(data) {
   ].map((value) => { const li = document.createElement("li"); li.textContent = value; return li; }));
 }
 
+function setSettings(settings) {
+  const form = byId("settings-form");
+  for (const [name, value] of Object.entries(settings)) {
+    const input = form.elements.namedItem(name);
+    if (!input) continue;
+    if (input.type === "checkbox") input.checked = value;
+    else input.value = value ?? "";
+  }
+  byId("settings-state").textContent = "Saved locally";
+}
+
+async function loadSettings() {
+  const response = await fetch("/api/settings", {headers: {"Accept": "application/json"}});
+  if (!response.ok) throw new Error("settings");
+  setSettings(await response.json());
+}
+
+byId("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const enabled = form.elements.namedItem("optional_model_enabled").checked;
+  const names = ["episodic_retention_days", "context_total_tokens", "context_active_task_checkpoint_tokens", "context_episodic_tokens", "context_knowledge_tokens", "context_structural_tokens", "context_skills_tokens", "context_provenance_tokens"];
+  const value = {
+    repository_knowledge_sync_enabled: form.elements.namedItem("repository_knowledge_sync_enabled").checked,
+    approved_event_capture_enabled: form.elements.namedItem("approved_event_capture_enabled").checked,
+    optional_model_enabled: enabled,
+    model_provider: enabled ? form.elements.namedItem("model_provider").value.trim() : null,
+    model_id: enabled ? form.elements.namedItem("model_id").value.trim() : null,
+  };
+  for (const name of names) value[name] = Number(form.elements.namedItem(name).value);
+  byId("settings-state").textContent = "Saving…";
+  const response = await fetch("/api/settings", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json", "X-Mnemo-Intent": "update-settings"},
+    body: JSON.stringify(value),
+  });
+  if (!response.ok) { byId("settings-state").textContent = "Invalid settings"; return; }
+  setSettings(await response.json());
+});
+
 async function refresh() {
   byId("error").hidden = true;
   try {
@@ -70,3 +110,4 @@ async function refresh() {
 
 byId("refresh").addEventListener("click", refresh);
 refresh();
+loadSettings().catch(() => { byId("settings-state").textContent = "Unavailable"; });

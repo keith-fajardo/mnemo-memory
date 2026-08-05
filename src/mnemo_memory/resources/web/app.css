@@ -26,9 +26,21 @@ button { border: 1px solid #69e5b7; border-radius: 10px; padding: 12px 16px; col
 .badge.pending { color: #e6c980; border-color: #705f38; }
 code { display: block; overflow: hidden; text-overflow: ellipsis; padding: 10px; border-radius: 8px; background: #08100e; color: #8be9c2; font-size: .74rem; white-space: nowrap; }
 .privacy { display: grid; grid-template-columns: 1fr 2fr; gap: 40px; padding: 28px; border-radius: 16px; background: #69e5b7; color: #07110e; }
+.settings-card { display: grid; gap: 14px; padding: 20px; border: 1px solid #29423b; border-radius: 15px; background: rgba(17, 31, 27, .82); }
+fieldset { margin: 0; padding: 18px; border: 1px solid #29423b; border-radius: 11px; }
+legend { padding: 0 8px; color: #bcd0c8; font-size: .82rem; font-weight: 750; }
+.toggle { display: block; margin: 8px 0; color: #a9bbb4; font-size: .86rem; }
+.toggle input { margin-right: 8px; accent-color: #69e5b7; }
+.fields { display: grid; gap: 12px; margin-top: 12px; }
+.fields.two { grid-template-columns: repeat(2, 1fr); }
+.fields.four { grid-template-columns: repeat(4, 1fr); }
+.fields label { color: #789087; font-size: .72rem; }
+.fields input { width: 100%; margin-top: 6px; border: 1px solid #3a5149; border-radius: 8px; padding: 10px; color: #e9f4ef; background: #08100e; }
+.form-actions { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.form-actions p { margin: 0; color: #789087; font-size: .76rem; }
 .privacy .eyebrow { color: #1b644d; }
 .privacy ul { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 32px; margin: 0; padding-left: 20px; }
 .privacy li { line-height: 1.45; }
 #error { border: 1px solid #7b4949; border-radius: 10px; padding: 14px; color: #ffb6b6; }
 footer { padding: 22px 0 36px; border-top: 1px solid #29423b; color: #6f867d; font-size: .78rem; }
-@media (max-width: 760px) { .grid.three { grid-template-columns: 1fr; } .hero { align-items: start; flex-direction: column; } .privacy { grid-template-columns: 1fr; } .privacy ul { grid-template-columns: 1fr; } .quiet { display: none; } }
+@media (max-width: 760px) { .grid.three, .fields.two, .fields.four { grid-template-columns: 1fr; } .hero { align-items: start; flex-direction: column; } .privacy { grid-template-columns: 1fr; } .privacy ul { grid-template-columns: 1fr; } .quiet { display: none; } .form-actions { align-items: start; flex-direction: column; } }

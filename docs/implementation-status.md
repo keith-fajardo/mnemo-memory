@@ -1006,6 +1006,42 @@ source files, dependency/provenance validation for 86 entries, and architecture 
 product Python files. No dependency, model call, settings mutation, memory mutation, job retry,
 backup, installer change, non-loopback exposure, or team behavior was added.
 
+#### Issue 20B — Durable personal settings — Complete
+
+This bounded issue adds an atomically replaced, mode-0600 local settings document and loopback
+GET/PUT settings endpoints protected against cross-origin writes. It configures repository Markdown
+auto-sync consent, explicit approved-event capture consent, optional model provider/model metadata,
+the default episodic-retention duration for future compatible jobs, and all context-packet section
+and total defaults. Settings must be strict, bounded, secret-free, and recover safely to documented
+defaults when absent; malformed state fails closed. The MCP process reads packet/capture defaults at
+startup and automatic project hooks honor the knowledge-sync switch. No API key, model call,
+retroactive retention mutation, arbitrary source registration, memory browser, job retry, backup,
+installer change, non-loopback exposure, dependency, or team behavior is added.
+
+Implemented strict `PersonalSettings` and a symlink-rejecting `PersonalSettingsStore` that returns
+documented defaults when absent and atomically replaces a canonical JSON document under the data
+directory with mode 0600. Exact fields cover repository Markdown auto-sync, explicit approved-event
+capture, optional provider/model identifiers (never credentials), future-job episodic-retention
+days, and the six section plus total context budgets. Unknown fields, malformed/oversized files,
+invalid model state, totals above 8,000, and unsafe filesystem state fail closed; an interrupted
+replacement preserves the prior document.
+
+The dashboard now provides GET/PUT settings. Writes require a same-loopback origin and explicit
+`X-Mnemo-Intent`, reject cross-origin requests and undeclared secret fields, and return sanitized
+errors. New MCP processes apply all configured packet defaults while preserving per-request bounded
+overrides; disabling approved-event capture rejects new `record_event` writes. Automatic hooks honor
+repository-knowledge sync consent and cap their already-smaller budgets by configured values, so a
+setting can reduce but never expand automatic attachment limits. Optional model metadata makes no
+call by itself, and retention changes do not rewrite existing schedules.
+
+All 118 focused settings/API/MCP/automatic-hook/lifecycle tests pass, including default and custom
+round trips, permissions, symlink/malformed input, cross-origin denial, unknown secret rejection,
+write-failure preservation, budget/capture enforcement, and knowledge-sync enable/disable. The
+complete repository gate passes with 753 tests, strict typing for 190 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 101 product Python
+files. No dependency, API key, model call, retroactive retention mutation, memory browser, job
+retry, backup, installer change, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

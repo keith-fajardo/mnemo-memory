@@ -26,6 +26,8 @@ from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
     LocalConfigurationError,
     LocalRuntimeError,
+    PersonalSettingsError,
+    PersonalSettingsStore,
     build_checkpoint_runtime,
     resolve_local_config,
 )
@@ -527,6 +529,7 @@ def main(data_directory: Path | None = None) -> None:
             FastEmbedLocalProvider(runtime.config.data_directory / "semantic-model-cache"),
         )
         skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
+        settings = PersonalSettingsStore(runtime.config.data_directory).load()
         create_server(
             DurableMcpContextPort(
                 runtime.checkpoint_service,
@@ -548,6 +551,8 @@ def main(data_directory: Path | None = None) -> None:
                 None if binding is None else binding.checkpoint_scope,
                 current_dbt_source_state,
                 skill_registry,
+                settings.context_budget,
+                settings.approved_event_capture_enabled,
             )
         ).run(transport="stdio")
 
@@ -558,7 +563,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         main(None if args.data_dir is None else Path(args.data_dir))
-    except (LocalConfigurationError, LocalRuntimeError) as error:
+    except (LocalConfigurationError, LocalRuntimeError, PersonalSettingsError) as error:
         logging.basicConfig(
             level=logging.ERROR, stream=sys.stderr, format="%(levelname)s %(message)s"
         )

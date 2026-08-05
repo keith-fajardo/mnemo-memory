@@ -94,6 +94,7 @@ from .knowledge import (
     SynchronizeKnowledgeDocuments,
 )
 from .services import LifecycleService
+from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
 
 __all__ = [
     "AbandonCheckpoint",
@@ -160,6 +161,9 @@ __all__ = [
     "ManifestChangesResult",
     "ManifestNodeChange",
     "ManifestSelectorQueryResult",
+    "PersonalSettings",
+    "PersonalSettingsError",
+    "PersonalSettingsStore",
     "QueryLineage",
     "QueryManifestChanges",
     "QueryManifestSelector",

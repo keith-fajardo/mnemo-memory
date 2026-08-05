@@ -31,6 +31,7 @@ from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
 from mnemo_memory.packages.domain import (
+    ContextBudget,
     ContextPacket,
     MemoryScope,
     OwnerId,
@@ -171,6 +172,31 @@ def test_fixture_port_is_explicit_test_only_behavior() -> None:
         )["durability"]
         == "fixture-only"
     )
+
+
+def test_durable_port_applies_personal_budget_and_capture_consent_defaults(
+    tmp_path: Path,
+) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "settings-runtime")) as runtime:
+        budget = ContextBudget(knowledge=321, total_limit=4_321)
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            default_budget=budget,
+            approved_event_capture_enabled=False,
+        )
+
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+        assert packet.budget.knowledge == 321
+        assert packet.budget.total_limit == 4_321
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.save_checkpoint(
+                save_payload(
+                    "record_event",
+                    event_kind="decision",
+                    event_summary="A setting-disabled event",
+                    source_event_key="settings-disabled-event",
+                )
+            )
 
 
 def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:

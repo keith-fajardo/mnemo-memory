@@ -84,6 +84,8 @@ class DurableMcpContextPort:
             Callable[[MemoryScope], SourceStateFingerprint | None] | None
         ) = None,
         skills: ProjectSkillRegistry | None = None,
+        default_budget: ContextBudget | None = None,
+        approved_event_capture_enabled: bool = True,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -91,6 +93,10 @@ class DurableMcpContextPort:
         self._default_scope = default_scope
         self._current_dbt_source_state = current_dbt_source_state
         self._skills = skills
+        self._default_budget = default_budget or ContextBudget()
+        if not isinstance(approved_event_capture_enabled, bool):
+            raise TypeError("approved event capture setting must be a boolean")
+        self._approved_event_capture_enabled = approved_event_capture_enabled
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -107,8 +113,18 @@ class DurableMcpContextPort:
             scope = _scope(request, self._default_scope)
             checkpoint = _optional_id(request, "checkpoint_id", CheckpointId)
             budget = ContextBudget(
-                active_task_checkpoint=_integer(request.get("active_task_checkpoint_tokens", 600)),
-                total_limit=_integer(request.get("total_tokens", 5700)),
+                active_task_checkpoint=_integer(
+                    request.get(
+                        "active_task_checkpoint_tokens",
+                        self._default_budget.active_task_checkpoint,
+                    )
+                ),
+                episodic_memories=self._default_budget.episodic_memories,
+                knowledge=self._default_budget.knowledge,
+                structural=self._default_budget.structural,
+                skills_and_procedures=self._default_budget.skills_and_procedures,
+                provenance_and_conflicts=self._default_budget.provenance_and_conflicts,
+                total_limit=_integer(request.get("total_tokens", self._default_budget.total_limit)),
             )
             lineage = request.get("dbt_lineage")
             test_coverage = request.get("dbt_test_coverage")
@@ -600,6 +616,10 @@ class DurableMcpContextPort:
             scope = _scope(request, self._default_scope)
             evidence = _evidence(request)
             if operation == "record_event":
+                if not self._approved_event_capture_enabled:
+                    raise CheckpointApplicationInvalidContent(
+                        "approved event capture is disabled by personal settings"
+                    )
                 event = self._service.record_approved_event(
                     RecordApprovedEpisodicEvent(
                         scope,

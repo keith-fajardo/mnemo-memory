@@ -40,6 +40,38 @@
         </div>
         <div id="indexes" class="grid three"></div>
       </section>
+      <section aria-labelledby="settings-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">PERSONAL DEFAULTS</p><h2 id="settings-heading">Settings</h2></div>
+          <span id="settings-state" class="quiet">Loading…</span>
+        </div>
+        <form id="settings-form" class="settings-card">
+          <fieldset>
+            <legend>Sources and privacy</legend>
+            <label class="toggle"><input name="repository_knowledge_sync_enabled" type="checkbox"> Sync checked-in Markdown during automatic sessions</label>
+            <label class="toggle"><input name="approved_event_capture_enabled" type="checkbox"> Allow explicit evidence-backed approved-event capture</label>
+          </fieldset>
+          <fieldset>
+            <legend>Optional model routing</legend>
+            <label class="toggle"><input name="optional_model_enabled" type="checkbox"> Enable configured optional model tasks</label>
+            <div class="fields two"><label>Provider<input name="model_provider" maxlength="128" placeholder="disabled"></label><label>Model ID<input name="model_id" maxlength="128" placeholder="disabled"></label></div>
+          </fieldset>
+          <fieldset>
+            <legend>Retention and context budget</legend>
+            <div class="fields four">
+              <label>Retention days<input name="episodic_retention_days" type="number" min="1" max="3650"></label>
+              <label>Total tokens<input name="context_total_tokens" type="number" min="0" max="8000"></label>
+              <label>Checkpoint<input name="context_active_task_checkpoint_tokens" type="number" min="0" max="8000"></label>
+              <label>Episodic<input name="context_episodic_tokens" type="number" min="0" max="8000"></label>
+              <label>Knowledge<input name="context_knowledge_tokens" type="number" min="0" max="8000"></label>
+              <label>Structure<input name="context_structural_tokens" type="number" min="0" max="8000"></label>
+              <label>Skills<input name="context_skills_tokens" type="number" min="0" max="8000"></label>
+              <label>Provenance<input name="context_provenance_tokens" type="number" min="0" max="8000"></label>
+            </div>
+          </fieldset>
+          <div class="form-actions"><p>Changes apply to new MCP processes and automatic hooks. Existing retained records are unchanged.</p><button type="submit">Save settings</button></div>
+        </form>
+      </section>
       <section class="privacy" aria-labelledby="privacy-heading">
         <div><p class="eyebrow">PRIVACY BOUNDARY</p><h2 id="privacy-heading">Local by default</h2></div>
         <ul id="privacy-list"></ul>
