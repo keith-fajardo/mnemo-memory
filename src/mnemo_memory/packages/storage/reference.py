@@ -33,6 +33,7 @@ from mnemo_memory.packages.domain import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
+    EpisodicMemoryCandidate,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -44,6 +45,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentTombstone,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
+    MemoryId,
     MemoryScope,
     OutboxJobId,
     ScopeLevel,
@@ -59,6 +61,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
 from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
+    EpisodicMemoryCandidateSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
     TaskActivityEventSafetyPolicy,
 )
@@ -83,12 +86,18 @@ from .contracts import (
     EpisodicEventNotFound,
     EpisodicEventPage,
     EpisodicEventStoreResult,
+    EpisodicMemoryCandidateConflict,
+    EpisodicMemoryCandidateNotFound,
+    EpisodicMemoryCandidatePage,
+    EpisodicMemoryCandidateRejected,
+    EpisodicMemoryCandidateStoreResult,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidEpisodicMemoryCandidateScope,
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
@@ -112,6 +121,7 @@ from .contracts import (
     TaskActivityEventNotFound,
     TaskActivityEventPage,
     TaskActivityEventRejected,
+    TaskActivityEventRepository,
     TaskActivityEventStoreResult,
     rank_knowledge_sections,
     validate_knowledge_search,
@@ -565,6 +575,135 @@ class ReferenceTaskActivityEventRepository:
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise InvalidTaskActivityEventScope("task activity events require explicit task scope")
+
+
+class ReferenceEpisodicMemoryCandidateRepository:
+    """Atomic in-memory reference for inactive candidates from canonical task events."""
+
+    def __init__(
+        self,
+        activity_events: TaskActivityEventRepository,
+        policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
+    ) -> None:
+        self._activity_events = activity_events
+        self._policy = policy or EpisodicMemoryCandidateSafetyPolicy()
+        self._candidates: dict[MemoryId, EpisodicMemoryCandidate] = {}
+        self._ordered: list[MemoryId] = []
+
+    def store_episodic_memory_candidates(
+        self, candidates: tuple[EpisodicMemoryCandidate, ...]
+    ) -> EpisodicMemoryCandidateStoreResult:
+        values = self._validate_batch(candidates)
+        first = values[0]
+        source = self._activity_events.get_task_activity_event(first.scope, first.source_event_id)
+        if any(
+            candidate.scope != source.scope
+            or candidate.retention != source.retention
+            or candidate.evidence_references != source.evidence_references
+            for candidate in values
+        ):
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate authority fields do not match the source event"
+            )
+        if any(not self._policy.assess(candidate).accepted for candidate in values):
+            raise EpisodicMemoryCandidateRejected(
+                "episodic candidate batch was rejected by safety policy"
+            )
+        existing = tuple(
+            sorted(
+                (
+                    candidate
+                    for candidate in self._candidates.values()
+                    if candidate.source_event_id == first.source_event_id
+                    and candidate.extractor_version == first.extractor_version
+                ),
+                key=lambda candidate: candidate.proposal_index,
+            )
+        )
+        if existing:
+            if existing == values:
+                return EpisodicMemoryCandidateStoreResult(existing, True)
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate extraction already has different output"
+            )
+        if any(candidate.memory_id in self._candidates for candidate in values):
+            raise EpisodicMemoryCandidateConflict("episodic candidate identity conflicts")
+        stored = dict(self._candidates)
+        ordered = list(self._ordered)
+        stored.update((candidate.memory_id, candidate) for candidate in values)
+        ordered.extend(candidate.memory_id for candidate in values)
+        self._candidates, self._ordered = stored, ordered
+        return EpisodicMemoryCandidateStoreResult(values, False)
+
+    def get_episodic_memory_candidate(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryCandidate:
+        self._require_scope(scope)
+        candidate = self._candidates.get(memory_id)
+        if candidate is None or candidate.scope != scope:
+            raise EpisodicMemoryCandidateNotFound("episodic memory candidate was not found")
+        return candidate
+
+    def list_episodic_memory_candidates(
+        self,
+        scope: MemoryScope,
+        *,
+        source_event_id: EventId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicMemoryCandidatePage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("candidate offset must be non-negative and limit must be positive")
+        items = tuple(
+            self._candidates[memory_id]
+            for memory_id in reversed(self._ordered)
+            if self._candidates[memory_id].scope == scope
+            and (
+                source_event_id is None
+                or self._candidates[memory_id].source_event_id == source_event_id
+            )
+        )
+        return EpisodicMemoryCandidatePage(
+            items[offset : offset + limit],
+            offset + limit if offset + limit < len(items) else None,
+        )
+
+    @classmethod
+    def _validate_batch(
+        cls, candidates: tuple[EpisodicMemoryCandidate, ...]
+    ) -> tuple[EpisodicMemoryCandidate, ...]:
+        values = tuple(candidates)
+        if not 1 <= len(values) <= 4 or any(
+            not isinstance(candidate, EpisodicMemoryCandidate) for candidate in values
+        ):
+            raise ValueError("episodic candidate batch is invalid")
+        first = values[0]
+        cls._require_scope(first.scope)
+        if tuple(candidate.proposal_index for candidate in values) != tuple(range(len(values))):
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate proposal indexes must be contiguous"
+            )
+        if any(
+            candidate.scope != first.scope
+            or candidate.source_event_id != first.source_event_id
+            or candidate.extractor_version != first.extractor_version
+            or candidate.provider_id != first.provider_id
+            or candidate.model_id != first.model_id
+            or candidate.prompt_version != first.prompt_version
+            for candidate in values
+        ):
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate batch metadata does not match"
+            )
+        return values
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidEpisodicMemoryCandidateScope(
+                "episodic candidates require explicit task scope"
+            )
 
 
 class ReferenceApprovedEpisodicEventRepository:
@@ -1068,6 +1207,7 @@ class ReferenceCheckpointRepository:
         self.events = ReferenceCheckpointLifecycleEventRepository(self, self.outbox)
         self.approved_events = ReferenceApprovedEpisodicEventRepository(self.outbox)
         self.activity_events = ReferenceTaskActivityEventRepository(self.outbox)
+        self.episodic_candidates = ReferenceEpisodicMemoryCandidateRepository(self.activity_events)
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision

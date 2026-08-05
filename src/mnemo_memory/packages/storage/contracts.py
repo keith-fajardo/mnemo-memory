@@ -29,6 +29,7 @@ from mnemo_memory.packages.domain import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
+    EpisodicMemoryCandidate,
     EventId,
     EventOutboxJob,
     EvidenceReference,
@@ -39,6 +40,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentTombstone,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
+    MemoryId,
     MemoryScope,
     OutboxJobId,
     ProjectClientProfile,
@@ -202,6 +204,30 @@ class TaskActivityEventStorageFailure(TaskActivityEventRepositoryError):
     pass
 
 
+class EpisodicMemoryCandidateRepositoryError(Exception):
+    """Expected storage-neutral outcome for inactive extracted candidates."""
+
+
+class EpisodicMemoryCandidateNotFound(EpisodicMemoryCandidateRepositoryError):
+    pass
+
+
+class EpisodicMemoryCandidateConflict(EpisodicMemoryCandidateRepositoryError):
+    pass
+
+
+class InvalidEpisodicMemoryCandidateScope(EpisodicMemoryCandidateRepositoryError):
+    pass
+
+
+class EpisodicMemoryCandidateRejected(EpisodicMemoryCandidateRepositoryError):
+    pass
+
+
+class EpisodicMemoryCandidateStorageFailure(EpisodicMemoryCandidateRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -256,6 +282,37 @@ class TaskActivityEventRepository(Protocol):
     def list_task_activity_events(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> TaskActivityEventPage: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryCandidateStoreResult:
+    candidates: tuple[EpisodicMemoryCandidate, ...]
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryCandidatePage:
+    items: tuple[EpisodicMemoryCandidate, ...]
+    next_offset: int | None
+
+
+class EpisodicMemoryCandidateRepository(Protocol):
+    def store_episodic_memory_candidates(
+        self, candidates: tuple[EpisodicMemoryCandidate, ...]
+    ) -> EpisodicMemoryCandidateStoreResult: ...
+
+    def get_episodic_memory_candidate(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryCandidate: ...
+
+    def list_episodic_memory_candidates(
+        self,
+        scope: MemoryScope,
+        *,
+        source_event_id: EventId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicMemoryCandidatePage: ...
 
 
 @dataclass(frozen=True, slots=True)

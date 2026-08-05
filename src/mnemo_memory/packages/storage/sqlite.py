@@ -56,6 +56,9 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessArtifact,
     DbtSourceFreshnessResult,
     DbtSupplementalArtifactMetadata,
+    DurableClaim,
+    EpisodicMemoryCandidate,
+    EpisodicMemoryKind,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -71,7 +74,10 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentTombstone,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
+    MemoryClassification,
+    MemoryId,
     MemoryScope,
+    MemoryStatus,
     OutboxJobId,
     OwnerId,
     ProjectId,
@@ -101,6 +107,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
 )
 from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
+    EpisodicMemoryCandidateSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
     TaskActivityEventSafetyPolicy,
 )
@@ -127,6 +134,12 @@ from .contracts import (
     EpisodicEventPage,
     EpisodicEventStorageFailure,
     EpisodicEventStoreResult,
+    EpisodicMemoryCandidateConflict,
+    EpisodicMemoryCandidateNotFound,
+    EpisodicMemoryCandidatePage,
+    EpisodicMemoryCandidateRejected,
+    EpisodicMemoryCandidateStorageFailure,
+    EpisodicMemoryCandidateStoreResult,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
     EventOutboxStorageFailure,
@@ -134,6 +147,7 @@ from .contracts import (
     InvalidApprovedEpisodicEventScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidEpisodicMemoryCandidateScope,
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
@@ -166,7 +180,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 19
+LATEST_SCHEMA_VERSION = 20
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -222,6 +236,7 @@ class SQLiteCheckpointRepository:
         approved_event_policy: ApprovedEpisodicEventSafetyPolicy | None = None,
         knowledge_document_policy: KnowledgeDocumentSafetyPolicy | None = None,
         task_activity_policy: TaskActivityEventSafetyPolicy | None = None,
+        episodic_candidate_policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
     ) -> None:
         self.path = resolve_database_path(path, base_directory)
         self._approved_event_policy = approved_event_policy or ApprovedEpisodicEventSafetyPolicy()
@@ -229,6 +244,9 @@ class SQLiteCheckpointRepository:
             knowledge_document_policy or KnowledgeDocumentSafetyPolicy()
         )
         self._task_activity_policy = task_activity_policy or TaskActivityEventSafetyPolicy()
+        self._episodic_candidate_policy = (
+            episodic_candidate_policy or EpisodicMemoryCandidateSafetyPolicy()
+        )
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -518,6 +536,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 19:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 19
+            if version < 20:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0020_episodic_memory_candidates.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (20, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 20:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 20
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1250,6 +1280,123 @@ class SQLiteCheckpointRepository:
                 "task activity event storage operation failed"
             ) from error
         return TaskActivityEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def store_episodic_memory_candidates(
+        self, candidates: tuple[EpisodicMemoryCandidate, ...]
+    ) -> EpisodicMemoryCandidateStoreResult:
+        values = self._validate_episodic_candidate_batch(candidates)
+        first = values[0]
+        if any(not self._episodic_candidate_policy.assess(item).accepted for item in values):
+            raise EpisodicMemoryCandidateRejected(
+                "episodic candidate batch was rejected by safety policy"
+            )
+        try:
+            with self._transaction() as connection:
+                source_row = connection.execute(
+                    "SELECT * FROM task_activity_events WHERE event_id = ? AND owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ?",
+                    (str(first.source_event_id), *self._scope_values(first.scope)),
+                ).fetchone()
+                if source_row is None:
+                    raise EpisodicMemoryCandidateConflict(
+                        "episodic candidate source event is unavailable"
+                    )
+                source = self._task_activity_event_from_row(connection, source_row, first.scope)
+                if any(
+                    candidate.scope != source.scope
+                    or candidate.retention != source.retention
+                    or candidate.evidence_references != source.evidence_references
+                    for candidate in values
+                ):
+                    raise EpisodicMemoryCandidateConflict(
+                        "episodic candidate authority fields do not match the source event"
+                    )
+                existing_rows = connection.execute(
+                    "SELECT * FROM episodic_memory_candidates WHERE source_event_id = ? "
+                    "AND extractor_version = ? ORDER BY proposal_index ASC",
+                    (str(first.source_event_id), first.extractor_version),
+                ).fetchall()
+                if existing_rows:
+                    existing = tuple(
+                        self._episodic_candidate_from_row(connection, row, first.scope)
+                        for row in existing_rows
+                    )
+                    if existing == values:
+                        return EpisodicMemoryCandidateStoreResult(existing, True)
+                    raise EpisodicMemoryCandidateConflict(
+                        "episodic candidate extraction already has different output"
+                    )
+                for candidate in values:
+                    self._insert_episodic_memory_candidate(connection, candidate)
+                return EpisodicMemoryCandidateStoreResult(values, False)
+        except (
+            EpisodicMemoryCandidateConflict,
+            EpisodicMemoryCandidateRejected,
+        ):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryCandidateStorageFailure(
+                "episodic candidate storage operation failed"
+            ) from error
+
+    def get_episodic_memory_candidate(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryCandidate:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM episodic_memory_candidates WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(memory_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicMemoryCandidateNotFound("episodic memory candidate was not found")
+                return self._episodic_candidate_from_row(connection, row, scope)
+        except EpisodicMemoryCandidateNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryCandidateStorageFailure(
+                "episodic candidate storage operation failed"
+            ) from error
+
+    def list_episodic_memory_candidates(
+        self,
+        scope: MemoryScope,
+        *,
+        source_event_id: EventId | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> EpisodicMemoryCandidatePage:
+        self._require_episodic_candidate_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("candidate offset must be non-negative and limit must be positive")
+        source_filter = "" if source_event_id is None else " AND source_event_id = ?"
+        parameters: tuple[object, ...] = self._scope_values(scope)
+        if source_event_id is not None:
+            parameters += (str(source_event_id),)
+        parameters += (limit + 1, offset)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM episodic_memory_candidates WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ?"
+                    + source_filter
+                    + " ORDER BY candidate_sequence DESC LIMIT ? OFFSET ?",
+                    parameters,
+                ).fetchall()
+                items = tuple(
+                    self._episodic_candidate_from_row(connection, row, scope)
+                    for row in rows[:limit]
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryCandidateStorageFailure(
+                "episodic candidate storage operation failed"
+            ) from error
+        return EpisodicMemoryCandidatePage(items, offset + limit if len(rows) > limit else None)
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent
@@ -3128,6 +3275,55 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _insert_episodic_memory_candidate(
+        connection: sqlite3.Connection, candidate: EpisodicMemoryCandidate
+    ) -> None:
+        memory = candidate.memory
+        retention = candidate.retention
+        connection.execute(
+            "INSERT INTO episodic_memory_candidates("
+            "memory_id,source_event_id,proposal_index,memory_kind,claim,confidence,"
+            "sensitivity,status,extractor_version,provider_id,model_id,prompt_version,"
+            "retention_policy_id,retention_permanent,retention_created_at,"
+            "retention_observed_at,retention_valid_from,retention_valid_to,"
+            "retention_expires_at,retention_expired_at,owner_id,visibility,workspace_id,"
+            "project_id,session_id,task_id,created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?)",
+            (
+                str(candidate.memory_id),
+                str(candidate.source_event_id),
+                candidate.proposal_index,
+                candidate.kind.value,
+                memory.claim,
+                candidate.confidence,
+                memory.classification.sensitivity.value,
+                memory.classification.status.value,
+                candidate.extractor_version,
+                candidate.provider_id,
+                candidate.model_id,
+                candidate.prompt_version,
+                str(retention.policy_id),
+                int(retention.permanent),
+                retention.created_at.isoformat(),
+                retention.observed_at.isoformat(),
+                retention.valid_from.isoformat(),
+                None if retention.valid_to is None else retention.valid_to.isoformat(),
+                None if retention.expires_at is None else retention.expires_at.isoformat(),
+                None if retention.expired_at is None else retention.expired_at.isoformat(),
+                *SQLiteCheckpointRepository._scope_values(candidate.scope),
+                candidate.created_at.isoformat(),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO episodic_memory_candidate_evidence(memory_id, evidence_id) VALUES (?, ?)",
+            [
+                (str(candidate.memory_id), str(evidence.evidence_id))
+                for evidence in candidate.evidence_references
+            ],
+        )
+
+    @staticmethod
     def _insert_approved_event(
         connection: sqlite3.Connection, event: ApprovedEpisodicEvent
     ) -> None:
@@ -3292,6 +3488,42 @@ class SQLiteCheckpointRepository:
     def _require_task_activity_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise InvalidTaskActivityEventScope("task activity events require explicit task scope")
+
+    @staticmethod
+    def _require_episodic_candidate_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidEpisodicMemoryCandidateScope(
+                "episodic candidates require explicit task scope"
+            )
+
+    @classmethod
+    def _validate_episodic_candidate_batch(
+        cls, candidates: tuple[EpisodicMemoryCandidate, ...]
+    ) -> tuple[EpisodicMemoryCandidate, ...]:
+        values = tuple(candidates)
+        if not 1 <= len(values) <= 4 or any(
+            not isinstance(candidate, EpisodicMemoryCandidate) for candidate in values
+        ):
+            raise ValueError("episodic candidate batch is invalid")
+        first = values[0]
+        cls._require_episodic_candidate_scope(first.scope)
+        if tuple(candidate.proposal_index for candidate in values) != tuple(range(len(values))):
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate proposal indexes must be contiguous"
+            )
+        if any(
+            candidate.scope != first.scope
+            or candidate.source_event_id != first.source_event_id
+            or candidate.extractor_version != first.extractor_version
+            or candidate.provider_id != first.provider_id
+            or candidate.model_id != first.model_id
+            or candidate.prompt_version != first.prompt_version
+            for candidate in values
+        ):
+            raise EpisodicMemoryCandidateConflict(
+                "episodic candidate batch metadata does not match"
+            )
+        return values
 
     @staticmethod
     def _scope_values(scope: MemoryScope) -> tuple[str, str, str | None, str, str, str]:
@@ -3518,6 +3750,64 @@ class SQLiteCheckpointRepository:
                 EvidenceReference.from_dict(json.loads(item["payload_json"]))
                 for item in evidence_rows
             ),
+        )
+
+    @staticmethod
+    def _episodic_candidate_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> EpisodicMemoryCandidate:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json FROM episodic_memory_candidate_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.memory_id = ? ORDER BY link.evidence_id ASC",
+            (row["memory_id"],),
+        ).fetchall()
+        retention = RetentionSchedule(
+            policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+            permanent=bool(row["retention_permanent"]),
+            created_at=datetime.fromisoformat(row["retention_created_at"]),
+            observed_at=datetime.fromisoformat(row["retention_observed_at"]),
+            valid_from=datetime.fromisoformat(row["retention_valid_from"]),
+            valid_to=(
+                None
+                if row["retention_valid_to"] is None
+                else datetime.fromisoformat(row["retention_valid_to"])
+            ),
+            expires_at=(
+                None
+                if row["retention_expires_at"] is None
+                else datetime.fromisoformat(row["retention_expires_at"])
+            ),
+            expired_at=(
+                None
+                if row["retention_expired_at"] is None
+                else datetime.fromisoformat(row["retention_expired_at"])
+            ),
+        )
+        memory = DurableClaim(
+            memory_id=MemoryId.from_string(row["memory_id"]),
+            scope=scope,
+            classification=MemoryClassification(
+                Sensitivity(row["sensitivity"]), MemoryStatus(row["status"])
+            ),
+            retention=retention,
+            claim=row["claim"],
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
+        )
+        return EpisodicMemoryCandidate(
+            memory=memory,
+            kind=EpisodicMemoryKind(row["memory_kind"]),
+            source_event_id=EventId.from_string(row["source_event_id"]),
+            proposal_index=int(row["proposal_index"]),
+            confidence=float(row["confidence"]),
+            extractor_version=row["extractor_version"],
+            provider_id=row["provider_id"],
+            model_id=row["model_id"],
+            prompt_version=row["prompt_version"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

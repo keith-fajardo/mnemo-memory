@@ -124,6 +124,13 @@ deletion under the selected policy. Optional model processing must be separately
 name the provider, task, and data class. Mnemo continues deterministic operation when model
 processing is disabled.
 
+Optional episodic extraction operates on one already-authorized minimized task event. Provider
+output may propose only a bounded kind, claim, confidence, and sensitivity; it cannot supply scope,
+evidence, retention, identity, lifecycle status, or provider provenance. Mnemo copies authority
+fields from the canonical source event, records configured extractor/provider/model/prompt
+versions, and persists only inactive candidates after deterministic safety validation. Extraction
+does not itself authorize approval, activation, retrieval, or automatic event capture.
+
 ## Retention defaults
 
 These conservative personal-mode defaults apply until changed through a versioned policy:

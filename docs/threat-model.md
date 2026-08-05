@@ -6,8 +6,9 @@ This threat model covers the planned personal, local-first path through native C
 Code MCP integration, explicit checkpoints, SQLite, and dbt structural projections. It specifies
 required controls before those features exist; it does not claim they are implemented.
 
-Team tenancy, remote MCP, hosted sync, UI, Obsidian ingestion, general code indexing, automatic
-memory extraction, and backup infrastructure are deferred and require threat-model revisions.
+Team tenancy, remote MCP, hosted sync, UI, automatic task-event capture, automatic extraction-job
+invocation, candidate approval/activation, and backup infrastructure are deferred and require
+threat-model revisions.
 
 ## Security objectives
 
@@ -92,6 +93,13 @@ user fact without verified evidence; candidate/approval states; revision chains;
 order; conflict reporting; extractor and prompt versioning; deterministic mutation policy. An
 explicit approved fact has at most one immutable correction or retraction action; corrected and
 retracted targets are excluded before context ranking, and correction retains exact evidence.
+Optional task-event extraction sends only the minimized event identity, category, actor, summary,
+and a four-candidate limit through a provider-neutral port. Mnemo accepts a closed proposal schema,
+retries malformed structured output once, pins configured provider/model metadata, and constructs
+scope, evidence, retention, identity, provenance versions, and inactive status itself. Candidates
+require verified non-inference evidence, pass deterministic content safety before an atomic write,
+and cannot enter context until a later explicit approval workflow exists. Deterministic identity
+makes duplicate delivery idempotent and changed retry output a conflict rather than an overwrite.
 
 **Verification:** Conflicting-source, repeated-claim, low-confidence, source-deletion, correction,
 and model-output tests. Frequency must not increase authority.

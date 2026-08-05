@@ -1326,3 +1326,42 @@ gate passes with 635 tests, strict typing for 159 source files, schema validatio
 dependency/provenance validation for 86 entries, and architecture validation for 79 product Python
 files. No automatic capture, client hook, model call, extraction, context retrieval, transport
 surface, daemon, retention execution, export/deletion behavior, dependency, or team mode was added.
+
+#### Issue 16D — Complete
+
+The current bounded issue adds optional provider-neutral extraction from one authorized
+`TaskActivityEvent` into durable typed episodic-memory candidates. A closed proposal schema may
+return at most four kind/claim/confidence/sensitivity proposals; scope, evidence, retention,
+identity, source-event linkage, extractor/provider/model/prompt versions, and candidate status are
+constructed by Mnemo and cannot be supplied by model output. Unknown fields, invalid types,
+non-finite confidence, prohibited content, under-evidenced sources, and mismatched provider metadata
+fail closed before persistence. Invalid structured output receives at most one retry; provider
+failures and the final invalid result surface stable payload-free codes. Candidate IDs are
+deterministic by source event, extractor version, and proposal position, so at-least-once handling
+is idempotent and changed retry output conflicts rather than overwrites. Reference and SQLite batch
+storage must be scoped, atomic, durable, and candidate-only. Migration 0020 is additive and
+forward-only with rollback coverage. Tests use an explicitly configured fake Luna provider; this
+issue adds no model SDK or network call, automatic job invocation, approval/activation, correction,
+context retrieval, API/CLI/MCP surface, daemon, retention execution, export/deletion behavior,
+dependency, or team mode.
+
+Implemented a provider-neutral, explicitly configured extraction boundary over one exact-scope
+minimized task event. The raw provider sees only event identity, category, actor, summary, and a
+four-candidate limit; a closed output schema accepts only kind, claim, finite confidence, and
+non-prohibited sensitivity, retries malformed output once, pins provider/model metadata, and
+returns stable payload-free failures. Mnemo constructs deterministic candidate identity, inactive
+status, exact source scope/evidence/retention, source-event linkage, and extractor/provider/model/
+prompt provenance. Verified non-inference evidence and mandatory content safety are required before
+the Reference or SQLite adapters atomically store a batch; changed at-least-once output conflicts
+instead of overwriting. SQLite migration `0020_episodic_memory_candidates.sql` is additive,
+scope-guarded, restart-durable, forward-only, and transactionally rollback-tested. Nineteen focused
+tests cover strict schema and authority-field rejection, non-finite and invalid types, one retry,
+provider failure and metadata mismatch, evidence sufficiency, sensitivity strengthening, secret
+rejection at service and repository boundaries, scope isolation, deterministic idempotency,
+changed-output conflict, SQLite restart durability, atomic batch failure, and migration rollback.
+The product and threat contracts record the candidate-only trust boundary. The complete repository
+gate passes with 654 tests, strict typing for 166 source files, schema validation,
+dependency/provenance validation for 86 entries, and architecture validation for 85 product Python
+files. No model SDK, network call, automatic job invocation, approval/activation, correction,
+context retrieval, transport surface, daemon, retention execution, export/deletion behavior,
+dependency, or team mode was added.

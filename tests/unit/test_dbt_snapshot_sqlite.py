@@ -155,7 +155,7 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
     assert "dbt_macro_dependency" not in sql
 
     item.migrate()
-    assert item.schema_version() == 19
+    assert item.schema_version() == 20
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:
@@ -198,7 +198,7 @@ def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path)
             is None
         )
     item.migrate()
-    assert item.schema_version() == 19
+    assert item.schema_version() == 20
     assert item.latest_transition(scope()) is None
     changed = item.store_and_activate(
         artifact(stamp=1),

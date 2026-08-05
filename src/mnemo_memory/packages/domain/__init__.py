@@ -78,6 +78,13 @@ from .dbt_manifest import (
     SourceStateFingerprint,
     UnsupportedManifestSchema,
 )
+from .episodic_candidates import (
+    EpisodicExtractionPort,
+    EpisodicExtractionProposal,
+    EpisodicExtractionRequest,
+    EpisodicMemoryCandidate,
+    EpisodicMemoryKind,
+)
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .event_outbox import EventOutboxJob, EventOutboxTopic
 from .identifiers import (
@@ -215,6 +222,11 @@ __all__ = [
     "DbtSupplementalArtifactMetadata",
     "DbtSupplementalArtifactValidationError",
     "DurableClaim",
+    "EpisodicExtractionPort",
+    "EpisodicExtractionProposal",
+    "EpisodicExtractionRequest",
+    "EpisodicMemoryCandidate",
+    "EpisodicMemoryKind",
     "EventId",
     "EventOutboxJob",
     "EventOutboxTopic",
