@@ -131,6 +131,10 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
         connection.execute("DROP TABLE source_structure_files")
         connection.execute("DROP TRIGGER source_snapshot_activation_scope_match")
         connection.execute("DROP TABLE source_snapshot_activations")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -181,6 +185,10 @@ def test_file_fingerprint_migration_is_atomic_and_legacy_snapshots_make_no_false
         connection.execute("DROP TRIGGER checkpoint_source_observation_checkpoint_scope_match")
         connection.execute("DROP TABLE checkpoint_source_observations")
         connection.execute("DROP TABLE source_structure_files")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 8")
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=8)

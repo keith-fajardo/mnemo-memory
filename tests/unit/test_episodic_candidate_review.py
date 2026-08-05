@@ -361,6 +361,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
     sqlite.append_task_activity_event(event)
     sqlite.store_episodic_memory_candidates((candidate,))
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
@@ -386,7 +387,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 25
+    assert sqlite.schema_version() == 26
     with sqlite3.connect(sqlite.path) as connection:
         review_columns = {
             row[1]
@@ -677,6 +678,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
     candidate, _, governance = _approved("sqlite", tmp_path)
     assert isinstance(governance, SQLiteCheckpointRepository)
     with sqlite3.connect(governance.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
@@ -699,7 +701,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
         )
 
     governance.migrate()
-    assert governance.schema_version() == 25
+    assert governance.schema_version() == 26
     with sqlite3.connect(governance.path) as connection:
         columns = {
             row[1]

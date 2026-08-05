@@ -94,6 +94,11 @@ from .episodic_candidates import (
     active_episodic_memory_at_revision,
     replay_episodic_memory_revisions,
 )
+from .episodic_deletion import (
+    EpisodicDeletionCause,
+    EpisodicMemoryDeletion,
+    TaskActivityEventDeletion,
+)
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .episodic_retention import (
     EpisodicMemoryExpiration,
@@ -244,10 +249,12 @@ __all__ = [
     "DurableClaim",
     "EpisodicCandidateReviewAction",
     "EpisodicCandidateReviewDecision",
+    "EpisodicDeletionCause",
     "EpisodicExtractionPort",
     "EpisodicExtractionProposal",
     "EpisodicExtractionRequest",
     "EpisodicMemoryCandidate",
+    "EpisodicMemoryDeletion",
     "EpisodicMemoryExpiration",
     "EpisodicMemoryGovernanceAction",
     "EpisodicMemoryGovernanceKind",
@@ -313,6 +320,7 @@ __all__ = [
     "SourceTrustClass",
     "TaskActivityActor",
     "TaskActivityEvent",
+    "TaskActivityEventDeletion",
     "TaskActivityEventExpiration",
     "TaskActivityEventKind",
     "TaskActivityEventPurge",

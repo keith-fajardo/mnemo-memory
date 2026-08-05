@@ -61,4 +61,5 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     ).is_file()
     assert package_files.joinpath("resources/migrations/0024_episodic_memory_purges.sql").is_file()
     assert package_files.joinpath("resources/migrations/0025_task_activity_retention.sql").is_file()
+    assert package_files.joinpath("resources/migrations/0026_episodic_deletions.sql").is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

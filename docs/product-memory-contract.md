@@ -167,8 +167,14 @@ Approval, correction, retraction, confidence, or access cannot extend this sched
 purge operation then removes the candidate claim and its dependent review/governance payloads and
 newly orphaned evidence while retaining the payload-free expiration record as an anti-resurrection
 tombstone. It does not remove the permitted source task event or evidence still referenced by that
-event. Source/user deletion propagation, export cleanup, and backup cleanup remain separate
-lifecycle operations.
+event. A separate explicit user action can now delete that individual memory or its minimized
+source event in the production episodic slice. Individual deletion writes a deterministic,
+payload-free exact-scope tombstone and removes candidate, review, active, governance, link, and
+newly orphaned evidence payloads. Source deletion writes its own tombstone plus dependent memory
+tombstones, removes all dependent payloads, and then removes the source event, evidence links,
+newly orphaned evidence, and task-activity outbox job. Existing expiration and purge metadata is
+retained, exact replay is idempotent, and either tombstone prevents re-ingestion from restoring the
+deleted identity. Export cleanup and backup cleanup remain separate lifecycle operations.
 
 An explicitly minimized task-activity event follows the same deterministic pattern using its own
 canonical schedule. Expiration hides its summary and evidence immediately. Physical purge waits
@@ -209,6 +215,15 @@ data, indexes, embeddings, caches, jobs, derived summaries, and controlled expor
 re-ingestion must honor tombstones and current consent. Local deletion should finish within 24
 hours once persistence exists; failures remain visible and retryable. Backup deletion semantics
 must be defined before backup support ships.
+
+For the current production episodic slice, only a user-authored exact-task-scope action can delete
+an extracted memory or its explicitly minimized task-event source. The stored deletion metadata
+contains identity, scope, actor, action key, cause/dependency identity, and time only; it contains
+no event summary, claim, reason, or evidence payload. The operation atomically removes every
+content-bearing canonical row and task-activity job controlled by this slice, deletes only newly
+orphaned evidence, preserves unrelated sources and memories, and rejects competing actions,
+action-key reuse, cross-scope targets, and target/source mismatches. This does not yet claim the
+same operation for checkpoints, knowledge documents, exports, backups, or external copies.
 
 ## Structural projections versus durable memories
 

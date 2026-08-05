@@ -36,7 +36,9 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
+    EpisodicDeletionCause,
     EpisodicMemoryCandidate,
+    EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryPurge,
@@ -59,6 +61,7 @@ from mnemo_memory.packages.domain import (
     OutboxJobId,
     ScopeLevel,
     TaskActivityEvent,
+    TaskActivityEventDeletion,
     TaskActivityEventExpiration,
     TaskActivityEventPurge,
     TaskActivityEventRetentionTarget,
@@ -101,6 +104,8 @@ from .contracts import (
     CheckpointSourceObservationNotFound,
     CheckpointSourceObservationStoreResult,
     DuplicateCheckpoint,
+    EpisodicDeletionConflict,
+    EpisodicDeletionNotFound,
     EpisodicEventNotFound,
     EpisodicEventPage,
     EpisodicEventStoreResult,
@@ -109,6 +114,7 @@ from .contracts import (
     EpisodicMemoryCandidatePage,
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryDeletionResult,
     EpisodicMemoryExpirationConflict,
     EpisodicMemoryExpirationNotFound,
     EpisodicMemoryExpirationResult,
@@ -149,6 +155,7 @@ from .contracts import (
     SourceStructureRepository,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
+    TaskActivityDeletionResult,
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
     TaskActivityEventPage,
@@ -570,13 +577,17 @@ class ReferenceTaskActivityEventRepository:
         self._ordered: list[EventId] = []
         self._expirations: dict[EventId, TaskActivityEventExpiration] = {}
         self._purges: dict[EventId, TaskActivityEventPurge] = {}
+        self._deletions: dict[EventId, TaskActivityEventDeletion] = {}
+        self._deletion_keys: dict[tuple[MemoryScope, str], EventId] = {}
 
     def append_task_activity_event(self, event: TaskActivityEvent) -> TaskActivityEventStoreResult:
         self._require_scope(event.scope)
         if not self._policy.assess(event).accepted:
             raise TaskActivityEventRejected("task activity event was rejected by safety policy")
-        if event.event_id in self._expirations:
-            raise TaskActivityEventConflict("expired task activity event cannot be restored")
+        if event.event_id in self._expirations or event.event_id in self._deletions:
+            raise TaskActivityEventConflict(
+                "expired or deleted task activity event cannot be restored"
+            )
         key = (event.scope, event.source_event_key)
         existing_id = self._keys.get(key)
         if existing_id is not None:
@@ -608,7 +619,12 @@ class ReferenceTaskActivityEventRepository:
     def get_task_activity_event(self, scope: MemoryScope, event_id: EventId) -> TaskActivityEvent:
         self._require_scope(scope)
         event = self._events.get(event_id)
-        if event is None or event.scope != scope or event_id in self._expirations:
+        if (
+            event is None
+            or event.scope != scope
+            or event_id in self._expirations
+            or event_id in self._deletions
+        ):
             raise TaskActivityEventNotFound("task activity event was not found")
         return event
 
@@ -621,7 +637,9 @@ class ReferenceTaskActivityEventRepository:
         items = tuple(
             self._events[event_id]
             for event_id in reversed(self._ordered)
-            if self._events[event_id].scope == scope and event_id not in self._expirations
+            if self._events[event_id].scope == scope
+            and event_id not in self._expirations
+            and event_id not in self._deletions
         )
         return TaskActivityEventPage(
             items[offset : offset + limit],
@@ -746,7 +764,7 @@ class ReferenceTaskActivityEventRepository:
                         "task activity event already has a different purge"
                     )
                 existing_count += 1
-            elif purge.event_id not in self._events:
+            elif purge.event_id not in self._events and purge.event_id not in self._deletions:
                 raise TaskActivityRetentionNotFound(
                     "task activity event payload was not found for purge"
                 )
@@ -773,6 +791,49 @@ class ReferenceTaskActivityEventRepository:
         if purge is None or purge.scope != scope:
             raise TaskActivityRetentionNotFound("task activity purge was not found")
         return purge
+
+    def _delete_task_activity_event(
+        self, deletion: TaskActivityEventDeletion
+    ) -> TaskActivityDeletionResult:
+        idempotent = self._validate_deletion(deletion)
+        if idempotent:
+            return TaskActivityDeletionResult(deletion, (), True)
+        self._deletions[deletion.event_id] = deletion
+        self._deletion_keys[(deletion.scope, deletion.source_action_key)] = deletion.event_id
+        self._events.pop(deletion.event_id, None)
+        self._ordered = [item for item in self._ordered if item != deletion.event_id]
+        self.outbox._cancel_source_jobs(EventOutboxTopic.TASK_ACTIVITY, (deletion.event_id,))
+        return TaskActivityDeletionResult(deletion, (), False)
+
+    def _get_task_activity_deletion(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion:
+        self._require_scope(scope)
+        deletion = self._deletions.get(event_id)
+        if deletion is None or deletion.scope != scope:
+            raise EpisodicDeletionNotFound("task activity deletion was not found")
+        return deletion
+
+    def _validate_deletion(self, deletion: TaskActivityEventDeletion) -> bool:
+        if not isinstance(deletion, TaskActivityEventDeletion):
+            raise TypeError("task activity deletion is invalid")
+        self._require_scope(deletion.scope)
+        existing = self._deletions.get(deletion.event_id)
+        if existing is not None:
+            if existing == deletion:
+                return True
+            raise EpisodicDeletionConflict("task activity event already has a different deletion")
+        key = (deletion.scope, deletion.source_action_key)
+        if key in self._deletion_keys:
+            raise EpisodicDeletionConflict("task activity deletion action key conflicts")
+        event = self._events.get(deletion.event_id)
+        expiration = self._expirations.get(deletion.event_id)
+        if not (
+            (event is not None and event.scope == deletion.scope)
+            or (expiration is not None and expiration.scope == deletion.scope)
+        ):
+            raise EpisodicDeletionNotFound("task activity event was not found for deletion")
+        return False
 
     @staticmethod
     def _require_scope(scope: MemoryScope) -> None:
@@ -805,14 +866,21 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self._governance_order: dict[MemoryId, list[EventId]] = {}
         self._expirations: dict[MemoryId, EpisodicMemoryExpiration] = {}
         self._purges: dict[MemoryId, EpisodicMemoryPurge] = {}
+        self._deletions: dict[MemoryId, EpisodicMemoryDeletion] = {}
+        self._deletion_keys: dict[tuple[MemoryScope, str], MemoryId] = {}
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
     ) -> EpisodicMemoryCandidateStoreResult:
         values = self._validate_batch(candidates)
         first = values[0]
-        if any(candidate.memory_id in self._expirations for candidate in values):
-            raise EpisodicMemoryCandidateConflict("expired episodic candidates cannot be restored")
+        if any(
+            candidate.memory_id in self._expirations or candidate.memory_id in self._deletions
+            for candidate in values
+        ):
+            raise EpisodicMemoryCandidateConflict(
+                "expired or deleted episodic candidates cannot be restored"
+            )
         source = self._activity_events.get_task_activity_event(first.scope, first.source_event_id)
         if any(
             candidate.scope != source.scope
@@ -839,7 +907,10 @@ class ReferenceEpisodicMemoryCandidateRepository:
             )
         )
         if existing:
-            if any(candidate.memory_id in self._expirations for candidate in existing):
+            if any(
+                candidate.memory_id in self._expirations or candidate.memory_id in self._deletions
+                for candidate in existing
+            ):
                 raise EpisodicMemoryCandidateConflict(
                     "expired episodic candidates cannot be restored"
                 )
@@ -862,7 +933,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryCandidate:
         self._require_scope(scope)
         candidate = self._candidates.get(memory_id)
-        if candidate is None or candidate.scope != scope or memory_id in self._expirations:
+        if (
+            candidate is None
+            or candidate.scope != scope
+            or memory_id in self._expirations
+            or memory_id in self._deletions
+        ):
             raise EpisodicMemoryCandidateNotFound("episodic memory candidate was not found")
         return candidate
 
@@ -882,6 +958,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
             for memory_id in reversed(self._ordered)
             if self._candidates[memory_id].scope == scope
             and memory_id not in self._expirations
+            and memory_id not in self._deletions
             and (
                 source_event_id is None
                 or self._candidates[memory_id].source_event_id == source_event_id
@@ -896,7 +973,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self, action: EpisodicCandidateReviewAction
     ) -> EpisodicMemoryReviewResult:
         self._require_scope(action.scope)
-        if action.candidate_id in self._expirations:
+        if action.candidate_id in self._expirations or action.candidate_id in self._deletions:
             raise EpisodicMemoryReviewNotFound("episodic memory candidate was not found for review")
         candidate = self.get_episodic_memory_candidate(action.scope, action.candidate_id)
         if not self._review_policy.assess(candidate, action).accepted:
@@ -938,7 +1015,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicCandidateReviewAction:
         self._require_scope(scope)
         action = self._reviews.get(candidate_id)
-        if action is None or action.scope != scope or candidate_id in self._expirations:
+        if (
+            action is None
+            or action.scope != scope
+            or candidate_id in self._expirations
+            or candidate_id in self._deletions
+        ):
             raise EpisodicMemoryReviewNotFound("episodic memory review was not found")
         return action
 
@@ -947,7 +1029,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> ActiveEpisodicMemory:
         self._require_scope(scope)
         base = self._active.get(memory_id)
-        if base is None or base.scope != scope or memory_id in self._expirations:
+        if (
+            base is None
+            or base.scope != scope
+            or memory_id in self._expirations
+            or memory_id in self._deletions
+        ):
             raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
         revisions = self._revisions_for(base)
         current = revisions[-1]
@@ -980,7 +1067,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryGovernanceResult:
         self._require_scope(action.scope)
         base = self._active.get(action.memory_id)
-        if base is None or base.scope != action.scope or action.memory_id in self._expirations:
+        if (
+            base is None
+            or base.scope != action.scope
+            or action.memory_id in self._expirations
+            or action.memory_id in self._deletions
+        ):
             raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
         existing = self._governance.get(action.action_id)
         if existing is not None:
@@ -1051,7 +1143,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryGovernanceAction:
         self._require_scope(scope)
         action = self._governance.get(action_id)
-        if action is None or action.scope != scope or action.memory_id in self._expirations:
+        if (
+            action is None
+            or action.scope != scope
+            or action.memory_id in self._expirations
+            or action.memory_id in self._deletions
+        ):
             raise EpisodicMemoryGovernanceNotFound(
                 "episodic memory governance action was not found"
             )
@@ -1062,7 +1159,12 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> tuple[EpisodicMemoryRevision, ...]:
         self._require_scope(scope)
         base = self._active.get(memory_id)
-        if base is None or base.scope != scope or memory_id in self._expirations:
+        if (
+            base is None
+            or base.scope != scope
+            or memory_id in self._expirations
+            or memory_id in self._deletions
+        ):
             raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
         return self._revisions_for(base)
 
@@ -1193,7 +1295,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
                         "episodic memory already has a different purge"
                     )
                 existing_count += 1
-            elif purge.memory_id not in self._candidates:
+            elif purge.memory_id not in self._candidates and purge.memory_id not in self._deletions:
                 raise EpisodicMemoryPurgeNotFound("episodic memory payload was not found for purge")
 
         candidates = dict(self._candidates)
@@ -1239,6 +1341,143 @@ class ReferenceEpisodicMemoryCandidateRepository:
             raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
         return purge
 
+    def delete_episodic_memory(
+        self, deletion: EpisodicMemoryDeletion
+    ) -> EpisodicMemoryDeletionResult:
+        idempotent = self._validate_memory_deletion(deletion)
+        if idempotent:
+            return EpisodicMemoryDeletionResult(deletion, True)
+        self._store_memory_deletion(deletion)
+        return EpisodicMemoryDeletionResult(deletion, False)
+
+    def delete_task_activity_event(
+        self, deletion: TaskActivityEventDeletion
+    ) -> TaskActivityDeletionResult:
+        activity = self._reference_task_activity_events
+        source_idempotent = activity._validate_deletion(deletion)
+        memory_ids = {
+            candidate.memory_id
+            for candidate in self._candidates.values()
+            if candidate.scope == deletion.scope and candidate.source_event_id == deletion.event_id
+        }
+        memory_ids.update(
+            expiration.memory_id
+            for expiration in self._expirations.values()
+            if expiration.scope == deletion.scope
+            and expiration.source_event_id == deletion.event_id
+        )
+        memory_ids.update(
+            memory_id
+            for memory_id, existing in self._deletions.items()
+            if existing.scope == deletion.scope and existing.source_event_id == deletion.event_id
+        )
+        dependent: list[EpisodicMemoryDeletion] = []
+        pending: list[EpisodicMemoryDeletion] = []
+        for memory_id in sorted(memory_ids, key=str):
+            existing = self._deletions.get(memory_id)
+            if existing is not None:
+                dependent.append(existing)
+                continue
+            item = EpisodicMemoryDeletion.from_source(
+                deletion,
+                memory_id=memory_id,
+                source_event_id=deletion.event_id,
+            )
+            self._validate_memory_deletion(item, pending_source_deletion=deletion)
+            dependent.append(item)
+            pending.append(item)
+        if not source_idempotent:
+            activity._delete_task_activity_event(deletion)
+        for item in pending:
+            self._store_memory_deletion(item)
+        return TaskActivityDeletionResult(
+            deletion,
+            tuple(dependent),
+            source_idempotent and not pending,
+        )
+
+    def get_episodic_memory_deletion(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryDeletion:
+        self._require_scope(scope)
+        deletion = self._deletions.get(memory_id)
+        if deletion is None or deletion.scope != scope:
+            raise EpisodicDeletionNotFound("episodic memory deletion was not found")
+        return deletion
+
+    def get_task_activity_deletion(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion:
+        return self._reference_task_activity_events._get_task_activity_deletion(scope, event_id)
+
+    def _validate_memory_deletion(
+        self,
+        deletion: EpisodicMemoryDeletion,
+        *,
+        pending_source_deletion: TaskActivityEventDeletion | None = None,
+    ) -> bool:
+        if not isinstance(deletion, EpisodicMemoryDeletion):
+            raise TypeError("episodic memory deletion is invalid")
+        self._require_scope(deletion.scope)
+        existing = self._deletions.get(deletion.memory_id)
+        if existing is not None:
+            if existing == deletion:
+                return True
+            raise EpisodicDeletionConflict("episodic memory already has a different deletion")
+        key = (deletion.scope, deletion.source_action_key)
+        if key in self._deletion_keys:
+            raise EpisodicDeletionConflict("episodic memory deletion action key conflicts")
+        candidate = self._candidates.get(deletion.memory_id)
+        expiration = self._expirations.get(deletion.memory_id)
+        source_event_id: EventId | None = None
+        if candidate is not None and candidate.scope == deletion.scope:
+            source_event_id = candidate.source_event_id
+        elif expiration is not None and expiration.scope == deletion.scope:
+            source_event_id = expiration.source_event_id
+        if source_event_id is None:
+            raise EpisodicDeletionNotFound("episodic memory was not found for deletion")
+        if source_event_id != deletion.source_event_id:
+            raise EpisodicDeletionConflict("episodic memory deletion source does not match")
+        if deletion.cause is EpisodicDeletionCause.SOURCE_DELETED:
+            if (
+                pending_source_deletion is not None
+                and pending_source_deletion.deletion_id == deletion.source_deletion_id
+                and pending_source_deletion.event_id == deletion.source_event_id
+                and pending_source_deletion.scope == deletion.scope
+            ):
+                return False
+            try:
+                source_deletion = self._reference_task_activity_events._get_task_activity_deletion(
+                    deletion.scope, deletion.source_event_id
+                )
+            except EpisodicDeletionNotFound as error:
+                raise EpisodicDeletionConflict(
+                    "dependent memory deletion has no source deletion"
+                ) from error
+            if source_deletion.deletion_id != deletion.source_deletion_id:
+                raise EpisodicDeletionConflict(
+                    "dependent memory deletion source identity conflicts"
+                )
+        return False
+
+    def _store_memory_deletion(self, deletion: EpisodicMemoryDeletion) -> None:
+        self._remove_memory_payload(deletion.memory_id)
+        self._deletions[deletion.memory_id] = deletion
+        self._deletion_keys[(deletion.scope, deletion.source_action_key)] = deletion.memory_id
+
+    def _remove_memory_payload(self, memory_id: MemoryId) -> None:
+        self._candidates.pop(memory_id, None)
+        self._ordered = [item for item in self._ordered if item != memory_id]
+        review = self._reviews.pop(memory_id, None)
+        if review is not None:
+            self._review_keys.pop((review.scope, review.source_action_key), None)
+        self._active.pop(memory_id, None)
+        self._active_ordered = [item for item in self._active_ordered if item != memory_id]
+        action_ids = self._governance_order.pop(memory_id, [])
+        for action_id in action_ids:
+            action = self._governance.pop(action_id)
+            self._governance_keys.pop((action.scope, action.source_action_key), None)
+
     def list_due_task_activity_retention(
         self, scope: MemoryScope, *, as_of: datetime
     ) -> tuple[TaskActivityEventRetentionTarget, ...]:
@@ -1281,6 +1520,16 @@ class ReferenceEpisodicMemoryCandidateRepository:
     @property
     def _task_activity_retention(self) -> TaskActivityRetentionRepository:
         return cast(TaskActivityRetentionRepository, self._activity_events)
+
+    @property
+    def _reference_task_activity_events(
+        self,
+    ) -> ReferenceTaskActivityEventRepository:
+        if not isinstance(self._activity_events, ReferenceTaskActivityEventRepository):
+            raise TypeError(
+                "reference episodic deletion requires the reference task activity adapter"
+            )
+        return self._activity_events
 
     def _revisions_for(self, base: ActiveEpisodicMemory) -> tuple[EpisodicMemoryRevision, ...]:
         actions = tuple(

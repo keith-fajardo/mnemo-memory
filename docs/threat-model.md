@@ -189,9 +189,9 @@ fixtures, replay and conflicting-delivery tests, transaction failure injection, 
 payload-free schema inspection, and forward-only migration rollback with candidate preservation.
 
 **Residual risk:** Retention now covers the deliberately minimized task events, not arbitrary raw
-conversations or tool bodies (which Mnemo does not capture here). Source or user-requested deletion
-propagation, export cleanup, and backup cleanup remain required before the full retention and
-deletion promise is complete.
+conversations or tool bodies (which Mnemo does not capture here). Explicit user/source deletion is
+implemented for this production episodic slice; export cleanup and backup cleanup remain required
+before the full retention and deletion promise is complete.
 
 ### Unauthorized memory mutation
 
@@ -223,6 +223,17 @@ For the current approved-fact-only retraction slice, the canonical event payload
 evidence links are removed atomically after the scoped tombstone is inserted. Approved facts have
 no FTS, vector, cache, export, or backup projection in this profile. This narrow control does not
 claim general checkpoint, knowledge, export, or backup deletion.
+
+For extracted production episodic state, one user-authored exact-task-scope action writes a
+deterministic payload-free memory or source tombstone before removing content. Individual memory
+deletion removes candidate, review, active, governance, link, and newly orphaned evidence payloads
+without changing its source. Source deletion creates deterministic dependent memory tombstones,
+removes every dependent payload, then removes the minimized event, its evidence links, newly
+orphaned evidence, and task-activity outbox job in the same transaction. Existing retention
+tombstones survive. Reads and re-ingestion reject deleted identities; exact replay is idempotent;
+competing actions, reused action keys, cross-scope targets, and source mismatches fail closed.
+Reference/SQLite parity, restart, schema inspection, and injected transaction failure are tested.
+No checkpoint, knowledge, embedding, export, backup, or external-copy deletion is implied.
 
 **Verification:** Failure-injected deletion tests across every materialized copy, retries, export,
 reindex, restore, and source rename/recreation. Counts and digests must reconcile.

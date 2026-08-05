@@ -1555,3 +1555,42 @@ complete repository gate passes with 704 tests, strict typing for 172 source fil
 dependency/provenance validation for 86 entries, and architecture validation for 88 product Python
 files. No user-requested or source-deletion propagation, export, backup cleanup, automatic
 scheduler/daemon, retrieval or transport surface, dependency, or team mode was added.
+
+#### Issue 16J — Complete
+
+The current bounded issue adds explicit user/source deletion propagation for the production
+episodic slice. One strict user-authored exact-task-scope action may delete an individual episodic
+memory or a minimized source task event. Individual deletion writes one deterministic payload-free
+memory tombstone and atomically removes any candidate, review, active, governance, evidence-link,
+and newly orphaned evidence payload while preserving unrelated source data. Source deletion writes
+one payload-free source tombstone plus deterministic dependent memory tombstones, removes every
+candidate-dependent payload, then removes the source event, its evidence links, newly orphaned
+evidence, and task-activity outbox job. Existing expiry/purge tombstones remain payload-free and
+valid. Exact replay is idempotent; competing actions, action-key reuse, cross-scope targets, and
+target/source mismatches fail closed. Re-ingestion cannot resurrect a deleted event or memory.
+Reference and SQLite must produce identical tombstones and deletion results, including restart and
+transaction failure. Migration 0026 is additive and forward-only with rollback coverage. This
+issue adds no export, backup cleanup, filesystem/knowledge/checkpoint deletion, automatic
+scheduler/daemon, API/CLI/MCP surface, dependency, or team mode.
+
+Implemented strict deterministic `TaskActivityEventDeletion` and `EpisodicMemoryDeletion`
+contracts plus one exact-task-scope user deletion service. Reference and SQLite now make
+individual memory deletion and source-event cascade produce identical payload-free tombstones,
+make exact replay idempotent, reject competing actions, action-key reuse, cross-scope targets, and
+source mismatches, and permanently prevent event or candidate resurrection. Individual deletion
+removes candidate, review, active, governance, evidence-link, and newly orphaned evidence payloads
+while preserving the source. Source deletion creates dependent memory tombstones, removes every
+dependent payload, then removes the minimized source event, its evidence links, newly orphaned
+evidence, and task-activity outbox job atomically while preserving unrelated data and all existing
+retention tombstones. Migration `0026_episodic_deletions.sql` adds only scoped action/dependency
+metadata, contains no claim, summary, reason, or evidence payload, survives restart, preserves
+retention completion after explicit deletion, and has forward-only rollback and foreign-key
+coverage. Nine focused tests cover strict serialization, individual reviewed/corrected deletion,
+source cascade, physical row/job/evidence removal, anti-resurrection, cross-scope and competing
+replay, adapter parity, retention-purge compatibility, restart durability, payload-free schema,
+and injected transaction rollback. Product and threat contracts now delimit this production
+episodic deletion slice from remaining export, backup, checkpoint, and knowledge deletion work.
+The complete repository gate passes with 713 tests, strict typing for 175 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 90 product Python
+files. No export, backup cleanup, filesystem/knowledge/checkpoint deletion, automatic
+scheduler/daemon, API/CLI/MCP surface, dependency, or team mode was added.

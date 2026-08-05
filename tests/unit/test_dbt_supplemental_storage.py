@@ -241,6 +241,10 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
         connection.execute("DROP TABLE dbt_catalog_columns")
         connection.execute("DROP TABLE dbt_catalog_relations")
         connection.execute("DROP TABLE dbt_supplemental_artifacts")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 14")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -255,7 +259,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 25
+    assert repository.schema_version() == 26
 
 
 def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
@@ -266,6 +270,10 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
         connection.execute("DROP TABLE dbt_manifest_activations")
         connection.execute("DROP TABLE dbt_source_freshness_results")
         connection.execute("DROP TABLE dbt_source_freshness_artifacts")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 16")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -280,4 +288,4 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 25
+    assert repository.schema_version() == 26

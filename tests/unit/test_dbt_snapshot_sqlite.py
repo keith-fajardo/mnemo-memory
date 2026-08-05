@@ -125,6 +125,10 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
         connection.execute("DROP TABLE dbt_manifest_activations")
         connection.execute("DROP TABLE dbt_source_freshness_results")
         connection.execute("DROP TABLE dbt_source_freshness_artifacts")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 15")
         connection.execute("ALTER TABLE dbt_manifest_edges RENAME TO dbt_manifest_edges_v15")
         connection.execute(
@@ -155,7 +159,7 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
     assert "dbt_macro_dependency" not in sql
 
     item.migrate()
-    assert item.schema_version() == 25
+    assert item.schema_version() == 26
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:
@@ -183,6 +187,10 @@ def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path)
     with sqlite3.connect(item.path) as connection:
         connection.execute("DROP TABLE event_outbox")
         connection.execute("DROP TABLE dbt_manifest_activations")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 17")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -198,7 +206,7 @@ def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path)
             is None
         )
     item.migrate()
-    assert item.schema_version() == 25
+    assert item.schema_version() == 26
     assert item.latest_transition(scope()) is None
     changed = item.store_and_activate(
         artifact(stamp=1),

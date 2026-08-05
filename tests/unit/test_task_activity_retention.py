@@ -419,8 +419,10 @@ def test_task_retention_migration_rolls_back_and_preserves_existing_state(
     memory_expiration = memory_service.expire_due(event.scope, as_of=SWEEP_TIME).expirations[0]
     memory_service.purge_expired(event.scope, purged_at=PURGE_TIME)
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DROP TABLE task_activity_event_expirations")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 25")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 25")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         sqlite.migrate(fail_after_version=25)
@@ -442,7 +444,7 @@ def test_task_retention_migration_rolls_back_and_preserves_existing_state(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 25
+    assert sqlite.schema_version() == 26
     with sqlite3.connect(sqlite.path) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert "source_event_id" not in {

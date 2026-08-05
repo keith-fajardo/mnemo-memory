@@ -535,6 +535,10 @@ def test_approved_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None
         connection.execute("DROP TABLE source_structure_files")
         connection.execute("DROP TABLE approved_episodic_event_evidence")
         connection.execute("DROP TABLE approved_episodic_events")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 7")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -565,6 +569,10 @@ def test_approved_event_governance_migration_rolls_back_as_one_step(tmp_path: Pa
         connection.execute("DROP TABLE dbt_supplemental_artifacts")
         connection.execute("DROP TABLE approved_episodic_event_governance_evidence")
         connection.execute("DROP TABLE approved_episodic_event_governance")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 13")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):

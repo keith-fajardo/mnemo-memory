@@ -281,6 +281,10 @@ def test_sqlite_fts_projection_contains_only_current_scoped_revisions_and_migrat
         connection.execute("DROP TABLE approved_episodic_event_governance")
         connection.execute("DROP TABLE knowledge_section_embeddings")
         connection.execute("DROP TABLE knowledge_document_section_fts")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 11")
     repository.migrate()
     with sqlite3.connect(path) as connection:
@@ -307,6 +311,10 @@ def test_knowledge_fts_migration_is_atomic(tmp_path: Path) -> None:
         connection.execute("DROP TABLE approved_episodic_event_governance")
         connection.execute("DROP TABLE knowledge_section_embeddings")
         connection.execute("DROP TABLE knowledge_document_section_fts")
+        connection.execute("DROP TRIGGER IF EXISTS episodic_memory_purge_guard")
+        connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
+        connection.execute("DROP TABLE episodic_memory_deletions")
+        connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 11")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):

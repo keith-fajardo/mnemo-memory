@@ -32,6 +32,7 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
     EpisodicMemoryCandidate,
+    EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryPurge,
@@ -53,6 +54,7 @@ from mnemo_memory.packages.domain import (
     ProjectClientProfile,
     ProjectProcedure,
     TaskActivityEvent,
+    TaskActivityEventDeletion,
     TaskActivityEventExpiration,
     TaskActivityEventPurge,
     TaskActivityEventRetentionTarget,
@@ -322,6 +324,22 @@ class EpisodicMemoryPurgeStorageFailure(EpisodicMemoryRetentionRepositoryError):
     pass
 
 
+class EpisodicDeletionRepositoryError(Exception):
+    """Expected outcome for explicit payload-free episodic deletion."""
+
+
+class EpisodicDeletionNotFound(EpisodicDeletionRepositoryError):
+    pass
+
+
+class EpisodicDeletionConflict(EpisodicDeletionRepositoryError):
+    pass
+
+
+class EpisodicDeletionStorageFailure(EpisodicDeletionRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -536,6 +554,37 @@ class EpisodicMemoryRetentionRepository(Protocol):
     def get_episodic_memory_purge(
         self, scope: MemoryScope, memory_id: MemoryId
     ) -> EpisodicMemoryPurge: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryDeletionResult:
+    deletion: EpisodicMemoryDeletion
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActivityDeletionResult:
+    deletion: TaskActivityEventDeletion
+    dependent_deletions: tuple[EpisodicMemoryDeletion, ...]
+    idempotent: bool
+
+
+class EpisodicDeletionRepository(Protocol):
+    def delete_episodic_memory(
+        self, deletion: EpisodicMemoryDeletion
+    ) -> EpisodicMemoryDeletionResult: ...
+
+    def delete_task_activity_event(
+        self, deletion: TaskActivityEventDeletion
+    ) -> TaskActivityDeletionResult: ...
+
+    def get_episodic_memory_deletion(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryDeletion: ...
+
+    def get_task_activity_deletion(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion: ...
 
 
 @dataclass(frozen=True, slots=True)

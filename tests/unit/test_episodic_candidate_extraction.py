@@ -483,6 +483,7 @@ def test_candidate_migration_is_forward_only_atomic_and_preserves_source_event(
     source = _event(_scope())
     sqlite.append_task_activity_event(source)
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
@@ -507,7 +508,7 @@ def test_candidate_migration_is_forward_only_atomic_and_preserves_source_event(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 25
+    assert sqlite.schema_version() == 26
     with sqlite3.connect(sqlite.path) as connection:
         columns = {
             row[1]

@@ -60,7 +60,9 @@ from mnemo_memory.packages.domain import (
     DurableClaim,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
+    EpisodicDeletionCause,
     EpisodicMemoryCandidate,
+    EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
@@ -98,6 +100,7 @@ from mnemo_memory.packages.domain import (
     SessionId,
     TaskActivityActor,
     TaskActivityEvent,
+    TaskActivityEventDeletion,
     TaskActivityEventExpiration,
     TaskActivityEventKind,
     TaskActivityEventPurge,
@@ -149,6 +152,9 @@ from .contracts import (
     CheckpointSourceObservationStorageFailure,
     CheckpointSourceObservationStoreResult,
     DuplicateCheckpoint,
+    EpisodicDeletionConflict,
+    EpisodicDeletionNotFound,
+    EpisodicDeletionStorageFailure,
     EpisodicEventNotFound,
     EpisodicEventPage,
     EpisodicEventStorageFailure,
@@ -159,6 +165,7 @@ from .contracts import (
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryDeletionResult,
     EpisodicMemoryExpirationConflict,
     EpisodicMemoryExpirationNotFound,
     EpisodicMemoryExpirationResult,
@@ -206,6 +213,7 @@ from .contracts import (
     SourceSnapshotStoreResult,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
+    TaskActivityDeletionResult,
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
     TaskActivityEventPage,
@@ -222,7 +230,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 25
+LATEST_SCHEMA_VERSION = 26
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -658,6 +666,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 25:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 25
+            if version < 26:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0026_episodic_deletions.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (26, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 26:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 26
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1325,9 +1345,13 @@ class SQLiteCheckpointRepository:
                     "SELECT 1 FROM task_activity_event_expirations WHERE event_id = ?",
                     (str(event.event_id),),
                 ).fetchone()
-                if expired is not None:
+                deleted = connection.execute(
+                    "SELECT 1 FROM task_activity_event_deletions WHERE event_id = ?",
+                    (str(event.event_id),),
+                ).fetchone()
+                if expired is not None or deleted is not None:
                     raise TaskActivityEventConflict(
-                        "expired task activity event cannot be restored"
+                        "expired or deleted task activity event cannot be restored"
                     )
                 existing = connection.execute(
                     "SELECT * FROM task_activity_events WHERE owner_id = ? AND visibility = ? "
@@ -1635,9 +1659,16 @@ class SQLiteCheckpointRepository:
                         (str(purge.event_id), *self._scope_values(purge.scope)),
                     ).fetchone()
                     if event_row is None:
-                        raise TaskActivityRetentionNotFound(
-                            "task activity event payload was not found for purge"
-                        )
+                        deletion_row = connection.execute(
+                            "SELECT 1 FROM task_activity_event_deletions WHERE event_id = ? "
+                            "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                            "AND project_id = ? AND session_id = ? AND task_id = ?",
+                            (str(purge.event_id), *self._scope_values(purge.scope)),
+                        ).fetchone()
+                        if deletion_row is None:
+                            raise TaskActivityRetentionNotFound(
+                                "task activity event payload was not found for purge"
+                            )
                     dependent = connection.execute(
                         "SELECT 1 FROM episodic_memory_candidates WHERE source_event_id = ? "
                         "LIMIT 1",
@@ -1756,6 +1787,17 @@ class SQLiteCheckpointRepository:
                 ):
                     raise EpisodicMemoryCandidateConflict(
                         "expired episodic candidates cannot be restored"
+                    )
+                if any(
+                    connection.execute(
+                        "SELECT 1 FROM episodic_memory_deletions WHERE memory_id = ?",
+                        (str(candidate.memory_id),),
+                    ).fetchone()
+                    is not None
+                    for candidate in values
+                ):
+                    raise EpisodicMemoryCandidateConflict(
+                        "deleted episodic candidates cannot be restored"
                     )
                 existing_rows = connection.execute(
                     "SELECT * FROM episodic_memory_candidates WHERE source_event_id = ? "
@@ -2400,9 +2442,16 @@ class SQLiteCheckpointRepository:
                         (str(purge.memory_id), *self._scope_values(purge.scope)),
                     ).fetchone()
                     if candidate_row is None:
-                        raise EpisodicMemoryPurgeNotFound(
-                            "episodic memory payload was not found for purge"
-                        )
+                        deletion_row = connection.execute(
+                            "SELECT 1 FROM episodic_memory_deletions WHERE memory_id = ? "
+                            "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                            "AND project_id = ? AND session_id = ? AND task_id = ?",
+                            (str(purge.memory_id), *self._scope_values(purge.scope)),
+                        ).fetchone()
+                        if deletion_row is None:
+                            raise EpisodicMemoryPurgeNotFound(
+                                "episodic memory payload was not found for purge"
+                            )
                     pending.append(purge)
 
                 for purge in pending:
@@ -2500,6 +2549,240 @@ class SQLiteCheckpointRepository:
             raise EpisodicMemoryPurgeStorageFailure(
                 "episodic memory purge storage operation failed"
             ) from error
+
+    def delete_episodic_memory(
+        self, deletion: EpisodicMemoryDeletion
+    ) -> EpisodicMemoryDeletionResult:
+        if not isinstance(deletion, EpisodicMemoryDeletion):
+            raise TypeError("episodic memory deletion is invalid")
+        self._require_episodic_candidate_scope(deletion.scope)
+        try:
+            with self._transaction() as connection:
+                existing_row = connection.execute(
+                    "SELECT * FROM episodic_memory_deletions WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(deletion.memory_id), *self._scope_values(deletion.scope)),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._episodic_memory_deletion_from_row(existing_row, deletion.scope)
+                    if existing == deletion:
+                        return EpisodicMemoryDeletionResult(existing, True)
+                    raise EpisodicDeletionConflict(
+                        "episodic memory already has a different deletion"
+                    )
+                action_key_row = connection.execute(
+                    "SELECT 1 FROM episodic_memory_deletions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+                    (*self._scope_values(deletion.scope), deletion.source_action_key),
+                ).fetchone()
+                if action_key_row is not None:
+                    raise EpisodicDeletionConflict("episodic memory deletion action key conflicts")
+                target_row = connection.execute(
+                    "SELECT source_event_id FROM episodic_memory_candidates "
+                    "WHERE memory_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                    "AND task_id = ? UNION ALL SELECT source_event_id "
+                    "FROM episodic_memory_expirations WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ? LIMIT 1",
+                    (
+                        str(deletion.memory_id),
+                        *self._scope_values(deletion.scope),
+                        str(deletion.memory_id),
+                        *self._scope_values(deletion.scope),
+                    ),
+                ).fetchone()
+                if target_row is None:
+                    raise EpisodicDeletionNotFound("episodic memory was not found for deletion")
+                if EventId.from_string(target_row["source_event_id"]) != deletion.source_event_id:
+                    raise EpisodicDeletionConflict("episodic memory deletion source does not match")
+                self._validate_source_dependent_memory_deletion(connection, deletion)
+                self._insert_episodic_memory_deletion(connection, deletion)
+                evidence_ids = self._delete_episodic_memory_payload(connection, deletion.memory_id)
+                for evidence_id in evidence_ids:
+                    self._delete_orphaned_evidence(connection, evidence_id)
+                return EpisodicMemoryDeletionResult(deletion, False)
+        except (EpisodicDeletionConflict, EpisodicDeletionNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicDeletionStorageFailure(
+                "episodic memory deletion storage operation failed"
+            ) from error
+
+    def delete_task_activity_event(
+        self, deletion: TaskActivityEventDeletion
+    ) -> TaskActivityDeletionResult:
+        if not isinstance(deletion, TaskActivityEventDeletion):
+            raise TypeError("task activity deletion is invalid")
+        self._require_task_activity_scope(deletion.scope)
+        try:
+            with self._transaction() as connection:
+                existing_row = connection.execute(
+                    "SELECT * FROM task_activity_event_deletions WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(deletion.event_id), *self._scope_values(deletion.scope)),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._task_activity_deletion_from_row(existing_row, deletion.scope)
+                    if existing != deletion:
+                        raise EpisodicDeletionConflict(
+                            "task activity event already has a different deletion"
+                        )
+                    dependent_rows = connection.execute(
+                        "SELECT * FROM episodic_memory_deletions WHERE source_event_id = ? "
+                        "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                        "AND project_id = ? AND session_id = ? AND task_id = ? "
+                        "ORDER BY memory_id ASC",
+                        (str(deletion.event_id), *self._scope_values(deletion.scope)),
+                    ).fetchall()
+                    stored_dependent = tuple(
+                        self._episodic_memory_deletion_from_row(row, deletion.scope)
+                        for row in dependent_rows
+                    )
+                    return TaskActivityDeletionResult(existing, stored_dependent, True)
+                action_key_row = connection.execute(
+                    "SELECT 1 FROM task_activity_event_deletions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+                    (*self._scope_values(deletion.scope), deletion.source_action_key),
+                ).fetchone()
+                if action_key_row is not None:
+                    raise EpisodicDeletionConflict("task activity deletion action key conflicts")
+                target_row = connection.execute(
+                    "SELECT event_id FROM task_activity_events WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "UNION ALL SELECT event_id FROM task_activity_event_expirations "
+                    "WHERE event_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                    "AND task_id = ? LIMIT 1",
+                    (
+                        str(deletion.event_id),
+                        *self._scope_values(deletion.scope),
+                        str(deletion.event_id),
+                        *self._scope_values(deletion.scope),
+                    ),
+                ).fetchone()
+                if target_row is None:
+                    raise EpisodicDeletionNotFound("task activity event was not found for deletion")
+                self._insert_task_activity_deletion(connection, deletion)
+                target_rows = connection.execute(
+                    "SELECT memory_id,source_event_id FROM episodic_memory_candidates "
+                    "WHERE source_event_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                    "AND task_id = ? UNION SELECT memory_id,source_event_id "
+                    "FROM episodic_memory_expirations WHERE source_event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "UNION SELECT memory_id,source_event_id FROM episodic_memory_deletions "
+                    "WHERE source_event_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                    "AND task_id = ? ORDER BY memory_id ASC",
+                    (
+                        str(deletion.event_id),
+                        *self._scope_values(deletion.scope),
+                        str(deletion.event_id),
+                        *self._scope_values(deletion.scope),
+                        str(deletion.event_id),
+                        *self._scope_values(deletion.scope),
+                    ),
+                ).fetchall()
+                dependent_deletions: list[EpisodicMemoryDeletion] = []
+                evidence_ids: set[str] = set()
+                for target in target_rows:
+                    memory_id = MemoryId.from_string(target["memory_id"])
+                    existing_memory_row = connection.execute(
+                        "SELECT * FROM episodic_memory_deletions WHERE memory_id = ?",
+                        (str(memory_id),),
+                    ).fetchone()
+                    if existing_memory_row is not None:
+                        existing_memory = self._episodic_memory_deletion_from_row(
+                            existing_memory_row, deletion.scope
+                        )
+                        if existing_memory.source_event_id != deletion.event_id:
+                            raise EpisodicDeletionConflict(
+                                "dependent memory deletion source conflicts"
+                            )
+                        dependent_deletions.append(existing_memory)
+                        continue
+                    item = EpisodicMemoryDeletion.from_source(
+                        deletion,
+                        memory_id=memory_id,
+                        source_event_id=EventId.from_string(target["source_event_id"]),
+                    )
+                    self._insert_episodic_memory_deletion(connection, item)
+                    evidence_ids.update(self._delete_episodic_memory_payload(connection, memory_id))
+                    dependent_deletions.append(item)
+                source_evidence_rows = connection.execute(
+                    "SELECT evidence_id FROM task_activity_event_evidence WHERE event_id = ?",
+                    (str(deletion.event_id),),
+                ).fetchall()
+                evidence_ids.update(row["evidence_id"] for row in source_evidence_rows)
+                connection.execute(
+                    "DELETE FROM task_activity_event_evidence WHERE event_id = ?",
+                    (str(deletion.event_id),),
+                )
+                connection.execute(
+                    "DELETE FROM event_outbox WHERE topic = 'task_activity' "
+                    "AND source_event_id = ?",
+                    (str(deletion.event_id),),
+                )
+                connection.execute(
+                    "DELETE FROM task_activity_events WHERE event_id = ?",
+                    (str(deletion.event_id),),
+                )
+                for evidence_id in evidence_ids:
+                    self._delete_orphaned_evidence(connection, evidence_id)
+                return TaskActivityDeletionResult(deletion, tuple(dependent_deletions), False)
+        except (EpisodicDeletionConflict, EpisodicDeletionNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicDeletionStorageFailure(
+                "task activity deletion storage operation failed"
+            ) from error
+
+    def get_episodic_memory_deletion(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryDeletion:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM episodic_memory_deletions WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(memory_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicDeletionNotFound("episodic memory deletion was not found")
+                return self._episodic_memory_deletion_from_row(row, scope)
+        except EpisodicDeletionNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicDeletionStorageFailure("episodic memory deletion read failed") from error
+
+    def get_task_activity_deletion(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion:
+        self._require_task_activity_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM task_activity_event_deletions WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicDeletionNotFound("task activity deletion was not found")
+                return self._task_activity_deletion_from_row(row, scope)
+        except EpisodicDeletionNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicDeletionStorageFailure("task activity deletion read failed") from error
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent
@@ -5090,6 +5373,150 @@ class SQLiteCheckpointRepository:
             scope=scope,
             purged_at=datetime.fromisoformat(row["purged_at"]),
         )
+
+    @staticmethod
+    def _task_activity_deletion_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> TaskActivityEventDeletion:
+        return TaskActivityEventDeletion(
+            deletion_id=EventId.from_string(row["deletion_id"]),
+            event_id=EventId.from_string(row["event_id"]),
+            scope=scope,
+            actor=TaskActivityActor(row["actor"]),
+            source_action_key=row["source_action_key"],
+            deleted_at=datetime.fromisoformat(row["deleted_at"]),
+        )
+
+    @staticmethod
+    def _episodic_memory_deletion_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> EpisodicMemoryDeletion:
+        source_deletion_id = row["source_deletion_id"]
+        return EpisodicMemoryDeletion(
+            deletion_id=EventId.from_string(row["deletion_id"]),
+            memory_id=MemoryId.from_string(row["memory_id"]),
+            source_event_id=EventId.from_string(row["source_event_id"]),
+            scope=scope,
+            cause=EpisodicDeletionCause(row["cause"]),
+            actor=TaskActivityActor(row["actor"]),
+            source_action_key=row["source_action_key"],
+            deleted_at=datetime.fromisoformat(row["deleted_at"]),
+            source_deletion_id=(
+                None if source_deletion_id is None else EventId.from_string(source_deletion_id)
+            ),
+        )
+
+    def _insert_task_activity_deletion(
+        self,
+        connection: sqlite3.Connection,
+        deletion: TaskActivityEventDeletion,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO task_activity_event_deletions("
+            "deletion_id,event_id,actor,source_action_key,deleted_at,owner_id,"
+            "visibility,workspace_id,project_id,session_id,task_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(deletion.deletion_id),
+                str(deletion.event_id),
+                deletion.actor.value,
+                deletion.source_action_key,
+                deletion.deleted_at.isoformat(),
+                *self._scope_values(deletion.scope),
+            ),
+        )
+
+    def _insert_episodic_memory_deletion(
+        self,
+        connection: sqlite3.Connection,
+        deletion: EpisodicMemoryDeletion,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO episodic_memory_deletions("
+            "deletion_id,memory_id,source_event_id,cause,source_deletion_id,actor,"
+            "source_action_key,deleted_at,owner_id,visibility,workspace_id,project_id,"
+            "session_id,task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(deletion.deletion_id),
+                str(deletion.memory_id),
+                str(deletion.source_event_id),
+                deletion.cause.value,
+                (None if deletion.source_deletion_id is None else str(deletion.source_deletion_id)),
+                deletion.actor.value,
+                deletion.source_action_key,
+                deletion.deleted_at.isoformat(),
+                *self._scope_values(deletion.scope),
+            ),
+        )
+
+    def _validate_source_dependent_memory_deletion(
+        self,
+        connection: sqlite3.Connection,
+        deletion: EpisodicMemoryDeletion,
+    ) -> None:
+        if deletion.cause is EpisodicDeletionCause.USER:
+            return
+        row = connection.execute(
+            "SELECT 1 FROM task_activity_event_deletions WHERE deletion_id = ? "
+            "AND event_id = ? AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+            "AND project_id = ? AND session_id = ? AND task_id = ?",
+            (
+                str(deletion.source_deletion_id),
+                str(deletion.source_event_id),
+                *self._scope_values(deletion.scope),
+            ),
+        ).fetchone()
+        if row is None:
+            raise EpisodicDeletionConflict(
+                "dependent memory deletion has no matching source deletion"
+            )
+
+    @staticmethod
+    def _delete_episodic_memory_payload(
+        connection: sqlite3.Connection, memory_id: MemoryId
+    ) -> tuple[str, ...]:
+        evidence_rows = connection.execute(
+            "SELECT evidence_id FROM episodic_memory_candidate_evidence "
+            "WHERE memory_id = ? UNION SELECT link.evidence_id "
+            "FROM episodic_candidate_review_evidence AS link "
+            "JOIN episodic_candidate_reviews AS review "
+            "ON review.action_id = link.action_id WHERE review.candidate_id = ? "
+            "UNION SELECT link.evidence_id FROM episodic_memory_governance_evidence AS link "
+            "JOIN episodic_memory_governance AS governance "
+            "ON governance.action_id = link.action_id WHERE governance.memory_id = ?",
+            (str(memory_id), str(memory_id), str(memory_id)),
+        ).fetchall()
+        connection.execute(
+            "DELETE FROM episodic_memory_governance_evidence WHERE action_id IN ("
+            "SELECT action_id FROM episodic_memory_governance WHERE memory_id = ?)",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM episodic_memory_governance WHERE memory_id = ?",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM active_episodic_memories WHERE memory_id = ?",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM episodic_candidate_review_evidence WHERE action_id IN ("
+            "SELECT action_id FROM episodic_candidate_reviews WHERE candidate_id = ?)",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM episodic_candidate_reviews WHERE candidate_id = ?",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM episodic_memory_candidate_evidence WHERE memory_id = ?",
+            (str(memory_id),),
+        )
+        connection.execute(
+            "DELETE FROM episodic_memory_candidates WHERE memory_id = ?",
+            (str(memory_id),),
+        )
+        return tuple(row["evidence_id"] for row in evidence_rows)
 
     @staticmethod
     def _delete_orphaned_evidence(connection: sqlite3.Connection, evidence_id: str) -> None:
