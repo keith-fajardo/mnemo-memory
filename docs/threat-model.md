@@ -327,6 +327,13 @@ reindex, restore, and source rename/recreation. Counts and digests must reconcil
 
 **Residual risk:** User-controlled exports cannot be recalled; warn and document their boundary.
 
+Personal SQLite backups are likewise user-controlled sensitive copies. Backup creation rejects an
+absent/corrupt source, unsafe backup-directory symlinks, validation failures, and destination
+collisions. It uses SQLite's coherent backup API, validates integrity, foreign keys, and schema
+history before atomic publication, and cleans partial candidates without changing the live store.
+Files and their directory use restrictive personal-mode permissions. Retraction, uninstall, and
+future deletion propagation cannot recall a backup the user has copied elsewhere.
+
 ### Local service exposure
 
 **Scenario:** The local API or MCP service binds beyond loopback, trusts filesystem permissions

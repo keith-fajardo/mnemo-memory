@@ -369,6 +369,19 @@ defaults, and packet budgets. It never accepts an API key. Changes apply to new 
 automatic hooks; existing retention schedules are not silently rewritten. Stop it with
 `mnemo-memory stop`.
 
+Create an integrity-checked recovery point before any manual installation change:
+
+```bash
+mnemo-memory backup
+```
+
+The command uses SQLite's coherent backup operation and writes one mode-0600 database under the
+private `backups` directory. Its filename records the schema version, UTC creation time, and full
+SHA-256 digest. Mnemo validates database integrity and foreign keys before publishing the file and
+never overwrites an existing artifact. The backup contains the same private data as the live store;
+keep it protected and remove it explicitly when no longer needed. Automatic invocation by the
+one-command upgrade workflow is a later packaging step.
+
 This creates a local database, normally **outside** your repository:
 
 - macOS: `~/Library/Application Support/Mnemo`

@@ -1164,6 +1164,37 @@ architecture validation for 102 product Python files. No import, expiry, general
 production-episodic browser, job control, backup/installer change, dependency, model call,
 non-loopback exposure, or team behavior was added.
 
+#### Issue 20G — Verified personal SQLite backup — Complete
+
+This bounded issue adds the recovery primitive required before automated upgrades. One explicit
+CLI command must create a coherent SQLite backup under a private directory in the configured data
+root, validate integrity, foreign keys, and the exact schema version, include the schema, UTC
+timestamp, and full SHA-256 digest in a non-overwritten filename, and report the recovery artifact
+without exposing memory payloads. Unsafe symlinks, an absent/corrupt store, partial-copy failures,
+and destination collisions must fail closed without damaging the live database or publishing a
+partial backup. A restore proof must read canonical data from the backup after the live database
+changes. This issue adds no upgrade execution, restore mutation, retention/expiry, index/job
+control, diagnostic bundle, installer/uninstaller change, dependency, model call, non-loopback
+exposure, or team behavior.
+
+Implemented `mnemo-memory backup` over a dedicated personal-profile application service. It opens
+the configured source read-only, uses SQLite's backup API, consolidates destination WAL state,
+validates `integrity_check`, `foreign_key_check`, and the migration-ledger maximum, hashes the
+validated file, fsyncs it, and atomically publishes it under a mode-0700 `backups` directory with
+mode 0600. The non-overwritten filename contains the exact schema version, normalized UTC creation
+time, and full SHA-256 digest; the JSON result exposes only recovery metadata. Identical timestamp
+and content reuse the already verified artifact without rewriting it.
+
+All 33 focused backup/lifecycle tests pass, including committed-state recovery after live payload
+erasure, exact digest/schema naming, permissions, repeat idempotency, missing/corrupt input, unsafe
+directory symlink, injected partial-copy cleanup, SQLite WAL/SHM sidecar cleanup, conflicting
+destination preservation, live-database non-mutation, and sanitized CLI failure. The complete
+repository gate passes with 765 tests, strict typing for 195 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 103 product
+Python files. No upgrade execution, restore mutation, retention/expiry, index/job control,
+diagnostic bundle, installer/uninstaller change, dependency, model call, non-loopback exposure, or
+team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

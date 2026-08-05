@@ -70,6 +70,8 @@ from mnemo_memory.packages.application import (
     ListApprovedEpisodicEventRecords,
     LocalConfig,
     LocalRuntimeError,
+    PersonalBackupError,
+    PersonalBackupService,
     PersonalSettingsStore,
     RetractApprovedEpisodicEvent,
     SynchronizeKnowledgeDocuments,
@@ -590,6 +592,15 @@ def status(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  #
 @app.command(help="Stop the local Mnemo lifecycle service.")
 def stop(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
     _show(_service(data_dir).stop())
+
+
+@app.command(help="Create and verify a private SQLite recovery backup.")
+def backup(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
+    try:
+        result = PersonalBackupService(resolve_local_config(data_dir)).create()
+    except (PersonalBackupError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_BACKUP_FAILED") from error
+    _show(result.to_dict())
 
 
 def _project_scope(owner_id: str, workspace_id: str, project_id: str) -> MemoryScope:

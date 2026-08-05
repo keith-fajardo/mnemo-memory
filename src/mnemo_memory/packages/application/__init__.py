@@ -1,5 +1,6 @@
 """Application services for local Mnemo lifecycle operations."""
 
+from .backups import PersonalBackupError, PersonalBackupResult, PersonalBackupService
 from .bootstrap import (
     CheckpointRuntime,
     LocalRuntimeError,
@@ -164,6 +165,9 @@ __all__ = [
     "ManifestChangesResult",
     "ManifestNodeChange",
     "ManifestSelectorQueryResult",
+    "PersonalBackupError",
+    "PersonalBackupResult",
+    "PersonalBackupService",
     "PersonalSettings",
     "PersonalSettingsError",
     "PersonalSettingsStore",

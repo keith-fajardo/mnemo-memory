@@ -294,6 +294,22 @@ The guide explains the steps in your terminal, can initialize your local store a
 and shows the exact connection command for Codex, Claude Code, or both. It does not call a model,
 change a client registration without your confirmation, or inspect your source code.
 
+### Create a recovery backup
+
+Before changing the installed Mnemo version manually, create a verified SQLite recovery point:
+
+```bash
+mnemo-memory backup
+```
+
+The JSON result gives the backup path, exact schema version, UTC creation time, byte count, and
+SHA-256 digest. The file is published only after SQLite integrity and foreign-key checks pass. It
+lives under the configured data directory's mode-0700 `backups` folder, has mode 0600, and is never
+silently overwritten. It contains the same private canonical data as the live database. Stop Mnemo
+and preserve the live database before performing any manual recovery; this command creates a
+recovery artifact but deliberately does not replace data. Application uninstall and later memory
+retraction do not remove user-held backups.
+
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
 the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also

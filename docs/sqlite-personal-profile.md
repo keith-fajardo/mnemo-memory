@@ -10,6 +10,20 @@ All timestamps are stored as UTC ISO-8601 strings with an explicit offset. Struc
 objects are stored as deterministically ordered JSON and reloaded through their strict domain
 parsers, preserving nominal IDs and rejecting unknown states.
 
+## Verified backups
+
+`mnemo-memory backup` opens the configured live database read-only and uses SQLite's backup API so
+committed WAL state is represented coherently without copying a possibly changing file directly.
+The candidate copy is created with mode 0600 under a mode-0700 `backups` directory, then checked
+with `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and the `schema_migrations` maximum. Only
+after validation is it fsynced and atomically renamed to a filename containing the schema version,
+UTC creation timestamp, and full SHA-256 digest. Existing destinations and symlinked backup
+directories fail closed; partial candidates are removed without touching the live database.
+
+This is a complete sensitive database copy, not a redacted export. It is retained until the user
+removes it. The bounded command does not perform restore or upgrade; the upgrade workflow must call
+this service successfully before changing an installed version.
+
 Migration `0001_initial.sql` is forward-only and transactional. Run `SQLiteCheckpointRepository.migrate()`
 before repository use; it is idempotent and rejects databases newer than the application. No
 destructive migration exists in Issue 5. A future destructive change requires a backup/restore
