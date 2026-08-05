@@ -10,8 +10,11 @@ reviewed on 2026-08-02.
 The parser consumes artifact metadata; `nodes` and `sources`; resource identity, relation/file
 metadata, enabled state, checksum, tags, and description; and `depends_on.nodes`. It builds edges
 only from that explicit dependency list, then validates `parent_map` and `child_map` when supplied.
-Descriptions, tags, and meta content remain untrusted descriptive data. Other collections, such
-as exposures and metrics, are recorded as deferred counts, not interpreted as lineage.
+Descriptions, tags, and meta content remain untrusted descriptive data. Exposure and metric
+resources and their semantic-model bridge are included as typed graph nodes because manifest v12
+provides their exact `depends_on.nodes` relationships; this lets downstream traversal identify
+dashboards and metrics affected by a model. Semantic dimensions and measures are not projected,
+and macros remain deferred rather than being assigned invented lineage semantics.
 
 Parsing is local and offline: no dbt executable, Jinja, macros, SQL parsing, warehouse connection,
 network call, or LLM is used. Personal-mode byte, node, edge, dependency, string, and traversal
@@ -27,5 +30,6 @@ Results sort by depth and dbt unique ID, include node and edge evidence, and rep
 truncation rather than recursing indefinitely. Disabled nodes are included by default so the
 artifact remains faithful; callers can explicitly exclude them.
 
-SQLite storage, incremental ingestion, MCP/context-packet integration, catalog/run-results,
-general code graphs, and all model behavior remain out of scope for 12A.
+This was the original 12A parser boundary. Later completed issues added SQLite storage,
+context-packet integration, incremental lifecycle ingestion, and minimized catalog/run-results
+projections; the manifest remains the sole authority for dbt dependency edges.

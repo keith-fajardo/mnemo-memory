@@ -67,6 +67,7 @@ class DbtResourceType(str, Enum):
     ANALYSIS = "analysis"
     EXPOSURE = "exposure"
     METRIC = "metric"
+    SEMANTIC_MODEL = "semantic_model"
     OTHER = "other"
 
 

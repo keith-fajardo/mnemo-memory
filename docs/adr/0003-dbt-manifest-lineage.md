@@ -22,6 +22,12 @@ manifest. Descriptions, tags, and meta-like descriptive content are inert untrus
 instructions. Non-node/source collections are counted as deferred rather than given invented
 lineage semantics.
 
+Issue 15D applies that same rule to the v12 `exposures`, `metrics`, and `semantic_models`
+collections. They become typed graph nodes only from their exact manifest identities and
+`depends_on.nodes` entries, so ordinary downstream traversal can report an affected exposure or
+metric through its declared semantic-model bridge. Their descriptive fields, dimensions, and
+measures remain inert and are not projected. Macro dependency semantics remain deferred.
+
 ## Consequences
 
 The parser is standard-library-only, offline, bounded, and schema-version-adapted. It accepts

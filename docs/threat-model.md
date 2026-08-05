@@ -207,6 +207,12 @@ snapshot and accepts supplemental failure without replacing that manifest. Conte
 only exact node identities, caps rendered columns, preserves artifact evidence, and applies the
 existing structural token budget before returning any supplemental fact.
 
+Manifest exposures, metrics, and the semantic-model nodes joining metrics to models are admitted
+to lineage only through the reviewed v12 collections, exact matching map keys and contained
+identities, typed resource values, bounded counts, and same-artifact `depends_on.nodes` references.
+Unknown endpoints, collection/type disagreement, map disagreement, and cycles fail closed;
+descriptive content, dimensions, and measures never create an edge.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

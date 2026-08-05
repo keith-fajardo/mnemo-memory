@@ -63,6 +63,27 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
         scope(), stored.snapshot.snapshot_id, "models/marts/fct_orders.sql"
     )
     assert [str(node.unique_id) for node in matches] == ["model.mnemo_analytics.fct_orders"]
+    exposure = reopened.find_nodes_by_original_file_path(
+        scope(), stored.snapshot.snapshot_id, "models/exposures.yml"
+    )
+    assert [node.resource_type.value for node in exposure] == ["exposure"]
+    affected = reopened.direct_downstream(
+        scope(),
+        stored.snapshot.snapshot_id,
+        next(
+            node.unique_id
+            for node in reopened.iter_nodes(scope(), stored.snapshot.snapshot_id)
+            if str(node.unique_id) == "model.mnemo_analytics.mart_customer_value"
+        ),
+    )
+    assert {str(edge.child_id) for edge in affected} == {
+        "exposure.mnemo_analytics.order_dashboard",
+        "semantic_model.mnemo_analytics.customer_value",
+    }
+    metric = reopened.find_nodes_by_original_file_path(
+        scope(), stored.snapshot.snapshot_id, "models/metrics.yml"
+    )
+    assert [node.resource_type.value for node in metric] == ["metric"]
     assert (
         reopened.find_nodes_by_original_file_path(
             scope(), stored.snapshot.snapshot_id, "models/not-recorded.sql"

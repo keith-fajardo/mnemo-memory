@@ -967,3 +967,27 @@ environment payloads are neither persisted nor returned. The complete gate passe
 strict typing for 147 source files, schema validation, dependency/provenance validation for 86
 entries, and architecture validation for 72 product Python files. No dependency or MCP tool was
 added.
+
+#### Issue 15D — Complete
+
+The current bounded issue completes the manifest lineage model for dbt exposures and metrics in
+the supported v12 adapter, including semantic-model nodes required to preserve their explicit
+dependency path. These resources must be parsed as ordinary immutable manifest nodes only when
+their exact `depends_on.nodes` identities exist in the same artifact, and their typed
+resource identity and dependency edges must survive reference and SQLite storage. Downstream
+queries may then surface the exposure or metric affected by a model change with the same bounded
+scope, currentness, and evidence rules as existing model/test lineage. Macro dependencies,
+semantic dimensions/measures, selector syntax, freshness, test-coverage aggregation, changed-state
+indexing, and new MCP tools remain outside this issue.
+
+Implemented exposure, metric, and semantic-model parsing as typed v12 manifest graph nodes with
+exact digest-addressed evidence and ordinary explicit dependency edges. The shared node limit now
+counts all three collections, collection/resource-type mismatches and unknown dependencies fail
+closed, and manifest parent/child maps must agree with every parsed relationship. Reference and SQLite
+round-trip coverage proves the resource types and downstream edges survive persistence, while
+application and context tests show a model impact query returning its exact dashboard and metric
+through the manifest-declared semantic-model bridge without descriptive payload interpretation.
+The complete gate passed with 561 tests, strict typing
+for 147 source files, schema validation, dependency/provenance validation for 86 entries, and
+architecture validation for 72 product Python files. No migration, dependency, model call, or MCP
+tool was added.

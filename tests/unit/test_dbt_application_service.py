@@ -212,6 +212,12 @@ def test_queries_are_bounded_deterministic_and_scope_safe() -> None:
     assert all(edge.evidence for edge in upstream.edges)
     direct = item.query(QueryLineage(value, start, LineageDirection.UPSTREAM, transitive=False))
     assert {node.depth for node in direct.nodes} == {1}
+    consumers = item.query(QueryLineage(value, start, LineageDirection.DOWNSTREAM))
+    assert {str(node.node.unique_id) for node in consumers.nodes} == {
+        "exposure.mnemo_analytics.order_dashboard",
+        "metric.mnemo_analytics.customer_value",
+        "semantic_model.mnemo_analytics.customer_value",
+    }
     zero = item.query(QueryLineage(value, start, LineageDirection.UPSTREAM, maximum_depth=0))
     assert zero.nodes == () and zero.truncated
     bounded = item.query(QueryLineage(value, start, LineageDirection.UPSTREAM, maximum_nodes=1))
@@ -254,6 +260,25 @@ def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
     assert packet.structural_items
     assert all(
         structural_item.source_scope == task_scope for structural_item in packet.structural_items
+    )
+
+    consumers = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("model.mnemo_analytics.mart_customer_value"),
+                LineageDirection.DOWNSTREAM,
+            ),
+        )
+    )
+    assert {
+        json.loads(structural_item.content)["resource_type"]
+        for structural_item in consumers.structural_items
+    } == {"exposure", "metric", "semantic_model"}
+    assert all(
+        structural_item.evidence_references for structural_item in consumers.structural_items
     )
 
 

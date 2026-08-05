@@ -111,12 +111,26 @@ class DbtManifestParser:
             )
         nodes_value = _object_map(value.get("nodes", {}), "nodes")
         sources_value = _object_map(value.get("sources", {}), "sources")
-        total_nodes = len(nodes_value) + len(sources_value)
+        exposures_value = _object_map(value.get("exposures", {}), "exposures")
+        metrics_value = _object_map(value.get("metrics", {}), "metrics")
+        semantic_models_value = _object_map(value.get("semantic_models", {}), "semantic_models")
+        total_nodes = (
+            len(nodes_value)
+            + len(sources_value)
+            + len(exposures_value)
+            + len(metrics_value)
+            + len(semantic_models_value)
+        )
         if total_nodes > request.limits.max_nodes:
             raise ManifestLimitError("dbt manifest exceeds the configured node limit")
         content_digest = sha256(encoded).hexdigest()
         nodes = self._parse_nodes(nodes_value, "nodes", content_digest, request)
         nodes += self._parse_nodes(sources_value, "sources", content_digest, request)
+        nodes += self._parse_nodes(exposures_value, "exposures", content_digest, request)
+        nodes += self._parse_nodes(metrics_value, "metrics", content_digest, request)
+        nodes += self._parse_nodes(
+            semantic_models_value, "semantic_models", content_digest, request
+        )
         self._validate_dependencies(nodes)
         edges = self._edges(nodes, content_digest)
         if len(edges) > request.limits.max_edges:
@@ -145,8 +159,7 @@ class DbtManifestParser:
                 sorted(
                     (name, len(_object_map(item, name)))
                     for name, item in value.items()
-                    if name in {"exposures", "metrics", "semantic_models", "macros"}
-                    and isinstance(item, dict)
+                    if name == "macros" and isinstance(item, dict)
                 )
             ),
         )
@@ -199,9 +212,15 @@ class DbtManifestParser:
                 raise ManifestValidationError("manifest map key must match contained unique_id")
             self._check_strings(raw_node, request.limits.max_string_length)
             raw_resource_type = _required_string(raw_node, "resource_type")
-            if collection == "sources" and raw_resource_type != "source":
+            expected_type = {
+                "sources": "source",
+                "exposures": "exposure",
+                "metrics": "metric",
+                "semantic_models": "semantic_model",
+            }.get(collection)
+            if expected_type is not None and raw_resource_type != expected_type:
                 raise ManifestValidationError(
-                    "source collection entries must use resource_type 'source'"
+                    f"{collection} entries must use resource_type {expected_type!r}"
                 )
             dependencies = _dependency_ids(raw_node, request.limits.max_dependencies_per_node)
             node_id = DbtNodeId(unique_id)
@@ -293,8 +312,8 @@ class DbtManifestParser:
                     isinstance(item, str) for item in dependencies
                 ):
                     raise ManifestConsistencyError(f"{name} contains invalid lineage data")
-                # dbt maps may include deferred resources such as exposures. Their semantics are
-                # intentionally not implemented in 12A, so only parsed nodes/sources are checked.
+                # dbt maps may include deferred resources such as semantic models or macros. Only
+                # the exact resource kinds parsed into this graph are checked.
                 parsed_dependencies = set(cast(list[str], dependencies)) & known
                 if node_id in known and parsed_dependencies != expected[node_id]:
                     raise ManifestConsistencyError(f"{name} disagrees with depends_on.nodes")
