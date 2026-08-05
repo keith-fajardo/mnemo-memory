@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
+from mnemo_memory.connectors.dbt.artifacts import (
+    DbtCatalogParser,
+    DbtRunResultsParser,
+    DbtSourceFreshnessParser,
+)
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
 from mnemo_memory.packages.application.dbt import (
@@ -22,13 +26,16 @@ from mnemo_memory.packages.application.dbt import (
     IngestCatalog,
     IngestManifest,
     IngestRunResults,
+    IngestSourceFreshness,
     LineageDirection,
     QueryLineage,
     QueryManifestSelector,
+    QuerySourceFreshness,
     QueryTestCoverage,
     ResolveManifestFile,
 )
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtFreshnessQuery,
     ContextDbtTestCoverageQuery,
     ContextLineageQuery,
     GetUnifiedContext,
@@ -59,6 +66,7 @@ from mnemo_memory.packages.storage.sqlite import SQLiteCheckpointRepository
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 CATALOG_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "catalog-v1.json"
 RUN_RESULTS_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "run-results-v6.json"
+SOURCES_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "sources-v3.json"
 STAMP = datetime(2026, 8, 2, tzinfo=UTC)
 
 
@@ -95,6 +103,7 @@ def service() -> DbtManifestApplicationService:
         DbtManifestParser(),
         DbtCatalogParser(),
         DbtRunResultsParser(),
+        DbtSourceFreshnessParser(),
     )
 
 
@@ -423,6 +432,67 @@ def test_manifest_selector_intersects_exact_filters_with_stable_bounds_and_scope
                 snapshot_id=snapshot.snapshot_id,
             )
         )
+
+
+def test_source_freshness_is_observed_evidenced_and_scope_safe() -> None:
+    item, project_scope = service(), scope()
+    snapshot = item.ingest(command(project_scope)).snapshot
+    item.ingest_source_freshness(
+        IngestSourceFreshness(
+            project_scope,
+            snapshot.snapshot_id,
+            SOURCES_FIXTURE.read_bytes(),
+            "sources.json",
+            STAMP,
+        )
+    )
+
+    result = item.query_source_freshness(
+        QuerySourceFreshness(
+            project_scope,
+            DbtNodeId("source.mnemo_analytics.raw_orders"),
+            snapshot.snapshot_id,
+        )
+    )
+
+    assert result.observation is not None
+    assert result.observation.status.value == "warn"
+    assert result.observation.age_seconds == 5400.0
+    assert result.observation.evidence
+    assert result.artifact is not None
+    with pytest.raises(DbtApplicationNotFound):
+        item.query_source_freshness(
+            QuerySourceFreshness(
+                scope(2),
+                DbtNodeId("source.mnemo_analytics.raw_orders"),
+                snapshot.snapshot_id,
+            )
+        )
+
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+    packet = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            dbt_freshness=ContextDbtFreshnessQuery(DbtNodeId("source.mnemo_analytics.raw_orders")),
+        )
+    )
+    assert len(packet.structural_items) == 1
+    fact = json.loads(packet.structural_items[0].content)
+    assert fact["query_kind"] == "source_freshness"
+    assert fact["status"] == "warn"
+    assert fact["warn_after"] == {"count": 1, "period": "hour"}
+    assert len(packet.structural_items[0].evidence_references) == 2
+    assert "private" not in packet.structural_items[0].content
 
 
 def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:

@@ -29,6 +29,7 @@ from mnemo_memory.packages.application.dbt import (
     IngestCatalog,
     IngestManifest,
     IngestRunResults,
+    IngestSourceFreshness,
 )
 from mnemo_memory.packages.domain import DbtSnapshotId, MemoryScope
 
@@ -176,7 +177,11 @@ class DbtManifestHooks:
         assert state.scope is not None and state.manifest_path is not None
         metadata: list[tuple[str, str]] = []
         changed = False
-        for kind, filename in (("catalog", "catalog.json"), ("run_results", "run_results.json")):
+        for kind, filename in (
+            ("catalog", "catalog.json"),
+            ("run_results", "run_results.json"),
+            ("source_freshness", "sources.json"),
+        ):
             path = state.manifest_path.with_name(filename)
             if not path.is_file():
                 metadata.append((kind, "unavailable"))
@@ -184,15 +189,18 @@ class DbtManifestHooks:
             try:
                 raw = path.read_bytes()
                 observed_at = self._clock()
-                stored = (
-                    service.ingest_catalog(
+                if kind == "catalog":
+                    stored = service.ingest_catalog(
                         IngestCatalog(state.scope, snapshot_id, raw, filename, observed_at)
                     )
-                    if kind == "catalog"
-                    else service.ingest_run_results(
+                elif kind == "run_results":
+                    stored = service.ingest_run_results(
                         IngestRunResults(state.scope, snapshot_id, raw, filename, observed_at)
                     )
-                )
+                else:
+                    stored = service.ingest_source_freshness(
+                        IngestSourceFreshness(state.scope, snapshot_id, raw, filename, observed_at)
+                    )
             except (
                 DbtApplicationConflict,
                 DbtApplicationInvalidManifest,

@@ -12,10 +12,12 @@ import pytest
 from mnemo_memory.connectors.dbt import (
     DbtCatalogParser,
     DbtRunResultsParser,
+    DbtSourceFreshnessParser,
     DbtSupplementalArtifactLimits,
     DbtSupplementalParseRequest,
 )
 from mnemo_memory.packages.domain import (
+    DbtFreshnessStatus,
     DbtRunStatus,
     DbtSupplementalArtifactLimitError,
     DbtSupplementalArtifactValidationError,
@@ -32,6 +34,7 @@ from mnemo_memory.packages.domain import (
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "dbt"
 CATALOG = FIXTURES / "catalog-v1.json"
 RUN_RESULTS = FIXTURES / "run-results-v6.json"
+SOURCES = FIXTURES / "sources-v3.json"
 
 
 def scope() -> MemoryScope:
@@ -110,6 +113,25 @@ def test_run_results_v6_retains_status_timing_and_failure_count_without_payloads
     assert "Thread-1" not in serialized
 
 
+def test_sources_v3_retains_observed_freshness_without_private_payloads() -> None:
+    artifact = DbtSourceFreshnessParser().parse(SOURCES.read_bytes(), request())
+    assert artifact.metadata.schema_version.endswith("/sources/v3.json")
+    assert artifact.elapsed_time_seconds == 2.0
+    observed, runtime_error = artifact.results
+    assert str(observed.unique_id) == "source.mnemo_analytics.raw_customers"
+    assert observed.status is DbtFreshnessStatus.RUNTIME_ERROR
+    assert observed.max_loaded_at is None
+    assert str(runtime_error.unique_id) == "source.mnemo_analytics.raw_orders"
+    assert runtime_error.status is DbtFreshnessStatus.WARN
+    assert runtime_error.age_seconds == 5400.0
+    assert runtime_error.warn_after is not None
+    assert runtime_error.warn_after.count == 1
+    serialized = artifact.normalized_json()
+    assert "must-not-be-retained" not in serialized
+    assert "private_filter_expression" not in serialized
+    assert "Thread-1" not in serialized
+
+
 @pytest.mark.parametrize(
     ("path", "parser", "schema"),
     [
@@ -119,10 +141,13 @@ def test_run_results_v6_retains_status_timing_and_failure_count_without_payloads
             DbtRunResultsParser(),
             "https://schemas.getdbt.com/dbt/run-results/v99.json",
         ),
+        (SOURCES, DbtSourceFreshnessParser(), "https://schemas.getdbt.com/dbt/sources/v99.json"),
     ],
 )
 def test_supplemental_parsers_reject_unsupported_schemas(
-    path: Path, parser: DbtCatalogParser | DbtRunResultsParser, schema: str
+    path: Path,
+    parser: DbtCatalogParser | DbtRunResultsParser | DbtSourceFreshnessParser,
+    schema: str,
 ) -> None:
     value = payload(path)
     cast(dict[str, object], value["metadata"])["dbt_schema_version"] = schema
@@ -177,6 +202,26 @@ def test_run_results_rejects_duplicates_invalid_time_status_and_hostile_json() -
 
     with pytest.raises(DbtSupplementalArtifactValidationError, match="not valid JSON"):
         DbtRunResultsParser().parse('{"elapsed_time": NaN}', request())
+
+
+def test_sources_rejects_invalid_status_age_and_duplicate_source() -> None:
+    value = payload(SOURCES)
+    results = cast(list[object], value["results"])
+    first = cast(dict[str, object], results[0])
+    first["status"] = "invented"
+    with pytest.raises(DbtSupplementalArtifactValidationError, match="status is unsupported"):
+        DbtSourceFreshnessParser().parse(json.dumps(value), request())
+
+    first["status"] = "warn"
+    first["max_loaded_at_time_ago_in_s"] = -1
+    with pytest.raises(DbtSupplementalArtifactValidationError, match="finite and non-negative"):
+        DbtSourceFreshnessParser().parse(json.dumps(value), request())
+
+    value = payload(SOURCES)
+    results = cast(list[object], value["results"])
+    results.append(results[0])
+    with pytest.raises(ValueError, match="duplicate source identities"):
+        DbtSourceFreshnessParser().parse(json.dumps(value), request())
 
 
 def test_supplemental_request_and_string_limits_fail_before_retention() -> None:

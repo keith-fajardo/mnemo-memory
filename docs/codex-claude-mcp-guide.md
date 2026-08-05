@@ -204,6 +204,11 @@ tag, or their intersection. Results are enabled manifest nodes in stable order w
 node evidence. Mnemo does not evaluate dbt selector strings or expand the selected nodes through
 the graph.
 
+For observed source freshness, the agent sends `dbt_freshness` with one exact source `unique_id`
+or unambiguous manifest file. Mnemo returns only the persisted dbt-reported `sources.json` status,
+observation time/age, thresholds, and evidence. It does not query the warehouse or infer a pass
+from configuration or missing data.
+
 ## Scope, in practical terms
 
 Mnemo uses stable owner, workspace, project, session, and task identities internally. They prevent

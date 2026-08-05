@@ -31,6 +31,7 @@ from mnemo_memory.packages.domain import (
     CurrentKnowledgeDocumentSection,
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
+    DbtSourceFreshnessArtifact,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -104,7 +105,10 @@ from .contracts import (
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
 _SupplementalArtifactT = TypeVar(
-    "_SupplementalArtifactT", DbtCatalogArtifact, DbtRunResultsArtifact
+    "_SupplementalArtifactT",
+    DbtCatalogArtifact,
+    DbtRunResultsArtifact,
+    DbtSourceFreshnessArtifact,
 )
 
 
@@ -1044,8 +1048,10 @@ class ReferenceProjectIndexRepository:
         self._active: dict[MemoryScope, DbtSnapshotId] = {}
         self._catalogs: dict[tuple[DbtSnapshotId, str], DbtCatalogArtifact] = {}
         self._run_results: dict[tuple[DbtSnapshotId, str], DbtRunResultsArtifact] = {}
+        self._source_freshness: dict[tuple[DbtSnapshotId, str], DbtSourceFreshnessArtifact] = {}
         self._active_catalog: dict[DbtSnapshotId, str] = {}
         self._active_run_results: dict[DbtSnapshotId, str] = {}
+        self._active_source_freshness: dict[DbtSnapshotId, str] = {}
 
     def store_and_activate(
         self,
@@ -1137,6 +1143,18 @@ class ReferenceProjectIndexRepository:
             tuple(item.unique_id for item in artifact.results),
         )
 
+    def store_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtSourceFreshnessArtifact
+    ) -> SupplementalArtifactStoreResult:
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            artifact,
+            self._source_freshness,
+            self._active_source_freshness,
+            tuple(item.unique_id for item in artifact.results),
+        )
+
     def get_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> DbtCatalogArtifact | None:
@@ -1150,6 +1168,13 @@ class ReferenceProjectIndexRepository:
         self.get_snapshot(scope, snapshot_id)
         digest = self._active_run_results.get(snapshot_id)
         return None if digest is None else self._run_results[(snapshot_id, digest)]
+
+    def get_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtSourceFreshnessArtifact | None:
+        self.get_snapshot(scope, snapshot_id)
+        digest = self._active_source_freshness.get(snapshot_id)
+        return None if digest is None else self._source_freshness[(snapshot_id, digest)]
 
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId

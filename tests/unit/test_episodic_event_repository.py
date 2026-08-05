@@ -308,6 +308,8 @@ def test_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DROP TABLE dbt_run_result_timings")
         connection.execute("DROP TABLE dbt_run_results")
         connection.execute("DROP TABLE dbt_catalog_columns")

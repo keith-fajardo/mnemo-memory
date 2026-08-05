@@ -45,11 +45,16 @@ from mnemo_memory.packages.domain import (
     DbtCatalogCollection,
     DbtCatalogColumn,
     DbtCatalogRelation,
+    DbtFreshnessPeriod,
+    DbtFreshnessStatus,
+    DbtFreshnessThreshold,
     DbtNodeRunResult,
     DbtRunResultsArtifact,
     DbtRunStatus,
     DbtRunTiming,
     DbtSnapshotId,
+    DbtSourceFreshnessArtifact,
+    DbtSourceFreshnessResult,
     DbtSupplementalArtifactMetadata,
     EventId,
     EvidenceReference,
@@ -141,7 +146,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 15
+LATEST_SCHEMA_VERSION = 16
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -411,6 +416,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 15:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 15
+            if version < 16:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0016_dbt_source_freshness.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (16, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 16:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 16
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1506,6 +1523,104 @@ class SQLiteCheckpointRepository:
                 "supplemental dbt run-results storage operation failed"
             ) from error
 
+    def store_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtSourceFreshnessArtifact
+    ) -> SupplementalArtifactStoreResult:
+        self._validate_supplemental_scope(scope, artifact.scope)
+        try:
+            with self._transaction() as connection:
+                self._require_supplemental_manifest(
+                    connection,
+                    scope,
+                    snapshot_id,
+                    tuple(item.unique_id for item in artifact.results),
+                )
+                existing = connection.execute(
+                    "SELECT * FROM dbt_source_freshness_artifacts "
+                    "WHERE manifest_snapshot_id = ? AND content_digest = ?",
+                    (str(snapshot_id), artifact.metadata.content_digest),
+                ).fetchone()
+                idempotent = existing is not None
+                if existing is not None:
+                    if (
+                        existing["normalized_digest"] != artifact.metadata.normalized_digest
+                        or existing["source_identity"] != artifact.metadata.source_identity
+                        or existing["schema_version"] != artifact.metadata.schema_version
+                    ):
+                        raise SupplementalArtifactConflict(
+                            "source-freshness digest conflicts with retained metadata"
+                        )
+                else:
+                    connection.execute(
+                        "INSERT INTO dbt_source_freshness_artifacts VALUES "
+                        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                        (
+                            str(snapshot_id),
+                            artifact.metadata.content_digest,
+                            artifact.metadata.schema_version,
+                            artifact.metadata.dbt_version,
+                            None
+                            if artifact.metadata.generated_at is None
+                            else artifact.metadata.generated_at.isoformat(),
+                            artifact.metadata.invocation_id,
+                            artifact.metadata.normalized_digest,
+                            artifact.metadata.source_identity,
+                            artifact.metadata.ingested_at.isoformat(),
+                            artifact.elapsed_time_seconds,
+                        ),
+                    )
+                    connection.executemany(
+                        "INSERT INTO dbt_source_freshness_results VALUES "
+                        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(snapshot_id),
+                                artifact.metadata.content_digest,
+                                str(item.unique_id),
+                                item.status.value,
+                                None
+                                if item.max_loaded_at is None
+                                else item.max_loaded_at.isoformat(),
+                                None
+                                if item.snapshotted_at is None
+                                else item.snapshotted_at.isoformat(),
+                                item.age_seconds,
+                                None if item.warn_after is None else item.warn_after.count,
+                                None if item.warn_after is None else item.warn_after.period.value,
+                                None if item.error_after is None else item.error_after.count,
+                                None if item.error_after is None else item.error_after.period.value,
+                                item.execution_time_seconds,
+                                _json(item.evidence.to_dict()),
+                            )
+                            for item in artifact.results
+                        ],
+                    )
+                connection.execute(
+                    "UPDATE dbt_source_freshness_artifacts SET is_active = 0 "
+                    "WHERE manifest_snapshot_id = ? AND is_active = 1",
+                    (str(snapshot_id),),
+                )
+                updated = connection.execute(
+                    "UPDATE dbt_source_freshness_artifacts SET is_active = 1 "
+                    "WHERE manifest_snapshot_id = ? AND content_digest = ?",
+                    (str(snapshot_id), artifact.metadata.content_digest),
+                )
+                if updated.rowcount != 1:
+                    raise SupplementalArtifactConflict(
+                        "source-freshness artifact could not be activated"
+                    )
+                return SupplementalArtifactStoreResult(
+                    snapshot_id, artifact.metadata.content_digest, idempotent
+                )
+        except (ManifestSnapshotNotFound, SupplementalArtifactConflict):
+            raise
+        except (TypeError, ValueError):
+            raise
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure(
+                "supplemental dbt source-freshness storage operation failed"
+            ) from error
+
     def get_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> DbtCatalogArtifact | None:
@@ -1611,6 +1726,79 @@ class SQLiteCheckpointRepository:
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise ProjectIndexStorageFailure(
                 "supplemental dbt run-results retrieval failed"
+            ) from error
+
+    def get_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtSourceFreshnessArtifact | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                self._require_supplemental_manifest(connection, scope, snapshot_id, ())
+                header = connection.execute(
+                    "SELECT * FROM dbt_source_freshness_artifacts "
+                    "WHERE manifest_snapshot_id = ? AND is_active = 1",
+                    (str(snapshot_id),),
+                ).fetchone()
+                if header is None:
+                    return None
+                rows = connection.execute(
+                    "SELECT * FROM dbt_source_freshness_results "
+                    "WHERE manifest_snapshot_id = ? AND content_digest = ? "
+                    "ORDER BY unique_id ASC",
+                    (str(snapshot_id), header["content_digest"]),
+                ).fetchall()
+                metadata = DbtSupplementalArtifactMetadata(
+                    header["schema_version"],
+                    header["dbt_version"],
+                    None
+                    if header["generated_at"] is None
+                    else datetime.fromisoformat(header["generated_at"]),
+                    header["invocation_id"],
+                    header["content_digest"],
+                    header["normalized_digest"],
+                    header["source_identity"],
+                    datetime.fromisoformat(header["ingested_at"]),
+                )
+                return DbtSourceFreshnessArtifact(
+                    metadata,
+                    scope,
+                    float(header["elapsed_time_seconds"]),
+                    tuple(
+                        DbtSourceFreshnessResult(
+                            DbtNodeId(row["unique_id"]),
+                            DbtFreshnessStatus(row["status"]),
+                            None
+                            if row["max_loaded_at"] is None
+                            else datetime.fromisoformat(row["max_loaded_at"]),
+                            None
+                            if row["snapshotted_at"] is None
+                            else datetime.fromisoformat(row["snapshotted_at"]),
+                            None if row["age_seconds"] is None else float(row["age_seconds"]),
+                            None
+                            if row["warn_count"] is None
+                            else DbtFreshnessThreshold(
+                                int(row["warn_count"]), DbtFreshnessPeriod(row["warn_period"])
+                            ),
+                            None
+                            if row["error_count"] is None
+                            else DbtFreshnessThreshold(
+                                int(row["error_count"]),
+                                DbtFreshnessPeriod(row["error_period"]),
+                            ),
+                            None
+                            if row["execution_time_seconds"] is None
+                            else float(row["execution_time_seconds"]),
+                            EvidenceReference.from_dict(json.loads(row["evidence_json"])),
+                        )
+                        for row in rows
+                    ),
+                )
+        except ManifestSnapshotNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ProjectIndexStorageFailure(
+                "supplemental dbt source-freshness retrieval failed"
             ) from error
 
     def get_node(

@@ -5,7 +5,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
+from mnemo_memory.connectors.dbt.artifacts import (
+    DbtCatalogParser,
+    DbtRunResultsParser,
+    DbtSourceFreshnessParser,
+)
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -38,6 +42,7 @@ NOW = datetime(2026, 8, 3, tzinfo=UTC)
 FIXTURE = Path("tests/fixtures/dbt/manifest-v12.json")
 CATALOG_FIXTURE = Path("tests/fixtures/dbt/catalog-v1.json")
 RUN_RESULTS_FIXTURE = Path("tests/fixtures/dbt/run-results-v6.json")
+SOURCES_FIXTURE = Path("tests/fixtures/dbt/sources-v3.json")
 
 
 def scope() -> MemoryScope:
@@ -136,6 +141,7 @@ def test_dbt_hook_attaches_new_supplemental_artifacts_to_an_unchanged_manifest(
 
     manifest.with_name("catalog.json").write_bytes(CATALOG_FIXTURE.read_bytes())
     manifest.with_name("run_results.json").write_bytes(RUN_RESULTS_FIXTURE.read_bytes())
+    manifest.with_name("sources.json").write_bytes(SOURCES_FIXTURE.read_bytes())
     before = hooks.before_dbt(context)
     outcome = hooks.after_dbt(context, before, _success())
 
@@ -145,12 +151,14 @@ def test_dbt_hook_attaches_new_supplemental_artifacts_to_an_unchanged_manifest(
         "snapshot": str(snapshot.snapshot_id),
         "catalog": "activated",
         "run_results": "activated",
+        "source_freshness": "activated",
     }
     supplemental = service.get_supplemental(
         GetDbtSupplementalArtifacts(scope(), snapshot.snapshot_id)
     )
     assert supplemental.catalog is not None
     assert supplemental.run_results is not None
+    assert supplemental.source_freshness is not None
 
 
 def test_dbt_hook_keeps_a_valid_manifest_when_supplemental_artifacts_are_invalid(
@@ -276,6 +284,7 @@ def _service() -> DbtManifestApplicationService:
         DbtManifestParser(),
         DbtCatalogParser(),
         DbtRunResultsParser(),
+        DbtSourceFreshnessParser(),
     )
 
 

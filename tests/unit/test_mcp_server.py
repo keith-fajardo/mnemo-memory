@@ -13,9 +13,11 @@ from mcp.client.stdio import stdio_client
 from mcp.types import Tool
 
 from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
+from mnemo_memory.connectors.dbt.artifacts import DbtSourceFreshnessParser
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.packages.application import (
     IngestManifest,
+    IngestSourceFreshness,
     LocalConfig,
     build_checkpoint_runtime,
 )
@@ -38,6 +40,7 @@ from mnemo_memory.packages.project_index import PythonSourceParser, PythonSource
 
 ROOT = Path(__file__).parents[2]
 DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
+DBT_SOURCES_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "sources-v3.json"
 IDS = {
     "owner_id": "11111111-1111-4111-8111-111111111111",
     "workspace_id": "22222222-2222-4222-8222-222222222222",
@@ -118,6 +121,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_overview" in tools[0].inputSchema["properties"]
     assert "dbt_test_coverage" in tools[0].inputSchema["properties"]
     assert "dbt_selector" in tools[0].inputSchema["properties"]
+    assert "dbt_freshness" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
     assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
@@ -759,6 +763,55 @@ def test_durable_port_returns_exact_bounded_dbt_selector_matches(tmp_path: Path)
     ]
     assert all(value["query_kind"] == "selector" for value in values)
     assert any(omission.item_id == "dbt-selector" for omission in packet.omissions)
+
+
+def test_durable_port_returns_observed_dbt_source_freshness(tmp_path: Path) -> None:
+    config = LocalConfig.defaults(tmp_path / "dbt freshness")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(
+        config,
+        dbt_parser=DbtManifestParser(),
+        dbt_source_freshness_parser=DbtSourceFreshnessParser(),
+    ) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        snapshot = runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+            )
+        ).snapshot
+        runtime.dbt_manifest_service.ingest_source_freshness(
+            IngestSourceFreshness(
+                project_scope,
+                snapshot.snapshot_id,
+                DBT_SOURCES_FIXTURE.read_bytes(),
+                "sources.json",
+                datetime(2026, 8, 5, 2, 1, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(dbt_freshness={"unique_id": "source.mnemo_analytics.raw_orders"})
+            )
+        )
+
+    assert len(packet.structural_items) == 1
+    value = json.loads(packet.structural_items[0].content)
+    assert value["status"] == "warn"
+    assert value["age_seconds"] == 5400.0
+    assert "private" not in packet.structural_items[0].content
 
 
 def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) -> None:

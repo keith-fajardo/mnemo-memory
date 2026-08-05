@@ -12,6 +12,8 @@ from typing import Protocol
 from mnemo_memory.packages.domain.dbt_artifacts import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
+    DbtSourceFreshnessArtifact,
+    DbtSourceFreshnessResult,
     DbtSupplementalArtifactError,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -69,6 +71,17 @@ class DbtRunResultsParserPort(Protocol):
         source_identity: str,
         ingested_at: datetime,
     ) -> DbtRunResultsArtifact: ...
+
+
+class DbtSourceFreshnessParserPort(Protocol):
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtSourceFreshnessArtifact: ...
 
 
 class DbtApplicationError(Exception):
@@ -137,6 +150,15 @@ class IngestRunResults:
 
 
 @dataclass(frozen=True, slots=True)
+class IngestSourceFreshness:
+    scope: MemoryScope
+    snapshot_id: DbtSnapshotId
+    raw_sources: bytes | str
+    source_identity: str
+    ingested_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class IngestSupplementalResult:
     content_digest: str
     idempotent: bool
@@ -152,6 +174,7 @@ class GetDbtSupplementalArtifacts:
 class DbtSupplementalArtifacts:
     catalog: DbtCatalogArtifact | None
     run_results: DbtRunResultsArtifact | None
+    source_freshness: DbtSourceFreshnessArtifact | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +311,25 @@ class ManifestSelectorQueryResult:
     currentness_reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class QuerySourceFreshness:
+    scope: MemoryScope
+    unique_id: DbtNodeId
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFreshnessQueryResult:
+    snapshot: DbtManifestSnapshot
+    source_node: DbtManifestNode
+    observation: DbtSourceFreshnessResult | None
+    artifact: DbtSourceFreshnessArtifact | None
+    currentness: ArtifactCurrentness
+    currentness_reason: str
+
+
 class DbtManifestApplicationService:
     """Coordinates authoritative parsing with immutable scoped snapshot storage."""
 
@@ -297,11 +339,13 @@ class DbtManifestApplicationService:
         parser: DbtManifestParserPort | None = None,
         catalog_parser: DbtCatalogParserPort | None = None,
         run_results_parser: DbtRunResultsParserPort | None = None,
+        source_freshness_parser: DbtSourceFreshnessParserPort | None = None,
     ) -> None:
         self._repository = repository
         self._parser = parser
         self._catalog_parser = catalog_parser
         self._run_results_parser = run_results_parser
+        self._source_freshness_parser = source_freshness_parser
 
     def ingest(self, command: IngestManifest) -> IngestManifestResult:
         if self._parser is None:
@@ -360,11 +404,28 @@ class DbtManifestApplicationService:
             ) from error
         return self._store_run_results(command, artifact)
 
+    def ingest_source_freshness(self, command: IngestSourceFreshness) -> IngestSupplementalResult:
+        if self._source_freshness_parser is None:
+            raise DbtApplicationInvalidManifest("dbt source-freshness parser is unavailable")
+        try:
+            artifact = self._source_freshness_parser.parse_for_ingestion(
+                command.raw_sources,
+                scope=command.scope,
+                source_identity=command.source_identity,
+                ingested_at=command.ingested_at,
+            )
+        except (DbtSupplementalArtifactError, TypeError, ValueError) as error:
+            raise DbtApplicationInvalidManifest(
+                "dbt source-freshness artifact is invalid or unsupported"
+            ) from error
+        return self._store_source_freshness(command, artifact)
+
     def get_supplemental(self, query: GetDbtSupplementalArtifacts) -> DbtSupplementalArtifacts:
         try:
             return DbtSupplementalArtifacts(
                 self._repository.get_catalog_projection(query.scope, query.snapshot_id),
                 self._repository.get_run_results_projection(query.scope, query.snapshot_id),
+                self._repository.get_source_freshness_projection(query.scope, query.snapshot_id),
             )
         except ManifestSnapshotNotFound as error:
             raise DbtApplicationNotFound(
@@ -406,6 +467,33 @@ class DbtManifestApplicationService:
         except SupplementalArtifactConflict as error:
             raise DbtApplicationConflict(
                 "dbt run-results do not match the selected manifest snapshot"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        return IngestSupplementalResult(stored.content_digest, stored.idempotent)
+
+    def _store_source_freshness(
+        self, command: IngestSourceFreshness, artifact: DbtSourceFreshnessArtifact
+    ) -> IngestSupplementalResult:
+        try:
+            for result in artifact.results:
+                node = self._repository.get_node(
+                    command.scope, command.snapshot_id, result.unique_id
+                )
+                if node.resource_type is not DbtResourceType.SOURCE:
+                    raise SupplementalArtifactConflict(
+                        "dbt source freshness references a non-source manifest node"
+                    )
+            stored = self._repository.store_source_freshness_projection(
+                command.scope, command.snapshot_id, artifact
+            )
+        except (ManifestSnapshotNotFound, ManifestNodeNotFound) as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest snapshot was not found in the authorized scope"
+            ) from error
+        except SupplementalArtifactConflict as error:
+            raise DbtApplicationConflict(
+                "dbt source freshness does not match the selected manifest snapshot"
             ) from error
         except ProjectIndexRepositoryError as error:
             raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
@@ -582,6 +670,43 @@ class DbtManifestApplicationService:
             len(matched) > query.maximum_nodes,
             currentness,
             currentness_reason,
+        )
+
+    def query_source_freshness(self, query: QuerySourceFreshness) -> SourceFreshnessQueryResult:
+        """Return one observed sources.json result without inferring from configuration."""
+        try:
+            snapshot = (
+                self._repository.get_snapshot(query.scope, query.snapshot_id)
+                if query.snapshot_id is not None
+                else self._repository.get_active_snapshot(query.scope)
+            )
+            if snapshot is None:
+                raise ManifestSnapshotNotFound()
+            node = self._repository.get_node(query.scope, snapshot.snapshot_id, query.unique_id)
+            if node.resource_type is not DbtResourceType.SOURCE:
+                raise DbtApplicationInvalidManifest("dbt freshness requires a source node")
+            artifact = self._repository.get_source_freshness_projection(
+                query.scope, snapshot.snapshot_id
+            )
+        except (ManifestSnapshotNotFound, ManifestNodeNotFound) as error:
+            raise DbtApplicationNotFound(
+                "dbt freshness source was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        observation = (
+            next(
+                (item for item in artifact.results if item.unique_id == query.unique_id),
+                None,
+            )
+            if artifact is not None
+            else None
+        )
+        currentness, currentness_reason = _currentness(
+            snapshot, query.current_content_digest, query.current_source_state
+        )
+        return SourceFreshnessQueryResult(
+            snapshot, node, observation, artifact, currentness, currentness_reason
         )
 
     def _shortest_path(

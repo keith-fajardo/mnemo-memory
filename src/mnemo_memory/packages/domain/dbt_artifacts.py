@@ -50,6 +50,19 @@ class DbtRunStatus(StrEnum):
     RUNTIME_ERROR = "runtime_error"
 
 
+class DbtFreshnessStatus(StrEnum):
+    PASS = "pass"
+    WARN = "warn"
+    ERROR = "error"
+    RUNTIME_ERROR = "runtime_error"
+
+
+class DbtFreshnessPeriod(StrEnum):
+    MINUTE = "minute"
+    HOUR = "hour"
+    DAY = "day"
+
+
 @dataclass(frozen=True, slots=True)
 class DbtSupplementalArtifactMetadata:
     schema_version: str
@@ -278,6 +291,130 @@ class DbtRunResultsArtifact:
                         }
                         for timing in result.timing
                     ],
+                }
+                for result in self.results
+            ],
+        }
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+@dataclass(frozen=True, slots=True)
+class DbtFreshnessThreshold:
+    count: int
+    period: DbtFreshnessPeriod
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.count, int) or isinstance(self.count, bool) or self.count < 0:
+            raise ValueError("freshness threshold count must be a non-negative integer")
+        if not isinstance(self.period, DbtFreshnessPeriod):
+            raise TypeError("freshness threshold period is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class DbtSourceFreshnessResult:
+    unique_id: DbtNodeId
+    status: DbtFreshnessStatus
+    max_loaded_at: datetime | None
+    snapshotted_at: datetime | None
+    age_seconds: float | None
+    warn_after: DbtFreshnessThreshold | None
+    error_after: DbtFreshnessThreshold | None
+    execution_time_seconds: float | None
+    evidence: EvidenceReference
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.unique_id, DbtNodeId) or not isinstance(
+            self.status, DbtFreshnessStatus
+        ):
+            raise TypeError("freshness result identity or status is invalid")
+        for field_name in ("max_loaded_at", "snapshotted_at"):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_aware(value, field_name)
+        for field_name in ("age_seconds", "execution_time_seconds"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"freshness {field_name} must be finite and non-negative")
+            if value is not None:
+                object.__setattr__(self, field_name, float(value))
+        if self.status is DbtFreshnessStatus.RUNTIME_ERROR:
+            if any(
+                value is not None
+                for value in (
+                    self.max_loaded_at,
+                    self.snapshotted_at,
+                    self.age_seconds,
+                    self.warn_after,
+                    self.error_after,
+                    self.execution_time_seconds,
+                )
+            ):
+                raise ValueError("runtime freshness errors cannot carry observed warehouse data")
+        elif any(
+            value is None
+            for value in (
+                self.max_loaded_at,
+                self.snapshotted_at,
+                self.age_seconds,
+                self.execution_time_seconds,
+            )
+        ):
+            raise ValueError("successful freshness observations require timestamps and durations")
+        if not isinstance(self.evidence, EvidenceReference):
+            raise TypeError("freshness result evidence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class DbtSourceFreshnessArtifact:
+    metadata: DbtSupplementalArtifactMetadata
+    scope: MemoryScope
+    elapsed_time_seconds: float
+    results: tuple[DbtSourceFreshnessResult, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.metadata, DbtSupplementalArtifactMetadata) or not isinstance(
+            self.scope, MemoryScope
+        ):
+            raise TypeError("source-freshness artifact requires metadata and explicit scope")
+        if (
+            isinstance(self.elapsed_time_seconds, bool)
+            or not isinstance(self.elapsed_time_seconds, (int, float))
+            or not math.isfinite(self.elapsed_time_seconds)
+            or self.elapsed_time_seconds < 0
+        ):
+            raise ValueError("source-freshness elapsed time must be finite and non-negative")
+        results = tuple(sorted(self.results, key=lambda item: str(item.unique_id)))
+        if len({result.unique_id for result in results}) != len(results):
+            raise ValueError("source-freshness artifact contains duplicate source identities")
+        object.__setattr__(self, "elapsed_time_seconds", float(self.elapsed_time_seconds))
+        object.__setattr__(self, "results", results)
+
+    def normalized_json(self) -> str:
+        def threshold(value: DbtFreshnessThreshold | None) -> dict[str, object] | None:
+            return None if value is None else {"count": value.count, "period": value.period.value}
+
+        value = {
+            "schema_version": self.metadata.schema_version,
+            "elapsed_time_seconds": self.elapsed_time_seconds,
+            "results": [
+                {
+                    "unique_id": str(result.unique_id),
+                    "status": result.status.value,
+                    "max_loaded_at": None
+                    if result.max_loaded_at is None
+                    else result.max_loaded_at.isoformat(),
+                    "snapshotted_at": None
+                    if result.snapshotted_at is None
+                    else result.snapshotted_at.isoformat(),
+                    "age_seconds": result.age_seconds,
+                    "warn_after": threshold(result.warn_after),
+                    "error_after": threshold(result.error_after),
+                    "execution_time_seconds": result.execution_time_seconds,
                 }
                 for result in self.results
             ],

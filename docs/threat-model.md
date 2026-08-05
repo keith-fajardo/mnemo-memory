@@ -233,6 +233,13 @@ require at least one filter. They scan only the already-authorized immutable sna
 disabled nodes, cap matches before context rendering, and never interpret selector expressions,
 Jinja, SQL, or shell syntax.
 
+`sources.json` freshness ingestion accepts only bounded official v3 fields and attaches results to
+source identities in one exact authorized manifest snapshot. Database error text, adapter
+responses, filters, timing details, environment values, and arbitrary payloads are validated only
+as needed and discarded before persistence. Retrieval returns the immutable observed status and
+timestamp; it never contacts the warehouse, recomputes freshness, or upgrades a missing result to
+pass.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

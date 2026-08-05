@@ -59,3 +59,8 @@ A `dbt_selector` request intersects exact resource-type, package, and tag fields
 in the selected snapshot. At least one field is required, results are capped at 100 before context
 rendering, and no match stays a scoped omission. Mnemo does not parse or execute dbt selector
 strings.
+Observed source freshness is a separate immutable `sources.json` v3 projection attached to the
+same exact manifest snapshot. `dbt_freshness` selects one exact source ID or unambiguous source
+file and returns the persisted dbt status, observation timestamps, age, thresholds, and execution
+time with source/artifact evidence. It never runs dbt, contacts a warehouse, or infers a status
+from manifest configuration; missing observation remains an omission.

@@ -1,0 +1,40 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/sources/v3.json",
+    "dbt_version": "1.11.6",
+    "generated_at": "2026-08-05T02:00:00Z",
+    "invocation_id": "freshness-invocation-001",
+    "invocation_started_at": "2026-08-05T01:59:00Z",
+    "env": {"PRIVATE_ENV": "must-not-be-retained"}
+  },
+  "results": [
+    {
+      "unique_id": "source.mnemo_analytics.raw_orders",
+      "max_loaded_at": "2026-08-05T00:30:00Z",
+      "snapshotted_at": "2026-08-05T02:00:00Z",
+      "max_loaded_at_time_ago_in_s": 5400.0,
+      "status": "warn",
+      "criteria": {
+        "warn_after": {"count": 1, "period": "hour"},
+        "error_after": {"count": 3, "period": "hour"},
+        "filter": "private_filter_expression"
+      },
+      "adapter_response": {"credential": "must-not-be-retained"},
+      "timing": [
+        {
+          "name": "execute",
+          "started_at": "2026-08-05T01:59:30Z",
+          "completed_at": "2026-08-05T01:59:31Z"
+        }
+      ],
+      "thread_id": "Thread-1",
+      "execution_time": 1.0
+    },
+    {
+      "unique_id": "source.mnemo_analytics.raw_customers",
+      "error": "private database error must not be retained",
+      "status": "runtime error"
+    }
+  ],
+  "elapsed_time": 2.0
+}

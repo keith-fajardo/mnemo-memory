@@ -28,6 +28,7 @@ from mnemo_memory.packages.domain import (
     CurrentKnowledgeDocumentSection,
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
+    DbtSourceFreshnessArtifact,
     EventId,
     EvidenceReference,
     KnowledgeDocumentId,
@@ -555,6 +556,10 @@ class ProjectIndexRepository(Protocol):
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtRunResultsArtifact
     ) -> SupplementalArtifactStoreResult: ...
 
+    def store_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtSourceFreshnessArtifact
+    ) -> SupplementalArtifactStoreResult: ...
+
     def get_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> DbtCatalogArtifact | None: ...
@@ -562,6 +567,10 @@ class ProjectIndexRepository(Protocol):
     def get_run_results_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId
     ) -> DbtRunResultsArtifact | None: ...
+
+    def get_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtSourceFreshnessArtifact | None: ...
 
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId

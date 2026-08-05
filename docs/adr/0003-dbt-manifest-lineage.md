@@ -70,17 +70,23 @@ prevent detached catalog relations, columns, results, or timing rows. The raw ar
 outside canonical storage.
 
 Issue 15C integrates them without changing manifest lineage authority. Successful wrapped dbt
-commands and explicit local manifest ingestion inspect only sibling `catalog.json` and
-`run_results.json`; missing, invalid, unsupported, or mismatched supplemental files fail softly
+commands and explicit local manifest ingestion inspect only sibling `catalog.json`,
+`run_results.json`, and `sources.json`; missing, invalid, unsupported, or mismatched supplemental files fail softly
 after a valid manifest is selected. Existing bounded lineage context may include at most twelve
 ordered columns per matching relation and the matching node's current stored run status, execution
 time, and failure count. Every included projection carries its exact artifact evidence and remains
 subject to the structural token budget.
 
-Freshness artifacts and model-assisted behavior remain deferred to later bounded issues.
+Source freshness comes only from a minimized official `sources.json` v3 observation attached to the
+same manifest snapshot. Mnemo retains identity, status, observed timestamps/age, threshold
+counts/periods, execution time, metadata, and evidence. It discards database error text, adapter
+responses, filters, timing details, and environment values, and never recomputes the authoritative
+dbt status.
 
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.
 
 Reviewed 2026-08-05: [dbt catalog documentation](https://docs.getdbt.com/reference/artifacts/catalog-json), [catalog v1 schema](https://schemas.getdbt.com/dbt/catalog/v1.json), [dbt run-results documentation](https://docs.getdbt.com/reference/artifacts/run-results-json), and [run-results v6 schema](https://schemas.getdbt.com/dbt/run-results/v6.json).
+
+Reviewed 2026-08-05: [dbt sources documentation](https://docs.getdbt.com/reference/artifacts/sources-json) and [sources v3 schema](https://schemas.getdbt.com/dbt/sources/v3.json).

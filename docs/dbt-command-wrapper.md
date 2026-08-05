@@ -100,12 +100,12 @@ manifest limits/schema rules, and compares the digest with the pre-run digest:
 - **invalid, storage failure, or competing snapshot update** → leave the prior snapshot unchanged
   and report a safe failure.
 
-After a valid manifest is selected, Mnemo independently checks sibling `catalog.json` and
-`run_results.json` files. Valid supported artifacts attach only to that manifest snapshot. Missing,
+After a valid manifest is selected, Mnemo independently checks sibling `catalog.json`,
+`run_results.json`, and `sources.json` files. Valid supported artifacts attach only to that manifest snapshot. Missing,
 malformed, unsupported, or mismatched supplemental files produce bounded statuses and do not
 invalidate the manifest. Mnemo retains relation/column identities and node run status/timing only;
-warehouse comments, statistics, adapter messages, compiled SQL, environment values, and arbitrary
-arguments are discarded.
+warehouse comments, statistics, adapter messages, database errors, freshness filters, compiled SQL,
+environment values, and arbitrary arguments are discarded.
 
 The command’s default summary is written to stderr so dbt’s normal stdout remains usable. Add
 `--json-summary` when an automation needs a structured wrapper result.

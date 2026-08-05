@@ -122,7 +122,9 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
 def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> None:
     item = repository(tmp_path)
     with sqlite3.connect(item.path) as connection:
-        connection.execute("DELETE FROM schema_migrations WHERE version = 15")
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 15")
         connection.execute("ALTER TABLE dbt_manifest_edges RENAME TO dbt_manifest_edges_v15")
         connection.execute(
             "CREATE TABLE dbt_manifest_edges ("
@@ -152,7 +154,7 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
     assert "dbt_macro_dependency" not in sql
 
     item.migrate()
-    assert item.schema_version() == 15
+    assert item.schema_version() == 16
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:

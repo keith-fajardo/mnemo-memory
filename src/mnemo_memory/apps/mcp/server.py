@@ -61,6 +61,7 @@ def create_server(port: McpContextPort) -> FastMCP:
         dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         dbt_test_coverage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         dbt_selector: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        dbt_freshness: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_query: Annotated[
             str | None,
             Field(
@@ -141,6 +142,7 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "dbt_lineage": dbt_lineage,
                 "dbt_test_coverage": dbt_test_coverage,
                 "dbt_selector": dbt_selector,
+                "dbt_freshness": dbt_freshness,
                 "source_query": source_query,
                 "knowledge_query": knowledge_query,
                 "semantic_knowledge_query": semantic_knowledge_query,

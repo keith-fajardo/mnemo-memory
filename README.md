@@ -279,8 +279,8 @@ not run Cargo, read `Cargo.lock`, or infer version, feature, build, development,
 or workspace-inherited dependencies.
 
 > Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
-> project intentionally does not yet provide automatic transcript capture, dbt source-freshness ingestion,
-> semantic cross-language call graphs, embeddings, a UI, or team workspaces.
+> project intentionally does not yet provide automatic transcript capture, semantic cross-language
+> call graphs, a UI, or team workspaces.
 >
 > The multi-language source-structure work described below is currently in this development branch; it is
 > not retroactively part of the immutable `0.1.0a2` PyPI release.
@@ -632,7 +632,8 @@ mnemo-memory dbt enable
 
 Mnemo finds `dbt_project.yml`, initializes its personal profile when needed, creates private
 stable identities, binds this one repository locally, and ingests `target/manifest.json` if a
-valid one already exists. Supported sibling `catalog.json` and `run_results.json` artifacts are
+valid one already exists. Supported sibling `catalog.json`, `run_results.json`, and `sources.json`
+artifacts are
 minimized and attached to that exact snapshot. You do not need to generate, copy, or remember UUIDs. Mnemo does not
 write `dbt_project.yml`, `profiles.yml`, warehouse credentials, or any shell profile.
 
@@ -722,6 +723,12 @@ matches your files:
 Verified current manifest structure outranks an older checkpoint’s recollection of repository
 structure. Mnemo preserves such a disagreement as evidence rather than asking a model to resolve
 it.
+
+An exact `dbt_freshness` request returns one persisted observation from `sources.json` v3 for a
+manifest source. The result includes its observed status, timestamps, age, thresholds, and
+execution time with evidence. Mnemo does not contact the warehouse, recompute the status, or treat
+manifest configuration as proof of freshness. Adapter responses, database errors, filters,
+environment values, and timing details are discarded before persistence.
 
 ## Reliability, privacy, and recovery
 

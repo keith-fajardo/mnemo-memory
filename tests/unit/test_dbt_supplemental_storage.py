@@ -14,6 +14,7 @@ from mnemo_memory.connectors.dbt import (
     DbtCatalogParser,
     DbtManifestParser,
     DbtRunResultsParser,
+    DbtSourceFreshnessParser,
     DbtSupplementalParseRequest,
     ManifestParseRequest,
 )
@@ -21,6 +22,7 @@ from mnemo_memory.packages.domain import (
     DbtCatalogArtifact,
     DbtRunResultsArtifact,
     DbtSnapshotId,
+    DbtSourceFreshnessArtifact,
     MemoryScope,
     OwnerId,
     ProjectId,
@@ -94,6 +96,17 @@ def run_results(item_scope: MemoryScope) -> DbtRunResultsArtifact:
     )
 
 
+def source_freshness(item_scope: MemoryScope) -> DbtSourceFreshnessArtifact:
+    return DbtSourceFreshnessParser().parse(
+        (FIXTURES / "sources-v3.json").read_bytes(),
+        DbtSupplementalParseRequest(
+            item_scope,
+            "target/sources.json",
+            datetime(2026, 8, 5, 2, 1, tzinfo=UTC),
+        ),
+    )
+
+
 @pytest.fixture(params=("reference", "sqlite"))
 def repository(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[ProjectIndexRepository]:
     if request.param == "reference":
@@ -114,6 +127,7 @@ def test_supplemental_storage_is_scoped_idempotent_versioned_and_manifest_bound(
     repository.store_and_activate(manifest(item_scope), snapshot_id)
     assert repository.get_catalog_projection(item_scope, snapshot_id) is None
     assert repository.get_run_results_projection(item_scope, snapshot_id) is None
+    assert repository.get_source_freshness_projection(item_scope, snapshot_id) is None
 
     first_catalog = catalog(item_scope)
     stored_catalog = repository.store_catalog_projection(item_scope, snapshot_id, first_catalog)
@@ -131,6 +145,16 @@ def test_supplemental_storage_is_scoped_idempotent_versioned_and_manifest_bound(
     assert stored_results.idempotent is False
     assert repository.get_run_results_projection(item_scope, snapshot_id) == execution
     assert repository.store_run_results_projection(item_scope, snapshot_id, execution).idempotent
+
+    freshness = source_freshness(item_scope)
+    stored_freshness = repository.store_source_freshness_projection(
+        item_scope, snapshot_id, freshness
+    )
+    assert stored_freshness.idempotent is False
+    assert repository.get_source_freshness_projection(item_scope, snapshot_id) == freshness
+    assert repository.store_source_freshness_projection(
+        item_scope, snapshot_id, freshness
+    ).idempotent
 
     other_scope = scope(2)
     with pytest.raises(InvalidManifestSnapshotScope):
@@ -171,15 +195,23 @@ def test_sqlite_supplemental_projection_is_minimized_durable_and_atomic(tmp_path
     repository.store_and_activate(manifest(item_scope), snapshot_id)
     repository.store_catalog_projection(item_scope, snapshot_id, catalog(item_scope))
     repository.store_run_results_projection(item_scope, snapshot_id, run_results(item_scope))
+    repository.store_source_freshness_projection(
+        item_scope, snapshot_id, source_freshness(item_scope)
+    )
 
     reopened = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     assert reopened.get_catalog_projection(item_scope, snapshot_id) == catalog(item_scope)
     assert reopened.get_run_results_projection(item_scope, snapshot_id) == run_results(item_scope)
+    assert reopened.get_source_freshness_projection(item_scope, snapshot_id) == source_freshness(
+        item_scope
+    )
     with sqlite3.connect(database) as connection:
         dump = "\n".join(connection.iterdump())
         assert "secret-that-must-not-be-retained" not in dump
         assert "private_table" not in dump
         assert "warehouse-owner" not in dump
+        assert "private database error" not in dump
+        assert "private_filter_expression" not in dump
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         connection.execute(
             "CREATE TRIGGER reject_catalog_column BEFORE INSERT ON dbt_catalog_columns "
@@ -201,6 +233,8 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DROP TABLE dbt_run_result_timings")
         connection.execute("DROP TABLE dbt_run_results")
         connection.execute("DROP TABLE dbt_catalog_columns")
@@ -220,4 +254,28 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 15
+    assert repository.schema_version() == 16
+
+
+def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
+    database = tmp_path / "freshness-migration.sqlite3"
+    repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
+    repository.migrate()
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 16")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        repository.migrate(fail_after_version=16)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (15,)
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'dbt_source_freshness_artifacts'"
+            ).fetchone()
+            is None
+        )
+    repository.migrate()
+    assert repository.schema_version() == 16

@@ -1,4 +1,4 @@
-"""Offline bounded parsers for dbt catalog v1 and run-results v6 artifacts."""
+"""Offline bounded parsers for safe dbt supplemental artifact projections."""
 
 from __future__ import annotations
 
@@ -16,11 +16,16 @@ from mnemo_memory.packages.domain import (
     DbtCatalogCollection,
     DbtCatalogColumn,
     DbtCatalogRelation,
+    DbtFreshnessPeriod,
+    DbtFreshnessStatus,
+    DbtFreshnessThreshold,
     DbtNodeId,
     DbtNodeRunResult,
     DbtRunResultsArtifact,
     DbtRunStatus,
     DbtRunTiming,
+    DbtSourceFreshnessArtifact,
+    DbtSourceFreshnessResult,
     DbtSupplementalArtifactLimitError,
     DbtSupplementalArtifactMetadata,
     DbtSupplementalArtifactValidationError,
@@ -38,6 +43,7 @@ from mnemo_memory.packages.domain.dbt_artifacts import normalized_digest
 
 SUPPORTED_CATALOG_SCHEMA = "https://schemas.getdbt.com/dbt/catalog/v1.json"
 SUPPORTED_RUN_RESULTS_SCHEMA = "https://schemas.getdbt.com/dbt/run-results/v6.json"
+SUPPORTED_SOURCES_SCHEMA = "https://schemas.getdbt.com/dbt/sources/v3.json"
 _EVIDENCE_NAMESPACE = UUID("e47c5cbe-0464-476d-9f45-4ea5383d186e")
 _KNOWN_RUN_STATUSES = {
     "success": DbtRunStatus.SUCCESS,
@@ -49,6 +55,12 @@ _KNOWN_RUN_STATUSES = {
     "fail": DbtRunStatus.FAIL,
     "warn": DbtRunStatus.WARN,
     "runtime error": DbtRunStatus.RUNTIME_ERROR,
+}
+_KNOWN_FRESHNESS_STATUSES = {
+    "pass": DbtFreshnessStatus.PASS,
+    "warn": DbtFreshnessStatus.WARN,
+    "error": DbtFreshnessStatus.ERROR,
+    "runtime error": DbtFreshnessStatus.RUNTIME_ERROR,
 }
 
 
@@ -397,6 +409,186 @@ class DbtRunResultsParser:
         )
 
 
+class DbtSourceFreshnessParser:
+    """Parse observed source freshness while discarding adapter and database payloads."""
+
+    def parse(
+        self, raw: bytes | str, request: DbtSupplementalParseRequest
+    ) -> DbtSourceFreshnessArtifact:
+        value, encoded = _decode(raw, request, "sources")
+        _allowed(value, {"metadata", "results", "elapsed_time"}, "sources")
+        _required_fields(value, {"metadata", "results", "elapsed_time"}, "sources")
+        metadata = _metadata(
+            _mapping(value.get("metadata"), "sources metadata"),
+            SUPPORTED_SOURCES_SCHEMA,
+            encoded,
+            request,
+        )
+        raw_results = value.get("results")
+        if not isinstance(raw_results, list):
+            raise DbtSupplementalArtifactValidationError("dbt sources results must be an array")
+        if len(raw_results) > request.limits.max_results:
+            raise DbtSupplementalArtifactLimitError(
+                "dbt sources exceeds the configured result limit"
+            )
+        results = tuple(
+            self._result(item, metadata.content_digest, request) for item in raw_results
+        )
+        preliminary = DbtSourceFreshnessArtifact(
+            metadata,
+            request.scope,
+            _finite_non_negative(value.get("elapsed_time"), "elapsed_time"),
+            results,
+        )
+        return replace(
+            preliminary,
+            metadata=replace(
+                metadata, normalized_digest=normalized_digest(preliminary.normalized_json())
+            ),
+        )
+
+    def parse_for_ingestion(
+        self,
+        raw: bytes | str,
+        *,
+        scope: MemoryScope,
+        source_identity: str,
+        ingested_at: datetime,
+    ) -> DbtSourceFreshnessArtifact:
+        return self.parse(raw, DbtSupplementalParseRequest(scope, source_identity, ingested_at))
+
+    @staticmethod
+    def _result(
+        value: object, content_digest: str, request: DbtSupplementalParseRequest
+    ) -> DbtSourceFreshnessResult:
+        raw = _mapping(value, "source freshness result")
+        unique_id = _required_string(raw, "unique_id")
+        status_value = _required_string(raw, "status")
+        try:
+            status = _KNOWN_FRESHNESS_STATUSES[status_value]
+        except KeyError as error:
+            raise DbtSupplementalArtifactValidationError(
+                "dbt source freshness status is unsupported"
+            ) from error
+        evidence = _evidence(content_digest, request, f"source-freshness:{unique_id}")
+        if "error" in raw:
+            _allowed(raw, {"unique_id", "error", "status"}, "source freshness runtime error")
+            _required_fields(
+                raw, {"unique_id", "error", "status"}, "source freshness runtime error"
+            )
+            error_value = raw.get("error")
+            if not (
+                error_value is None
+                or isinstance(error_value, str)
+                or (isinstance(error_value, int) and not isinstance(error_value, bool))
+            ):
+                raise DbtSupplementalArtifactValidationError(
+                    "dbt source freshness error payload is invalid"
+                )
+            if isinstance(error_value, str) and len(error_value) > request.limits.max_string_length:
+                raise DbtSupplementalArtifactLimitError(
+                    "dbt source freshness error exceeds the configured string limit"
+                )
+            if status is not DbtFreshnessStatus.RUNTIME_ERROR:
+                raise DbtSupplementalArtifactValidationError(
+                    "dbt source freshness runtime error has an invalid status"
+                )
+            return DbtSourceFreshnessResult(
+                DbtNodeId(unique_id), status, None, None, None, None, None, None, evidence
+            )
+        _allowed(
+            raw,
+            {
+                "unique_id",
+                "max_loaded_at",
+                "snapshotted_at",
+                "max_loaded_at_time_ago_in_s",
+                "status",
+                "criteria",
+                "adapter_response",
+                "timing",
+                "thread_id",
+                "execution_time",
+            },
+            "source freshness result",
+        )
+        _required_fields(
+            raw,
+            {
+                "unique_id",
+                "max_loaded_at",
+                "snapshotted_at",
+                "max_loaded_at_time_ago_in_s",
+                "status",
+                "criteria",
+                "adapter_response",
+                "timing",
+                "thread_id",
+                "execution_time",
+            },
+            "source freshness result",
+        )
+        criteria = _mapping(raw.get("criteria"), "source freshness criteria")
+        _allowed(criteria, {"warn_after", "error_after", "filter"}, "source freshness criteria")
+        filter_value = criteria.get("filter")
+        _nullable_string(filter_value, "source freshness filter")
+        _mapping(raw.get("adapter_response"), "source freshness adapter_response")
+        timings = raw.get("timing")
+        if not isinstance(timings, list):
+            raise DbtSupplementalArtifactValidationError(
+                "dbt source freshness timing must be an array"
+            )
+        if len(timings) > request.limits.max_timings_per_result:
+            raise DbtSupplementalArtifactLimitError(
+                "dbt source freshness exceeds the configured timing limit"
+            )
+        for timing in timings:
+            DbtRunResultsParser._timing(timing)
+        _required_string(raw, "thread_id")
+        if status is DbtFreshnessStatus.RUNTIME_ERROR:
+            return DbtSourceFreshnessResult(
+                DbtNodeId(unique_id), status, None, None, None, None, None, None, evidence
+            )
+        return DbtSourceFreshnessResult(
+            DbtNodeId(unique_id),
+            status,
+            _required_timestamp(raw.get("max_loaded_at"), "max_loaded_at"),
+            _required_timestamp(raw.get("snapshotted_at"), "snapshotted_at"),
+            _finite_non_negative(
+                raw.get("max_loaded_at_time_ago_in_s"), "max_loaded_at_time_ago_in_s"
+            ),
+            DbtSourceFreshnessParser._threshold(criteria.get("warn_after"), "warn_after"),
+            DbtSourceFreshnessParser._threshold(criteria.get("error_after"), "error_after"),
+            _finite_non_negative(raw.get("execution_time"), "execution_time"),
+            evidence,
+        )
+
+    @staticmethod
+    def _threshold(value: object, name: str) -> DbtFreshnessThreshold | None:
+        if value is None:
+            return None
+        raw = _mapping(value, f"source freshness {name}")
+        _allowed(raw, {"count", "period"}, f"source freshness {name}")
+        count = raw.get("count")
+        period = raw.get("period")
+        if count is None and period is None:
+            return None
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise DbtSupplementalArtifactValidationError(
+                f"dbt source freshness {name} count is invalid"
+            )
+        if not isinstance(period, str):
+            raise DbtSupplementalArtifactValidationError(
+                f"dbt source freshness {name} period is invalid"
+            )
+        try:
+            return DbtFreshnessThreshold(count, DbtFreshnessPeriod(period))
+        except ValueError as error:
+            raise DbtSupplementalArtifactValidationError(
+                f"dbt source freshness {name} period is unsupported"
+            ) from error
+
+
 def _decode(
     raw: bytes | str, request: DbtSupplementalParseRequest, artifact_name: str
 ) -> tuple[dict[str, object], bytes]:
@@ -523,6 +715,13 @@ def _optional_timestamp(value: object, name: str) -> datetime | None:
         raise DbtSupplementalArtifactValidationError(f"{name} must be a valid timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise DbtSupplementalArtifactValidationError(f"{name} must be timezone-aware")
+    return parsed
+
+
+def _required_timestamp(value: object, name: str) -> datetime:
+    parsed = _optional_timestamp(value, name)
+    if parsed is None:
+        raise DbtSupplementalArtifactValidationError(f"{name} must be an ISO-8601 string")
     return parsed
 
 

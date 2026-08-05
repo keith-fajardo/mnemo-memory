@@ -113,6 +113,8 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
     # fabricating source history. Remove later migration state as well: a test
     # database cannot claim v6 while its v5 schema has been removed.
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DROP TABLE dbt_run_result_timings")
         connection.execute("DROP TABLE dbt_run_results")
         connection.execute("DROP TABLE dbt_catalog_columns")
@@ -166,6 +168,8 @@ def test_file_fingerprint_migration_is_atomic_and_legacy_snapshots_make_no_false
     # so a later comparison must report file-level history as unavailable, not claim
     # every file was newly added.
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_source_freshness_results")
+        connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DROP TABLE dbt_run_result_timings")
         connection.execute("DROP TABLE dbt_run_results")
         connection.execute("DROP TABLE dbt_catalog_columns")

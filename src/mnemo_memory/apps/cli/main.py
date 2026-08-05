@@ -28,7 +28,11 @@ from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
     LocalExecutableResolver,
     SubprocessExecutor,
 )
-from mnemo_memory.connectors.dbt.artifacts import DbtCatalogParser, DbtRunResultsParser
+from mnemo_memory.connectors.dbt.artifacts import (
+    DbtCatalogParser,
+    DbtRunResultsParser,
+    DbtSourceFreshnessParser,
+)
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -60,6 +64,7 @@ from mnemo_memory.packages.application import (
     IngestCatalog,
     IngestManifest,
     IngestRunResults,
+    IngestSourceFreshness,
     KnowledgeDocumentApplicationService,
     ListApprovedEpisodicEventRecords,
     LocalConfig,
@@ -578,6 +583,7 @@ def _dbt_runtime(config: LocalConfig) -> CheckpointRuntime:
         dbt_parser=DbtManifestParser(),
         dbt_catalog_parser=DbtCatalogParser(),
         dbt_run_results_parser=DbtRunResultsParser(),
+        dbt_source_freshness_parser=DbtSourceFreshnessParser(),
     )
 
 
@@ -589,21 +595,30 @@ def _ingest_supplemental_artifacts(
     observed_at: datetime,
 ) -> dict[str, str]:
     statuses: dict[str, str] = {}
-    for kind, filename in (("catalog", "catalog.json"), ("run_results", "run_results.json")):
+    for kind, filename in (
+        ("catalog", "catalog.json"),
+        ("run_results", "run_results.json"),
+        ("source_freshness", "sources.json"),
+    ):
         path = artifact_directory / filename
         if not path.is_file():
             statuses[kind] = "unavailable"
             continue
         try:
-            stored = (
-                service.ingest_catalog(
+            if kind == "catalog":
+                stored = service.ingest_catalog(
                     IngestCatalog(scope, snapshot_id, path.read_bytes(), filename, observed_at)
                 )
-                if kind == "catalog"
-                else service.ingest_run_results(
+            elif kind == "run_results":
+                stored = service.ingest_run_results(
                     IngestRunResults(scope, snapshot_id, path.read_bytes(), filename, observed_at)
                 )
-            )
+            else:
+                stored = service.ingest_source_freshness(
+                    IngestSourceFreshness(
+                        scope, snapshot_id, path.read_bytes(), filename, observed_at
+                    )
+                )
         except (
             DbtApplicationConflict,
             DbtApplicationInvalidManifest,
@@ -623,7 +638,15 @@ def _ingest_existing_manifest(
 ) -> tuple[str, bool, dict[str, str]]:
     manifest = binding.project_root / "target" / "manifest.json"
     if not manifest.is_file():
-        return "unavailable", False, {"catalog": "unavailable", "run_results": "unavailable"}
+        return (
+            "unavailable",
+            False,
+            {
+                "catalog": "unavailable",
+                "run_results": "unavailable",
+                "source_freshness": "unavailable",
+            },
+        )
     try:
         observed_at = datetime.now(UTC)
         with _dbt_runtime(resolve_local_config(data_directory)) as runtime:
@@ -647,7 +670,11 @@ def _ingest_existing_manifest(
         return (
             "invalid_or_unavailable",
             False,
-            {"catalog": "unavailable", "run_results": "unavailable"},
+            {
+                "catalog": "unavailable",
+                "run_results": "unavailable",
+                "source_freshness": "unavailable",
+            },
         )
     return ("unchanged" if stored.idempotent else "activated"), True, supplemental
 
@@ -906,6 +933,9 @@ def dbt_status(
                 "catalog": "available" if supplemental.catalog is not None else "unavailable",
                 "run_results": (
                     "available" if supplemental.run_results is not None else "unavailable"
+                ),
+                "source_freshness": (
+                    "available" if supplemental.source_freshness is not None else "unavailable"
                 ),
             }
         )

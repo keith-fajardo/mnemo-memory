@@ -29,6 +29,7 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtFreshnessQuery,
     ContextDbtSelectorQuery,
     ContextDbtTestCoverageQuery,
     ContextLineageQuery,
@@ -87,6 +88,7 @@ class DurableMcpContextPort:
             lineage = request.get("dbt_lineage")
             test_coverage = request.get("dbt_test_coverage")
             dbt_selector = request.get("dbt_selector")
+            dbt_freshness = request.get("dbt_freshness")
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
@@ -136,7 +138,15 @@ class DurableMcpContextPort:
                 raise ValueError("dbt_test_coverage must be an object")
             if dbt_selector is not None and not isinstance(dbt_selector, Mapping):
                 raise ValueError("dbt_selector must be an object")
-            if sum(query is not None for query in (lineage, test_coverage, dbt_selector)) > 1:
+            if dbt_freshness is not None and not isinstance(dbt_freshness, Mapping):
+                raise ValueError("dbt_freshness must be an object")
+            if (
+                sum(
+                    query is not None
+                    for query in (lineage, test_coverage, dbt_selector, dbt_freshness)
+                )
+                > 1
+            ):
                 raise ValueError("request only one dbt structural query at a time")
             impact = (
                 None
@@ -201,6 +211,7 @@ class DurableMcpContextPort:
                 lineage is not None
                 or test_coverage is not None
                 or dbt_selector is not None
+                or dbt_freshness is not None
                 or source_query is not None
                 or impact is not None
                 or changes is not None
@@ -213,11 +224,52 @@ class DurableMcpContextPort:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
                 if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
-                if lineage is None and test_coverage is None and dbt_selector is None:
+                if (
+                    lineage is None
+                    and test_coverage is None
+                    and dbt_selector is None
+                    and dbt_freshness is None
+                ):
                     return self._context_service.get_context(
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            source_query=source_query,
+                            budget=budget,
+                            source_impact=impact,
+                            source_changes=changes,
+                            source_overview=overview,
+                            knowledge_query=knowledge_query,
+                            semantic_knowledge_query=semantic_knowledge_query,
+                            procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            include_lifecycle_events=include_lifecycle_events,
+                            include_approved_events=include_approved_events,
+                        )
+                    ).to_dict()
+                if dbt_freshness is not None:
+                    has_unique_id = "unique_id" in dbt_freshness
+                    has_relative_path = "relative_path" in dbt_freshness
+                    if has_unique_id == has_relative_path:
+                        raise ValueError(
+                            "dbt_freshness requires exactly one unique_id or relative_path"
+                        )
+                    if has_relative_path and not isinstance(dbt_freshness["relative_path"], str):
+                        raise ValueError("dbt_freshness.relative_path must be a string")
+                    freshness_query = ContextDbtFreshnessQuery(
+                        DbtNodeId(_string(dbt_freshness, "unique_id")) if has_unique_id else None,
+                        _optional_id(dbt_freshness, "snapshot_id", DbtSnapshotId),
+                        dbt_freshness.get("current_content_digest")
+                        if isinstance(dbt_freshness.get("current_content_digest"), str)
+                        else None,
+                        None,
+                        bool(dbt_freshness.get("require_current", False)),
+                        cast(str, dbt_freshness["relative_path"]) if has_relative_path else None,
+                    )
+                    return self._context_service.get_context(
+                        GetUnifiedContext(
+                            scope=scope,
+                            checkpoint_id=checkpoint,
+                            dbt_freshness=freshness_query,
                             source_query=source_query,
                             budget=budget,
                             source_impact=impact,

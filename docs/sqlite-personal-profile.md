@@ -37,6 +37,12 @@ edge table to admit the distinct `dbt_macro_dependency` type while preserving al
 schema-14 backup for rollback, or rebuild the structural projection from its retained source
 artifact. A failed migration leaves the schema-14 table and ledger unchanged.
 
+Migration `0016_dbt_source_freshness.sql` additively stores minimized immutable `sources.json` v3
+headers and source observations linked by foreign keys to exact manifest snapshots and source
+nodes. It is forward-only and transactional; back up the personal-profile database before upgrade
+and restore that backup to reverse a committed migration. An interrupted or injected failure
+leaves schema 15 and its ledger unchanged.
+
 Scope/principal records are retained with `RESTRICT`. Checkpoints, revisions, evidence, and their
 links also use `RESTRICT`, so evidence supporting a durable checkpoint cannot disappear silently.
 The repository contract suite exercises the same public contract intended for a later PostgreSQL

@@ -1079,3 +1079,30 @@ Jinja, or shell input is interpreted. The complete repository gate passes with 5
 typing for 147 source files, schema validation, dependency/provenance validation for 86 entries,
 and architecture validation for 72 product Python files. No external dependency, migration,
 model call, or MCP tool was added.
+
+#### Issue 15I — Complete
+
+The current bounded issue adds authoritative dbt source-freshness context from the official
+`sources.json` v3 artifact produced by `dbt source freshness`. Mnemo must parse, persist, and
+activate only bounded source identity, observed timestamps/age, threshold counts/periods, status,
+execution time, artifact metadata, and exact evidence for an existing authorized manifest
+snapshot. Adapter responses, database error text, freshness filters, environment values, timing
+details, compiled content, and arbitrary arguments must be discarded. The existing command hook
+may ingest an adjacent `sources.json`, and the existing `get_context` tool may query one exact
+source unique ID or unambiguous manifest file with currentness and scope safety. This issue does
+not execute dbt or contact a warehouse, infer freshness from configuration, add selector syntax,
+changed-state indexing, code excerpts, a dependency, model call, or MCP tool. The SQLite schema
+change requires upgrade atomicity and forward-only recovery coverage.
+
+Implemented bounded parsing, immutable reference/SQLite persistence, automatic sibling-artifact
+ingestion, status reporting, and exact `get_context` retrieval for official dbt `sources.json` v3.
+Only source identity, dbt-reported status, observed timestamps/age, threshold counts/periods,
+execution time, safe artifact metadata, and evidence survive parsing. Environment values, adapter
+responses, database error text, freshness filters, timing details, and arbitrary payloads are
+validated only as needed and discarded. Each result must reference a source node in the exact
+authorized manifest snapshot; missing or cross-scope nodes cannot widen retrieval. Migration 0016
+is additive, forward-only, foreign-keyed, and transactionally rolls back with its ledger entry on
+failure. The complete repository gate passes with 577 tests, strict typing for 147 source files,
+schema validation, dependency/provenance validation for 86 entries, and architecture validation
+for 72 product Python files. No external dependency, model call, warehouse access, dbt execution,
+or MCP tool was added.

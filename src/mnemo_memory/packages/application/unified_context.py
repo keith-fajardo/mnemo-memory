@@ -20,6 +20,7 @@ from mnemo_memory.packages.application.dbt import (
     LineageDirection,
     QueryLineage,
     QueryManifestSelector,
+    QuerySourceFreshness,
     QueryTestCoverage,
     ResolveManifestFile,
 )
@@ -42,6 +43,7 @@ from mnemo_memory.packages.domain import (
     ContextItemType,
     ContextPacket,
     CurrentKnowledgeDocumentSection,
+    DbtFreshnessThreshold,
     DbtNodeId,
     DbtSnapshotId,
     EvidenceId,
@@ -149,6 +151,22 @@ class ContextDbtSelectorQuery:
                 raise ValueError(f"dbt selector {field_name} must be a bounded non-empty string")
         if not 1 <= self.maximum_nodes <= 100:
             raise ValueError("dbt selector node limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextDbtFreshnessQuery:
+    unique_id: DbtNodeId | None
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+    require_current: bool = False
+    relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.unique_id is None) == (self.relative_path is None):
+            raise ValueError("dbt freshness requires exactly one unique_id or relative_path")
+        if self.relative_path is not None:
+            _validate_source_relative_path(self.relative_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,12 +336,18 @@ class GetUnifiedContext:
     procedure_profile: ProjectClientProfile | None = None
     dbt_test_coverage: ContextDbtTestCoverageQuery | None = None
     dbt_selector: ContextDbtSelectorQuery | None = None
+    dbt_freshness: ContextDbtFreshnessQuery | None = None
 
     def __post_init__(self) -> None:
         if (
             sum(
                 query is not None
-                for query in (self.lineage, self.dbt_test_coverage, self.dbt_selector)
+                for query in (
+                    self.lineage,
+                    self.dbt_test_coverage,
+                    self.dbt_selector,
+                    self.dbt_freshness,
+                )
             )
             > 1
         ):
@@ -377,6 +401,7 @@ class UnifiedContextService:
             request.lineage is None
             and request.dbt_test_coverage is None
             and request.dbt_selector is None
+            and request.dbt_freshness is None
             and request.source_query is None
             and request.source_impact is None
             and request.source_changes is None
@@ -393,6 +418,8 @@ class UnifiedContextService:
             return self._with_dbt_test_coverage(packet, request)
         if request.dbt_selector is not None:
             return self._with_dbt_selector(packet, request)
+        if request.dbt_freshness is not None:
+            return self._with_dbt_freshness(packet, request)
         return self._with_requested_source_facts(packet, request)
 
     def _with_requested_procedures(
@@ -1113,6 +1140,156 @@ class UnifiedContextService:
             skills_and_procedures=packet.skills_and_procedures,
             provenance=tuple(notices),
             omissions=omissions,
+            conflicts=packet.conflicts,
+        )
+        return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_freshness(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach one observed source-freshness result from a persisted sources.json."""
+        query = request.dbt_freshness
+        assert query is not None
+        if self._dbt is None:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet, "dbt-freshness", OmissionReason.LOWER_RANK, "dbt index is unavailable"
+                ),
+                request,
+            )
+        unique_id = query.unique_id
+        if unique_id is None:
+            assert query.relative_path is not None
+            unique_id = self._dbt.resolve_file(
+                ResolveManifestFile(
+                    _project_scope(request.scope), query.relative_path, query.snapshot_id
+                )
+            ).node.unique_id
+        result = self._dbt.query_source_freshness(
+            QuerySourceFreshness(
+                _project_scope(request.scope),
+                unique_id,
+                query.snapshot_id,
+                query.current_content_digest,
+                query.current_source_state,
+            )
+        )
+        if query.require_current and result.currentness is not ArtifactCurrentness.CURRENT:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-freshness",
+                    OmissionReason.STALE,
+                    "manifest structural state is not current",
+                ),
+                request,
+            )
+        observation = result.observation
+        artifact = result.artifact
+        if observation is None or artifact is None:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-freshness",
+                    OmissionReason.LOWER_RANK,
+                    "no persisted sources.json observation exists for this source",
+                ),
+                request,
+            )
+
+        def threshold(value: DbtFreshnessThreshold | None) -> dict[str, object] | None:
+            if value is None:
+                return None
+            return {
+                "count": value.count,
+                "period": value.period.value,
+            }
+
+        content = json.dumps(
+            {
+                "query_kind": "source_freshness",
+                "snapshot_id": str(result.snapshot.snapshot_id),
+                "source_unique_id": str(result.source_node.unique_id),
+                "status": observation.status.value,
+                "max_loaded_at": None
+                if observation.max_loaded_at is None
+                else observation.max_loaded_at.isoformat(),
+                "snapshotted_at": None
+                if observation.snapshotted_at is None
+                else observation.snapshotted_at.isoformat(),
+                "age_seconds": observation.age_seconds,
+                "warn_after": threshold(observation.warn_after),
+                "error_after": threshold(observation.error_after),
+                "execution_time_seconds": observation.execution_time_seconds,
+                "artifact_generated_at": None
+                if artifact.metadata.generated_at is None
+                else artifact.metadata.generated_at.isoformat(),
+                "manifest_currentness": result.currentness.value,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        if tokens > min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        ):
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-freshness",
+                    OmissionReason.TOKEN_BUDGET,
+                    "dbt freshness fact exceeds context budget",
+                ),
+                request,
+            )
+        evidence = (result.source_node.evidence, observation.evidence)
+        context_item = ContextItem(
+            item_id=(f"dbt-freshness:{result.snapshot.snapshot_id}:{result.source_node.unique_id}"),
+            item_type=ContextItemType.STRUCTURAL_FACT,
+            source_scope=request.scope,
+            content=content,
+            content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+            token_estimate=tokens,
+            evidence_references=evidence,
+            source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+            sensitivity=Sensitivity.NORMAL,
+            validity=ValidityState.CURRENT
+            if result.currentness is ArtifactCurrentness.CURRENT
+            else ValidityState.STALE,
+            ranking=None,
+            conflict_state=ConflictState.NONE,
+            observed_at=artifact.metadata.ingested_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{context_item.item_id}",
+            context_item.item_id,
+            (
+                f"mnemo:dbt/snapshot/{result.snapshot.snapshot_id}/"
+                f"source-freshness/{result.source_node.unique_id}"
+            ),
+            hashlib.sha256(content.encode()).hexdigest(),
+            evidence,
+        )
+        result_packet = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, context_item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
             conflicts=packet.conflicts,
         )
         return self._with_requested_source_facts(result_packet, request)

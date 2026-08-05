@@ -298,6 +298,21 @@ For a bounded manifest inventory, use exact structured fields instead of selecto
 Supplied filters are intersected over enabled nodes in one scoped snapshot. Mnemo returns stable
 cited matches and never evaluates dbt selector strings or expands the result through lineage.
 
+For one observed source-freshness result, use an exact source identity (or an unambiguous source
+file):
+
+```json
+{
+  "dbt_freshness": {
+    "unique_id": "source.analytics.raw_orders"
+  }
+}
+```
+
+The fact comes only from a persisted `sources.json` v3 observation for the selected manifest
+snapshot. It includes the dbt-reported status and observed time/age/thresholds with evidence;
+Mnemo does not contact the warehouse or infer freshness from configuration.
+
 ## Ask for static code impact from an exact file
 
 For a supported parsed language, use `source_impact.relative_path` when the changed file is known.

@@ -3,6 +3,7 @@
 from .artifacts import (
     DbtCatalogParser,
     DbtRunResultsParser,
+    DbtSourceFreshnessParser,
     DbtSupplementalArtifactLimits,
     DbtSupplementalParseRequest,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "DbtManifestLimits",
     "DbtManifestParser",
     "DbtRunResultsParser",
+    "DbtSourceFreshnessParser",
     "DbtSupplementalArtifactLimits",
     "DbtSupplementalParseRequest",
     "ManifestParseRequest",
