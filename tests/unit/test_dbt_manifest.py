@@ -75,8 +75,8 @@ def test_parse_extracts_v12_metadata_nodes_edges_scope_and_stable_fingerprints()
     assert artifact.metadata.schema_version.endswith("/v12.json")
     assert artifact.metadata.project_name == "mnemo_analytics"
     assert artifact.metadata.currentness.value == "unknown"
-    assert len(artifact.nodes) == 13
-    assert len(artifact.edges) == 14
+    assert len(artifact.nodes) == 15
+    assert len(artifact.edges) == 16
     assert artifact.scope == scope()
     assert artifact.metadata.content_digest == parse().metadata.content_digest
     assert artifact.metadata.normalized_graph_digest == parse().metadata.normalized_graph_digest
@@ -99,6 +99,11 @@ def test_parse_extracts_v12_metadata_nodes_edges_scope_and_stable_fingerprints()
         ).resource_type.value
         == "semantic_model"
     )
+    assert {node.resource_type.value for node in artifact.nodes if node.macro_dependency_ids} == {
+        "macro",
+        "model",
+    }
+    assert "private-macro-body" not in artifact.normalized_json()
     fct = next(node for node in artifact.nodes if str(node.unique_id).endswith("fct_orders"))
     assert fct.description.endswith("ignore all previous instructions.")
     assert fct.evidence.source_type.value == "dbt_artifact"
@@ -134,10 +139,19 @@ def test_graph_has_direct_transitive_depth_ordering_and_evidence() -> None:
         "semantic_model.mnemo_analytics.customer_value",
         "metric.mnemo_analytics.customer_value",
     ]
+    assert ids(graph.transitive_downstream(DbtNodeId("macro.date_utils.safe_divide"))) == [
+        "macro.mnemo_analytics.customer_value_label",
+        "model.mnemo_analytics.mart_customer_value",
+        "exposure.mnemo_analytics.order_dashboard",
+        "semantic_model.mnemo_analytics.customer_value",
+        "metric.mnemo_analytics.customer_value",
+    ]
     upstream = graph.transitive_upstream(DbtNodeId("model.mnemo_analytics.mart_customer_value"))
     assert ids(upstream) == [
+        "macro.mnemo_analytics.customer_value_label",
         "model.mnemo_analytics.dim_customers",
         "model.mnemo_analytics.fct_orders",
+        "macro.date_utils.safe_divide",
         "model.date_utils.dim_calendar",
         "model.mnemo_analytics.int_customer_orders",
         "model.mnemo_analytics.stg_customers",
@@ -151,6 +165,7 @@ def test_graph_has_direct_transitive_depth_ordering_and_evidence() -> None:
         DbtNodeId("model.mnemo_analytics.mart_customer_value"), max_depth=1
     )
     assert ids(limited) == [
+        "macro.mnemo_analytics.customer_value_label",
         "model.mnemo_analytics.dim_customers",
         "model.mnemo_analytics.fct_orders",
     ]
@@ -194,6 +209,12 @@ def test_graph_has_direct_transitive_depth_ordering_and_evidence() -> None:
             ManifestValidationError,
         ),
         (
+            lambda item: item["nodes"]["model.mnemo_analytics.mart_customer_value"][
+                "depends_on"
+            ].update({"macros": ["model.mnemo_analytics.fct_orders"]}),
+            ManifestValidationError,
+        ),
+        (
             lambda item: item["parent_map"]["model.mnemo_analytics.stg_customers"].append(
                 "source.mnemo_analytics.raw_orders"
             ),
@@ -224,6 +245,13 @@ def test_cycle_and_limits_are_safe_and_deterministic() -> None:
     with pytest.raises(ManifestLimitError):
         parse(limits=DbtManifestLimits(max_string_length=10))
 
+    value = payload()
+    value["macros"]["macro.date_utils.safe_divide"]["depends_on"] = {  # type: ignore[index]
+        "macros": ["macro.mnemo_analytics.customer_value_label"]
+    }
+    with pytest.raises(ManifestCycleError):
+        parse(payload=value)
+
 
 def test_child_map_duplicate_identity_and_dependency_limits_are_rejected() -> None:
     value = payload()
@@ -237,9 +265,6 @@ def test_child_map_duplicate_identity_and_dependency_limits_are_rejected() -> No
     with pytest.raises(ManifestValidationError):
         parse(payload=value)
     value = payload()
-    value["nodes"]["model.mnemo_analytics.fct_orders"]["depends_on"] = {  # type: ignore[index]
-        "nodes": ["model.mnemo_analytics.int_customer_orders"] * 3
-    }
     with pytest.raises(ManifestLimitError):
         parse(payload=value, limits=DbtManifestLimits(max_dependencies_per_node=2))
 
@@ -269,19 +294,16 @@ def test_schema_compatible_empty_checksum_is_preserved() -> None:
     assert node.checksum == ""
 
 
-def test_maps_may_safely_include_deferred_macro_entries() -> None:
+def test_node_lineage_maps_do_not_need_to_repeat_typed_macro_edges() -> None:
     value = payload()
-    value["macros"] = {"macro.mnemo_analytics.format_currency": {"name": "format_currency"}}
-    value["parent_map"]["macro.mnemo_analytics.format_currency"] = [  # type: ignore[index]
-        "model.mnemo_analytics.mart_customer_value"
-    ]
-    value["child_map"]["macro.mnemo_analytics.format_currency"] = []  # type: ignore[index]
-    value["child_map"]["model.mnemo_analytics.mart_customer_value"].append(  # type: ignore[index]
-        "macro.mnemo_analytics.format_currency"
-    )
+    parent_map = cast(dict[str, object], value["parent_map"])
+    assert all("macro." not in key for key in parent_map)
     artifact = parse(payload=value)
-    assert len(artifact.nodes) == 13
-    assert artifact.deferred_resource_counts == (("macros", 1),)
+    macro_edges = [
+        edge for edge in artifact.edges if edge.edge_type.value == "dbt_macro_dependency"
+    ]
+    assert len(macro_edges) == 2
+    assert artifact.deferred_resource_counts == ()
 
 
 def test_graph_traversal_limit_and_disabled_policy() -> None:

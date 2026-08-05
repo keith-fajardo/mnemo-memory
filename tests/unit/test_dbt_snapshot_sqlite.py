@@ -20,6 +20,7 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.domain.dbt_manifest import DbtManifestArtifact
 from mnemo_memory.packages.storage import ActiveSnapshotConflict, SQLiteCheckpointRepository
+from mnemo_memory.packages.storage.sqlite import SQLiteMigrationError
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
 
@@ -84,6 +85,15 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
         scope(), stored.snapshot.snapshot_id, "models/metrics.yml"
     )
     assert [node.resource_type.value for node in metric] == ["metric"]
+    macro_edges = [
+        edge
+        for edge in reopened.iter_edges(scope(), stored.snapshot.snapshot_id)
+        if edge.edge_type.value == "dbt_macro_dependency"
+    ]
+    assert len(macro_edges) == 2
+    assert any(
+        str(edge.child_id) == "model.mnemo_analytics.mart_customer_value" for edge in macro_edges
+    )
     assert (
         reopened.find_nodes_by_original_file_path(
             scope(), stored.snapshot.snapshot_id, "models/not-recorded.sql"
@@ -92,6 +102,7 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
     )
     with sqlite3.connect(item.path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
+        assert "private-macro-body" not in "\n".join(connection.iterdump())
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         with pytest.raises(sqlite3.IntegrityError):
@@ -106,6 +117,42 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
                     "{}",
                 ),
             )
+
+
+def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> None:
+    item = repository(tmp_path)
+    with sqlite3.connect(item.path) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 15")
+        connection.execute("ALTER TABLE dbt_manifest_edges RENAME TO dbt_manifest_edges_v15")
+        connection.execute(
+            "CREATE TABLE dbt_manifest_edges ("
+            "snapshot_id TEXT NOT NULL "
+            "REFERENCES dbt_manifest_snapshots(snapshot_id) ON DELETE RESTRICT,"
+            "parent_unique_id TEXT NOT NULL, child_unique_id TEXT NOT NULL,"
+            "edge_type TEXT NOT NULL CHECK (edge_type = 'dbt_dependency'),"
+            "artifact_digest TEXT NOT NULL CHECK (length(artifact_digest) = 64),"
+            "evidence_json TEXT NOT NULL,"
+            "PRIMARY KEY (snapshot_id, parent_unique_id, child_unique_id, edge_type),"
+            "FOREIGN KEY (snapshot_id, parent_unique_id) "
+            "REFERENCES dbt_manifest_nodes(snapshot_id, unique_id) ON DELETE RESTRICT,"
+            "FOREIGN KEY (snapshot_id, child_unique_id) "
+            "REFERENCES dbt_manifest_nodes(snapshot_id, unique_id) ON DELETE RESTRICT)"
+        )
+        connection.execute("INSERT INTO dbt_manifest_edges SELECT * FROM dbt_manifest_edges_v15")
+        connection.execute("DROP TABLE dbt_manifest_edges_v15")
+
+    assert item.schema_version() == 14
+    with pytest.raises(SQLiteMigrationError):
+        item.migrate(fail_after_version=15)
+    assert item.schema_version() == 14
+    with sqlite3.connect(item.path) as connection:
+        sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dbt_manifest_edges'"
+        ).fetchone()[0]
+    assert "dbt_macro_dependency" not in sql
+
+    item.migrate()
+    assert item.schema_version() == 15
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:

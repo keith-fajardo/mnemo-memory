@@ -983,11 +983,34 @@ indexing, and new MCP tools remain outside this issue.
 Implemented exposure, metric, and semantic-model parsing as typed v12 manifest graph nodes with
 exact digest-addressed evidence and ordinary explicit dependency edges. The shared node limit now
 counts all three collections, collection/resource-type mismatches and unknown dependencies fail
-closed, and manifest parent/child maps must agree with every parsed relationship. Reference and SQLite
-round-trip coverage proves the resource types and downstream edges survive persistence, while
+closed, and manifest parent/child maps must agree with every parsed relationship. Reference and
+SQLite round-trip coverage proves the resource types and downstream edges survive persistence, while
 application and context tests show a model impact query returning its exact dashboard and metric
 through the manifest-declared semantic-model bridge without descriptive payload interpretation.
-The complete gate passed with 561 tests, strict typing
-for 147 source files, schema validation, dependency/provenance validation for 86 entries, and
+The complete gate passed with 561 tests, strict typing for 147 source files, schema validation,
+dependency/provenance validation for 86 entries, and
 architecture validation for 72 product Python files. No migration, dependency, model call, or MCP
 tool was added.
+
+#### Issue 15E — Complete
+
+The current bounded issue models dbt v12 macros and exact `depends_on.macros` relationships without
+retaining macro SQL. Macro resources must carry typed manifest identity and evidence, while macro
+dependencies use a distinct edge type from ordinary `depends_on.nodes` lineage. Both edge types
+must survive reference and SQLite storage and remain scope-first and traversal-bounded. Migration
+0015 may widen only the existing rebuildable edge-type constraint, must retain foreign-key and
+transactional rollback guarantees, and requires the documented pre-upgrade backup recovery path.
+Macro SQL, execution, Jinja rendering, selector syntax, freshness, test-coverage aggregation,
+changed-state indexing, model calls, dependencies, and new MCP tools remain outside this issue.
+
+Implemented typed macro nodes and `dbt_macro_dependency` edges from exact v12
+`depends_on.macros` identities. The parser rejects unknown or wrong-type endpoints, duplicate
+dependencies, mixed node/macro fields, cycles, and combined per-resource limit overflow; macro SQL
+is excluded from normalized projections, SQLite, and context. Existing lineage traversal remains
+bounded and now exposes supporting edge types and edge evidence, so a macro impact result is not
+misrepresented as ordinary data lineage. Migration 0015 transactionally rebuilds only the
+rebuildable edge table, preserves existing rows and endpoint foreign keys, and an injected schema-14
+upgrade failure proves rollback leaves its table and ledger unchanged. The complete gate passed
+with 563 tests, strict typing for 147 source files, schema validation, dependency/provenance
+validation for 86 entries, and architecture validation for 72 product Python
+files. No model call, external dependency, or MCP tool was added.

@@ -68,6 +68,7 @@ class DbtResourceType(str, Enum):
     EXPOSURE = "exposure"
     METRIC = "metric"
     SEMANTIC_MODEL = "semantic_model"
+    MACRO = "macro"
     OTHER = "other"
 
 
@@ -79,6 +80,7 @@ class ArtifactCurrentness(str, Enum):
 
 class LineageEdgeType(str, Enum):
     DBT_DEPENDENCY = "dbt_dependency"
+    DBT_MACRO_DEPENDENCY = "dbt_macro_dependency"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +149,7 @@ class DbtManifestNode:
     tags: tuple[str, ...]
     description: str
     dependency_ids: tuple[DbtNodeId, ...]
+    macro_dependency_ids: tuple[DbtNodeId, ...]
     evidence: EvidenceReference
 
     def __post_init__(self) -> None:
@@ -174,12 +177,14 @@ class DbtManifestNode:
         if any(not isinstance(tag, str) or not tag.strip() for tag in tags):
             raise ValueError("tags must contain non-empty strings")
         dependencies = tuple(self.dependency_ids)
-        if any(not isinstance(item, DbtNodeId) for item in dependencies):
+        macro_dependencies = tuple(self.macro_dependency_ids)
+        if any(not isinstance(item, DbtNodeId) for item in (*dependencies, *macro_dependencies)):
             raise TypeError("dependency_ids must contain DbtNodeId values")
         if not isinstance(self.evidence, EvidenceReference):
             raise TypeError("node evidence must be an EvidenceReference")
         object.__setattr__(self, "tags", tags)
         object.__setattr__(self, "dependency_ids", dependencies)
+        object.__setattr__(self, "macro_dependency_ids", macro_dependencies)
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +255,7 @@ class DbtManifestArtifact:
                     "tags": list(node.tags),
                     "description": node.description,
                     "dependency_ids": [str(item) for item in node.dependency_ids],
+                    "macro_dependency_ids": [str(item) for item in node.macro_dependency_ids],
                 }
                 for node in self.nodes
             ],

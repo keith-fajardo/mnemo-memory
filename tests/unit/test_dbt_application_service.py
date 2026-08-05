@@ -281,6 +281,25 @@ def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:
         structural_item.evidence_references for structural_item in consumers.structural_items
     )
 
+    macro_impact = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            lineage=ContextLineageQuery(
+                DbtNodeId("macro.date_utils.safe_divide"),
+                LineageDirection.DOWNSTREAM,
+                maximum_depth=2,
+            ),
+        )
+    )
+    model = next(
+        json.loads(structural_item.content)
+        for structural_item in macro_impact.structural_items
+        if '"node_unique_id":"model.mnemo_analytics.mart_customer_value"' in structural_item.content
+    )
+    assert model["lineage_edge_types"] == ["dbt_macro_dependency"]
+
 
 def test_task_context_includes_bounded_matching_supplemental_dbt_evidence() -> None:
     item, project_scope = service(), scope()
@@ -345,7 +364,7 @@ def test_task_context_includes_bounded_matching_supplemental_dbt_evidence() -> N
     assert len(content["catalog"]["columns"]) == 12
     assert content["catalog"]["columns_omitted"] == 3
     assert '"status":"success"' in fact.content
-    assert len(fact.evidence_references) == 3
+    assert len(fact.evidence_references) == 4
     assert "secret-that-must-not-be-retained" not in fact.content
     assert "compiled_code" not in fact.content
     notice = next(notice for notice in packet.provenance if notice.item_id == fact.item_id)

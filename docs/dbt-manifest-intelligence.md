@@ -13,8 +13,9 @@ only from that explicit dependency list, then validates `parent_map` and `child_
 Descriptions, tags, and meta content remain untrusted descriptive data. Exposure and metric
 resources and their semantic-model bridge are included as typed graph nodes because manifest v12
 provides their exact `depends_on.nodes` relationships; this lets downstream traversal identify
-dashboards and metrics affected by a model. Semantic dimensions and measures are not projected,
-and macros remain deferred rather than being assigned invented lineage semantics.
+dashboards and metrics affected by a model. Macro resources and `depends_on.macros` relationships
+are also retained as a distinct typed edge, so macro impact is not confused with ordinary node
+lineage. Semantic dimensions, measures, and macro SQL are not projected.
 
 Parsing is local and offline: no dbt executable, Jinja, macros, SQL parsing, warehouse connection,
 network call, or LLM is used. Personal-mode byte, node, edge, dependency, string, and traversal

@@ -114,12 +114,14 @@ class DbtManifestParser:
         exposures_value = _object_map(value.get("exposures", {}), "exposures")
         metrics_value = _object_map(value.get("metrics", {}), "metrics")
         semantic_models_value = _object_map(value.get("semantic_models", {}), "semantic_models")
+        macros_value = _object_map(value.get("macros", {}), "macros")
         total_nodes = (
             len(nodes_value)
             + len(sources_value)
             + len(exposures_value)
             + len(metrics_value)
             + len(semantic_models_value)
+            + len(macros_value)
         )
         if total_nodes > request.limits.max_nodes:
             raise ManifestLimitError("dbt manifest exceeds the configured node limit")
@@ -131,6 +133,7 @@ class DbtManifestParser:
         nodes += self._parse_nodes(
             semantic_models_value, "semantic_models", content_digest, request
         )
+        nodes += self._parse_nodes(macros_value, "macros", content_digest, request)
         self._validate_dependencies(nodes)
         edges = self._edges(nodes, content_digest)
         if len(edges) > request.limits.max_edges:
@@ -155,13 +158,7 @@ class DbtManifestParser:
             scope=request.scope,
             nodes=tuple(nodes),
             edges=tuple(edges),
-            deferred_resource_counts=tuple(
-                sorted(
-                    (name, len(_object_map(item, name)))
-                    for name, item in value.items()
-                    if name == "macros" and isinstance(item, dict)
-                )
-            ),
+            deferred_resource_counts=(),
         )
         normalized_digest = artifact.digest_normalized_json(artifact.normalized_json())
         return replace(
@@ -217,12 +214,21 @@ class DbtManifestParser:
                 "exposures": "exposure",
                 "metrics": "metric",
                 "semantic_models": "semantic_model",
+                "macros": "macro",
             }.get(collection)
             if expected_type is not None and raw_resource_type != expected_type:
                 raise ManifestValidationError(
                     f"{collection} entries must use resource_type {expected_type!r}"
                 )
-            dependencies = _dependency_ids(raw_node, request.limits.max_dependencies_per_node)
+            dependencies = _dependency_ids(raw_node, "nodes")
+            macro_dependencies = _dependency_ids(raw_node, "macros")
+            if (
+                len(dependencies) + len(macro_dependencies)
+                > request.limits.max_dependencies_per_node
+            ):
+                raise ManifestLimitError(
+                    "dbt manifest dependency count exceeds the configured limit"
+                )
             node_id = DbtNodeId(unique_id)
             evidence = _evidence(content_digest, request, node_id)
             node = DbtManifestNode(
@@ -244,6 +250,7 @@ class DbtManifestParser:
                 tags=_tags(raw_node.get("tags")),
                 description=_description(raw_node.get("description")),
                 dependency_ids=dependencies,
+                macro_dependency_ids=macro_dependencies,
                 evidence=evidence,
             )
             nodes.append(node)
@@ -270,11 +277,20 @@ class DbtManifestParser:
             raise ManifestValidationError(
                 "dbt manifest contains duplicate identities across collections"
             )
+        macro_ids = {
+            node.unique_id for node in nodes if node.resource_type is DbtResourceType.MACRO
+        }
         for node in nodes:
-            missing = set(node.dependency_ids) - ids
+            missing = set((*node.dependency_ids, *node.macro_dependency_ids)) - ids
             if missing:
                 raise ManifestValidationError(
                     "dbt manifest dependency references an unavailable node"
+                )
+            if set(node.dependency_ids) & macro_ids or not set(node.macro_dependency_ids).issubset(
+                macro_ids
+            ):
+                raise ManifestValidationError(
+                    "dbt manifest node and macro dependencies must retain their resource type"
                 )
 
     @staticmethod
@@ -291,16 +307,34 @@ class DbtManifestParser:
                         artifact_digest=content_digest,
                     )
                 )
+            for parent_id in child.macro_dependency_ids:
+                edges.append(
+                    DbtLineageEdge(
+                        parent_id=parent_id,
+                        child_id=child.unique_id,
+                        edge_type=LineageEdgeType.DBT_MACRO_DEPENDENCY,
+                        evidence=child.evidence,
+                        artifact_digest=content_digest,
+                    )
+                )
         return edges
 
     @staticmethod
     def _validate_maps(
         payload: Mapping[str, object], nodes: list[DbtManifestNode], edges: list[DbtLineageEdge]
     ) -> None:
-        known = {str(node.unique_id) for node in nodes}
+        known = {
+            str(node.unique_id) for node in nodes if node.resource_type is not DbtResourceType.MACRO
+        }
         expected_parents: dict[str, set[str]] = {node: set() for node in known}
         expected_children: dict[str, set[str]] = {node: set() for node in known}
         for edge in edges:
+            if edge.edge_type is not LineageEdgeType.DBT_DEPENDENCY:
+                continue
+            if str(edge.parent_id) not in known or str(edge.child_id) not in known:
+                raise ManifestConsistencyError(
+                    "depends_on.nodes cannot use a macro resource identity"
+                )
             expected_parents[str(edge.child_id)].add(str(edge.parent_id))
             expected_children[str(edge.parent_id)].add(str(edge.child_id))
         for name, expected in (("parent_map", expected_parents), ("child_map", expected_children)):
@@ -322,7 +356,10 @@ class DbtManifestParser:
 
     @staticmethod
     def _validate_acyclic(nodes: list[DbtManifestNode]) -> None:
-        parents = {node.unique_id: set(node.dependency_ids) for node in nodes}
+        parents = {
+            node.unique_id: set((*node.dependency_ids, *node.macro_dependency_ids))
+            for node in nodes
+        }
         remaining = {node_id: set(dependencies) for node_id, dependencies in parents.items()}
         while remaining:
             roots = {node_id for node_id, dependencies in remaining.items() if not dependencies}
@@ -378,15 +415,13 @@ def _optional_timestamp(value: object, name: str) -> datetime | None:
     return parsed
 
 
-def _dependency_ids(value: Mapping[str, object], maximum: int) -> tuple[DbtNodeId, ...]:
+def _dependency_ids(value: Mapping[str, object], kind: str) -> tuple[DbtNodeId, ...]:
     depends_on = value.get("depends_on", {})
     if not isinstance(depends_on, Mapping):
         raise ManifestValidationError("dbt manifest depends_on must be an object")
-    raw = depends_on.get("nodes", [])
+    raw = depends_on.get(kind, [])
     if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
-        raise ManifestValidationError("dbt manifest depends_on.nodes must be an array of strings")
-    if len(raw) > maximum:
-        raise ManifestLimitError("dbt manifest dependency count exceeds the configured limit")
+        raise ManifestValidationError(f"dbt manifest depends_on.{kind} must be an array of strings")
     ids = tuple(DbtNodeId(item) for item in cast(list[str], raw))
     if len(set(ids)) != len(ids):
         raise ManifestValidationError("dbt manifest dependencies must not contain duplicates")

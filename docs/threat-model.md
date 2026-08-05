@@ -213,6 +213,11 @@ identities, typed resource values, bounded counts, and same-artifact `depends_on
 Unknown endpoints, collection/type disagreement, map disagreement, and cycles fail closed;
 descriptive content, dimensions, and measures never create an edge.
 
+Macro impact uses only exact same-artifact identities from `depends_on.macros`, a distinct typed
+edge, and the shared graph count/cycle limits. Macro SQL is never normalized, persisted, or
+returned. A macro identity in `depends_on.nodes`, a non-macro identity in `depends_on.macros`, an
+unknown endpoint, or a macro cycle rejects the artifact.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

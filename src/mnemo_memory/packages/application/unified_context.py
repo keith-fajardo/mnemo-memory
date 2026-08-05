@@ -617,6 +617,15 @@ class UnifiedContextService:
             request.budget.total_limit - packet.declared_total_tokens,
         )
         for item in result.nodes:
+            lineage_edges = tuple(
+                edge
+                for edge in result.edges
+                if (
+                    edge.parent_id == item.node.unique_id
+                    if result.direction is LineageDirection.UPSTREAM
+                    else edge.child_id == item.node.unique_id
+                )
+            )
             content_value: dict[str, object] = {
                 "snapshot_id": str(result.snapshot.snapshot_id),
                 "start_node": str(result.start_node.unique_id),
@@ -626,8 +635,12 @@ class UnifiedContextService:
                 "depth": item.depth,
                 "currentness": result.currentness.value,
                 "relative_file": item.node.original_file_path,
+                "lineage_edge_types": sorted({edge.edge_type.value for edge in lineage_edges}),
             }
             evidence = [item.node.evidence]
+            for edge in lineage_edges:
+                if edge.evidence not in evidence:
+                    evidence.append(edge.evidence)
             relation = catalog_by_id.get(item.node.unique_id)
             if relation is not None:
                 columns = relation.columns[:12]

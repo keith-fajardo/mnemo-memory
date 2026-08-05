@@ -38,4 +38,7 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0014_dbt_supplemental_artifacts.sql"
     ).is_file()
+    assert package_files.joinpath(
+        "resources/migrations/0015_dbt_macro_dependency_edges.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

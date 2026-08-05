@@ -26,7 +26,13 @@ Issue 15D applies that same rule to the v12 `exposures`, `metrics`, and `semanti
 collections. They become typed graph nodes only from their exact manifest identities and
 `depends_on.nodes` entries, so ordinary downstream traversal can report an affected exposure or
 metric through its declared semantic-model bridge. Their descriptive fields, dimensions, and
-measures remain inert and are not projected. Macro dependency semantics remain deferred.
+measures remain inert and are not projected.
+
+Issue 15E adds manifest macros as typed nodes and maps only exact `depends_on.macros` identities to
+`dbt_macro_dependency` edges. Ordinary `depends_on.nodes` remains `dbt_dependency`; mixing a macro
+identity into the wrong field fails closed. Macro SQL is validated only by the existing bounded
+string limit and is then discarded. Node lineage maps validate ordinary edges only because dbt's
+macro call graph is separately authoritative in `depends_on.macros`.
 
 ## Consequences
 

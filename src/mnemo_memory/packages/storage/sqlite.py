@@ -141,7 +141,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 14
+LATEST_SCHEMA_VERSION = 15
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -399,6 +399,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 14:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 14
+            if version < 15:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0015_dbt_macro_dependency_edges.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (15, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 15:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 15
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -2347,6 +2359,7 @@ class SQLiteCheckpointRepository:
             tags=tags,
             description="",
             dependency_ids=(),
+            macro_dependency_ids=(),
             evidence=evidence,
         )
 
