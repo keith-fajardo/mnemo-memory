@@ -53,4 +53,7 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0021_episodic_candidate_reviews.sql"
     ).is_file()
+    assert package_files.joinpath(
+        "resources/migrations/0022_episodic_memory_governance.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()

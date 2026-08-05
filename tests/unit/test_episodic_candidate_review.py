@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -14,7 +15,10 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewDecision,
     EpisodicExtractionProposal,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
     EpisodicMemoryKind,
+    EpisodicMemoryRevisionStatus,
+    EventId,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -37,10 +41,17 @@ from mnemo_memory.packages.domain import (
     VerificationStatus,
     Visibility,
     WorkspaceId,
+    active_episodic_memory_at_revision,
+    replay_episodic_memory_revisions,
 )
 from mnemo_memory.packages.storage import (
     ActiveEpisodicMemoryNotFound,
     EpisodicMemoryCandidateRepository,
+    EpisodicMemoryGovernanceConflict,
+    EpisodicMemoryGovernanceNotFound,
+    EpisodicMemoryGovernanceRejected,
+    EpisodicMemoryGovernanceRepository,
+    EpisodicMemoryGovernanceStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -350,10 +361,12 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
     sqlite.append_task_activity_event(event)
     sqlite.store_episodic_memory_candidates((candidate,))
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_governance_evidence")
+        connection.execute("DROP TABLE episodic_memory_governance")
         connection.execute("DROP TABLE active_episodic_memories")
         connection.execute("DROP TABLE episodic_candidate_review_evidence")
         connection.execute("DROP TABLE episodic_candidate_reviews")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 21")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 21")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         sqlite.migrate(fail_after_version=21)
@@ -369,7 +382,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 21
+    assert sqlite.schema_version() == 22
     with sqlite3.connect(sqlite.path) as connection:
         review_columns = {
             row[1]
@@ -395,3 +408,312 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         "reviewed_at",
     } <= review_columns
     assert {"memory_id", "approval_action_id", "activated_at"} <= active_columns
+
+
+def _governance_repository(
+    reviews: EpisodicMemoryReviewRepository,
+) -> EpisodicMemoryGovernanceRepository:
+    return cast(EpisodicMemoryGovernanceRepository, reviews)
+
+
+def _correct(
+    candidate: EpisodicMemoryCandidate,
+    expected_revision_id: EventId,
+    *,
+    key: str = "governance:correct:one",
+    claim: str = "The user-verified corrected outcome passed the complete gate.",
+    sensitivity: Sensitivity = Sensitivity.RESTRICTED,
+    seed: int = 3,
+    minutes: int = 2,
+) -> EpisodicMemoryGovernanceAction:
+    return EpisodicMemoryGovernanceAction.correct(
+        scope=candidate.scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=expected_revision_id,
+        source_action_key=key,
+        reason="The user supplied a verified correction to the extracted claim.",
+        corrected_claim=claim,
+        corrected_sensitivity=sensitivity,
+        occurred_at=NOW + timedelta(minutes=minutes),
+        evidence_references=(_review_evidence(seed),),
+    )
+
+
+def _retract(
+    candidate: EpisodicMemoryCandidate,
+    expected_revision_id: EventId,
+    *,
+    key: str = "governance:retract:one",
+    seed: int = 4,
+    minutes: int = 3,
+) -> EpisodicMemoryGovernanceAction:
+    return EpisodicMemoryGovernanceAction.retract(
+        scope=candidate.scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=expected_revision_id,
+        source_action_key=key,
+        reason="The user withdrew this memory after reviewing its evidence.",
+        occurred_at=NOW + timedelta(minutes=minutes),
+        evidence_references=(_review_evidence(seed),),
+    )
+
+
+def _approved(
+    adapter: str, tmp_path: Path
+) -> tuple[
+    EpisodicMemoryCandidate,
+    EpisodicCandidateReviewAction,
+    EpisodicMemoryGovernanceRepository,
+]:
+    candidate, reviews = _stored_candidate(adapter, tmp_path)
+    approval = _action(candidate)
+    reviews.review_episodic_memory_candidate(approval)
+    return candidate, approval, _governance_repository(reviews)
+
+
+def test_governance_contract_and_replay_are_strict_deterministic_and_payload_safe() -> None:
+    event = _event(_scope())
+    candidate = _candidate(event)
+    approval = _action(candidate)
+    active = ActiveEpisodicMemory.approve(candidate, approval)
+    correction = _correct(candidate, approval.action_id)
+    retraction = _retract(candidate, correction.action_id)
+
+    assert EpisodicMemoryGovernanceAction.from_dict(correction.to_dict()) == correction
+    first = replay_episodic_memory_revisions(active, (correction,))
+    replayed = replay_episodic_memory_revisions(active, (correction, retraction))
+    assert [item.status for item in first] == [
+        EpisodicMemoryRevisionStatus.SUPERSEDED,
+        EpisodicMemoryRevisionStatus.ACTIVE,
+    ]
+    assert active_episodic_memory_at_revision(active, first[-1]).memory.claim == (
+        correction.corrected_claim
+    )
+    assert [item.status for item in replayed] == [
+        EpisodicMemoryRevisionStatus.SUPERSEDED,
+        EpisodicMemoryRevisionStatus.SUPERSEDED,
+        EpisodicMemoryRevisionStatus.RETRACTED,
+    ]
+    assert replayed[-1].claim is None
+    assert replayed[-1].sensitivity is None
+    with pytest.raises(ValueError, match="fields are invalid"):
+        EpisodicMemoryGovernanceAction.from_dict({**correction.to_dict(), "provider": "model"})
+    with pytest.raises(ValueError, match="only a user"):
+        EpisodicMemoryGovernanceAction(
+            correction.action_id,
+            correction.scope,
+            correction.memory_id,
+            correction.kind,
+            TaskActivityActor.AGENT,
+            correction.expected_revision_id,
+            correction.source_action_key,
+            correction.reason,
+            correction.corrected_claim,
+            correction.corrected_sensitivity,
+            correction.occurred_at,
+            correction.evidence_references,
+        )
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_correction_is_scoped_idempotent_revisioned_and_restart_durable(
+    adapter: str, tmp_path: Path
+) -> None:
+    candidate, approval, governance = _approved(adapter, tmp_path)
+    correction = _correct(candidate, approval.action_id)
+
+    first = governance.govern_episodic_memory(correction)
+    second = governance.govern_episodic_memory(correction)
+
+    assert first.idempotent is False
+    assert second.idempotent is True
+    assert first.current_revision == second.current_revision
+    assert first.active_memory is not None
+    assert first.active_memory.memory_id == candidate.memory_id
+    assert first.active_memory.memory.claim == correction.corrected_claim
+    assert first.active_memory.source_event_id == candidate.source_event_id
+    assert first.active_memory.extractor_version == candidate.extractor_version
+    assert first.active_memory.memory.retention == candidate.retention
+    revisions = governance.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)
+    assert [item.revision_number for item in revisions] == [1, 2]
+    assert revisions[0].status is EpisodicMemoryRevisionStatus.SUPERSEDED
+    assert revisions[1].predecessor_revision_id == approval.action_id
+    assert (
+        governance.get_episodic_memory_governance(candidate.scope, correction.action_id)
+        == correction
+    )
+    review_repo = cast(EpisodicMemoryReviewRepository, governance)
+    assert (
+        review_repo.get_active_episodic_memory(candidate.scope, candidate.memory_id)
+        == first.active_memory
+    )
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        governance.get_episodic_memory_governance(_scope(2), correction.action_id)
+
+    if isinstance(governance, SQLiteCheckpointRepository):
+        reopened = SQLiteCheckpointRepository(governance.path, base_directory=tmp_path)
+        assert (
+            reopened.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)
+            == revisions
+        )
+        assert (
+            reopened.get_active_episodic_memory(candidate.scope, candidate.memory_id)
+            == first.active_memory
+        )
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_stale_unsafe_or_weaker_corrections_fail_without_fork(adapter: str, tmp_path: Path) -> None:
+    candidate, approval, governance = _approved(adapter, tmp_path)
+    correction = _correct(candidate, approval.action_id)
+    governance.govern_episodic_memory(correction)
+
+    with pytest.raises(EpisodicMemoryGovernanceConflict):
+        governance.govern_episodic_memory(
+            _correct(
+                candidate,
+                approval.action_id,
+                key="governance:stale",
+                claim="This stale correction must not fork history.",
+                seed=5,
+                minutes=3,
+            )
+        )
+    with pytest.raises(EpisodicMemoryGovernanceRejected):
+        governance.govern_episodic_memory(
+            _correct(
+                candidate,
+                correction.action_id,
+                key="governance:weaker",
+                sensitivity=Sensitivity.NORMAL,
+                seed=6,
+                minutes=3,
+            )
+        )
+    with pytest.raises(EpisodicMemoryGovernanceRejected):
+        governance.govern_episodic_memory(
+            _correct(
+                candidate,
+                correction.action_id,
+                key="governance:secret",
+                claim="api_key=ABCDEFGHIJKLMNOPQRSTUVWX",
+                seed=7,
+                minutes=3,
+            )
+        )
+    assert len(governance.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)) == 2
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_retraction_is_terminal_idempotent_and_excluded_from_active_reads(
+    adapter: str, tmp_path: Path
+) -> None:
+    candidate, approval, governance = _approved(adapter, tmp_path)
+    correction = _correct(candidate, approval.action_id)
+    governance.govern_episodic_memory(correction)
+    retraction = _retract(candidate, correction.action_id)
+
+    result = governance.govern_episodic_memory(retraction)
+    assert result.active_memory is None
+    assert governance.govern_episodic_memory(retraction).idempotent is True
+    history = governance.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)
+    assert history[-1].status is EpisodicMemoryRevisionStatus.RETRACTED
+    assert history[-1].claim is None
+    reviews = cast(EpisodicMemoryReviewRepository, governance)
+    assert reviews.review_episodic_memory_candidate(approval).active_memory is None
+    with pytest.raises(ActiveEpisodicMemoryNotFound):
+        reviews.get_active_episodic_memory(candidate.scope, candidate.memory_id)
+    assert reviews.list_active_episodic_memories(candidate.scope).items == ()
+    with pytest.raises(EpisodicMemoryGovernanceConflict):
+        governance.govern_episodic_memory(
+            _correct(
+                candidate,
+                retraction.action_id,
+                key="governance:after-retraction",
+                seed=8,
+                minutes=4,
+            )
+        )
+
+
+def test_reference_and_sqlite_replay_identical_governance_streams(tmp_path: Path) -> None:
+    histories = []
+    for adapter in ("reference", "sqlite"):
+        candidate, approval, governance = _approved(adapter, tmp_path)
+        correction = _correct(candidate, approval.action_id)
+        governance.govern_episodic_memory(correction)
+        governance.govern_episodic_memory(_retract(candidate, correction.action_id))
+        histories.append(
+            governance.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)
+        )
+    assert histories[0] == histories[1]
+
+
+def test_sqlite_governance_failure_is_atomic(tmp_path: Path) -> None:
+    candidate, approval, governance = _approved("sqlite", tmp_path)
+    assert isinstance(governance, SQLiteCheckpointRepository)
+    with sqlite3.connect(governance.path) as connection:
+        connection.execute(
+            "CREATE TRIGGER reject_governance_evidence BEFORE INSERT ON "
+            "episodic_memory_governance_evidence "
+            "BEGIN SELECT RAISE(ABORT, 'injected governance failure'); END"
+        )
+    correction = _correct(candidate, approval.action_id)
+
+    with pytest.raises(EpisodicMemoryGovernanceStorageFailure):
+        governance.govern_episodic_memory(correction)
+    assert len(governance.list_episodic_memory_revisions(candidate.scope, candidate.memory_id)) == 1
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        governance.get_episodic_memory_governance(candidate.scope, correction.action_id)
+
+
+def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
+    tmp_path: Path,
+) -> None:
+    candidate, _, governance = _approved("sqlite", tmp_path)
+    assert isinstance(governance, SQLiteCheckpointRepository)
+    with sqlite3.connect(governance.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_governance_evidence")
+        connection.execute("DROP TABLE episodic_memory_governance")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        governance.migrate(fail_after_version=22)
+    assert governance.schema_version() == 21
+    with sqlite3.connect(governance.path) as connection:
+        assert connection.execute(
+            "SELECT memory_id FROM active_episodic_memories WHERE memory_id = ?",
+            (str(candidate.memory_id),),
+        ).fetchone() == (str(candidate.memory_id),)
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='episodic_memory_governance'"
+            ).fetchone()
+            is None
+        )
+
+    governance.migrate()
+    assert governance.schema_version() == 22
+    with sqlite3.connect(governance.path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(episodic_memory_governance)"
+            ).fetchall()
+        }
+    assert {
+        "action_id",
+        "memory_id",
+        "action_kind",
+        "expected_revision_id",
+        "source_action_key",
+        "reason",
+        "corrected_claim",
+        "corrected_sensitivity",
+        "owner_id",
+        "project_id",
+        "session_id",
+        "task_id",
+        "occurred_at",
+    } <= columns

@@ -10,6 +10,7 @@ from .episodic import ApprovedEpisodicEventSafetyDecision, ApprovedEpisodicEvent
 from .episodic_candidates import (
     EpisodicCandidateReviewSafetyPolicy,
     EpisodicMemoryCandidateSafetyPolicy,
+    EpisodicMemoryGovernanceSafetyPolicy,
 )
 from .knowledge import KnowledgeDocumentSafetyDecision, KnowledgeDocumentSafetyPolicy
 from .task_activity import TaskActivityEventSafetyPolicy
@@ -23,6 +24,7 @@ __all__ = [
     "DeterministicSecretClassifier",
     "EpisodicCandidateReviewSafetyPolicy",
     "EpisodicMemoryCandidateSafetyPolicy",
+    "EpisodicMemoryGovernanceSafetyPolicy",
     "KnowledgeDocumentSafetyDecision",
     "KnowledgeDocumentSafetyPolicy",
     "TaskActivityEventSafetyPolicy",

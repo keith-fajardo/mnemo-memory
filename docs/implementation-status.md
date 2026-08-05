@@ -1403,3 +1403,41 @@ and threat contracts record the explicit review boundary. The complete repositor
 for 86 entries, and architecture validation for 85 product Python files. No correction or revision
 chain, automatic approval/job invocation, context retrieval, transport surface, daemon, retention
 execution, export/deletion behavior, dependency, or team mode was added.
+
+#### Issue 16F — Complete
+
+The current bounded issue adds explicit user correction and retraction for an approved episodic
+memory as a deterministic append-only revision chain. The approval action is revision one; every
+later action carries the exact expected revision identity, caller-owned idempotency key, bounded
+reason, user actor, action time, and verified user-correction evidence. Correction supplies one
+bounded safe replacement claim and non-weaker sensitivity, marks the prior revision superseded,
+and makes the replacement active without changing memory identity, source event, extraction
+provenance, scope, retention, or original evidence. Retraction appends a payload-free terminal
+revision and immediately excludes the memory from active reads. Identical delivery is idempotent;
+stale expected revisions, forks, action-key reuse, cross-scope targets, unsafe content, non-user or
+under-evidenced actions, and governance after retraction fail closed. Reference and SQLite replay
+of the same action stream must produce identical revisions and active state, atomically and across
+restart. Migration 0022 is additive and forward-only with rollback coverage. This issue adds no
+expiry or retention execution, physical purge, export/deletion propagation, automatic governance,
+context retrieval/ranking, API/CLI/MCP surface, daemon, dependency, or team mode.
+
+Implemented strict `EpisodicMemoryGovernanceAction` and replayed
+`EpisodicMemoryRevision` contracts. Approval deterministically forms revision one; every correction
+or retraction names the exact active revision, uses a user-only caller key and verified
+user-correction evidence, and becomes the next revision identity. Correction preserves memory ID,
+source event, extraction metadata, scope, retention, and accumulated evidence while replacing only
+the safe claim and non-weaker sensitivity; replay marks every prior revision superseded. Retraction
+adds a terminal revision with no claim or sensitivity and immediately disappears from active get,
+list, and idempotent review results. Reference and SQLite adapters enforce action-key and expected-
+revision uniqueness, monotonic time, content safety, exact evidence identity, cross-scope isolation,
+atomic writes, and deterministic ordered replay. Additive forward-only migration
+`0022_episodic_memory_governance.sql` stores the scoped optimistic action stream and evidence with
+scope and payload-shape guards. Ten focused tests cover strict actions, deterministic replay,
+correction and retraction, immutable provenance, idempotency, stale forks, sensitivity weakening,
+secret rejection, terminal behavior, cross-scope reads, Reference/SQLite replay equality, SQLite
+restart durability, transactional failure, and migration rollback preserving active memory. The
+product and threat contracts record the revision boundary. The complete repository gate passes
+with 673 tests, strict typing for 167 source files, schema validation, dependency/provenance
+validation for 86 entries, and architecture validation for 85 product Python files. No expiry or
+retention execution, physical purge, export/deletion propagation, automatic governance, context
+retrieval, transport surface, daemon, dependency, or team mode was added.

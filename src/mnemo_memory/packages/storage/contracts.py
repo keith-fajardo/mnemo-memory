@@ -32,6 +32,8 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryRevision,
     EventId,
     EventOutboxJob,
     EvidenceReference,
@@ -254,6 +256,26 @@ class ActiveEpisodicMemoryNotFound(EpisodicMemoryReviewRepositoryError):
     pass
 
 
+class EpisodicMemoryGovernanceRepositoryError(Exception):
+    """Expected outcome for an append-only active-memory revision action."""
+
+
+class EpisodicMemoryGovernanceNotFound(EpisodicMemoryGovernanceRepositoryError):
+    pass
+
+
+class EpisodicMemoryGovernanceConflict(EpisodicMemoryGovernanceRepositoryError):
+    pass
+
+
+class EpisodicMemoryGovernanceRejected(EpisodicMemoryGovernanceRepositoryError):
+    pass
+
+
+class EpisodicMemoryGovernanceStorageFailure(EpisodicMemoryGovernanceRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -370,6 +392,28 @@ class EpisodicMemoryReviewRepository(Protocol):
     def list_active_episodic_memories(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ActiveEpisodicMemoryPage: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryGovernanceResult:
+    action: EpisodicMemoryGovernanceAction
+    current_revision: EpisodicMemoryRevision
+    active_memory: ActiveEpisodicMemory | None
+    idempotent: bool
+
+
+class EpisodicMemoryGovernanceRepository(Protocol):
+    def govern_episodic_memory(
+        self, action: EpisodicMemoryGovernanceAction
+    ) -> EpisodicMemoryGovernanceResult: ...
+
+    def get_episodic_memory_governance(
+        self, scope: MemoryScope, action_id: EventId
+    ) -> EpisodicMemoryGovernanceAction: ...
+
+    def list_episodic_memory_revisions(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> tuple[EpisodicMemoryRevision, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)

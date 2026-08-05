@@ -37,6 +37,9 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryRevision,
+    EpisodicMemoryRevisionStatus,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -53,6 +56,8 @@ from mnemo_memory.packages.domain import (
     OutboxJobId,
     ScopeLevel,
     TaskActivityEvent,
+    active_episodic_memory_at_revision,
+    replay_episodic_memory_revisions,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
     DbtLineageEdge,
@@ -66,6 +71,7 @@ from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
     EpisodicCandidateReviewSafetyPolicy,
     EpisodicMemoryCandidateSafetyPolicy,
+    EpisodicMemoryGovernanceSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
     TaskActivityEventSafetyPolicy,
 )
@@ -97,6 +103,10 @@ from .contracts import (
     EpisodicMemoryCandidatePage,
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryGovernanceConflict,
+    EpisodicMemoryGovernanceNotFound,
+    EpisodicMemoryGovernanceRejected,
+    EpisodicMemoryGovernanceResult,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -595,16 +605,21 @@ class ReferenceEpisodicMemoryCandidateRepository:
         activity_events: TaskActivityEventRepository,
         policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
         review_policy: EpisodicCandidateReviewSafetyPolicy | None = None,
+        governance_policy: EpisodicMemoryGovernanceSafetyPolicy | None = None,
     ) -> None:
         self._activity_events = activity_events
         self._policy = policy or EpisodicMemoryCandidateSafetyPolicy()
         self._review_policy = review_policy or EpisodicCandidateReviewSafetyPolicy()
+        self._governance_policy = governance_policy or EpisodicMemoryGovernanceSafetyPolicy()
         self._candidates: dict[MemoryId, EpisodicMemoryCandidate] = {}
         self._ordered: list[MemoryId] = []
         self._reviews: dict[MemoryId, EpisodicCandidateReviewAction] = {}
         self._review_keys: dict[tuple[MemoryScope, str], MemoryId] = {}
         self._active: dict[MemoryId, ActiveEpisodicMemory] = {}
         self._active_ordered: list[MemoryId] = []
+        self._governance: dict[EventId, EpisodicMemoryGovernanceAction] = {}
+        self._governance_keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._governance_order: dict[MemoryId, list[EventId]] = {}
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -697,9 +712,11 @@ class ReferenceEpisodicMemoryCandidateRepository:
         existing = self._reviews.get(action.candidate_id)
         if existing is not None:
             if existing == action:
-                return EpisodicMemoryReviewResult(
-                    existing, self._active.get(action.candidate_id), True
-                )
+                try:
+                    active = self.get_active_episodic_memory(action.scope, action.candidate_id)
+                except ActiveEpisodicMemoryNotFound:
+                    active = None
+                return EpisodicMemoryReviewResult(existing, active, True)
             raise EpisodicMemoryReviewConflict("episodic candidate already has a different review")
         key = (action.scope, action.source_action_key)
         if key in self._review_keys:
@@ -735,10 +752,14 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self, scope: MemoryScope, memory_id: MemoryId
     ) -> ActiveEpisodicMemory:
         self._require_scope(scope)
-        memory = self._active.get(memory_id)
-        if memory is None or memory.scope != scope:
+        base = self._active.get(memory_id)
+        if base is None or base.scope != scope:
             raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
-        return memory
+        revisions = self._revisions_for(base)
+        current = revisions[-1]
+        if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+            raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
+        return active_episodic_memory_at_revision(base, current)
 
     def list_active_episodic_memories(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
@@ -746,15 +767,117 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self._require_scope(scope)
         if offset < 0 or limit < 1:
             raise ValueError("memory offset must be non-negative and limit must be positive")
-        items = tuple(
-            self._active[memory_id]
-            for memory_id in reversed(self._active_ordered)
-            if self._active[memory_id].scope == scope
-        )
+        active_items: list[ActiveEpisodicMemory] = []
+        for memory_id in reversed(self._active_ordered):
+            if self._active[memory_id].scope != scope:
+                continue
+            try:
+                active_items.append(self.get_active_episodic_memory(scope, memory_id))
+            except ActiveEpisodicMemoryNotFound:
+                continue
+        items = tuple(active_items)
         return ActiveEpisodicMemoryPage(
             items[offset : offset + limit],
             offset + limit if offset + limit < len(items) else None,
         )
+
+    def govern_episodic_memory(
+        self, action: EpisodicMemoryGovernanceAction
+    ) -> EpisodicMemoryGovernanceResult:
+        self._require_scope(action.scope)
+        base = self._active.get(action.memory_id)
+        if base is None or base.scope != action.scope:
+            raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+        existing = self._governance.get(action.action_id)
+        if existing is not None:
+            if existing != action:
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic memory governance identity conflicts"
+                )
+            revisions = self._revisions_for(base)
+            current = revisions[-1]
+            active = (
+                active_episodic_memory_at_revision(base, current)
+                if current.status is EpisodicMemoryRevisionStatus.ACTIVE
+                else None
+            )
+            return EpisodicMemoryGovernanceResult(existing, current, active, True)
+        key = (action.scope, action.source_action_key)
+        if key in self._governance_keys:
+            raise EpisodicMemoryGovernanceConflict(
+                "episodic memory governance action key conflicts"
+            )
+        revisions = self._revisions_for(base)
+        current = revisions[-1]
+        if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+            raise EpisodicMemoryGovernanceConflict("retracted episodic memory is terminal")
+        if action.expected_revision_id != current.revision_id:
+            raise EpisodicMemoryGovernanceConflict("episodic memory expected revision is stale")
+        if action.occurred_at < current.created_at:
+            raise EpisodicMemoryGovernanceConflict(
+                "episodic memory governance time precedes the current revision"
+            )
+        current_active = active_episodic_memory_at_revision(base, current)
+        if not self._governance_policy.assess(current_active, action).accepted:
+            raise EpisodicMemoryGovernanceRejected(
+                "episodic memory governance was rejected by safety policy"
+            )
+        ordered_ids = [*self._governance_order.get(action.memory_id, ()), action.action_id]
+        proposed_actions = tuple(
+            self._governance[action_id] if action_id != action.action_id else action
+            for action_id in ordered_ids
+        )
+        try:
+            proposed_revisions = replay_episodic_memory_revisions(base, proposed_actions)
+        except ValueError as error:
+            raise EpisodicMemoryGovernanceConflict(
+                "episodic memory governance does not form a valid revision"
+            ) from error
+        governance = dict(self._governance)
+        governance_keys = dict(self._governance_keys)
+        governance_order = {
+            memory_id: list(action_ids) for memory_id, action_ids in self._governance_order.items()
+        }
+        governance[action.action_id] = action
+        governance_keys[key] = action.action_id
+        governance_order[action.memory_id] = ordered_ids
+        self._governance = governance
+        self._governance_keys = governance_keys
+        self._governance_order = governance_order
+        latest = proposed_revisions[-1]
+        active = (
+            active_episodic_memory_at_revision(base, latest)
+            if latest.status is EpisodicMemoryRevisionStatus.ACTIVE
+            else None
+        )
+        return EpisodicMemoryGovernanceResult(action, latest, active, False)
+
+    def get_episodic_memory_governance(
+        self, scope: MemoryScope, action_id: EventId
+    ) -> EpisodicMemoryGovernanceAction:
+        self._require_scope(scope)
+        action = self._governance.get(action_id)
+        if action is None or action.scope != scope:
+            raise EpisodicMemoryGovernanceNotFound(
+                "episodic memory governance action was not found"
+            )
+        return action
+
+    def list_episodic_memory_revisions(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> tuple[EpisodicMemoryRevision, ...]:
+        self._require_scope(scope)
+        base = self._active.get(memory_id)
+        if base is None or base.scope != scope:
+            raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+        return self._revisions_for(base)
+
+    def _revisions_for(self, base: ActiveEpisodicMemory) -> tuple[EpisodicMemoryRevision, ...]:
+        actions = tuple(
+            self._governance[action_id]
+            for action_id in self._governance_order.get(base.memory_id, ())
+        )
+        return replay_episodic_memory_revisions(base, actions)
 
     @classmethod
     def _validate_batch(

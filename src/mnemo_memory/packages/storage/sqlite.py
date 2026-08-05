@@ -61,7 +61,11 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryRevision,
+    EpisodicMemoryRevisionStatus,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -95,6 +99,8 @@ from mnemo_memory.packages.domain import (
     TaskId,
     Visibility,
     WorkspaceId,
+    active_episodic_memory_at_revision,
+    replay_episodic_memory_revisions,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
     ArtifactCurrentness,
@@ -112,6 +118,7 @@ from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
     EpisodicCandidateReviewSafetyPolicy,
     EpisodicMemoryCandidateSafetyPolicy,
+    EpisodicMemoryGovernanceSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
     TaskActivityEventSafetyPolicy,
 )
@@ -146,6 +153,11 @@ from .contracts import (
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryGovernanceConflict,
+    EpisodicMemoryGovernanceNotFound,
+    EpisodicMemoryGovernanceRejected,
+    EpisodicMemoryGovernanceResult,
+    EpisodicMemoryGovernanceStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -191,7 +203,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 21
+LATEST_SCHEMA_VERSION = 22
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -249,6 +261,7 @@ class SQLiteCheckpointRepository:
         task_activity_policy: TaskActivityEventSafetyPolicy | None = None,
         episodic_candidate_policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
         episodic_review_policy: EpisodicCandidateReviewSafetyPolicy | None = None,
+        episodic_governance_policy: EpisodicMemoryGovernanceSafetyPolicy | None = None,
     ) -> None:
         self.path = resolve_database_path(path, base_directory)
         self._approved_event_policy = approved_event_policy or ApprovedEpisodicEventSafetyPolicy()
@@ -261,6 +274,9 @@ class SQLiteCheckpointRepository:
         )
         self._episodic_review_policy = (
             episodic_review_policy or EpisodicCandidateReviewSafetyPolicy()
+        )
+        self._episodic_governance_policy = (
+            episodic_governance_policy or EpisodicMemoryGovernanceSafetyPolicy()
         )
 
     def _connect(self) -> sqlite3.Connection:
@@ -575,6 +591,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 21:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 21
+            if version < 22:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0022_episodic_memory_governance.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (22, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 22:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 22
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1461,13 +1489,12 @@ class SQLiteCheckpointRepository:
                             "SELECT * FROM active_episodic_memories WHERE memory_id = ?",
                             (str(action.candidate_id),),
                         ).fetchone()
-                        active = (
-                            None
-                            if active_row is None
-                            else self._active_episodic_memory_from_row(
-                                connection, active_row, action.scope
-                            )
-                        )
+                        active = None
+                        if active_row is not None:
+                            with suppress(ActiveEpisodicMemoryNotFound):
+                                active = self._current_active_episodic_memory_from_row(
+                                    connection, active_row, action.scope
+                                )
                         return EpisodicMemoryReviewResult(existing, active, True)
                     raise EpisodicMemoryReviewConflict(
                         "episodic candidate already has a different review"
@@ -1544,7 +1571,7 @@ class SQLiteCheckpointRepository:
                 ).fetchone()
                 if row is None:
                     raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
-                return self._active_episodic_memory_from_row(connection, row, scope)
+                return self._current_active_episodic_memory_from_row(connection, row, scope)
         except ActiveEpisodicMemoryNotFound:
             raise
         except (sqlite3.Error, TypeError, ValueError) as error:
@@ -1567,18 +1594,146 @@ class SQLiteCheckpointRepository:
                     "WHERE review.owner_id = ? AND review.visibility = ? "
                     "AND review.workspace_id IS ? AND review.project_id = ? "
                     "AND review.session_id = ? AND review.task_id = ? "
-                    "ORDER BY review.action_sequence DESC LIMIT ? OFFSET ?",
-                    (*self._scope_values(scope), limit + 1, offset),
+                    "ORDER BY review.action_sequence DESC",
+                    self._scope_values(scope),
                 ).fetchall()
-                items = tuple(
-                    self._active_episodic_memory_from_row(connection, row, scope)
-                    for row in rows[:limit]
-                )
+                active_items: list[ActiveEpisodicMemory] = []
+                for row in rows:
+                    try:
+                        active_items.append(
+                            self._current_active_episodic_memory_from_row(connection, row, scope)
+                        )
+                    except ActiveEpisodicMemoryNotFound:
+                        continue
+                items = tuple(active_items[offset : offset + limit])
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise EpisodicMemoryReviewStorageFailure(
                 "active episodic memory storage operation failed"
             ) from error
-        return ActiveEpisodicMemoryPage(items, offset + limit if len(rows) > limit else None)
+        return ActiveEpisodicMemoryPage(
+            items, offset + limit if offset + limit < len(active_items) else None
+        )
+
+    def govern_episodic_memory(
+        self, action: EpisodicMemoryGovernanceAction
+    ) -> EpisodicMemoryGovernanceResult:
+        self._require_episodic_candidate_scope(action.scope)
+        try:
+            with self._transaction() as connection:
+                active_row = self._scoped_active_episodic_memory_row(
+                    connection, action.scope, action.memory_id
+                )
+                if active_row is None:
+                    raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+                base = self._active_episodic_memory_from_row(connection, active_row, action.scope)
+                existing_row = connection.execute(
+                    "SELECT * FROM episodic_memory_governance WHERE action_id = ?",
+                    (str(action.action_id),),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._episodic_memory_governance_from_row(
+                        connection, existing_row, action.scope
+                    )
+                    if existing != action:
+                        raise EpisodicMemoryGovernanceConflict(
+                            "episodic memory governance identity conflicts"
+                        )
+                    revisions = self._episodic_memory_revisions(connection, base)
+                    current = revisions[-1]
+                    active = (
+                        active_episodic_memory_at_revision(base, current)
+                        if current.status is EpisodicMemoryRevisionStatus.ACTIVE
+                        else None
+                    )
+                    return EpisodicMemoryGovernanceResult(existing, current, active, True)
+                key_row = connection.execute(
+                    "SELECT 1 FROM episodic_memory_governance WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+                    (*self._scope_values(action.scope), action.source_action_key),
+                ).fetchone()
+                if key_row is not None:
+                    raise EpisodicMemoryGovernanceConflict(
+                        "episodic memory governance action key conflicts"
+                    )
+                revisions = self._episodic_memory_revisions(connection, base)
+                current = revisions[-1]
+                if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+                    raise EpisodicMemoryGovernanceConflict("retracted episodic memory is terminal")
+                if action.expected_revision_id != current.revision_id:
+                    raise EpisodicMemoryGovernanceConflict(
+                        "episodic memory expected revision is stale"
+                    )
+                if action.occurred_at < current.created_at:
+                    raise EpisodicMemoryGovernanceConflict(
+                        "episodic memory governance time precedes the current revision"
+                    )
+                current_active = active_episodic_memory_at_revision(base, current)
+                if not self._episodic_governance_policy.assess(current_active, action).accepted:
+                    raise EpisodicMemoryGovernanceRejected(
+                        "episodic memory governance was rejected by safety policy"
+                    )
+                self._insert_episodic_memory_governance(connection, action)
+                updated = self._episodic_memory_revisions(connection, base)
+                latest = updated[-1]
+                active = (
+                    active_episodic_memory_at_revision(base, latest)
+                    if latest.status is EpisodicMemoryRevisionStatus.ACTIVE
+                    else None
+                )
+                return EpisodicMemoryGovernanceResult(action, latest, active, False)
+        except (
+            EpisodicMemoryGovernanceConflict,
+            EpisodicMemoryGovernanceNotFound,
+            EpisodicMemoryGovernanceRejected,
+        ):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryGovernanceStorageFailure(
+                "episodic memory governance storage operation failed"
+            ) from error
+
+    def get_episodic_memory_governance(
+        self, scope: MemoryScope, action_id: EventId
+    ) -> EpisodicMemoryGovernanceAction:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM episodic_memory_governance WHERE action_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(action_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicMemoryGovernanceNotFound(
+                        "episodic memory governance action was not found"
+                    )
+                return self._episodic_memory_governance_from_row(connection, row, scope)
+        except EpisodicMemoryGovernanceNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryGovernanceStorageFailure(
+                "episodic memory governance storage operation failed"
+            ) from error
+
+    def list_episodic_memory_revisions(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> tuple[EpisodicMemoryRevision, ...]:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                active_row = self._scoped_active_episodic_memory_row(connection, scope, memory_id)
+                if active_row is None:
+                    raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+                base = self._active_episodic_memory_from_row(connection, active_row, scope)
+                return self._episodic_memory_revisions(connection, base)
+        except EpisodicMemoryGovernanceNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryGovernanceStorageFailure(
+                "episodic memory governance storage operation failed"
+            ) from error
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent
@@ -3548,6 +3703,58 @@ class SQLiteCheckpointRepository:
             )
 
     @staticmethod
+    def _insert_episodic_memory_governance(
+        connection: sqlite3.Connection, action: EpisodicMemoryGovernanceAction
+    ) -> None:
+        connection.execute(
+            "INSERT INTO episodic_memory_governance("
+            "action_id,memory_id,action_kind,actor,expected_revision_id,source_action_key,"
+            "reason,corrected_claim,corrected_sensitivity,owner_id,visibility,workspace_id,"
+            "project_id,session_id,task_id,occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(action.action_id),
+                str(action.memory_id),
+                action.kind.value,
+                action.actor.value,
+                str(action.expected_revision_id),
+                action.source_action_key,
+                action.reason,
+                action.corrected_claim,
+                (
+                    None
+                    if action.corrected_sensitivity is None
+                    else action.corrected_sensitivity.value
+                ),
+                *SQLiteCheckpointRepository._scope_values(action.scope),
+                action.occurred_at.isoformat(),
+            ),
+        )
+        for evidence in action.evidence_references:
+            existing = connection.execute(
+                "SELECT payload_json FROM evidence WHERE evidence_id = ?",
+                (str(evidence.evidence_id),),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO evidence(evidence_id, source_id, payload_json) VALUES (?, ?, ?)",
+                    (
+                        str(evidence.evidence_id),
+                        str(evidence.source_id),
+                        _json(evidence.to_dict()),
+                    ),
+                )
+            elif EvidenceReference.from_dict(json.loads(existing["payload_json"])) != evidence:
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic governance evidence identity conflicts"
+                )
+            connection.execute(
+                "INSERT INTO episodic_memory_governance_evidence(action_id, evidence_id) "
+                "VALUES (?, ?)",
+                (str(action.action_id), str(evidence.evidence_id)),
+            )
+
+    @staticmethod
     def _insert_approved_event(
         connection: sqlite3.Connection, event: ApprovedEpisodicEvent
     ) -> None:
@@ -4081,6 +4288,82 @@ class SQLiteCheckpointRepository:
         if active.activated_at.isoformat() != row["activated_at"]:
             raise ValueError("active episodic memory activation time conflicts")
         return active
+
+    @staticmethod
+    def _episodic_memory_governance_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> EpisodicMemoryGovernanceAction:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json FROM episodic_memory_governance_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.action_id = ? ORDER BY link.evidence_id ASC",
+            (row["action_id"],),
+        ).fetchall()
+        return EpisodicMemoryGovernanceAction(
+            action_id=EventId.from_string(row["action_id"]),
+            scope=scope,
+            memory_id=MemoryId.from_string(row["memory_id"]),
+            kind=EpisodicMemoryGovernanceKind(row["action_kind"]),
+            actor=TaskActivityActor(row["actor"]),
+            expected_revision_id=EventId.from_string(row["expected_revision_id"]),
+            source_action_key=row["source_action_key"],
+            reason=row["reason"],
+            corrected_claim=row["corrected_claim"],
+            corrected_sensitivity=(
+                None
+                if row["corrected_sensitivity"] is None
+                else Sensitivity(row["corrected_sensitivity"])
+            ),
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
+        )
+
+    @staticmethod
+    def _scoped_active_episodic_memory_row(
+        connection: sqlite3.Connection, scope: MemoryScope, memory_id: MemoryId
+    ) -> sqlite3.Row | None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT active.* FROM active_episodic_memories AS active "
+                "JOIN episodic_memory_candidates AS candidate "
+                "ON candidate.memory_id = active.memory_id WHERE active.memory_id = ? "
+                "AND candidate.owner_id = ? AND candidate.visibility = ? "
+                "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
+                "AND candidate.session_id = ? AND candidate.task_id = ?",
+                (str(memory_id), *SQLiteCheckpointRepository._scope_values(scope)),
+            ).fetchone(),
+        )
+
+    @staticmethod
+    def _episodic_memory_revisions(
+        connection: sqlite3.Connection, base: ActiveEpisodicMemory
+    ) -> tuple[EpisodicMemoryRevision, ...]:
+        rows = connection.execute(
+            "SELECT * FROM episodic_memory_governance WHERE memory_id = ? "
+            "ORDER BY action_sequence ASC",
+            (str(base.memory_id),),
+        ).fetchall()
+        actions = tuple(
+            SQLiteCheckpointRepository._episodic_memory_governance_from_row(
+                connection, row, base.scope
+            )
+            for row in rows
+        )
+        return replay_episodic_memory_revisions(base, actions)
+
+    @staticmethod
+    def _current_active_episodic_memory_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> ActiveEpisodicMemory:
+        base = SQLiteCheckpointRepository._active_episodic_memory_from_row(connection, row, scope)
+        current = SQLiteCheckpointRepository._episodic_memory_revisions(connection, base)[-1]
+        if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+            raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
+        return active_episodic_memory_at_revision(base, current)
 
     @staticmethod
     def _approved_event_from_row(

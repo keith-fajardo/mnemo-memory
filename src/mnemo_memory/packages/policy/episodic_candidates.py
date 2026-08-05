@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from mnemo_memory.packages.domain import (
+    ActiveEpisodicMemory,
     EpisodicCandidateReviewAction,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryGovernanceKind,
     Sensitivity,
 )
 
@@ -81,4 +84,48 @@ class EpisodicCandidateReviewSafetyPolicy:
             return ContentSafetyDecision(
                 False, Sensitivity.PROHIBITED, "MNEMO_EPISODIC_REVIEW_REJECTED"
             )
+        return ContentSafetyDecision(True, decision.sensitivity)
+
+
+class EpisodicMemoryGovernanceSafetyPolicy:
+    def __init__(self, additional_classifiers: tuple[ContentSafetyClassifier, ...] = ()) -> None:
+        self._content_safety = ContentSafetyPolicy(additional_classifiers)
+
+    def assess(
+        self,
+        active: ActiveEpisodicMemory,
+        action: EpisodicMemoryGovernanceAction,
+    ) -> ContentSafetyDecision:
+        if not isinstance(active, ActiveEpisodicMemory) or not isinstance(
+            action, EpisodicMemoryGovernanceAction
+        ):
+            raise TypeError("episodic memory governance safety requires canonical values")
+        if action.scope != active.scope or action.memory_id != active.memory_id:
+            return ContentSafetyDecision(
+                False, Sensitivity.PROHIBITED, "MNEMO_EPISODIC_GOVERNANCE_TARGET_MISMATCH"
+            )
+        values = [action.source_action_key, action.reason]
+        if action.corrected_claim is not None:
+            values.append(action.corrected_claim)
+        values.extend(
+            value
+            for evidence in action.evidence_references
+            for value in (evidence.immutable_source_ref, evidence.location.uri)
+        )
+        decision = self._content_safety.assess(*values)
+        if not decision.accepted:
+            return ContentSafetyDecision(
+                False, Sensitivity.PROHIBITED, "MNEMO_EPISODIC_GOVERNANCE_REJECTED"
+            )
+        if action.kind is EpisodicMemoryGovernanceKind.CORRECTED:
+            assert action.corrected_sensitivity is not None
+            current = active.memory.classification.sensitivity
+            required = max((current, decision.sensitivity), key=_SENSITIVITY_ORDER.__getitem__)
+            if _SENSITIVITY_ORDER[action.corrected_sensitivity] < _SENSITIVITY_ORDER[required]:
+                return ContentSafetyDecision(
+                    False,
+                    Sensitivity.PROHIBITED,
+                    "MNEMO_EPISODIC_GOVERNANCE_SENSITIVITY_UNDERSPECIFIED",
+                )
+            return ContentSafetyDecision(True, action.corrected_sensitivity)
         return ContentSafetyDecision(True, decision.sensitivity)

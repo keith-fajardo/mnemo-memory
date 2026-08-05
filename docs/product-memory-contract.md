@@ -165,6 +165,13 @@ agent-derived memories but cannot override current repository/dbt structural fac
 checked-in rules. Conflicting active evidence remains visible as a conflict until the user or a
 higher-authority source resolves it.
 
+For an approved episodic memory, its approval action is revision one. Each correction or
+retraction names the exact expected current revision and carries verified user-correction evidence,
+so stale concurrent actions cannot fork history. Correction preserves memory identity, source
+scope, retention, and extraction provenance while superseding the prior claim. Retraction appends
+a terminal payload-free revision and removes the memory from active reads; replaying the ordered
+action stream must reconstruct the same history and active state.
+
 Confidence changes never substitute for correction. Every correction records actor, scope, time,
 reason, and evidence without logging sensitive payloads.
 

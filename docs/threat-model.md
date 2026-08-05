@@ -106,6 +106,13 @@ adds an active marker and preserves both source and review provenance; rejection
 payload. Duplicate review is idempotent, while competing decisions, action-key reuse, unsafe
 content, and cross-scope targets fail closed. Storage re-runs candidate and review safety so a
 caller cannot bypass the review boundary by writing directly to an adapter.
+Approved episodic-memory correction and retraction use one append-only optimistic chain whose first
+revision is the approval action. Each user action names the exact current revision, carries verified
+user-correction evidence, and passes deterministic safety checks. Corrections preserve immutable
+scope, source, retention, and extraction provenance; stale revisions and action-key reuse cannot
+fork the chain. Retraction is terminal, creates a payload-free final revision, and immediately
+removes the memory from active reads, including idempotent review retries. Reference and SQLite
+replay are required to produce identical history and active state.
 
 **Verification:** Conflicting-source, repeated-claim, low-confidence, source-deletion, correction,
 and model-output tests. Frequency must not increase authority.

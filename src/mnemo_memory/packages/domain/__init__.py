@@ -86,7 +86,13 @@ from .episodic_candidates import (
     EpisodicExtractionProposal,
     EpisodicExtractionRequest,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryRevision,
+    EpisodicMemoryRevisionStatus,
+    active_episodic_memory_at_revision,
+    replay_episodic_memory_revisions,
 )
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .event_outbox import EventOutboxJob, EventOutboxTopic
@@ -232,7 +238,11 @@ __all__ = [
     "EpisodicExtractionProposal",
     "EpisodicExtractionRequest",
     "EpisodicMemoryCandidate",
+    "EpisodicMemoryGovernanceAction",
+    "EpisodicMemoryGovernanceKind",
     "EpisodicMemoryKind",
+    "EpisodicMemoryRevision",
+    "EpisodicMemoryRevisionStatus",
     "EventId",
     "EventOutboxJob",
     "EventOutboxTopic",
@@ -299,9 +309,11 @@ __all__ = [
     "VerificationStatus",
     "Visibility",
     "WorkspaceId",
+    "active_episodic_memory_at_revision",
     "knowledge_search_tokens",
     "knowledge_section_digest",
     "normalize_knowledge_query",
     "normalize_procedure_tags",
+    "replay_episodic_memory_revisions",
     "unique_file_renames",
 ]

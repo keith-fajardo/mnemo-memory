@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, Self
@@ -30,6 +30,7 @@ from .task_activity_events import TaskActivityActor, TaskActivityEvent, TaskActi
 
 _CANDIDATE_NAMESPACE = UUID("ed4ec4fe-7e6c-42aa-b98b-d0d9a9c34876")
 _REVIEW_NAMESPACE = UUID("34339822-e386-49d5-ac4f-f97fb94a2a4d")
+_GOVERNANCE_NAMESPACE = UUID("6948ac6a-0d9f-4c6c-9e2b-f1a1222a7140")
 _MAX_CANDIDATES = 4
 _MAX_CLAIM_LENGTH = 1_200
 _MAX_VERSION_LENGTH = 128
@@ -614,3 +615,371 @@ class ActiveEpisodicMemory:
             EventId.from_string(str(value["approval_action_id"])),
             _parse_datetime(value["activated_at"], "activated_at"),
         )
+
+
+class EpisodicMemoryGovernanceKind(StrEnum):
+    CORRECTED = "corrected"
+    RETRACTED = "retracted"
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryGovernanceAction:
+    action_id: EventId
+    scope: MemoryScope
+    memory_id: MemoryId
+    kind: EpisodicMemoryGovernanceKind
+    actor: TaskActivityActor
+    expected_revision_id: EventId
+    source_action_key: str
+    reason: str
+    corrected_claim: str | None
+    corrected_sensitivity: Sensitivity | None
+    occurred_at: datetime
+    evidence_references: tuple[EvidenceReference, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action_id, EventId) or not isinstance(self.memory_id, MemoryId):
+            raise TypeError("episodic memory governance identity is invalid")
+        if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.TASK:
+            raise ValueError("episodic memory governance requires task scope")
+        if not isinstance(self.kind, EpisodicMemoryGovernanceKind):
+            raise TypeError("episodic memory governance kind is invalid")
+        if self.actor is not TaskActivityActor.USER:
+            raise ValueError("only a user may govern episodic memory")
+        if not isinstance(self.expected_revision_id, EventId):
+            raise TypeError("episodic memory expected revision identity is invalid")
+        if (
+            not isinstance(self.source_action_key, str)
+            or not self.source_action_key.strip()
+            or len(self.source_action_key) > 256
+        ):
+            raise ValueError("episodic memory governance action key is invalid")
+        if (
+            not isinstance(self.reason, str)
+            or not self.reason.strip()
+            or len(self.reason) > _MAX_CLAIM_LENGTH
+        ):
+            raise ValueError("episodic memory governance reason is invalid")
+        if self.kind is EpisodicMemoryGovernanceKind.CORRECTED:
+            if (
+                not isinstance(self.corrected_claim, str)
+                or not self.corrected_claim.strip()
+                or len(self.corrected_claim) > _MAX_CLAIM_LENGTH
+                or not isinstance(self.corrected_sensitivity, Sensitivity)
+                or self.corrected_sensitivity is Sensitivity.PROHIBITED
+            ):
+                raise ValueError("episodic memory correction payload is invalid")
+        elif self.corrected_claim is not None or self.corrected_sensitivity is not None:
+            raise ValueError("episodic memory retraction must be payload-free")
+        _require_aware(self.occurred_at, "occurred_at")
+        evidence = tuple(self.evidence_references)
+        if (
+            not 1 <= len(evidence) <= 16
+            or len({item.evidence_id for item in evidence}) != len(evidence)
+            or any(
+                not isinstance(item, EvidenceReference)
+                or item.source_type is not EvidenceSourceType.USER_CORRECTION
+                or item.trust_class is not SourceTrustClass.USER_CORRECTION
+                or item.verification_status is not VerificationStatus.VERIFIED
+                for item in evidence
+            )
+        ):
+            raise ValueError(
+                "episodic memory governance requires verified user-correction evidence"
+            )
+        if self.action_id != self.identity(self.scope, self.memory_id, self.source_action_key):
+            raise ValueError("episodic memory governance identity is not deterministic")
+        object.__setattr__(
+            self,
+            "evidence_references",
+            tuple(sorted(evidence, key=lambda item: str(item.evidence_id))),
+        )
+
+    @staticmethod
+    def identity(scope: MemoryScope, memory_id: MemoryId, source_action_key: str) -> EventId:
+        return EventId(
+            uuid5(_GOVERNANCE_NAMESPACE, f"{scope.to_dict()}:{memory_id}:{source_action_key}")
+        )
+
+    @classmethod
+    def correct(
+        cls,
+        *,
+        scope: MemoryScope,
+        memory_id: MemoryId,
+        expected_revision_id: EventId,
+        source_action_key: str,
+        reason: str,
+        corrected_claim: str,
+        corrected_sensitivity: Sensitivity,
+        occurred_at: datetime,
+        evidence_references: tuple[EvidenceReference, ...],
+    ) -> Self:
+        return cls(
+            cls.identity(scope, memory_id, source_action_key),
+            scope,
+            memory_id,
+            EpisodicMemoryGovernanceKind.CORRECTED,
+            TaskActivityActor.USER,
+            expected_revision_id,
+            source_action_key,
+            reason,
+            corrected_claim,
+            corrected_sensitivity,
+            occurred_at,
+            evidence_references,
+        )
+
+    @classmethod
+    def retract(
+        cls,
+        *,
+        scope: MemoryScope,
+        memory_id: MemoryId,
+        expected_revision_id: EventId,
+        source_action_key: str,
+        reason: str,
+        occurred_at: datetime,
+        evidence_references: tuple[EvidenceReference, ...],
+    ) -> Self:
+        return cls(
+            cls.identity(scope, memory_id, source_action_key),
+            scope,
+            memory_id,
+            EpisodicMemoryGovernanceKind.RETRACTED,
+            TaskActivityActor.USER,
+            expected_revision_id,
+            source_action_key,
+            reason,
+            None,
+            None,
+            occurred_at,
+            evidence_references,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "action_id": str(self.action_id),
+            "scope": self.scope.to_dict(),
+            "memory_id": str(self.memory_id),
+            "kind": self.kind.value,
+            "actor": self.actor.value,
+            "expected_revision_id": str(self.expected_revision_id),
+            "source_action_key": self.source_action_key,
+            "reason": self.reason,
+            "corrected_claim": self.corrected_claim,
+            "corrected_sensitivity": (
+                None if self.corrected_sensitivity is None else self.corrected_sensitivity.value
+            ),
+            "occurred_at": self.occurred_at.isoformat(),
+            "evidence_references": [item.to_dict() for item in self.evidence_references],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        expected = {
+            "action_id",
+            "scope",
+            "memory_id",
+            "kind",
+            "actor",
+            "expected_revision_id",
+            "source_action_key",
+            "reason",
+            "corrected_claim",
+            "corrected_sensitivity",
+            "occurred_at",
+            "evidence_references",
+        }
+        if set(value) != expected:
+            raise ValueError("episodic memory governance fields are invalid")
+        scope = value["scope"]
+        evidence = value["evidence_references"]
+        required_text = tuple(
+            value[name]
+            for name in (
+                "action_id",
+                "memory_id",
+                "kind",
+                "actor",
+                "expected_revision_id",
+                "source_action_key",
+                "reason",
+            )
+        )
+        corrected_claim = value["corrected_claim"]
+        corrected_sensitivity = value["corrected_sensitivity"]
+        if (
+            not isinstance(scope, Mapping)
+            or not isinstance(evidence, list)
+            or not all(isinstance(item, Mapping) for item in evidence)
+            or not all(isinstance(item, str) for item in required_text)
+            or (corrected_claim is not None and not isinstance(corrected_claim, str))
+            or (corrected_sensitivity is not None and not isinstance(corrected_sensitivity, str))
+        ):
+            raise TypeError("episodic memory governance serialization is invalid")
+        return cls(
+            EventId.from_string(str(value["action_id"])),
+            MemoryScope.from_dict(scope),
+            MemoryId.from_string(str(value["memory_id"])),
+            EpisodicMemoryGovernanceKind(str(value["kind"])),
+            TaskActivityActor(str(value["actor"])),
+            EventId.from_string(str(value["expected_revision_id"])),
+            str(value["source_action_key"]),
+            str(value["reason"]),
+            corrected_claim,
+            (None if corrected_sensitivity is None else Sensitivity(corrected_sensitivity)),
+            _parse_datetime(value["occurred_at"], "occurred_at"),
+            tuple(EvidenceReference.from_dict(item) for item in evidence),
+        )
+
+
+class EpisodicMemoryRevisionStatus(StrEnum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    RETRACTED = "retracted"
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryRevision:
+    revision_id: EventId
+    memory_id: MemoryId
+    revision_number: int
+    predecessor_revision_id: EventId | None
+    scope: MemoryScope
+    claim: str | None
+    sensitivity: Sensitivity | None
+    status: EpisodicMemoryRevisionStatus
+    created_at: datetime
+    evidence_references: tuple[EvidenceReference, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.revision_id, EventId) or not isinstance(self.memory_id, MemoryId):
+            raise TypeError("episodic memory revision identity is invalid")
+        if (
+            isinstance(self.revision_number, bool)
+            or not isinstance(self.revision_number, int)
+            or self.revision_number < 1
+        ):
+            raise ValueError("episodic memory revision number is invalid")
+        if self.predecessor_revision_id is not None and not isinstance(
+            self.predecessor_revision_id, EventId
+        ):
+            raise TypeError("episodic memory revision predecessor identity is invalid")
+        if (self.revision_number == 1) != (self.predecessor_revision_id is None):
+            raise ValueError("episodic memory revision predecessor is invalid")
+        if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.TASK:
+            raise ValueError("episodic memory revision requires task scope")
+        if not isinstance(self.status, EpisodicMemoryRevisionStatus):
+            raise TypeError("episodic memory revision status is invalid")
+        if self.status is EpisodicMemoryRevisionStatus.RETRACTED:
+            if self.claim is not None or self.sensitivity is not None:
+                raise ValueError("retracted episodic revision must be payload-free")
+        elif (
+            not isinstance(self.claim, str)
+            or not self.claim.strip()
+            or len(self.claim) > _MAX_CLAIM_LENGTH
+            or not isinstance(self.sensitivity, Sensitivity)
+            or self.sensitivity is Sensitivity.PROHIBITED
+        ):
+            raise ValueError("episodic memory revision payload is invalid")
+        _require_aware(self.created_at, "created_at")
+        evidence = tuple(self.evidence_references)
+        if not evidence or any(not isinstance(item, EvidenceReference) for item in evidence):
+            raise ValueError("episodic memory revision requires evidence")
+        object.__setattr__(self, "evidence_references", evidence)
+
+
+def replay_episodic_memory_revisions(
+    active: ActiveEpisodicMemory,
+    actions: tuple[EpisodicMemoryGovernanceAction, ...],
+) -> tuple[EpisodicMemoryRevision, ...]:
+    if not isinstance(active, ActiveEpisodicMemory):
+        raise TypeError("episodic revision replay requires active approved memory")
+    revisions = [
+        EpisodicMemoryRevision(
+            active.approval_action_id,
+            active.memory_id,
+            1,
+            None,
+            active.scope,
+            active.memory.claim,
+            active.memory.classification.sensitivity,
+            EpisodicMemoryRevisionStatus.ACTIVE,
+            active.activated_at,
+            active.memory.evidence_references,
+        )
+    ]
+    for action in actions:
+        current = revisions[-1]
+        if (
+            action.scope != active.scope
+            or action.memory_id != active.memory_id
+            or current.status is not EpisodicMemoryRevisionStatus.ACTIVE
+            or action.expected_revision_id != current.revision_id
+            or action.occurred_at < current.created_at
+        ):
+            raise ValueError("episodic memory governance action does not extend current revision")
+        revisions[-1] = replace(current, status=EpisodicMemoryRevisionStatus.SUPERSEDED)
+        if action.kind is EpisodicMemoryGovernanceKind.CORRECTED:
+            evidence_by_id = {
+                evidence.evidence_id: evidence for evidence in current.evidence_references
+            }
+            for evidence in action.evidence_references:
+                existing = evidence_by_id.get(evidence.evidence_id)
+                if existing is not None and existing != evidence:
+                    raise ValueError("episodic memory revision evidence identity conflicts")
+                evidence_by_id[evidence.evidence_id] = evidence
+            assert action.corrected_claim is not None
+            assert action.corrected_sensitivity is not None
+            revision = EpisodicMemoryRevision(
+                action.action_id,
+                active.memory_id,
+                current.revision_number + 1,
+                current.revision_id,
+                active.scope,
+                action.corrected_claim,
+                action.corrected_sensitivity,
+                EpisodicMemoryRevisionStatus.ACTIVE,
+                action.occurred_at,
+                tuple(evidence_by_id.values()),
+            )
+        else:
+            revision = EpisodicMemoryRevision(
+                action.action_id,
+                active.memory_id,
+                current.revision_number + 1,
+                current.revision_id,
+                active.scope,
+                None,
+                None,
+                EpisodicMemoryRevisionStatus.RETRACTED,
+                action.occurred_at,
+                action.evidence_references,
+            )
+        revisions.append(revision)
+    return tuple(revisions)
+
+
+def active_episodic_memory_at_revision(
+    base: ActiveEpisodicMemory, revision: EpisodicMemoryRevision
+) -> ActiveEpisodicMemory:
+    if (
+        revision.memory_id != base.memory_id
+        or revision.scope != base.scope
+        or revision.status is not EpisodicMemoryRevisionStatus.ACTIVE
+        or revision.claim is None
+        or revision.sensitivity is None
+    ):
+        raise ValueError("episodic memory revision is not an active revision of this memory")
+    return replace(
+        base,
+        memory=DurableClaim(
+            base.memory_id,
+            base.scope,
+            MemoryClassification(revision.sensitivity, MemoryStatus.ACTIVE),
+            base.memory.retention,
+            revision.claim,
+            revision.evidence_references,
+        ),
+    )
