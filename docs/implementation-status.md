@@ -1260,6 +1260,40 @@ dependency/provenance validation for 86 entries, and architecture validation for
 Python files. No backup deletion policy, restore, diagnostic bundle, signed release workflow,
 index/job control, dependency, model call, non-loopback exposure, or team behavior was added.
 
+#### Issue 20J — Private diagnostic bundle — Complete
+
+This bounded issue adds `mnemo-memory diagnostics`, which must create one private, integrity-
+verifiable ZIP archive of closed diagnostic metadata even when the personal database is absent or
+corrupt. The manifest may report the Mnemo/Python/platform versions, initialized/running/schema and
+content-free SQLite health, settings availability, current-project registration, and bounded client
+availability/ownership status. It must never include memory, checkpoint, note, source, query, job,
+or evidence content; owner/scope/item IDs; filesystem or executable paths; environment/configuration
+values; credentials; subprocess or exception output; or durable logs. Archive creation must reject
+unsafe symlink/collision state, publish atomically with restrictive permissions, include a canonical
+manifest digest, and clean partial candidates. This issue adds no log persistence, index/job
+control, backup/restore, installer/release workflow change, dependency, model call, non-loopback
+exposure, or team behavior.
+
+Implemented `mnemo-memory diagnostics` over a closed typed context and a read-only SQLite health
+probe. It publishes a deterministic ZIP containing exactly one canonical
+`mnemo.personal-diagnostics.v1` manifest. The manifest reports only bounded runtime versions,
+initialized/running/schema state, integrity and foreign-key booleans, settings availability,
+current-project registration, client availability/ownership, and explicit exclusion flags. An
+absent or corrupt database still yields a useful content-free result without creating a database
+or embedding failure details.
+
+The archive and manifest each have a SHA-256 digest. The mode-0700 diagnostics directory and
+mode-0600 archive use symlink rejection, exclusive temporary creation, atomic non-overwriting
+publication, deterministic reuse, collision preservation, fsync, and partial-candidate cleanup.
+The archive contains no durable log or user content, identity, path, environment/configuration
+value, credential, subprocess output, or exception text.
+
+All 64 focused diagnostics/lifecycle/Codex/Claude Code tests pass. The complete repository gate
+passes with 794 tests, strict typing for 201 source files, dependency/provenance validation for 86
+entries, and architecture validation for 106 product Python files. No log persistence, index/job
+control, backup/restore, installer/release workflow change, dependency, model call, non-loopback
+exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

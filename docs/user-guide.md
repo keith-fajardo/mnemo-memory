@@ -350,6 +350,23 @@ configuration and database. It removes the directory only after package removal 
 also removes backups stored inside that directory. Copies exported or backed up elsewhere remain
 under your control and cannot be recalled by Mnemo.
 
+### Create a private diagnostic bundle
+
+When setup or storage is unhealthy, create a support artifact with:
+
+```bash
+mnemo-memory diagnostics
+```
+
+The command remains available for an absent or corrupt database and publishes one mode-0600 ZIP
+under the private `diagnostics` directory. Its single canonical manifest reports only runtime
+versions, bounded lifecycle and SQLite health, settings availability, current-project registration,
+and client availability/ownership status. Manifest and archive SHA-256 digests make the result
+verifiable. The bundle deliberately excludes durable logs and every memory, checkpoint, note,
+source fact, evidence reference, query, job, identifier, path, environment value, credential,
+subprocess output, and exception detail. Inspect the manifest before sharing it; operating-system
+and runtime versions are intentionally present.
+
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
 the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also

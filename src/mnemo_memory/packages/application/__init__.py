@@ -78,6 +78,13 @@ from .dbt import (
     SourceFreshnessQueryResult,
     TestCoverageQueryResult,
 )
+from .diagnostics import (
+    DiagnosticClientStatus,
+    PersonalDiagnosticContext,
+    PersonalDiagnosticError,
+    PersonalDiagnosticResult,
+    PersonalDiagnosticService,
+)
 from .event_outbox import (
     EventOutboxApplicationError,
     EventOutboxApplicationStorageFailure,
@@ -141,6 +148,7 @@ __all__ = [
     "DbtApplicationStorageFailure",
     "DbtManifestApplicationService",
     "DbtSupplementalArtifacts",
+    "DiagnosticClientStatus",
     "EventOutboxApplicationError",
     "EventOutboxApplicationStorageFailure",
     "EventOutboxHandler",
@@ -180,6 +188,10 @@ __all__ = [
     "PersonalBackupError",
     "PersonalBackupResult",
     "PersonalBackupService",
+    "PersonalDiagnosticContext",
+    "PersonalDiagnosticError",
+    "PersonalDiagnosticResult",
+    "PersonalDiagnosticService",
     "PersonalSettings",
     "PersonalSettingsError",
     "PersonalSettingsStore",

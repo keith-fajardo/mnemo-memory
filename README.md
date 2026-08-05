@@ -399,6 +399,18 @@ so it cannot enter logs or terminal capture. If a post-backup step fails, the bo
 identifies the recovery artifact. Mnemo does not automatically downgrade the package or replace the
 live database on failure.
 
+Create a private support artifact without exporting memories or logs:
+
+```bash
+mnemo-memory diagnostics
+```
+
+The resulting mode-0600 ZIP contains one closed JSON manifest with runtime versions, bounded
+lifecycle and SQLite health, settings availability, current-project registration, and client
+availability/ownership status. It contains no memory, checkpoint, note, source, evidence, query,
+job, identifier, path, environment, credential, subprocess output, exception detail, or durable
+log. The filename and result include SHA-256 integrity digests.
+
 This creates a local database, normally **outside** your repository:
 
 - macOS: `~/Library/Application Support/Mnemo`

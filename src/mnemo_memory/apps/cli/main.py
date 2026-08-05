@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -58,6 +59,7 @@ from mnemo_memory.packages.application import (
     DbtApplicationNotFound,
     DbtApplicationStorageFailure,
     DbtManifestApplicationService,
+    DiagnosticClientStatus,
     GetActiveManifestStatus,
     GetApprovedEpisodicEventRecord,
     GetCheckpointContext,
@@ -72,6 +74,9 @@ from mnemo_memory.packages.application import (
     LocalRuntimeError,
     PersonalBackupError,
     PersonalBackupService,
+    PersonalDiagnosticContext,
+    PersonalDiagnosticError,
+    PersonalDiagnosticService,
     PersonalSettingsStore,
     PersonalUninstallError,
     PersonalUninstallService,
@@ -604,6 +609,63 @@ def backup(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  #
         result = PersonalBackupService(resolve_local_config(data_dir)).create()
     except (PersonalBackupError, ValueError) as error:
         raise typer.BadParameter("MNEMO_BACKUP_FAILED") from error
+    _show(result.to_dict())
+
+
+def _diagnostic_client_status(client: ClientName, launcher: Path | None) -> DiagnosticClientStatus:
+    executable = shutil.which("codex" if client == "codex" else "claude")
+    if executable is None:
+        return DiagnosticClientStatus(False, False, "not_installed")
+    if launcher is None:
+        return DiagnosticClientStatus(True, False, "unavailable")
+    try:
+        if client == "codex":
+            manager = CodexMcpManager(executable, launcher)
+            entry = manager.inspect()
+            connected = entry is not None and manager.is_owned(entry)
+        else:
+            claude_manager = ClaudeMcpManager(executable, launcher)
+            detail = claude_manager.inspect()
+            connected = detail is not None and claude_manager.is_owned(detail)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return DiagnosticClientStatus(True, False, "unavailable")
+    return DiagnosticClientStatus(
+        True,
+        connected,
+        "connected" if connected else "available",
+    )
+
+
+def _diagnostic_context(config: LocalConfig, project_directory: Path) -> PersonalDiagnosticContext:
+    launcher_value = shutil.which("mnemo-memory")
+    launcher = None if launcher_value is None else Path(launcher_value).resolve()
+    try:
+        registered: bool | None = (
+            LocalMemoryProjectBindingStore(config.data_directory).get(project_directory) is not None
+        )
+    except (AutomaticMemoryBindingError, OSError, ValueError):
+        registered = None
+    return PersonalDiagnosticContext(
+        _diagnostic_client_status("codex", launcher),
+        _diagnostic_client_status("claude-code", launcher),
+        registered,
+    )
+
+
+@app.command(help="Create a private content-free diagnostic ZIP bundle.")
+def diagnostics(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        result = PersonalDiagnosticService(
+            config,
+            context=_diagnostic_context(config, project_dir),
+        ).create()
+    except (PersonalDiagnosticError, ValueError) as error:
+        _show({"status": "failed", "code": "MNEMO_DIAGNOSTICS_FAILED"})
+        raise typer.Exit(code=1) from error
     _show(result.to_dict())
 
 

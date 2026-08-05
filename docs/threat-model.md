@@ -370,6 +370,16 @@ port-conflict, and diagnostic-redaction tests.
 **Residual risk:** Malware running as the same OS user may access local data; document this personal
 profile boundary and avoid ambient credentials.
 
+The explicit diagnostic command creates a private archive containing exactly one closed canonical
+manifest. It probes SQLite read-only and reduces integrity, foreign-key, lifecycle, settings,
+project-registration, and client-ownership results to booleans, nulls, bounded status labels, and
+runtime versions. It remains usable for absent or corrupt storage without embedding failure text.
+Memory, checkpoint, note, source, evidence, query, job, identifier, path, environment, credential,
+subprocess output, exception detail, and durable logs are excluded. Manifest and archive digests,
+mode-0700/0600 permissions, symlink rejection, atomic non-overwriting publication, and partial-file
+cleanup are covered by tests. Runtime versions are intentionally disclosed and must be reviewed
+before a user shares the archive.
+
 ### Compromised connectors
 
 **Scenario:** A connector returns forged scope/source metadata, reads beyond registration, supplies
