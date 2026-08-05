@@ -343,6 +343,17 @@ restore a previously running service; failed post-upgrade validation leaves it s
 serving an unverified schema. Package downgrade and database restore remain explicit recovery
 operations.
 
+The uninstall wrapper uses the same exact isolated-environment ownership requirement and fixed,
+shell-free uv or pipx command boundary. It removes only MCP entries whose command matches the
+running Mnemo launcher and only hook commands matching that launcher, client, and configured data
+directory; foreign entries survive. The default preserves the entire data directory. Recursive
+data removal requires both an explicit deletion option and non-interactive confirmation, validates
+a regular matching configuration and database before any lifecycle change and again immediately
+before deletion, rejects root, home, current-directory, symlink, and unrecognized targets, and runs
+only after package removal succeeds. A pre-removal failure retains the application and attempts to
+restore a previously running service; a later deletion failure reports truthfully that package
+removal already occurred.
+
 ### Local service exposure
 
 **Scenario:** The local API or MCP service binds beyond loopback, trusts filesystem permissions

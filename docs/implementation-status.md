@@ -1229,6 +1229,37 @@ CLI configuration errors. The complete repository gate passes with 773 tests, st
 installation/uninstall command, expiry, index/job control, diagnostic bundle, dependency, release
 workflow change, model call, non-loopback exposure, or team behavior was added.
 
+#### Issue 20I — Safe one-command uninstall — Complete
+
+This bounded issue adds `mnemo-memory uninstall` for installations actually owned by uv or pipx.
+The command must stop and await the local daemon, remove only Mnemo-owned Codex and Claude Code
+MCP registrations and automatic-memory hook entries, invoke the owning manager's documented
+package-specific uninstall command without exposing its output, and preserve the complete personal
+data directory by default. Optional data deletion must require both `--delete-data` and `--yes`,
+reject unsafe or ambiguous targets before any change, and occur only after package removal succeeds.
+Unsupported environments, client cleanup failures, stop timeouts, installer failures, and data
+deletion failures must return bounded codes. This issue adds no backup deletion policy, restore,
+diagnostic bundle, signed release workflow, index/job control, dependency, model call, non-loopback
+exposure, or team behavior.
+
+Implemented `mnemo-memory uninstall` with exact uv/pipx isolated-environment ownership detection,
+fixed shell-free manager commands, bounded process output, daemon stop/await behavior, and cleanup
+of only exact Mnemo-owned Codex/Claude Code MCP registrations and automatic-memory hook commands.
+Unavailable client executables and foreign registrations are reported and preserved. Failures
+before package removal retain the application and attempt to restore a previously running daemon.
+
+The default result explicitly preserves and reports the configured personal data directory.
+Permanent removal requires the distinct `--delete-data --yes` form, validates a regular matching
+configuration and database before any lifecycle change and again after successful package removal,
+and rejects broad, symlinked, or unrecognized targets. A later deletion failure truthfully reports
+that application removal already succeeded; user-controlled copies remain outside Mnemo's reach.
+
+All 128 focused uninstall/upgrade/Codex/Claude Code/automatic-hook/lifecycle tests pass. The
+complete repository gate passes with 787 tests, strict typing for 199 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 105 product
+Python files. No backup deletion policy, restore, diagnostic bundle, signed release workflow,
+index/job control, dependency, model call, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

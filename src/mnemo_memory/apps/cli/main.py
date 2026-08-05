@@ -73,6 +73,8 @@ from mnemo_memory.packages.application import (
     PersonalBackupError,
     PersonalBackupService,
     PersonalSettingsStore,
+    PersonalUninstallError,
+    PersonalUninstallService,
     PersonalUpgradeError,
     PersonalUpgradeService,
     RetractApprovedEpisodicEvent,
@@ -614,6 +616,81 @@ def upgrade(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  
         raise typer.Exit(code=1) from error
     except ValueError as error:
         failure = PersonalUpgradeError("MNEMO_UPGRADE_CONFIGURATION_INVALID")
+        _show(failure.to_dict())
+        raise typer.Exit(code=1) from error
+    _show(result.to_dict())
+
+
+def _cleanup_owned_integrations(launcher: Path, data_directory: Path) -> dict[str, str]:
+    """Remove only exact Mnemo registrations and hook commands."""
+    results: dict[str, str] = {}
+    for client in cast(tuple[ClientName, ...], ("codex", "claude-code")):
+        hooks_changed = disable_client_hooks(
+            client,
+            launcher,
+            client_home(client),
+            data_directory,
+        )
+        results[f"{client}_hooks"] = "removed" if hooks_changed else "absent"
+
+    codex = shutil.which("codex")
+    if codex is None:
+        results["codex_mcp"] = "client_unavailable"
+    else:
+        codex_manager = CodexMcpManager(codex, launcher)
+        codex_entry = codex_manager.inspect()
+        if codex_entry is None:
+            results["codex_mcp"] = "absent"
+        elif not codex_manager.is_owned(codex_entry):
+            results["codex_mcp"] = "preserved_unrecognized"
+        else:
+            codex_manager.disconnect()
+            results["codex_mcp"] = "removed"
+
+    claude = shutil.which("claude")
+    if claude is None:
+        results["claude-code_mcp"] = "client_unavailable"
+    else:
+        claude_manager = ClaudeMcpManager(claude, launcher)
+        claude_entry = claude_manager.inspect()
+        if claude_entry is None:
+            results["claude-code_mcp"] = "absent"
+        elif not claude_manager.is_owned(claude_entry):
+            results["claude-code_mcp"] = "preserved_unrecognized"
+        else:
+            claude_manager.disconnect()
+            results["claude-code_mcp"] = "removed"
+    return results
+
+
+@app.command(help="Remove the uv- or pipx-managed application; preserve personal data by default.")
+def uninstall(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    delete_data: bool = typer.Option(
+        False,
+        "--delete-data",
+        help="Permanently delete the configured data directory and all in-place backups.",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Confirm application removal."),
+) -> None:
+    if delete_data and not yes:
+        raise typer.BadParameter("MNEMO_UNINSTALL_DATA_DELETE_REQUIRES_YES")
+    if not yes and not typer.confirm("Uninstall Mnemo and preserve all personal data?"):
+        raise typer.Abort()
+    try:
+        config = resolve_local_config(data_dir)
+        launcher = _installed_launcher()
+        result = PersonalUninstallService(
+            config,
+            integration_cleaner=lambda: _cleanup_owned_integrations(
+                launcher, config.data_directory
+            ),
+        ).uninstall(delete_data=delete_data)
+    except PersonalUninstallError as error:
+        _show(error.to_dict())
+        raise typer.Exit(code=1) from error
+    except (AutomaticMemoryClientConfigError, ValueError) as error:
+        failure = PersonalUninstallError("MNEMO_UNINSTALL_CONFIGURATION_INVALID")
         _show(failure.to_dict())
         raise typer.Exit(code=1) from error
     _show(result.to_dict())

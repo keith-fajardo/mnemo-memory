@@ -98,6 +98,11 @@ from .knowledge import (
 )
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
+from .uninstalls import (
+    PersonalUninstallError,
+    PersonalUninstallResult,
+    PersonalUninstallService,
+)
 from .upgrades import (
     InstallationManager,
     PersonalUpgradeError,
@@ -178,6 +183,9 @@ __all__ = [
     "PersonalSettings",
     "PersonalSettingsError",
     "PersonalSettingsStore",
+    "PersonalUninstallError",
+    "PersonalUninstallResult",
+    "PersonalUninstallService",
     "PersonalUpgradeError",
     "PersonalUpgradeResult",
     "PersonalUpgradeService",

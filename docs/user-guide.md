@@ -325,6 +325,31 @@ whether an installer-failure restart restored the prior service. Validation and 
 leave the service stopped for inspection. The command does not silently downgrade the package or
 restore the database; retain the reported backup for explicit recovery.
 
+### Uninstall the application or explicitly erase local data
+
+For a uv- or pipx-owned installation, remove the application while retaining every personal
+memory and in-place backup with:
+
+```bash
+mnemo-memory uninstall --yes
+```
+
+Mnemo stops the local service, removes only its exactly owned Codex and Claude Code MCP entries and
+automatic-memory hook commands, then asks the manager that owns the running environment to remove
+the package. Missing client tools and foreign entries are preserved and reported without direct
+configuration-file edits. Package-manager output is discarded.
+
+Data removal is a separate irreversible choice:
+
+```bash
+mnemo-memory uninstall --delete-data --yes
+```
+
+That form is accepted only for the exact configured directory containing a regular matching Mnemo
+configuration and database. It removes the directory only after package removal succeeds, and it
+also removes backups stored inside that directory. Copies exported or backed up elsewhere remain
+under your control and cannot be recalled by Mnemo.
+
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
 the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also

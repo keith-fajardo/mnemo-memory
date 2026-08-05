@@ -317,12 +317,17 @@ uv sync --locked
 uv run mnemo-memory --help
 ```
 
-Upgrade or remove it with:
+Upgrade or remove a uv- or pipx-owned installation with Mnemo's lifecycle commands:
 
 ```bash
-uv tool upgrade mnemo-unified-context
-uv tool uninstall mnemo-unified-context
+mnemo-memory upgrade
+mnemo-memory uninstall --yes
 ```
+
+Uninstall stops the local service, removes only exact Mnemo-owned Codex and Claude Code
+registrations and hooks, and preserves the configured data directory, including backups. To
+permanently remove that recognized directory too, use the deliberately separate destructive form
+`mnemo-memory uninstall --delete-data --yes`.
 
 ## Start here: let Mnemo explain the setup
 
