@@ -75,8 +75,14 @@ from mnemo_memory.packages.domain import (
     OutboxJobId,
     OwnerId,
     ProjectId,
+    RetentionPolicyId,
+    RetentionSchedule,
     ScopeLevel,
+    Sensitivity,
     SessionId,
+    TaskActivityActor,
+    TaskActivityEvent,
+    TaskActivityEventKind,
     TaskId,
     Visibility,
     WorkspaceId,
@@ -96,6 +102,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
 from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
+    TaskActivityEventSafetyPolicy,
 )
 
 from .contracts import (
@@ -130,6 +137,7 @@ from .contracts import (
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
+    InvalidTaskActivityEventScope,
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentSecretRejected,
@@ -147,12 +155,18 @@ from .contracts import (
     SourceSnapshotStoreResult,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
+    TaskActivityEventConflict,
+    TaskActivityEventNotFound,
+    TaskActivityEventPage,
+    TaskActivityEventRejected,
+    TaskActivityEventStorageFailure,
+    TaskActivityEventStoreResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 18
+LATEST_SCHEMA_VERSION = 19
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -207,12 +221,14 @@ class SQLiteCheckpointRepository:
         base_directory: Path | None = None,
         approved_event_policy: ApprovedEpisodicEventSafetyPolicy | None = None,
         knowledge_document_policy: KnowledgeDocumentSafetyPolicy | None = None,
+        task_activity_policy: TaskActivityEventSafetyPolicy | None = None,
     ) -> None:
         self.path = resolve_database_path(path, base_directory)
         self._approved_event_policy = approved_event_policy or ApprovedEpisodicEventSafetyPolicy()
         self._knowledge_document_policy = (
             knowledge_document_policy or KnowledgeDocumentSafetyPolicy()
         )
+        self._task_activity_policy = task_activity_policy or TaskActivityEventSafetyPolicy()
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -490,6 +506,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 18:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 18
+            if version < 19:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0019_task_activity_events.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (19, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 19:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 19
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1145,6 +1173,83 @@ class SQLiteCheckpointRepository:
         except sqlite3.Error as error:
             raise EpisodicEventStorageFailure("episodic event storage operation failed") from error
         return EpisodicEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def append_task_activity_event(self, event: TaskActivityEvent) -> TaskActivityEventStoreResult:
+        self._require_task_activity_scope(event.scope)
+        if not self._task_activity_policy.assess(event).accepted:
+            raise TaskActivityEventRejected("task activity event was rejected by safety policy")
+        try:
+            with self._transaction() as connection:
+                self._store_scope(connection, event.scope)
+                existing = connection.execute(
+                    "SELECT * FROM task_activity_events WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "AND source_event_key = ?",
+                    (*self._scope_values(event.scope), event.source_event_key),
+                ).fetchone()
+                if existing is not None:
+                    stored = self._task_activity_event_from_row(connection, existing, event.scope)
+                    if stored == event:
+                        return TaskActivityEventStoreResult(stored, True)
+                    raise TaskActivityEventConflict("task activity event key conflicts")
+                identity = connection.execute(
+                    "SELECT 1 FROM task_activity_events WHERE event_id = ?",
+                    (str(event.event_id),),
+                ).fetchone()
+                if identity is not None:
+                    raise TaskActivityEventConflict("task activity event identity conflicts")
+                self._insert_task_activity_event(connection, event)
+                return TaskActivityEventStoreResult(event, False)
+        except (TaskActivityEventConflict, TaskActivityEventRejected):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityEventStorageFailure(
+                "task activity event storage operation failed"
+            ) from error
+
+    def get_task_activity_event(self, scope: MemoryScope, event_id: EventId) -> TaskActivityEvent:
+        self._require_task_activity_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM task_activity_events WHERE event_id = ? AND owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ?",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise TaskActivityEventNotFound("task activity event was not found")
+                return self._task_activity_event_from_row(connection, row, scope)
+        except TaskActivityEventNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityEventStorageFailure(
+                "task activity event storage operation failed"
+            ) from error
+
+    def list_task_activity_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> TaskActivityEventPage:
+        self._require_task_activity_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM task_activity_events WHERE owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
+                    (*self._scope_values(scope), limit + 1, offset),
+                ).fetchall()
+                items = tuple(
+                    self._task_activity_event_from_row(connection, row, scope)
+                    for row in rows[:limit]
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityEventStorageFailure(
+                "task activity event storage operation failed"
+            ) from error
+        return TaskActivityEventPage(items, offset + limit if len(rows) > limit else None)
 
     def append_approved_event(
         self, event: ApprovedEpisodicEvent
@@ -2965,6 +3070,64 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _insert_task_activity_event(
+        connection: sqlite3.Connection, event: TaskActivityEvent
+    ) -> None:
+        retention = event.retention
+        connection.execute(
+            "INSERT INTO task_activity_events("
+            "event_id,source_event_key,event_kind,actor_kind,summary,sensitivity,"
+            "retention_policy_id,retention_permanent,retention_created_at,"
+            "retention_observed_at,retention_valid_from,retention_valid_to,"
+            "retention_expires_at,retention_expired_at,owner_id,visibility,workspace_id,"
+            "project_id,session_id,task_id,occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(event.event_id),
+                event.source_event_key,
+                event.kind.value,
+                event.actor.value,
+                event.summary,
+                event.sensitivity.value,
+                str(retention.policy_id),
+                int(retention.permanent),
+                retention.created_at.isoformat(),
+                retention.observed_at.isoformat(),
+                retention.valid_from.isoformat(),
+                None if retention.valid_to is None else retention.valid_to.isoformat(),
+                None if retention.expires_at is None else retention.expires_at.isoformat(),
+                None if retention.expired_at is None else retention.expired_at.isoformat(),
+                *SQLiteCheckpointRepository._scope_values(event.scope),
+                event.occurred_at.isoformat(),
+            ),
+        )
+        for evidence in event.evidence_references:
+            connection.execute(
+                "INSERT OR IGNORE INTO evidence(evidence_id, source_id, payload_json) "
+                "VALUES (?, ?, ?)",
+                (
+                    str(evidence.evidence_id),
+                    str(evidence.source_id),
+                    _json(evidence.to_dict()),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO task_activity_event_evidence(event_id, evidence_id) VALUES (?, ?)",
+                (str(event.event_id), str(evidence.evidence_id)),
+            )
+        SQLiteCheckpointRepository._insert_event_outbox(
+            connection,
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.TASK_ACTIVITY,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
+            ),
+        )
+
+    @staticmethod
     def _insert_approved_event(
         connection: sqlite3.Connection, event: ApprovedEpisodicEvent
     ) -> None:
@@ -3124,6 +3287,11 @@ class SQLiteCheckpointRepository:
     def _require_checkpoint_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise InvalidCheckpointScope("checkpoint operations require explicit task scope")
+
+    @staticmethod
+    def _require_task_activity_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidTaskActivityEventScope("task activity events require explicit task scope")
 
     @staticmethod
     def _scope_values(scope: MemoryScope) -> tuple[str, str, str | None, str, str, str]:
@@ -3303,6 +3471,53 @@ class SQLiteCheckpointRepository:
             datetime.fromisoformat(row["occurred_at"]),
             row["idempotency_key"],
             revision.evidence_references,
+        )
+
+    @staticmethod
+    def _task_activity_event_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> TaskActivityEvent:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json FROM task_activity_event_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.event_id = ? ORDER BY link.evidence_id ASC",
+            (row["event_id"],),
+        ).fetchall()
+        return TaskActivityEvent(
+            event_id=EventId.from_string(row["event_id"]),
+            scope=scope,
+            kind=TaskActivityEventKind(row["event_kind"]),
+            actor=TaskActivityActor(row["actor_kind"]),
+            summary=row["summary"],
+            source_event_key=row["source_event_key"],
+            sensitivity=Sensitivity(row["sensitivity"]),
+            retention=RetentionSchedule(
+                policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+                permanent=bool(row["retention_permanent"]),
+                created_at=datetime.fromisoformat(row["retention_created_at"]),
+                observed_at=datetime.fromisoformat(row["retention_observed_at"]),
+                valid_from=datetime.fromisoformat(row["retention_valid_from"]),
+                valid_to=(
+                    None
+                    if row["retention_valid_to"] is None
+                    else datetime.fromisoformat(row["retention_valid_to"])
+                ),
+                expires_at=(
+                    None
+                    if row["retention_expires_at"] is None
+                    else datetime.fromisoformat(row["retention_expires_at"])
+                ),
+                expired_at=(
+                    None
+                    if row["retention_expired_at"] is None
+                    else datetime.fromisoformat(row["retention_expired_at"])
+                ),
+            ),
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
         )
 
     @staticmethod

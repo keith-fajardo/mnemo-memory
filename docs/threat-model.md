@@ -117,6 +117,10 @@ At most eight explicitly supplied classifiers may strengthen sensitivity or reje
 cannot override a deterministic rejection, and invalid results or classifier failures reject with
 stable content-free codes. Knowledge passages are checked again immediately before the local
 embedding provider is invoked, so rejection produces neither a provider call nor a vector row.
+Explicit task-activity capture persists only a bounded summary plus closed category/actor,
+sensitivity, retention, scope, time, and evidence fields. Its schema has no raw transcript,
+prompt, command, tool argument/body/result, source-content, or opaque-model-trace field; the same
+content-safety decision and declared-sensitivity floor run before the event and outbox transaction.
 
 **Verification:** Synthetic secret corpus across ingestion, job retry, logging, retrieval, export,
 and deletion paths. Confirm no raw value or reversible encoding appears.

@@ -145,6 +145,11 @@ from .models import (
     Visibility,
 )
 from .procedures import ProjectClientProfile, ProjectProcedure, normalize_procedure_tags
+from .task_activity_events import (
+    TaskActivityActor,
+    TaskActivityEvent,
+    TaskActivityEventKind,
+)
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
@@ -265,6 +270,9 @@ __all__ = [
     "SourceId",
     "SourceStateFingerprint",
     "SourceTrustClass",
+    "TaskActivityActor",
+    "TaskActivityEvent",
+    "TaskActivityEventKind",
     "TaskId",
     "TokenEstimator",
     "UnsupportedDbtSupplementalSchema",

@@ -16,6 +16,7 @@ from .contracts import (
     EventOutboxRepository,
     EventOutboxStorageFailure,
     InvalidKnowledgeDocumentScope,
+    InvalidTaskActivityEventScope,
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentRepository,
@@ -29,6 +30,13 @@ from .contracts import (
     SourceStructureRepository,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
+    TaskActivityEventConflict,
+    TaskActivityEventNotFound,
+    TaskActivityEventPage,
+    TaskActivityEventRejected,
+    TaskActivityEventRepository,
+    TaskActivityEventStorageFailure,
+    TaskActivityEventStoreResult,
 )
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
@@ -39,6 +47,7 @@ from .reference import (
     ReferenceKnowledgeDocumentRepository,
     ReferenceProjectIndexRepository,
     ReferenceSourceStructureRepository,
+    ReferenceTaskActivityEventRepository,
 )
 from .sqlite import (
     SQLiteCheckpointRepository,
@@ -64,6 +73,7 @@ __all__ = [
     "EventOutboxRepository",
     "EventOutboxStorageFailure",
     "InvalidKnowledgeDocumentScope",
+    "InvalidTaskActivityEventScope",
     "KnowledgeDocumentConflict",
     "KnowledgeDocumentNotFound",
     "KnowledgeDocumentRepository",
@@ -82,6 +92,7 @@ __all__ = [
     "ReferenceKnowledgeDocumentRepository",
     "ReferenceProjectIndexRepository",
     "ReferenceSourceStructureRepository",
+    "ReferenceTaskActivityEventRepository",
     "SQLiteCheckpointRepository",
     "SQLiteKnowledgeDocumentRepository",
     "SQLiteMigrationError",
@@ -90,4 +101,11 @@ __all__ = [
     "SourceStructureRepository",
     "SupplementalArtifactConflict",
     "SupplementalArtifactStoreResult",
+    "TaskActivityEventConflict",
+    "TaskActivityEventNotFound",
+    "TaskActivityEventPage",
+    "TaskActivityEventRejected",
+    "TaskActivityEventRepository",
+    "TaskActivityEventStorageFailure",
+    "TaskActivityEventStoreResult",
 ]

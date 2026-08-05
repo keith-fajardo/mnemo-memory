@@ -43,6 +43,7 @@ from mnemo_memory.packages.domain import (
     OutboxJobId,
     ProjectClientProfile,
     ProjectProcedure,
+    TaskActivityEvent,
     knowledge_search_tokens,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -177,6 +178,30 @@ class ApprovedEpisodicEventSecretRejected(ApprovedEpisodicEventRepositoryError):
     pass
 
 
+class TaskActivityEventRepositoryError(Exception):
+    """Expected storage-neutral outcome for minimized task activity events."""
+
+
+class TaskActivityEventNotFound(TaskActivityEventRepositoryError):
+    pass
+
+
+class TaskActivityEventConflict(TaskActivityEventRepositoryError):
+    pass
+
+
+class InvalidTaskActivityEventScope(TaskActivityEventRepositoryError):
+    pass
+
+
+class TaskActivityEventRejected(TaskActivityEventRepositoryError):
+    pass
+
+
+class TaskActivityEventStorageFailure(TaskActivityEventRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -205,6 +230,32 @@ class KnowledgeDocumentStorageFailure(KnowledgeDocumentRepositoryError):
 class ApprovedEpisodicEventStoreResult:
     event: ApprovedEpisodicEvent
     idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActivityEventStoreResult:
+    event: TaskActivityEvent
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActivityEventPage:
+    items: tuple[TaskActivityEvent, ...]
+    next_offset: int | None
+
+
+class TaskActivityEventRepository(Protocol):
+    def append_task_activity_event(
+        self, event: TaskActivityEvent
+    ) -> TaskActivityEventStoreResult: ...
+
+    def get_task_activity_event(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEvent: ...
+
+    def list_task_activity_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> TaskActivityEventPage: ...
 
 
 @dataclass(frozen=True, slots=True)

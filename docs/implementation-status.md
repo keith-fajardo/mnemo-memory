@@ -1290,3 +1290,39 @@ validation, dependency/provenance validation for 86 entries, and architecture va
 product Python files. No event kind, conversation/tool capture, model call, candidate extraction,
 transport surface, daemon, migration, retention/export/deletion behavior, dependency, or team mode
 was added.
+
+#### Issue 16C — Complete
+
+The current bounded issue adds the missing canonical activity categories without changing the
+completed checkpoint or approved decision/failure/tool-outcome ledgers. One explicitly submitted,
+minimized task event may describe a conversation handoff, task activity, tool invocation, or task
+outcome using only a bounded summary, actor/category metadata, a caller-owned idempotency key,
+explicit evidence, sensitivity, retention schedule, task scope, and timestamps. Raw transcripts,
+prompts, tool arguments/bodies/results, commands, source content, and opaque model traces are not
+accepted fields. Prohibited content must fail the Issue 16B classification boundary before any
+canonical or outbox write. Reference and SQLite repositories must be append-only, scoped,
+idempotent, deterministically ordered, and transactionally enqueue exactly one minimal Issue 16A
+job per first event write; failed and duplicate writes persist no partial or duplicate state.
+Migration 0019 is forward-only with a scope-preserving outbox-topic constraint rebuild, additive
+event tables, and rollback coverage. This issue adds no automatic
+capture, agent hook, model call, extraction candidate, context retrieval/ranking, API/CLI/MCP
+surface, daemon, retention execution, export/deletion behavior, dependency, or team mode.
+
+Implemented the original `TaskActivityEvent` contract for explicit conversation handoffs, task
+activity, tool invocations, and task outcomes. The closed event schema contains only a bounded
+summary, actor/category, idempotency key, task scope, declared non-prohibited sensitivity,
+retention schedule, occurred time, and up to 64 evidence references; raw interaction and tool/source
+payload fields are absent and strict deserialization rejects unknown fields. The composed safety
+policy rejects secrets and sensitivity labels weaker than classifier output before persistence.
+Reference and SQLite repositories provide scoped append-only writes, exact idempotency, ordered
+pagination, restart durability, and atomic minimal outbox enqueue under the new `task_activity`
+topic. Forward-only migration `0019_task_activity_events.sql` preserves existing outbox rows while
+rebuilding its closed topic constraint and adds the scoped event/evidence tables; injected failure
+rolls back the whole migration. Focused tests cover all four categories, strict/minimized schema,
+scope isolation, conflicts, duplicate writes, classification, Reference and SQLite atomicity,
+restart, outbox minimality, table contents, row preservation, and migration rollback. Product and
+threat contracts record explicit-only capture and the excluded payloads. The complete repository
+gate passes with 635 tests, strict typing for 159 source files, schema validation,
+dependency/provenance validation for 86 entries, and architecture validation for 79 product Python
+files. No automatic capture, client hook, model call, extraction, context retrieval, transport
+surface, daemon, retention execution, export/deletion behavior, dependency, or team mode was added.

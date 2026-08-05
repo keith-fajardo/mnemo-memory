@@ -359,7 +359,7 @@ def test_event_outbox_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
     repository.migrate()
     with sqlite3.connect(repository.path) as connection:
         connection.execute("DROP TABLE event_outbox")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 18")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 18")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=18)
@@ -372,7 +372,7 @@ def test_event_outbox_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 18
+    assert repository.schema_version() == 19
     with sqlite3.connect(repository.path) as connection:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(event_outbox)").fetchall()

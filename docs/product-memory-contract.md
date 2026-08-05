@@ -114,6 +114,11 @@ require an intentional user action or a narrowly authorized client action visibl
 Read-only retrieval does not imply write consent. Connector permissions are source-specific,
 least-privilege, revocable, and cannot be expanded by retrieved content or model output.
 
+An explicitly submitted task-activity event is a minimized summary with category, actor,
+sensitivity, retention, scope, and evidence metadata. It is not authorization to retain a raw
+conversation, prompt, command, tool argument/body/result, source body, or hidden model trace, and
+it does not enable automatic capture.
+
 Consent withdrawal stops new capture immediately and schedules affected data and projections for
 deletion under the selected policy. Optional model processing must be separately enabled and must
 name the provider, task, and data class. Mnemo continues deterministic operation when model

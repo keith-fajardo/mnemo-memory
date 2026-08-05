@@ -47,6 +47,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OutboxJobId,
     ScopeLevel,
+    TaskActivityEvent,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
     DbtLineageEdge,
@@ -59,6 +60,7 @@ from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
 from mnemo_memory.packages.policy import (
     ApprovedEpisodicEventSafetyPolicy,
     KnowledgeDocumentSafetyPolicy,
+    TaskActivityEventSafetyPolicy,
 )
 
 from .contracts import (
@@ -90,6 +92,7 @@ from .contracts import (
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     InvalidManifestSnapshotScope,
+    InvalidTaskActivityEventScope,
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentSecretRejected,
@@ -105,6 +108,11 @@ from .contracts import (
     SourceStructureRepository,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
+    TaskActivityEventConflict,
+    TaskActivityEventNotFound,
+    TaskActivityEventPage,
+    TaskActivityEventRejected,
+    TaskActivityEventStoreResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
@@ -482,6 +490,81 @@ class ReferenceEventOutboxRepository:
     def _require_scope(scope: MemoryScope) -> None:
         if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
             raise ValueError("event outbox operations require explicit task scope")
+
+
+class ReferenceTaskActivityEventRepository:
+    """Append-only in-memory reference for explicitly minimized task activity."""
+
+    def __init__(
+        self,
+        outbox: ReferenceEventOutboxRepository | None = None,
+        policy: TaskActivityEventSafetyPolicy | None = None,
+    ) -> None:
+        self.outbox = outbox or ReferenceEventOutboxRepository()
+        self._policy = policy or TaskActivityEventSafetyPolicy()
+        self._events: dict[EventId, TaskActivityEvent] = {}
+        self._keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._ordered: list[EventId] = []
+
+    def append_task_activity_event(self, event: TaskActivityEvent) -> TaskActivityEventStoreResult:
+        self._require_scope(event.scope)
+        if not self._policy.assess(event).accepted:
+            raise TaskActivityEventRejected("task activity event was rejected by safety policy")
+        key = (event.scope, event.source_event_key)
+        existing_id = self._keys.get(key)
+        if existing_id is not None:
+            existing = self._events[existing_id]
+            if existing == event:
+                return TaskActivityEventStoreResult(existing, True)
+            raise TaskActivityEventConflict("task activity event key conflicts")
+        if event.event_id in self._events:
+            raise TaskActivityEventConflict("task activity event identity conflicts")
+        events = dict(self._events)
+        keys = dict(self._keys)
+        ordered = list(self._ordered)
+        events[event.event_id] = event
+        keys[key] = event.event_id
+        ordered.append(event.event_id)
+        self.outbox._enqueue(
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.TASK_ACTIVITY,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
+            )
+        )
+        self._events, self._keys, self._ordered = events, keys, ordered
+        return TaskActivityEventStoreResult(event, False)
+
+    def get_task_activity_event(self, scope: MemoryScope, event_id: EventId) -> TaskActivityEvent:
+        self._require_scope(scope)
+        event = self._events.get(event_id)
+        if event is None or event.scope != scope:
+            raise TaskActivityEventNotFound("task activity event was not found")
+        return event
+
+    def list_task_activity_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> TaskActivityEventPage:
+        self._require_scope(scope)
+        if offset < 0 or limit < 1:
+            raise ValueError("event offset must be non-negative and limit must be positive")
+        items = tuple(
+            self._events[event_id]
+            for event_id in reversed(self._ordered)
+            if self._events[event_id].scope == scope
+        )
+        return TaskActivityEventPage(
+            items[offset : offset + limit],
+            offset + limit if offset + limit < len(items) else None,
+        )
+
+    @staticmethod
+    def _require_scope(scope: MemoryScope) -> None:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidTaskActivityEventScope("task activity events require explicit task scope")
 
 
 class ReferenceApprovedEpisodicEventRepository:
@@ -984,6 +1067,7 @@ class ReferenceCheckpointRepository:
         self.outbox = ReferenceEventOutboxRepository()
         self.events = ReferenceCheckpointLifecycleEventRepository(self, self.outbox)
         self.approved_events = ReferenceApprovedEpisodicEventRepository(self.outbox)
+        self.activity_events = ReferenceTaskActivityEventRepository(self.outbox)
 
     def create_checkpoint_aggregate(
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision

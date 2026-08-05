@@ -8,6 +8,7 @@ from .content_safety import (
 )
 from .episodic import ApprovedEpisodicEventSafetyDecision, ApprovedEpisodicEventSafetyPolicy
 from .knowledge import KnowledgeDocumentSafetyDecision, KnowledgeDocumentSafetyPolicy
+from .task_activity import TaskActivityEventSafetyPolicy
 
 __all__ = [
     "ApprovedEpisodicEventSafetyDecision",
@@ -18,4 +19,5 @@ __all__ = [
     "DeterministicSecretClassifier",
     "KnowledgeDocumentSafetyDecision",
     "KnowledgeDocumentSafetyPolicy",
+    "TaskActivityEventSafetyPolicy",
 ]

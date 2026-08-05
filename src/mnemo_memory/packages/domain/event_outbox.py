@@ -20,6 +20,7 @@ class EventOutboxTopic(StrEnum):
     CHECKPOINT_LIFECYCLE = "checkpoint_lifecycle"
     APPROVED_EPISODIC = "approved_episodic"
     APPROVED_GOVERNANCE = "approved_governance"
+    TASK_ACTIVITY = "task_activity"
 
 
 @dataclass(frozen=True, slots=True)
