@@ -29,6 +29,7 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtTestCoverageQuery,
     ContextLineageQuery,
     ContextSourceChangeQuery,
     ContextSourceImpactQuery,
@@ -83,6 +84,7 @@ class DurableMcpContextPort:
                 total_limit=_integer(request.get("total_tokens", 5700)),
             )
             lineage = request.get("dbt_lineage")
+            test_coverage = request.get("dbt_test_coverage")
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
@@ -128,6 +130,10 @@ class DurableMcpContextPort:
                 raise ValueError("source_changes.relative_path must be a string")
             if source_overview is not None and not isinstance(source_overview, Mapping):
                 raise ValueError("source_overview must be an object")
+            if test_coverage is not None and not isinstance(test_coverage, Mapping):
+                raise ValueError("dbt_test_coverage must be an object")
+            if lineage is not None and test_coverage is not None:
+                raise ValueError("request only one dbt structural query at a time")
             impact = (
                 None
                 if source_impact is None
@@ -189,6 +195,7 @@ class DurableMcpContextPort:
             )
             if (
                 lineage is not None
+                or test_coverage is not None
                 or source_query is not None
                 or impact is not None
                 or changes is not None
@@ -201,7 +208,7 @@ class DurableMcpContextPort:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
                 if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
-                if lineage is None:
+                if lineage is None and test_coverage is None:
                     return self._context_service.get_context(
                         GetUnifiedContext(
                             scope=scope,
@@ -218,6 +225,44 @@ class DurableMcpContextPort:
                             include_approved_events=include_approved_events,
                         )
                     ).to_dict()
+                if test_coverage is not None:
+                    has_unique_id = "unique_id" in test_coverage
+                    has_relative_path = "relative_path" in test_coverage
+                    if has_unique_id == has_relative_path:
+                        raise ValueError(
+                            "dbt_test_coverage requires exactly one unique_id or relative_path"
+                        )
+                    if has_relative_path and not isinstance(test_coverage["relative_path"], str):
+                        raise ValueError("dbt_test_coverage.relative_path must be a string")
+                    coverage_query = ContextDbtTestCoverageQuery(
+                        DbtNodeId(_string(test_coverage, "unique_id")) if has_unique_id else None,
+                        int(test_coverage.get("maximum_tests", 32)),
+                        _optional_id(test_coverage, "snapshot_id", DbtSnapshotId),
+                        test_coverage.get("current_content_digest")
+                        if isinstance(test_coverage.get("current_content_digest"), str)
+                        else None,
+                        None,
+                        bool(test_coverage.get("require_current", False)),
+                        cast(str, test_coverage["relative_path"]) if has_relative_path else None,
+                    )
+                    return self._context_service.get_context(
+                        GetUnifiedContext(
+                            scope=scope,
+                            checkpoint_id=checkpoint,
+                            dbt_test_coverage=coverage_query,
+                            source_query=source_query,
+                            budget=budget,
+                            source_impact=impact,
+                            source_changes=changes,
+                            source_overview=overview,
+                            knowledge_query=knowledge_query,
+                            semantic_knowledge_query=semantic_knowledge_query,
+                            procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            include_lifecycle_events=include_lifecycle_events,
+                            include_approved_events=include_approved_events,
+                        )
+                    ).to_dict()
+                assert lineage is not None
                 direction = LineageDirection(_string(lineage, "direction"))
                 has_unique_id = "unique_id" in lineage
                 has_relative_path = "relative_path" in lineage

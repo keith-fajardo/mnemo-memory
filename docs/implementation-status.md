@@ -1036,3 +1036,25 @@ the bounded request and provenance contract. The complete repository gate passes
 strict typing for 147 source files, schema validation, dependency/provenance validation for 86
 entries, and architecture validation for 72 product Python files. No model call, external
 dependency, migration, or MCP tool was added.
+
+#### Issue 15G — Complete
+
+The current bounded issue adds deterministic direct dbt test-coverage context for one exact node
+or unambiguous manifest file in one authorized snapshot. The existing `get_context` tool must
+return a stable, bounded list of enabled manifest test nodes that directly depend on the selected
+node, exact node and edge evidence, snapshot currentness, and the latest persisted run-result
+status when available. No attached tests must remain distinct from an unknown or cross-scope
+node without leaking another scope. This issue does not add transitive coverage inference, column
+coverage, selector syntax, freshness, changed-state indexing, code excerpts, a migration,
+dependency, model call, or MCP tool.
+
+Implemented `dbt_test_coverage` on the existing `get_context` tool for one exact dbt unique ID or
+unambiguous manifest file. The application resolves the subject inside one authorized immutable
+snapshot, selects a stable bounded list of directly attached enabled manifest tests, and returns
+their node/dependency evidence and snapshot currentness. When the same snapshot has a persisted
+`run_results.json` projection, each matching test also carries its latest status, execution time,
+failure count, and run-result evidence; absence is never promoted to success. Empty coverage,
+unknown/cross-scope subjects, truncation, staleness, and token-budget omissions remain explicit.
+The complete repository gate passes with 569 tests, strict typing for 147 source files, schema
+validation, dependency/provenance validation for 86 entries, and architecture validation for 72
+product Python files. No external dependency, migration, model call, or MCP tool was added.

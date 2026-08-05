@@ -194,6 +194,11 @@ or exact `relative_path`, `direction`, and a `path_to_unique_id` destination. Mn
 bounded deterministic shortest path with typed manifest-edge evidence; it does not infer a route
 from SQL or search another project.
 
+For direct dbt test coverage, the agent uses `dbt_test_coverage` with one exact `unique_id` or
+`relative_path`. Mnemo returns the bounded enabled manifest tests directly attached to that
+resource and includes the latest saved run status when available. It never treats a missing test
+result as success or infers transitive or column-level coverage.
+
 ## Scope, in practical terms
 
 Mnemo uses stable owner, workspace, project, session, and task identities internally. They prevent

@@ -223,6 +223,11 @@ The search is breadth-first, deterministically ordered, and bounded by explicit 
 depth limits. A missing, cross-scope, or unreachable endpoint cannot trigger a wider snapshot read
 or disclose whether a matching identity exists elsewhere.
 
+Direct dbt test-coverage queries resolve the subject inside one authorized snapshot, filter only
+persisted enabled test nodes that directly depend on it, and cap returned tests before context
+rendering. Latest status is joined only from the run-results projection attached to that exact
+snapshot. Missing execution evidence remains absent and cannot be promoted to a passing result.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

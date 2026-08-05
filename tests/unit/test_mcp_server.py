@@ -116,6 +116,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
     assert "source_overview" in tools[0].inputSchema["properties"]
+    assert "dbt_test_coverage" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
     assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
@@ -670,6 +671,48 @@ def test_durable_port_rejects_a_non_string_dbt_path_destination(tmp_path: Path) 
                     }
                 )
             )
+
+
+def test_durable_port_returns_direct_dbt_test_coverage_through_get_context(
+    tmp_path: Path,
+) -> None:
+    config = LocalConfig.defaults(tmp_path / "test coverage")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_test_coverage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "maximum_tests": 8,
+                    }
+                )
+            )
+        )
+
+    assert len(packet.structural_items) == 1
+    value = json.loads(packet.structural_items[0].content)
+    assert value["subject_node"] == "model.mnemo_analytics.fct_orders"
+    assert value["test_unique_id"] == "test.mnemo_analytics.unique_fct_orders"
 
 
 def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) -> None:

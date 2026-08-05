@@ -22,6 +22,7 @@ from mnemo_memory.packages.domain.dbt_manifest import (
     DbtManifestNode,
     DbtManifestSnapshot,
     DbtNodeId,
+    DbtResourceType,
     SourceStateFingerprint,
 )
 from mnemo_memory.packages.domain.identifiers import DbtSnapshotId
@@ -231,6 +232,31 @@ class LineageQueryResult:
     path_found: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class QueryTestCoverage:
+    scope: MemoryScope
+    unique_id: DbtNodeId
+    maximum_tests: int = 32
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.maximum_tests <= 100:
+            raise ValueError("dbt test coverage limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class TestCoverageQueryResult:
+    snapshot: DbtManifestSnapshot
+    subject_node: DbtManifestNode
+    test_nodes: tuple[DbtManifestNode, ...]
+    edges: tuple[DbtLineageEdge, ...]
+    truncated: bool
+    currentness: ArtifactCurrentness
+    currentness_reason: str
+
+
 class DbtManifestApplicationService:
     """Coordinates authoritative parsing with immutable scoped snapshot storage."""
 
@@ -438,6 +464,57 @@ class DbtManifestApplicationService:
             currentness_reason=currentness_reason,
             destination_node=destination,
             path_found=path_found,
+        )
+
+    def query_test_coverage(self, query: QueryTestCoverage) -> TestCoverageQueryResult:
+        """Return directly attached enabled manifest tests without inferring coverage."""
+        try:
+            snapshot = (
+                self._repository.get_snapshot(query.scope, query.snapshot_id)
+                if query.snapshot_id is not None
+                else self._repository.get_active_snapshot(query.scope)
+            )
+            if snapshot is None:
+                raise ManifestSnapshotNotFound()
+            subject = self._repository.get_node(query.scope, snapshot.snapshot_id, query.unique_id)
+            downstream = self._repository.direct_downstream(
+                query.scope, snapshot.snapshot_id, query.unique_id
+            )
+            candidates = self._nodes_batched(
+                query.scope,
+                snapshot.snapshot_id,
+                {edge.child_id for edge in downstream},
+            )
+        except (ManifestSnapshotNotFound, ManifestNodeNotFound) as error:
+            raise DbtApplicationNotFound(
+                "dbt test coverage node was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+
+        attached_values: list[tuple[DbtManifestNode, DbtLineageEdge]] = []
+        for edge in sorted(
+            downstream,
+            key=lambda item: (str(item.child_id), item.edge_type.value, str(item.parent_id)),
+        ):
+            node = candidates.get(edge.child_id)
+            if node is None:
+                raise DbtApplicationStorageFailure("dbt project index graph is inconsistent")
+            if node.resource_type is DbtResourceType.TEST and node.enabled:
+                attached_values.append((node, edge))
+        attached = tuple(attached_values)
+        selected = attached[: query.maximum_tests]
+        currentness, currentness_reason = _currentness(
+            snapshot, query.current_content_digest, query.current_source_state
+        )
+        return TestCoverageQueryResult(
+            snapshot,
+            subject,
+            tuple(node for node, _ in selected),
+            tuple(edge for _, edge in selected),
+            len(attached) > len(selected),
+            currentness,
+            currentness_reason,
         )
 
     def _shortest_path(

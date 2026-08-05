@@ -267,6 +267,21 @@ returns its normal bounded, cited lineage facts. It rejects no match or multiple
 than guessing. As with a unique ID request, add an explicit snapshot ID for a historical audit and
 currentness evidence when you need to prove the artifact still matches your project.
 
+For direct manifest test coverage, use the separate bounded object on the same `get_context` tool:
+
+```json
+{
+  "dbt_test_coverage": {
+    "relative_path": "models/marts/fct_orders.sql",
+    "maximum_tests": 32
+  }
+}
+```
+
+Mnemo returns enabled test nodes with exact dependency evidence and the latest saved run status
+when present. It does not infer transitive or column coverage, and a test without a saved result is
+not reported as passing.
+
 ## Ask for static code impact from an exact file
 
 For a supported parsed language, use `source_impact.relative_path` when the changed file is known.

@@ -24,9 +24,11 @@ from mnemo_memory.packages.application.dbt import (
     IngestRunResults,
     LineageDirection,
     QueryLineage,
+    QueryTestCoverage,
     ResolveManifestFile,
 )
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtTestCoverageQuery,
     ContextLineageQuery,
     GetUnifiedContext,
     UnifiedContextService,
@@ -287,6 +289,107 @@ def test_directed_path_query_returns_one_stable_shortest_evidenced_path() -> Non
                 destination_unique_id=DbtNodeId("model.mnemo_analytics.mart_customer_value"),
             )
         )
+
+
+def test_direct_test_coverage_is_bounded_evidenced_and_scope_safe() -> None:
+    item, value = service(), scope()
+    snapshot = item.ingest(command(value)).snapshot
+
+    result = item.query_test_coverage(
+        QueryTestCoverage(
+            value,
+            DbtNodeId("model.mnemo_analytics.fct_orders"),
+            snapshot_id=snapshot.snapshot_id,
+        )
+    )
+
+    assert [str(node.unique_id) for node in result.test_nodes] == [
+        "test.mnemo_analytics.unique_fct_orders"
+    ]
+    assert len(result.edges) == 1
+    assert result.edges[0].evidence
+    assert result.truncated is False
+
+    expanded = json.loads(FIXTURE.read_text())
+    second_test = json.loads(
+        json.dumps(expanded["nodes"]["test.mnemo_analytics.unique_fct_orders"])
+    )
+    second_test["unique_id"] = "test.mnemo_analytics.z_fct_orders"
+    second_test["name"] = "z_fct_orders"
+    second_test["alias"] = "z_fct_orders"
+    expanded["nodes"][second_test["unique_id"]] = second_test
+    expanded["parent_map"][second_test["unique_id"]] = ["model.mnemo_analytics.fct_orders"]
+    expanded["child_map"][second_test["unique_id"]] = []
+    expanded["child_map"]["model.mnemo_analytics.fct_orders"].append(second_test["unique_id"])
+    bounded_item = service()
+    bounded_item.ingest(command(value, json.dumps(expanded)))
+    bounded = bounded_item.query_test_coverage(
+        QueryTestCoverage(
+            value,
+            DbtNodeId("model.mnemo_analytics.fct_orders"),
+            maximum_tests=1,
+        )
+    )
+    assert len(bounded.test_nodes) == 1 and bounded.truncated
+
+    uncovered = item.query_test_coverage(
+        QueryTestCoverage(value, DbtNodeId("model.mnemo_analytics.dim_customers"))
+    )
+    assert uncovered.test_nodes == ()
+    with pytest.raises(DbtApplicationNotFound):
+        item.query_test_coverage(
+            QueryTestCoverage(
+                scope(2),
+                DbtNodeId("model.mnemo_analytics.fct_orders"),
+                snapshot_id=snapshot.snapshot_id,
+            )
+        )
+
+
+def test_task_context_returns_direct_test_coverage_with_latest_run_evidence() -> None:
+    item, project_scope = service(), scope()
+    snapshot = item.ingest(command(project_scope)).snapshot
+    item.ingest_run_results(
+        IngestRunResults(
+            project_scope,
+            snapshot.snapshot_id,
+            RUN_RESULTS_FIXTURE.read_bytes(),
+            "run_results.json",
+            STAMP,
+        )
+    )
+    task_scope = MemoryScope(
+        project_scope.owner_id,
+        ScopeLevel.TASK,
+        project_scope.visibility,
+        project_scope.workspace_id,
+        project_scope.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+
+    packet = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP), item
+    ).get_context(
+        GetUnifiedContext(
+            task_scope,
+            dbt_test_coverage=ContextDbtTestCoverageQuery(
+                None, relative_path="models/marts/fct_orders.sql"
+            ),
+        )
+    )
+
+    assert len(packet.structural_items) == 1
+    fact = json.loads(packet.structural_items[0].content)
+    assert fact["query_kind"] == "test_coverage"
+    assert fact["subject_node"] == "model.mnemo_analytics.fct_orders"
+    assert fact["test_unique_id"] == "test.mnemo_analytics.unique_fct_orders"
+    assert fact["latest_run"] == {
+        "status": "fail",
+        "execution_time_seconds": 0.25,
+        "failures": 1,
+    }
+    assert len(packet.structural_items[0].evidence_references) == 3
 
 
 def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:

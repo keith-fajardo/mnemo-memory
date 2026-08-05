@@ -50,3 +50,8 @@ facts within its 1,500-token section budget and labels every fact current, stale
 Adding `path_to_unique_id` selects one stable shortest directed path from that same start resource
 instead of returning the full reachable subgraph. Unknown endpoints, cross-scope snapshots, and
 unreachable destinations do not trigger broader retrieval.
+An optional `dbt_test_coverage` request selects one exact resource and returns only its directly
+attached enabled manifest tests, bounded to at most 100. Test identity and dependency evidence
+come from the selected manifest snapshot; an optional latest status comes only from the persisted
+`run_results.json` projection for that same snapshot. Missing results are not passes, and no tests
+does not trigger transitive inference.

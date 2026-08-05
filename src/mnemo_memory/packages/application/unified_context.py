@@ -19,6 +19,7 @@ from mnemo_memory.packages.application.dbt import (
     GetDbtSupplementalArtifacts,
     LineageDirection,
     QueryLineage,
+    QueryTestCoverage,
     ResolveManifestFile,
 )
 from mnemo_memory.packages.domain import (
@@ -106,6 +107,25 @@ class ContextLineageQuery:
             _validate_source_relative_path(self.relative_path)
         if self.destination_unique_id is not None and self.destination_unique_id == self.unique_id:
             raise ValueError("dbt path requires distinct start and destination nodes")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextDbtTestCoverageQuery:
+    unique_id: DbtNodeId | None
+    maximum_tests: int = 32
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+    require_current: bool = False
+    relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.unique_id is None) == (self.relative_path is None):
+            raise ValueError("dbt test coverage requires exactly one unique_id or relative_path")
+        if self.relative_path is not None:
+            _validate_source_relative_path(self.relative_path)
+        if not 1 <= self.maximum_tests <= 100:
+            raise ValueError("dbt test coverage limit must be between 1 and 100")
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,8 +293,11 @@ class GetUnifiedContext:
     include_approved_events: bool = False
     procedure_tags: tuple[str, ...] = ()
     procedure_profile: ProjectClientProfile | None = None
+    dbt_test_coverage: ContextDbtTestCoverageQuery | None = None
 
     def __post_init__(self) -> None:
+        if self.lineage is not None and self.dbt_test_coverage is not None:
+            raise ValueError("request only one dbt structural query at a time")
         if self.procedure_tags:
             object.__setattr__(
                 self, "procedure_tags", normalize_procedure_tags(self.procedure_tags)
@@ -322,6 +345,7 @@ class UnifiedContextService:
         packet = self._with_requested_procedures(packet, request)
         if (
             request.lineage is None
+            and request.dbt_test_coverage is None
             and request.source_query is None
             and request.source_impact is None
             and request.source_changes is None
@@ -332,9 +356,11 @@ class UnifiedContextService:
             and not request.procedure_tags
         ):
             return packet
-        if request.lineage is None:
-            return self._with_requested_source_facts(packet, request)
-        return self._with_dbt_lineage(packet, request)
+        if request.lineage is not None:
+            return self._with_dbt_lineage(packet, request)
+        if request.dbt_test_coverage is not None:
+            return self._with_dbt_test_coverage(packet, request)
+        return self._with_requested_source_facts(packet, request)
 
     def _with_requested_procedures(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -744,6 +770,171 @@ class UnifiedContextService:
             packet.created_at,
             packet.expires_at,
             packet.declared_total_tokens + sum(x.token_estimate for x in facts),
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, *facts),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=tuple(notices),
+            omissions=omissions,
+            conflicts=packet.conflicts,
+        )
+        return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_test_coverage(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach direct manifest tests and their latest persisted execution status."""
+        query = request.dbt_test_coverage
+        assert query is not None
+        if self._dbt is None:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-test-coverage",
+                    OmissionReason.LOWER_RANK,
+                    "dbt index is unavailable",
+                ),
+                request,
+            )
+        unique_id = query.unique_id
+        if unique_id is None:
+            assert query.relative_path is not None
+            unique_id = self._dbt.resolve_file(
+                ResolveManifestFile(
+                    _project_scope(request.scope), query.relative_path, query.snapshot_id
+                )
+            ).node.unique_id
+        result = self._dbt.query_test_coverage(
+            QueryTestCoverage(
+                _project_scope(request.scope),
+                unique_id,
+                query.maximum_tests,
+                query.snapshot_id,
+                query.current_content_digest,
+                query.current_source_state,
+            )
+        )
+        if query.require_current and result.currentness is not ArtifactCurrentness.CURRENT:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-test-coverage",
+                    OmissionReason.STALE,
+                    "structural facts are not current",
+                ),
+                request,
+            )
+        if not result.test_nodes:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-test-coverage",
+                    OmissionReason.LOWER_RANK,
+                    "no directly attached enabled manifest tests",
+                ),
+                request,
+            )
+        try:
+            supplemental = self._dbt.get_supplemental(
+                GetDbtSupplementalArtifacts(
+                    _project_scope(request.scope), result.snapshot.snapshot_id
+                )
+            )
+        except DbtApplicationError:
+            supplemental = None
+        run_by_id = (
+            {node.unique_id: node for node in supplemental.run_results.results}
+            if supplemental is not None and supplemental.run_results is not None
+            else {}
+        )
+        edges_by_test = {edge.child_id: edge for edge in result.edges}
+        facts: list[ContextItem] = []
+        notices = list(packet.provenance)
+        omissions = packet.omissions
+        remaining = min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        for node in result.test_nodes:
+            edge = edges_by_test[node.unique_id]
+            content_value: dict[str, object] = {
+                "query_kind": "test_coverage",
+                "snapshot_id": str(result.snapshot.snapshot_id),
+                "subject_node": str(result.subject_node.unique_id),
+                "test_unique_id": str(node.unique_id),
+                "resource_type": node.raw_resource_type,
+                "relative_file": node.original_file_path,
+                "currentness": result.currentness.value,
+            }
+            evidence = [node.evidence, edge.evidence]
+            node_run = run_by_id.get(node.unique_id)
+            if node_run is not None:
+                content_value["latest_run"] = {
+                    "status": node_run.status.value,
+                    "execution_time_seconds": node_run.execution_time_seconds,
+                    "failures": node_run.failures,
+                }
+                evidence.append(node_run.evidence)
+            content = json.dumps(content_value, sort_keys=True, separators=(",", ":"))
+            tokens = (len(content) + 3) // 4
+            if tokens > remaining:
+                omissions += (
+                    OmissionNotice(
+                        f"dbt-test:{node.unique_id}",
+                        OmissionReason.TOKEN_BUDGET,
+                        "dbt test coverage exceeds context budget",
+                    ),
+                )
+                break
+            context_item = ContextItem(
+                item_id=f"dbt-test:{result.snapshot.snapshot_id}:{node.unique_id}",
+                item_type=ContextItemType.STRUCTURAL_FACT,
+                source_scope=request.scope,
+                content=content,
+                content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+                token_estimate=tokens,
+                evidence_references=tuple(evidence),
+                source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+                sensitivity=Sensitivity.NORMAL,
+                validity=ValidityState.CURRENT
+                if result.currentness is ArtifactCurrentness.CURRENT
+                else ValidityState.STALE,
+                ranking=None,
+                conflict_state=ConflictState.NONE,
+                observed_at=result.snapshot.metadata.ingested_at,
+            )
+            facts.append(context_item)
+            remaining -= tokens
+            notices.append(
+                ProvenanceNotice(
+                    f"provenance:{context_item.item_id}",
+                    context_item.item_id,
+                    f"mnemo:dbt/snapshot/{result.snapshot.snapshot_id}/test/{node.unique_id}",
+                    hashlib.sha256(content.encode()).hexdigest(),
+                    tuple(evidence),
+                )
+            )
+        if result.truncated:
+            omissions += (
+                OmissionNotice(
+                    "dbt-test-coverage",
+                    OmissionReason.LOWER_RANK,
+                    "dbt test coverage result limit reached",
+                ),
+            )
+        result_packet = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + sum(item.token_estimate for item in facts),
             packet.budget,
             packet.producer_version,
             active_task_checkpoint=packet.active_task_checkpoint,

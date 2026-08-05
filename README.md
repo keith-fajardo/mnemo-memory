@@ -216,6 +216,10 @@ For an enabled dbt project, the authoritative manifest closes that gap: an agent
 exactly one scoped manifest node owns that file. It then returns normal bounded upstream/downstream
 facts with citations—without reading SQL or guessing dependencies.
 
+The same existing `get_context` tool accepts `dbt_test_coverage` for one exact dbt resource or
+manifest file. It returns directly attached enabled tests and their latest persisted run status
+when available, without treating missing execution data as a pass.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash

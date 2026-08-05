@@ -230,6 +230,12 @@ To ask how one dbt resource reaches another, add `path_to_unique_id` to that sam
 edge supporting each step. The path stays in the selected immutable snapshot and existing token,
 node, edge, and depth limits; no path produces a bounded omission instead of a broad graph replay.
 
+To inspect direct dbt test coverage, request `dbt_test_coverage` with one exact `unique_id` or
+`relative_path`. Mnemo returns only enabled manifest test nodes that directly depend on that
+resource, plus their latest persisted `run_results.json` status when one is available. A missing
+run result stays unobserved rather than being treated as a pass, and no attached tests produces a
+bounded omission rather than inferred coverage.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

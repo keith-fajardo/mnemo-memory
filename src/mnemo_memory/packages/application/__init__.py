@@ -61,8 +61,10 @@ from .dbt import (
     LineageDirection,
     LineageQueryResult,
     QueryLineage,
+    QueryTestCoverage,
     ResolvedManifestFile,
     ResolveManifestFile,
+    TestCoverageQueryResult,
 )
 from .knowledge import (
     KnowledgeApplicationConflict,
@@ -131,6 +133,7 @@ __all__ = [
     "LocalConfigurationError",
     "LocalRuntimeError",
     "QueryLineage",
+    "QueryTestCoverage",
     "RecordApprovedEpisodicEvent",
     "RecordCheckpointLesson",
     "ResolveManifestFile",
@@ -138,6 +141,7 @@ __all__ = [
     "RetractApprovedEpisodicEvent",
     "ReviseCheckpoint",
     "SynchronizeKnowledgeDocuments",
+    "TestCoverageQueryResult",
     "build_checkpoint_runtime",
     "build_lifecycle_service",
     "default_data_directory",
