@@ -18,6 +18,7 @@ from mnemo_memory.packages.application import (
     LocalConfig,
     LocalRuntimeError,
     RetractApprovedEpisodicEvent,
+    SetApprovedEpisodicEventPin,
     build_checkpoint_runtime,
 )
 from mnemo_memory.packages.application.automatic_memory import (
@@ -172,6 +173,44 @@ def retract_approved_memory(
     return {"idempotent": result.idempotent, "retracted": _record_value(result.target)}
 
 
+def set_approved_memory_pin(
+    config: LocalConfig,
+    event_id: str,
+    value: object,
+    *,
+    project_directory: Path | None = None,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"pinned"}:
+        raise ApprovedMemoryActionInvalid("MNEMO_MEMORY_ACTION_INVALID")
+    pinned = value["pinned"]
+    if not isinstance(pinned, bool):
+        raise ApprovedMemoryActionInvalid("MNEMO_MEMORY_ACTION_INVALID")
+    typed_event_id = _event_id(event_id)
+    digest = _action_digest("pinned" if pinned else "unpinned", typed_event_id, "", None)
+    evidence = _governance_evidence(typed_event_id, digest, datetime.now(UTC))
+    binding = _mutation_binding(config, project_directory)
+    try:
+        with build_checkpoint_runtime(config) as runtime:
+            result = runtime.checkpoint_service.set_approved_event_pin(
+                SetApprovedEpisodicEventPin(
+                    binding.checkpoint_scope,
+                    typed_event_id,
+                    pinned,
+                    f"web-pin-action:{typed_event_id}:{digest[:32]}",
+                    (evidence,),
+                )
+            )
+    except CheckpointApplicationEpisodicEventNotFound as error:
+        raise ApprovedMemoryActionNotFound("MNEMO_MEMORY_NOT_FOUND") from error
+    except CheckpointApplicationEpisodicEventConflict as error:
+        raise ApprovedMemoryActionConflict("MNEMO_MEMORY_ACTION_CONFLICT") from error
+    except CheckpointApplicationInvalidContent as error:
+        raise ApprovedMemoryActionInvalid("MNEMO_MEMORY_ACTION_INVALID") from error
+    except (CheckpointApplicationError, LocalRuntimeError, OSError, ValueError) as error:
+        raise ApprovedMemoryActionError("MNEMO_MEMORY_ACTION_UNAVAILABLE") from error
+    return {"idempotent": result.idempotent, "record": _record_value(result.record)}
+
+
 def _mutation_binding(config: LocalConfig, project_directory: Path | None) -> MemoryProjectBinding:
     try:
         binding = LocalMemoryProjectBindingStore(config.data_directory).get(
@@ -245,6 +284,7 @@ def _record_value(record: ApprovedEpisodicEventRecord) -> dict[str, object]:
     return {
         "event_id": str(record.event_id),
         "status": record.status.value,
+        "pinned": record.pinned,
         "kind": None if event is None else event.kind.value,
         "summary": None if event is None else event.summary,
         "occurred_at": None if event is None else event.occurred_at.isoformat(),

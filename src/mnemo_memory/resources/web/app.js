@@ -113,6 +113,20 @@ async function retractMemory(memory) {
   await loadMemories();
 }
 
+async function setMemoryPin(memory) {
+  const pinned = !memory.pinned;
+  const verb = pinned ? "Pin" : "Unpin";
+  if (!window.confirm(`${verb} this fact for bounded context retrieval?`)) return;
+  byId("memories-state").textContent = `${verb}ning…`;
+  const response = await fetch(`/api/memories/${encodeURIComponent(memory.event_id)}/pin`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json", "X-Mnemo-Intent": "pin-memory"},
+    body: JSON.stringify({pinned}),
+  });
+  if (!response.ok) { byId("memories-state").textContent = `${verb} failed`; return; }
+  await loadMemories();
+}
+
 function renderMemories(page) {
   const target = byId("memories");
   if (!page.project_registered) {
@@ -140,7 +154,7 @@ function renderMemories(page) {
     title.textContent = memory.kind ? memory.kind.replace("_", " ") : "Retracted fact";
     const badge = document.createElement("span");
     badge.className = `badge ${memory.status === "active" ? "ready" : "pending"}`;
-    badge.textContent = memory.status;
+    badge.textContent = memory.pinned ? `pinned · ${memory.status}` : memory.status;
     top.append(title, badge);
     const body = document.createElement("p");
     body.textContent = memory.summary ?? "The retained tombstone contains no original payload.";
@@ -171,12 +185,17 @@ function renderMemories(page) {
       correct.className = "secondary";
       correct.textContent = "Correct";
       correct.addEventListener("click", () => { correctMemory(memory).catch(() => { byId("memories-state").textContent = "Correction failed"; }); });
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.className = "secondary";
+      pin.textContent = memory.pinned ? "Unpin" : "Pin";
+      pin.addEventListener("click", () => { setMemoryPin(memory).catch(() => { byId("memories-state").textContent = "Pin update failed"; }); });
       const retract = document.createElement("button");
       retract.type = "button";
       retract.className = "danger";
       retract.textContent = "Erase fact";
       retract.addEventListener("click", () => { retractMemory(memory).catch(() => { byId("memories-state").textContent = "Erasure failed"; }); });
-      actions.append(correct, retract);
+      actions.append(pin, correct, retract);
       item.append(actions);
     }
     return item;

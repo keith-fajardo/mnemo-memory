@@ -3,6 +3,7 @@
 from .approved_episodic_events import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
@@ -199,6 +200,7 @@ __all__ = [
     "AgentId",
     "ApprovedEpisodicEvent",
     "ApprovedEpisodicEventGovernance",
+    "ApprovedEpisodicEventPinAction",
     "ApprovedEventGovernanceKind",
     "ApprovedEventKind",
     "ApprovedEventLifecycleStatus",

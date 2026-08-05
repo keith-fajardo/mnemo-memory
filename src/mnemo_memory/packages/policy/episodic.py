@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     EvidenceReference,
     Sensitivity,
 )
@@ -51,6 +52,16 @@ class ApprovedEpisodicEventSafetyPolicy:
             governance.reason,
             governance.source_action_key,
             *self._evidence_values(governance.evidence_references),
+        )
+
+    def assess_pin(
+        self, action: ApprovedEpisodicEventPinAction
+    ) -> ApprovedEpisodicEventSafetyDecision:
+        if not isinstance(action, ApprovedEpisodicEventPinAction):
+            raise TypeError("approved event safety policy requires a canonical pin action")
+        return self._decision(
+            action.source_action_key,
+            *self._evidence_values(action.evidence_references),
         )
 
     def _decision(self, *values: str) -> ApprovedEpisodicEventSafetyDecision:

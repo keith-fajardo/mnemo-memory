@@ -1101,6 +1101,40 @@ Python files. No general episodic-candidate UI, pin, expiry, export, new deletio
 model call, dependency, job control, packaging change, non-loopback exposure, or team behavior was
 added.
 
+#### Issue 20E — Durable approved-memory pinning — Complete
+
+This bounded issue adds explicit pin/unpin state for active approved facts. Pin state must be an
+evidence-backed scoped user action, remain idempotent for an identical action, rank pinned active
+facts before unpinned recency inside the existing bounded approved-event retrieval, transfer to an
+immutable correction replacement, and be removed when its fact is retracted. The browser must show
+the current pin state and require same-loopback-origin intent plus explicit confirmation for writes.
+Migration 0027 must be additive and transactional with documented forward-only recovery. Another
+project must not observe or change a pin. This issue adds no general candidate browser, expiry,
+export, new deletion behavior, model call, dependency, job control, packaging change, non-loopback
+exposure, or team behavior.
+
+Implemented immutable `ApprovedEpisodicEventPinAction` records with verified user-correction
+evidence, matching reference/SQLite repository behavior, and an application command used by the
+loopback dashboard. Migration `0027_approved_episodic_event_pins.sql` stores append-only scoped
+actions and evidence behind a live-target scope trigger without retaining a foreign key that would
+block later payload erasure. Identical actions are idempotent; conflicting keys and cross-scope
+targets fail closed. Active record views expose only the latest pin state.
+
+The existing bounded approved-event query now orders pinned facts before unpinned recency, so a
+one-item context request selects a pinned fact without increasing its count or token budget.
+Correction atomically appends an unpin for the superseded identity and transfers the pin to the
+replacement; retraction atomically unpins before deleting the event/evidence payload. The browser
+shows the current state and uses an explicit same-origin `pin-memory` intent and confirmation for
+both pin and unpin.
+
+All 117 focused pin/browser/repository/application/outbox/lifecycle/resource tests pass across
+reference and SQLite adapters, including context priority, unpin, retry, cross-scope isolation,
+correction transfer, retraction removal, restart-durable rows, and migration rollback to schema 26.
+The complete repository gate passes with 760 tests, strict typing for 193 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 102 product
+Python files. No general candidate browser, expiry, export, new deletion behavior, model call,
+dependency, job control, packaging change, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

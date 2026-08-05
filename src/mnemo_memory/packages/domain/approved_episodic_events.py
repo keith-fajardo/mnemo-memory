@@ -10,10 +10,20 @@ from typing import Self
 from uuid import UUID, uuid5
 
 from .identifiers import EventId
-from .models import EvidenceReference, MemoryScope, ScopeLevel, _parse_datetime, _require_aware
+from .models import (
+    EvidenceReference,
+    EvidenceSourceType,
+    MemoryScope,
+    ScopeLevel,
+    SourceTrustClass,
+    VerificationStatus,
+    _parse_datetime,
+    _require_aware,
+)
 
 _EVENT_NAMESPACE = UUID("e112b48c-0ac3-4fb1-87a9-9b0b27ed6096")
 _GOVERNANCE_NAMESPACE = UUID("95a55f2a-9b29-47e0-a366-99550329a07a")
+_PIN_NAMESPACE = UUID("2fa90fce-05df-45d2-97e6-a6e98ca71ea2")
 _MAX_SUMMARY_LENGTH = 1_200
 _MAX_SOURCE_KEY_LENGTH = 256
 _MAX_GOVERNANCE_REASON_LENGTH = 1_200
@@ -301,6 +311,137 @@ class ApprovedEpisodicEventGovernance:
             None if replacement is None else EventId.from_string(replacement),
             reason,
             source_action_key,
+            _parse_datetime(value["occurred_at"], "occurred_at"),
+            tuple(EvidenceReference.from_dict(item) for item in evidence),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventPinAction:
+    """One immutable user action changing the priority of an active approved fact."""
+
+    action_id: EventId
+    scope: MemoryScope
+    event_id: EventId
+    pinned: bool
+    source_action_key: str
+    occurred_at: datetime
+    evidence_references: tuple[EvidenceReference, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action_id, EventId) or not isinstance(self.event_id, EventId):
+            raise TypeError("approved event pin identities are invalid")
+        if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.TASK:
+            raise ValueError("approved event pin requires task scope")
+        if not isinstance(self.pinned, bool):
+            raise TypeError("approved event pin state must be a boolean")
+        if (
+            not isinstance(self.source_action_key, str)
+            or not self.source_action_key.strip()
+            or len(self.source_action_key) > _MAX_SOURCE_KEY_LENGTH
+        ):
+            raise ValueError("approved event pin action key is invalid")
+        _require_aware(self.occurred_at, "occurred_at")
+        evidence = tuple(self.evidence_references)
+        if (
+            not evidence
+            or len({item.evidence_id for item in evidence}) != len(evidence)
+            or any(
+                item.source_type is not EvidenceSourceType.USER_CORRECTION
+                or item.trust_class is not SourceTrustClass.USER_CORRECTION
+                or item.verification_status is not VerificationStatus.VERIFIED
+                for item in evidence
+            )
+        ):
+            raise ValueError("approved event pin requires verified user evidence")
+        if self.action_id != self.identity(self.scope, self.event_id, self.source_action_key):
+            raise ValueError("approved event pin identity is not deterministic")
+        object.__setattr__(self, "evidence_references", evidence)
+
+    @staticmethod
+    def identity(scope: MemoryScope, event_id: EventId, source_action_key: str) -> EventId:
+        return EventId(uuid5(_PIN_NAMESPACE, f"{scope.to_dict()}:{event_id}:{source_action_key}"))
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        scope: MemoryScope,
+        event_id: EventId,
+        pinned: bool,
+        source_action_key: str,
+        occurred_at: datetime,
+        evidence_references: tuple[EvidenceReference, ...],
+    ) -> Self:
+        return cls(
+            cls.identity(scope, event_id, source_action_key),
+            scope,
+            event_id,
+            pinned,
+            source_action_key,
+            occurred_at,
+            evidence_references,
+        )
+
+    def same_intent(self, other: object) -> bool:
+        return isinstance(other, ApprovedEpisodicEventPinAction) and (
+            self.action_id,
+            self.scope,
+            self.event_id,
+            self.pinned,
+            self.source_action_key,
+        ) == (
+            other.action_id,
+            other.scope,
+            other.event_id,
+            other.pinned,
+            other.source_action_key,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "action_id": str(self.action_id),
+            "scope": self.scope.to_dict(),
+            "event_id": str(self.event_id),
+            "pinned": self.pinned,
+            "source_action_key": self.source_action_key,
+            "occurred_at": self.occurred_at.isoformat(),
+            "evidence_references": [item.to_dict() for item in self.evidence_references],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        expected = {
+            "action_id",
+            "scope",
+            "event_id",
+            "pinned",
+            "source_action_key",
+            "occurred_at",
+            "evidence_references",
+        }
+        if set(value) != expected:
+            raise ValueError("approved event pin fields are invalid")
+        scope = value["scope"]
+        evidence = value["evidence_references"]
+        strings = tuple(
+            value[name] for name in ("action_id", "event_id", "source_action_key", "occurred_at")
+        )
+        pinned = value["pinned"]
+        if (
+            not isinstance(scope, Mapping)
+            or not isinstance(evidence, list)
+            or not all(isinstance(item, Mapping) for item in evidence)
+            or not all(isinstance(item, str) for item in strings)
+            or not isinstance(pinned, bool)
+        ):
+            raise TypeError("approved event pin serialization is invalid")
+        return cls(
+            EventId.from_string(str(value["action_id"])),
+            MemoryScope.from_dict(scope),
+            EventId.from_string(str(value["event_id"])),
+            pinned,
+            str(value["source_action_key"]),
             _parse_datetime(value["occurred_at"], "occurred_at"),
             tuple(EvidenceReference.from_dict(item) for item in evidence),
         )

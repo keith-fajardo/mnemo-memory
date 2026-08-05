@@ -19,6 +19,7 @@ from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
@@ -141,6 +142,7 @@ from .contracts import (
     ApprovedEpisodicEventGovernanceResult,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventPinResult,
     ApprovedEpisodicEventRecord,
     ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventSecretRejected,
@@ -233,7 +235,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 26
+LATEST_SCHEMA_VERSION = 27
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -681,6 +683,23 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 26:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 26
+            if version < 27:
+                pin_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'approved_episodic_event_pin_actions'"
+                ).fetchone()
+                if pin_table is None:
+                    _execute_sql_script(
+                        connection,
+                        _migration_text("0027_approved_episodic_event_pins.sql"),
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (27, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 27:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 27
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -3015,7 +3034,10 @@ class SQLiteCheckpointRepository:
                     "AND session_id = ? AND task_id = ? "
                     "AND NOT EXISTS (SELECT 1 FROM approved_episodic_event_governance AS action "
                     "WHERE action.target_event_id = approved_episodic_events.event_id) "
-                    "ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
+                    "ORDER BY COALESCE((SELECT pin.pinned FROM "
+                    "approved_episodic_event_pin_actions AS pin WHERE pin.event_id = "
+                    "approved_episodic_events.event_id ORDER BY pin.action_sequence DESC "
+                    "LIMIT 1), 0) DESC, event_sequence DESC LIMIT ? OFFSET ?",
                     (*self._scope_values(scope), limit + 1, offset),
                 ).fetchall()
                 items = tuple(
@@ -3088,10 +3110,20 @@ class SQLiteCheckpointRepository:
                         "approved event correction cannot change kind"
                     )
                 self._require_available_approved_replacement(connection, replacement, governance)
+                current_pin = self._approved_event_current_pin(
+                    connection, governance.scope, governance.target_event_id
+                )
                 self._insert_approved_event(connection, replacement)
                 self._insert_approved_governance(
                     connection, governance, int(target_row["event_sequence"])
                 )
+                if current_pin is not None and current_pin.pinned:
+                    self._insert_approved_pin_transfer(
+                        connection,
+                        governance,
+                        replacement.event_id,
+                        current_pin.evidence_references,
+                    )
                 return ApprovedEpisodicEventGovernanceResult(
                     self._approved_event_record(
                         connection, governance.scope, governance.target_event_id
@@ -3143,9 +3175,24 @@ class SQLiteCheckpointRepository:
                 if target_row is None:
                     raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
                 self._require_available_approved_action_key(connection, governance)
+                current_pin = self._approved_event_current_pin(
+                    connection, governance.scope, governance.target_event_id
+                )
                 self._insert_approved_governance(
                     connection, governance, int(target_row["event_sequence"])
                 )
+                if current_pin is not None and current_pin.pinned:
+                    self._insert_approved_pin_action(
+                        connection,
+                        ApprovedEpisodicEventPinAction.create(
+                            scope=governance.scope,
+                            event_id=governance.target_event_id,
+                            pinned=False,
+                            source_action_key=(f"governance-pin-retracted:{governance.action_id}"),
+                            occurred_at=governance.occurred_at,
+                            evidence_references=current_pin.evidence_references,
+                        ),
+                    )
                 connection.execute(
                     "DELETE FROM approved_episodic_event_evidence WHERE event_id = ?",
                     (str(governance.target_event_id),),
@@ -3218,6 +3265,57 @@ class SQLiteCheckpointRepository:
                 "approved episodic event governance operation failed"
             ) from error
         return ApprovedEpisodicEventRecordPage(items, offset + limit if len(rows) > limit else None)
+
+    def set_approved_event_pin(
+        self, action: ApprovedEpisodicEventPinAction
+    ) -> ApprovedEpisodicEventPinResult:
+        self._require_approved_episodic_scope(action.scope)
+        if not self._approved_event_policy.assess_pin(action).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event pin was rejected by secret policy"
+            )
+        try:
+            with self._transaction() as connection:
+                self._store_scope(connection, action.scope)
+                existing = connection.execute(
+                    "SELECT * FROM approved_episodic_event_pin_actions WHERE action_id = ?",
+                    (str(action.action_id),),
+                ).fetchone()
+                if existing is not None:
+                    stored = self._approved_pin_from_row(connection, existing, action.scope)
+                    if not stored.same_intent(action):
+                        raise ApprovedEpisodicEventConflict("approved event pin action conflicts")
+                    return ApprovedEpisodicEventPinResult(
+                        stored,
+                        self._approved_event_record(connection, action.scope, action.event_id),
+                        True,
+                    )
+                action_key = connection.execute(
+                    "SELECT 1 FROM approved_episodic_event_pin_actions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+                    (*self._scope_values(action.scope), action.source_action_key),
+                ).fetchone()
+                if action_key is not None:
+                    raise ApprovedEpisodicEventConflict("approved event pin action key conflicts")
+                target = self._scoped_approved_event_row(connection, action.scope, action.event_id)
+                governed = self._scoped_approved_governance_row(
+                    connection, action.scope, action.event_id
+                )
+                if target is None or governed is not None:
+                    raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+                self._insert_approved_pin_action(connection, action)
+                return ApprovedEpisodicEventPinResult(
+                    action,
+                    self._approved_event_record(connection, action.scope, action.event_id),
+                    False,
+                )
+        except (ApprovedEpisodicEventConflict, ApprovedEpisodicEventNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event pin operation failed"
+            ) from error
 
     def store_and_activate(
         self,
@@ -5056,6 +5154,82 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _insert_approved_pin_action(
+        connection: sqlite3.Connection, action: ApprovedEpisodicEventPinAction
+    ) -> None:
+        connection.execute(
+            "INSERT INTO approved_episodic_event_pin_actions("
+            "action_id,event_id,pinned,source_action_key,occurred_at,owner_id,visibility,"
+            "workspace_id,project_id,session_id,task_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(action.action_id),
+                str(action.event_id),
+                int(action.pinned),
+                action.source_action_key,
+                action.occurred_at.isoformat(),
+                *SQLiteCheckpointRepository._scope_values(action.scope),
+            ),
+        )
+        for evidence in action.evidence_references:
+            existing = connection.execute(
+                "SELECT payload_json FROM evidence WHERE evidence_id = ?",
+                (str(evidence.evidence_id),),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO evidence(evidence_id, source_id, payload_json) VALUES (?, ?, ?)",
+                    (
+                        str(evidence.evidence_id),
+                        str(evidence.source_id),
+                        _json(evidence.to_dict()),
+                    ),
+                )
+            elif EvidenceReference.from_dict(json.loads(existing["payload_json"])) != evidence:
+                raise ApprovedEpisodicEventConflict(
+                    "approved event pin evidence identity conflicts"
+                )
+            connection.execute(
+                "INSERT INTO approved_episodic_event_pin_evidence(action_id, evidence_id) "
+                "VALUES (?, ?)",
+                (str(action.action_id), str(evidence.evidence_id)),
+            )
+        SQLiteCheckpointRepository._insert_event_outbox(
+            connection,
+            EventOutboxJob.create(
+                scope=action.scope,
+                topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+                source_event_id=action.action_id,
+                event_kind="pinned" if action.pinned else "unpinned",
+                occurred_at=action.occurred_at,
+                created_at=action.occurred_at,
+            ),
+        )
+
+    @staticmethod
+    def _insert_approved_pin_transfer(
+        connection: sqlite3.Connection,
+        governance: ApprovedEpisodicEventGovernance,
+        replacement_event_id: EventId,
+        evidence_references: tuple[EvidenceReference, ...],
+    ) -> None:
+        for event_id, pinned, suffix in (
+            (governance.target_event_id, False, "released"),
+            (replacement_event_id, True, "transferred"),
+        ):
+            SQLiteCheckpointRepository._insert_approved_pin_action(
+                connection,
+                ApprovedEpisodicEventPinAction.create(
+                    scope=governance.scope,
+                    event_id=event_id,
+                    pinned=pinned,
+                    source_action_key=f"governance-pin-{suffix}:{governance.action_id}",
+                    occurred_at=governance.occurred_at,
+                    evidence_references=evidence_references,
+                ),
+            )
+
+    @staticmethod
     def _insert_event_outbox(connection: sqlite3.Connection, job: EventOutboxJob) -> None:
         connection.execute(
             "INSERT INTO event_outbox("
@@ -5878,6 +6052,52 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _approved_pin_from_row(
+        connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
+    ) -> ApprovedEpisodicEventPinAction:
+        evidence_rows = connection.execute(
+            "SELECT evidence.payload_json FROM approved_episodic_event_pin_evidence AS link "
+            "JOIN evidence ON evidence.evidence_id = link.evidence_id "
+            "WHERE link.action_id = ? ORDER BY link.evidence_id ASC",
+            (row["action_id"],),
+        ).fetchall()
+        return ApprovedEpisodicEventPinAction(
+            action_id=EventId.from_string(row["action_id"]),
+            scope=scope,
+            event_id=EventId.from_string(row["event_id"]),
+            pinned=bool(row["pinned"]),
+            source_action_key=row["source_action_key"],
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            evidence_references=tuple(
+                EvidenceReference.from_dict(json.loads(item["payload_json"]))
+                for item in evidence_rows
+            ),
+        )
+
+    @staticmethod
+    def _approved_event_current_pin(
+        connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventPinAction | None:
+        row = connection.execute(
+            "SELECT * FROM approved_episodic_event_pin_actions WHERE event_id = ? "
+            "AND owner_id = ? AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+            "AND session_id = ? AND task_id = ? ORDER BY action_sequence DESC LIMIT 1",
+            (str(event_id), *SQLiteCheckpointRepository._scope_values(scope)),
+        ).fetchone()
+        return (
+            None
+            if row is None
+            else SQLiteCheckpointRepository._approved_pin_from_row(connection, row, scope)
+        )
+
+    @staticmethod
+    def _approved_event_is_pinned(
+        connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
+    ) -> bool:
+        action = SQLiteCheckpointRepository._approved_event_current_pin(connection, scope, event_id)
+        return action is not None and action.pinned
+
+    @staticmethod
     def _scoped_approved_event_row(
         connection: sqlite3.Connection, scope: MemoryScope, event_id: EventId
     ) -> sqlite3.Row | None:
@@ -5934,6 +6154,10 @@ class SQLiteCheckpointRepository:
                 else ApprovedEventLifecycleStatus.CORRECTED,
                 event,
                 governance,
+                governance is None
+                and SQLiteCheckpointRepository._approved_event_is_pinned(
+                    connection, scope, event_id
+                ),
             )
         if governance_row is not None and governance_row["action_kind"] == "retracted":
             governance = SQLiteCheckpointRepository._approved_governance_from_row(

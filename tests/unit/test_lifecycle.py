@@ -59,7 +59,7 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
     assert first["initialized"] is True
     assert second["initialized"] is False
-    assert first["schema_version"] == 26
+    assert first["schema_version"] == 27
     assert value.config.config_path.exists()
     assert value.config.database_path.exists()
 
@@ -137,6 +137,7 @@ def test_loopback_dashboard_serves_packaged_assets_and_sanitized_status(tmp_path
     assert 'fetch("/api/memories?offset=0&limit=50"' in script.body.decode()
     assert '"X-Mnemo-Intent": "correct-memory"' in script.body.decode()
     assert '"X-Mnemo-Intent": "retract-memory"' in script.body.decode()
+    assert '"X-Mnemo-Intent": "pin-memory"' in script.body.decode()
     assert status["lifecycle"]["initialized"] is True
     assert status["connections"] == details["connections"]
     encoded = json.dumps(status)

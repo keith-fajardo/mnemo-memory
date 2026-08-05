@@ -261,6 +261,10 @@ and idempotency; deterministic schema, policy, consent, and evidence validation;
 destructive or authority-changing writes; audit metadata without sensitive payloads. Personal CLI
 governance resolves only an enabled canonical project binding, requires confirmation, and uses a
 deterministic action key so retry cannot create a second replacement or tombstone.
+The local dashboard applies the same exact binding and deterministic evidence rule, and rejects a
+correction, retraction, pin, or unpin unless its request has the exact same-loopback origin and
+operation-specific intent header. Pinning changes bounded retrieval priority only; it cannot widen
+scope, bypass source authority, or keep a retracted payload active.
 
 **Verification:** Read-only annotation tests, confused-deputy cases, replay tests, malformed scope,
 stale consent, injection-triggered writes, and mutation authorization matrices.

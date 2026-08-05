@@ -10,6 +10,7 @@ from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
@@ -623,8 +624,11 @@ class ApprovedEpisodicEventRecord:
     status: ApprovedEventLifecycleStatus
     event: ApprovedEpisodicEvent | None
     governance: ApprovedEpisodicEventGovernance | None
+    pinned: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.pinned, bool):
+            raise TypeError("approved event pin state must be a boolean")
         if self.status is ApprovedEventLifecycleStatus.ACTIVE:
             if self.event is None or self.governance is not None:
                 raise ValueError("active approved event record is invalid")
@@ -633,6 +637,8 @@ class ApprovedEpisodicEventRecord:
                 raise ValueError("corrected approved event record is invalid")
         elif self.event is not None or self.governance is None:
             raise ValueError("retracted approved event record is invalid")
+        if self.status is not ApprovedEventLifecycleStatus.ACTIVE and self.pinned:
+            raise ValueError("only an active approved event may be pinned")
         if self.event is not None and (
             self.event.event_id != self.event_id or self.event.scope != self.scope
         ):
@@ -655,6 +661,13 @@ class ApprovedEpisodicEventRecordPage:
 class ApprovedEpisodicEventGovernanceResult:
     target: ApprovedEpisodicEventRecord
     replacement: ApprovedEpisodicEventRecord | None
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventPinResult:
+    action: ApprovedEpisodicEventPinAction
+    record: ApprovedEpisodicEventRecord
     idempotent: bool
 
 
@@ -690,6 +703,10 @@ class ApprovedEpisodicEventRepository(Protocol):
     def list_approved_event_records(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventRecordPage: ...
+
+    def set_approved_event_pin(
+        self, action: ApprovedEpisodicEventPinAction
+    ) -> ApprovedEpisodicEventPinResult: ...
 
 
 @dataclass(frozen=True, slots=True)

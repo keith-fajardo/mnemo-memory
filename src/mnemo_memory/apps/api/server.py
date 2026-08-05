@@ -13,6 +13,7 @@ from mnemo_memory.apps.api.memories import (
     build_approved_memory_page,
     correct_approved_memory,
     retract_approved_memory,
+    set_approved_memory_pin,
 )
 from mnemo_memory.packages.application import (
     PersonalSettingsStore,
@@ -36,6 +37,7 @@ def main() -> None:
             lambda offset, limit: build_approved_memory_page(config, offset=offset, limit=limit),
             lambda event_id, value: correct_approved_memory(config, event_id, value),
             lambda event_id, value: retract_approved_memory(config, event_id, value),
+            lambda event_id, value: set_approved_memory_pin(config, event_id, value),
         ),
         host=config.host,
         port=config.port,

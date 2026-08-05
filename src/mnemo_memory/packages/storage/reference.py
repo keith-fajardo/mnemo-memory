@@ -11,6 +11,7 @@ from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     ApprovedEventGovernanceKind,
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
@@ -94,6 +95,7 @@ from .contracts import (
     ApprovedEpisodicEventGovernanceResult,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventPage,
+    ApprovedEpisodicEventPinResult,
     ApprovedEpisodicEventRecord,
     ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventSecretRejected,
@@ -1653,6 +1655,9 @@ class ReferenceApprovedEpisodicEventRepository:
         self._keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._governance: dict[EventId, ApprovedEpisodicEventGovernance] = {}
         self._action_keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._pin_actions: dict[EventId, ApprovedEpisodicEventPinAction] = {}
+        self._pin_action_keys: dict[tuple[MemoryScope, str], EventId] = {}
+        self._current_pins: dict[EventId, ApprovedEpisodicEventPinAction] = {}
         self._ordered: list[EventId] = []
 
     def append_approved_event(
@@ -1703,6 +1708,7 @@ class ReferenceApprovedEpisodicEventRepository:
             and self._events[event_id].scope == scope
             and event_id not in self._governance
         )
+        items = tuple(sorted(items, key=lambda item: not self._is_pinned(item.event_id)))
         return ApprovedEpisodicEventPage(
             items[offset : offset + limit],
             offset + limit if offset + limit < len(items) else None,
@@ -1761,8 +1767,13 @@ class ReferenceApprovedEpisodicEventRepository:
             self._action_keys[(governance.scope, governance.source_action_key)] = (
                 governance.action_id
             )
+            pin_actions = self._transfer_pin(governance, replacement.event_id)
             self.outbox._enqueue_many(
-                (self._event_job(replacement), self._governance_job(governance))
+                (
+                    self._event_job(replacement),
+                    self._governance_job(governance),
+                    *(self._pin_job(action) for action in pin_actions),
+                )
             )
         except BaseException:
             self._restore(state)
@@ -1802,9 +1813,15 @@ class ReferenceApprovedEpisodicEventRepository:
             self._action_keys[(governance.scope, governance.source_action_key)] = (
                 governance.action_id
             )
+            pin_action = self._remove_pin_for_retraction(governance)
             del self._events[target.event_id]
             del self._keys[(target.scope, target.source_event_key)]
-            self.outbox._enqueue(self._governance_job(governance))
+            self.outbox._enqueue_many(
+                (
+                    self._governance_job(governance),
+                    *(() if pin_action is None else (self._pin_job(pin_action),)),
+                )
+            )
         except BaseException:
             self._restore(state)
             raise
@@ -1826,7 +1843,14 @@ class ReferenceApprovedEpisodicEventRepository:
                 if governance is None
                 else ApprovedEventLifecycleStatus.CORRECTED
             )
-            return ApprovedEpisodicEventRecord(event_id, scope, status, event, governance)
+            return ApprovedEpisodicEventRecord(
+                event_id,
+                scope,
+                status,
+                event,
+                governance,
+                status is ApprovedEventLifecycleStatus.ACTIVE and self._is_pinned(event_id),
+            )
         if governance is not None and governance.scope == scope:
             return ApprovedEpisodicEventRecord(
                 event_id,
@@ -1856,6 +1880,90 @@ class ReferenceApprovedEpisodicEventRepository:
             offset + limit if offset + limit < len(records) else None,
         )
 
+    def set_approved_event_pin(
+        self, action: ApprovedEpisodicEventPinAction
+    ) -> ApprovedEpisodicEventPinResult:
+        self._require_scope(action.scope)
+        if not self._policy.assess_pin(action).accepted:
+            raise ApprovedEpisodicEventSecretRejected(
+                "approved episodic event pin was rejected by secret policy"
+            )
+        existing = self._pin_actions.get(action.action_id)
+        if existing is not None:
+            if not existing.same_intent(action):
+                raise ApprovedEpisodicEventConflict("approved event pin action conflicts")
+            return ApprovedEpisodicEventPinResult(
+                existing,
+                self.get_approved_event_record(action.scope, action.event_id),
+                True,
+            )
+        if (action.scope, action.source_action_key) in self._pin_action_keys:
+            raise ApprovedEpisodicEventConflict("approved event pin action key conflicts")
+        event = self._events.get(action.event_id)
+        if event is None or event.scope != action.scope or action.event_id in self._governance:
+            raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+        state = self._snapshot()
+        try:
+            self._store_pin_action(action)
+            self.outbox._enqueue(self._pin_job(action))
+        except BaseException:
+            self._restore(state)
+            raise
+        return ApprovedEpisodicEventPinResult(
+            action,
+            self.get_approved_event_record(action.scope, action.event_id),
+            False,
+        )
+
+    def _is_pinned(self, event_id: EventId) -> bool:
+        action = self._current_pins.get(event_id)
+        return action is not None and action.pinned
+
+    def _store_pin_action(self, action: ApprovedEpisodicEventPinAction) -> None:
+        self._pin_actions[action.action_id] = action
+        self._pin_action_keys[(action.scope, action.source_action_key)] = action.action_id
+        self._current_pins[action.event_id] = action
+
+    def _transfer_pin(
+        self, governance: ApprovedEpisodicEventGovernance, replacement_event_id: EventId
+    ) -> tuple[ApprovedEpisodicEventPinAction, ...]:
+        current = self._current_pins.get(governance.target_event_id)
+        if current is None or not current.pinned:
+            return ()
+        actions: list[ApprovedEpisodicEventPinAction] = []
+        for event_id, pinned, suffix in (
+            (governance.target_event_id, False, "released"),
+            (replacement_event_id, True, "transferred"),
+        ):
+            action = ApprovedEpisodicEventPinAction.create(
+                scope=governance.scope,
+                event_id=event_id,
+                pinned=pinned,
+                source_action_key=f"governance-pin-{suffix}:{governance.action_id}",
+                occurred_at=governance.occurred_at,
+                evidence_references=current.evidence_references,
+            )
+            self._store_pin_action(action)
+            actions.append(action)
+        return tuple(actions)
+
+    def _remove_pin_for_retraction(
+        self, governance: ApprovedEpisodicEventGovernance
+    ) -> ApprovedEpisodicEventPinAction | None:
+        current = self._current_pins.get(governance.target_event_id)
+        if current is None or not current.pinned:
+            return None
+        action = ApprovedEpisodicEventPinAction.create(
+            scope=governance.scope,
+            event_id=governance.target_event_id,
+            pinned=False,
+            source_action_key=f"governance-pin-retracted:{governance.action_id}",
+            occurred_at=governance.occurred_at,
+            evidence_references=current.evidence_references,
+        )
+        self._store_pin_action(action)
+        return action
+
     def _validate_governance(
         self, scope: MemoryScope, governance: ApprovedEpisodicEventGovernance
     ) -> None:
@@ -1876,6 +1984,9 @@ class ReferenceApprovedEpisodicEventRepository:
         dict[tuple[MemoryScope, str], EventId],
         dict[EventId, ApprovedEpisodicEventGovernance],
         dict[tuple[MemoryScope, str], EventId],
+        dict[EventId, ApprovedEpisodicEventPinAction],
+        dict[tuple[MemoryScope, str], EventId],
+        dict[EventId, ApprovedEpisodicEventPinAction],
         list[EventId],
     ]:
         return (
@@ -1883,6 +1994,9 @@ class ReferenceApprovedEpisodicEventRepository:
             dict(self._keys),
             dict(self._governance),
             dict(self._action_keys),
+            dict(self._pin_actions),
+            dict(self._pin_action_keys),
+            dict(self._current_pins),
             list(self._ordered),
         )
 
@@ -1893,6 +2007,9 @@ class ReferenceApprovedEpisodicEventRepository:
             dict[tuple[MemoryScope, str], EventId],
             dict[EventId, ApprovedEpisodicEventGovernance],
             dict[tuple[MemoryScope, str], EventId],
+            dict[EventId, ApprovedEpisodicEventPinAction],
+            dict[tuple[MemoryScope, str], EventId],
+            dict[EventId, ApprovedEpisodicEventPinAction],
             list[EventId],
         ],
     ) -> None:
@@ -1901,6 +2018,9 @@ class ReferenceApprovedEpisodicEventRepository:
             self._keys,
             self._governance,
             self._action_keys,
+            self._pin_actions,
+            self._pin_action_keys,
+            self._current_pins,
             self._ordered,
         ) = state
 
@@ -1924,6 +2044,17 @@ class ReferenceApprovedEpisodicEventRepository:
             event_kind=governance.kind.value,
             occurred_at=governance.occurred_at,
             created_at=governance.occurred_at,
+        )
+
+    @staticmethod
+    def _pin_job(action: ApprovedEpisodicEventPinAction) -> EventOutboxJob:
+        return EventOutboxJob.create(
+            scope=action.scope,
+            topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+            source_event_id=action.action_id,
+            event_kind="pinned" if action.pinned else "unpinned",
+            occurred_at=action.occurred_at,
+            created_at=action.occurred_at,
         )
 
     @staticmethod

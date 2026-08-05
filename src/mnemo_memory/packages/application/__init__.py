@@ -9,6 +9,7 @@ from .bootstrap import (
 from .checkpoints import (
     AbandonCheckpoint,
     ApprovedEpisodicEventGovernanceView,
+    ApprovedEpisodicEventPinView,
     ApprovedEpisodicEventView,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
@@ -35,6 +36,7 @@ from .checkpoints import (
     RecordCheckpointLesson,
     RetractApprovedEpisodicEvent,
     ReviseCheckpoint,
+    SetApprovedEpisodicEventPin,
 )
 from .config import (
     LocalConfig,
@@ -99,6 +101,7 @@ from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsS
 __all__ = [
     "AbandonCheckpoint",
     "ApprovedEpisodicEventGovernanceView",
+    "ApprovedEpisodicEventPinView",
     "ApprovedEpisodicEventView",
     "CheckpointApplicationBudgetExceeded",
     "CheckpointApplicationDuplicate",
@@ -175,6 +178,7 @@ __all__ = [
     "ResolvedManifestFile",
     "RetractApprovedEpisodicEvent",
     "ReviseCheckpoint",
+    "SetApprovedEpisodicEventPin",
     "SourceFreshnessQueryResult",
     "SynchronizeKnowledgeDocuments",
     "TestCoverageQueryResult",

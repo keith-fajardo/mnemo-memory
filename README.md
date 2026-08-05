@@ -358,7 +358,9 @@ credentials, or command output. The Approved Memory section explicitly displays 
 decision/failure/tool-outcome facts for the current registered project task, including retained
 evidence and correction/retraction lineage; it never retrieves another project. Confirmed
 same-origin controls can append an evidence-backed correction or erase an active fact's retained
-payload while preserving its minimal tombstone. Its Settings section controls repository-note
+payload while preserving its minimal tombstone. They can also pin an active fact so it is selected
+before unpinned recency within the same bounded project-task retrieval; correction transfers that
+pin and erasure removes it. Its Settings section controls repository-note
 auto-sync, explicit approved-event capture, optional model routing metadata, future retention
 defaults, and packet budgets. It never accepts an API key. Changes apply to new MCP processes and
 automatic hooks; existing retention schedules are not silently rewritten. Stop it with

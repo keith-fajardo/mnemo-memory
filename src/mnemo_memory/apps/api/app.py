@@ -45,6 +45,7 @@ def create_app(
     approved_memory_page: Callable[[int, int], dict[str, object]] | None = None,
     correct_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
     retract_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
+    set_approved_memory_pin: Callable[[str, object], dict[str, object]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -157,6 +158,15 @@ def create_app(
         if retract_approved_memory is None:
             raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE")
         return _memory_action(lambda: retract_approved_memory(event_id, value))
+
+    @app.put("/api/memories/{event_id}/pin")
+    def set_memory_pin(
+        event_id: str, request: Request, value: dict[str, object]
+    ) -> dict[str, object]:
+        _require_memory_write(request, service, "pin-memory")
+        if set_approved_memory_pin is None:
+            raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE")
+        return _memory_action(lambda: set_approved_memory_pin(event_id, value))
 
     return app
 

@@ -13,6 +13,7 @@ from mnemo_memory.packages.domain import (
     DEFAULT_CONTEXT_BUDGET,
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
     CheckpointAggregate,
@@ -197,6 +198,15 @@ class RetractApprovedEpisodicEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class SetApprovedEpisodicEventPin:
+    scope: MemoryScope
+    event_id: EventId
+    pinned: bool
+    source_action_key: str
+    evidence_references: tuple[EvidenceReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class GetApprovedEpisodicEventRecord:
     scope: MemoryScope
     event_id: EventId
@@ -266,6 +276,12 @@ class ApprovedEpisodicEventView:
 class ApprovedEpisodicEventGovernanceView:
     target: ApprovedEpisodicEventRecord
     replacement: ApprovedEpisodicEventRecord | None
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEpisodicEventPinView:
+    record: ApprovedEpisodicEventRecord
     idempotent: bool
 
 
@@ -637,6 +653,42 @@ class CheckpointApplicationService:
             raise CheckpointApplicationStorageFailure(
                 "approved episodic event storage is unavailable"
             ) from error
+
+    def set_approved_event_pin(
+        self, command: SetApprovedEpisodicEventPin
+    ) -> ApprovedEpisodicEventPinView:
+        self._validate_scope(command.scope)
+        repository = self._approved_repository()
+        evidence = self._approved_governance_evidence(command.evidence_references)
+        try:
+            action = ApprovedEpisodicEventPinAction.create(
+                scope=command.scope,
+                event_id=command.event_id,
+                pinned=command.pinned,
+                source_action_key=command.source_action_key,
+                occurred_at=self._now(),
+                evidence_references=evidence,
+            )
+            result = repository.set_approved_event_pin(action)
+        except ApprovedEpisodicEventSecretRejected as error:
+            raise CheckpointApplicationInvalidContent(
+                "approved event pin was rejected by deterministic secret policy"
+            ) from error
+        except ApprovedEpisodicEventNotFound as error:
+            raise CheckpointApplicationEpisodicEventNotFound(
+                "approved episodic event was not found"
+            ) from error
+        except ApprovedEpisodicEventConflict as error:
+            raise CheckpointApplicationEpisodicEventConflict(
+                "approved episodic event pin conflicts"
+            ) from error
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        except (TypeError, ValueError) as error:
+            raise CheckpointApplicationInvalidContent("approved event pin is invalid") from error
+        return ApprovedEpisodicEventPinView(result.record, result.idempotent)
 
     def list_approved_event_records(
         self, query: ListApprovedEpisodicEventRecords

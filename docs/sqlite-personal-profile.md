@@ -22,6 +22,14 @@ transaction, not a schema migration; it removes one approved event payload and i
 links only after inserting the scoped tombstone. Restore the pre-upgrade database backup to return
 to schema 12; no down-migration is provided because schema-12 code cannot enforce governance state.
 
+Migration `0027_approved_episodic_event_pins.sql` additively stores immutable, evidence-linked pin
+and unpin actions for active approved facts. The current state is the latest action for one exact
+scoped event; the event row is deliberately not a foreign-key target because a later retraction
+must erase that payload while retaining the bounded action audit. An insertion trigger still
+requires an exact live scoped target at action time. The migration is forward-only and
+transactional: an injected failure leaves schema 26 and its ledger unchanged. Restore the
+pre-upgrade schema-26 backup to reverse a committed migration 0027.
+
 Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
 projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
 result, and timing row to both its digest-addressed supplemental artifact and an existing manifest

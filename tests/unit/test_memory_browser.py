@@ -18,6 +18,7 @@ from mnemo_memory.apps.api.memories import (
     build_approved_memory_page,
     correct_approved_memory,
     retract_approved_memory,
+    set_approved_memory_pin,
 )
 from mnemo_memory.packages.application import (
     CorrectApprovedEpisodicEvent,
@@ -200,6 +201,14 @@ def test_browser_actions_correct_idempotently_and_erase_payload_in_exact_scope(
         "summary": corrected_summary,
         "reason": "The verified project evidence disproved the original grain.",
     }
+    pinned = set_approved_memory_pin(
+        config, str(original.event_id), {"pinned": True}, project_directory=project
+    )
+    pin_retry = set_approved_memory_pin(
+        config, str(original.event_id), {"pinned": True}, project_directory=project
+    )
+    assert pinned["idempotent"] is False
+    assert pin_retry["idempotent"] is True
     corrected = correct_approved_memory(
         config, str(original.event_id), correction_value, project_directory=project
     )
@@ -210,6 +219,7 @@ def test_browser_actions_correct_idempotently_and_erase_payload_in_exact_scope(
     assert retried["idempotent"] is True
     replacement = cast(dict[str, object], corrected["replacement"])
     replacement_id = str(replacement["event_id"])
+    assert replacement["pinned"] is True
 
     with pytest.raises(ApprovedMemoryActionNotFound):
         retract_approved_memory(
@@ -260,11 +270,16 @@ def test_memory_write_api_requires_explicit_same_origin_intent_and_safe_errors(
         actions.append(("retract", event_id, value))
         return {"idempotent": False}
 
+    def pin(event_id: str, value: object) -> dict[str, object]:
+        actions.append(("pin", event_id, value))
+        return {"idempotent": False}
+
     client = TestClient(
         create_app(
             service,
             correct_approved_memory=correct,
             retract_approved_memory=retract,
+            set_approved_memory_pin=pin,
         ),
         base_url="http://127.0.0.1:8765",
     )
@@ -301,7 +316,16 @@ def test_memory_write_api_requires_explicit_same_origin_intent_and_safe_errors(
         },
     )
     assert erased.status_code == 200
-    assert [item[0] for item in actions] == ["correct", "retract"]
+    pinned_response = client.put(
+        f"/api/memories/{event_id}/pin",
+        json={"pinned": True},
+        headers={
+            "Origin": "http://127.0.0.1:8765",
+            "X-Mnemo-Intent": "pin-memory",
+        },
+    )
+    assert pinned_response.status_code == 200
+    assert [item[0] for item in actions] == ["correct", "retract", "pin"]
 
     def unavailable(_: str, __: object) -> dict[str, object]:
         raise ApprovedMemoryActionError("private failure detail")

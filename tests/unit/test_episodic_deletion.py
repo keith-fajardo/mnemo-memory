@@ -460,7 +460,7 @@ def test_deletion_migration_is_atomic_forward_only_and_payload_free(tmp_path: Pa
         connection.execute("DROP TRIGGER task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 26")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 26")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         sqlite.migrate(fail_after_version=26)
@@ -477,7 +477,7 @@ def test_deletion_migration_is_atomic_forward_only_and_payload_free(tmp_path: Pa
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 26
+    assert sqlite.schema_version() == 27
     with sqlite3.connect(sqlite.path) as connection:
         source_columns = {
             row[1]

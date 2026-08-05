@@ -44,6 +44,15 @@ transactional; failure rolls back its schema objects and ledger entry, and retry
 whole step. Recovery from a successfully committed migration requires restoring the pre-upgrade
 personal-profile database backup rather than attempting a lossy down-migration.
 
+Pinning is a separate immutable user-action ledger introduced by migration 0027. A pin does not
+change fact content, evidence, source authority, or authorization; it only places an active fact
+before unpinned recency inside the already bounded approved-fact selection. Pin and unpin actions
+require verified user-correction evidence and complete task scope. Correcting a pinned fact
+atomically releases the superseded identity and transfers the pin to its replacement; retracting a
+pinned fact atomically records an unpin before payload erasure. Historical pin actions remain
+audit metadata, while corrected and retracted review records are never reported as currently
+pinned.
+
 ## Consequences
 
 This provides a durable, privacy-bounded event substrate plus explicit personal governance. It does
