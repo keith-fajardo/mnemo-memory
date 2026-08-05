@@ -68,6 +68,12 @@ from .contracts import (
     TaskActivityEventRepository,
     TaskActivityEventStorageFailure,
     TaskActivityEventStoreResult,
+    TaskActivityExpirationResult,
+    TaskActivityPurgeResult,
+    TaskActivityRetentionConflict,
+    TaskActivityRetentionNotFound,
+    TaskActivityRetentionRepository,
+    TaskActivityRetentionStorageFailure,
 )
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
@@ -172,4 +178,10 @@ __all__ = [
     "TaskActivityEventRepository",
     "TaskActivityEventStorageFailure",
     "TaskActivityEventStoreResult",
+    "TaskActivityExpirationResult",
+    "TaskActivityPurgeResult",
+    "TaskActivityRetentionConflict",
+    "TaskActivityRetentionNotFound",
+    "TaskActivityRetentionRepository",
+    "TaskActivityRetentionStorageFailure",
 ]

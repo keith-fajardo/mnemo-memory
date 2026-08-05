@@ -9,6 +9,9 @@ from .retention import (
     EpisodicPurgeSweepResult,
     EpisodicRetentionService,
     EpisodicRetentionSweepResult,
+    TaskActivityPurgeSweepResult,
+    TaskActivityRetentionService,
+    TaskActivityRetentionSweepResult,
 )
 
 __all__ = [
@@ -18,4 +21,7 @@ __all__ = [
     "EpisodicPurgeSweepResult",
     "EpisodicRetentionService",
     "EpisodicRetentionSweepResult",
+    "TaskActivityPurgeSweepResult",
+    "TaskActivityRetentionService",
+    "TaskActivityRetentionSweepResult",
 ]

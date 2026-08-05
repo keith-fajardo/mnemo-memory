@@ -167,8 +167,15 @@ Approval, correction, retraction, confidence, or access cannot extend this sched
 purge operation then removes the candidate claim and its dependent review/governance payloads and
 newly orphaned evidence while retaining the payload-free expiration record as an anti-resurrection
 tombstone. It does not remove the permitted source task event or evidence still referenced by that
-event. Raw-event retention, source/user deletion propagation, export cleanup, and backup cleanup
-remain separate lifecycle operations.
+event. Source/user deletion propagation, export cleanup, and backup cleanup remain separate
+lifecycle operations.
+
+An explicitly minimized task-activity event follows the same deterministic pattern using its own
+canonical schedule. Expiration hides its summary and evidence immediately. Physical purge waits
+until every dependent episodic candidate payload has been purged, then removes the event, evidence
+links, newly orphaned evidence, and task-activity outbox job while preserving payload-free event
+and candidate tombstones. Event retry cannot restore expired or purged content. This lifecycle does
+not apply to arbitrary conversations, source documents, checkpoints, exports, or backups.
 
 ## Correction and conflict handling
 

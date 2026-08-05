@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 from threading import Lock
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
@@ -59,6 +59,9 @@ from mnemo_memory.packages.domain import (
     OutboxJobId,
     ScopeLevel,
     TaskActivityEvent,
+    TaskActivityEventExpiration,
+    TaskActivityEventPurge,
+    TaskActivityEventRetentionTarget,
     active_episodic_memory_at_revision,
     replay_episodic_memory_revisions,
 )
@@ -152,6 +155,11 @@ from .contracts import (
     TaskActivityEventRejected,
     TaskActivityEventRepository,
     TaskActivityEventStoreResult,
+    TaskActivityExpirationResult,
+    TaskActivityPurgeResult,
+    TaskActivityRetentionConflict,
+    TaskActivityRetentionNotFound,
+    TaskActivityRetentionRepository,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
@@ -513,6 +521,17 @@ class ReferenceEventOutboxRepository:
             self._jobs.update((job.job_id, job) for job in jobs)
             return tuple(self._jobs[job.job_id] for job in jobs)
 
+    def _cancel_source_jobs(
+        self, topic: EventOutboxTopic, source_event_ids: tuple[EventId, ...]
+    ) -> None:
+        targets = set(source_event_ids)
+        with self._lock:
+            self._jobs = {
+                job_id: job
+                for job_id, job in self._jobs.items()
+                if job.topic is not topic or job.source_event_id not in targets
+            }
+
     def _scoped_job(self, scope: MemoryScope, job_id: OutboxJobId) -> EventOutboxJob:
         self._require_scope(scope)
         job = self._jobs.get(job_id)
@@ -549,11 +568,15 @@ class ReferenceTaskActivityEventRepository:
         self._events: dict[EventId, TaskActivityEvent] = {}
         self._keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._ordered: list[EventId] = []
+        self._expirations: dict[EventId, TaskActivityEventExpiration] = {}
+        self._purges: dict[EventId, TaskActivityEventPurge] = {}
 
     def append_task_activity_event(self, event: TaskActivityEvent) -> TaskActivityEventStoreResult:
         self._require_scope(event.scope)
         if not self._policy.assess(event).accepted:
             raise TaskActivityEventRejected("task activity event was rejected by safety policy")
+        if event.event_id in self._expirations:
+            raise TaskActivityEventConflict("expired task activity event cannot be restored")
         key = (event.scope, event.source_event_key)
         existing_id = self._keys.get(key)
         if existing_id is not None:
@@ -585,7 +608,7 @@ class ReferenceTaskActivityEventRepository:
     def get_task_activity_event(self, scope: MemoryScope, event_id: EventId) -> TaskActivityEvent:
         self._require_scope(scope)
         event = self._events.get(event_id)
-        if event is None or event.scope != scope:
+        if event is None or event.scope != scope or event_id in self._expirations:
             raise TaskActivityEventNotFound("task activity event was not found")
         return event
 
@@ -598,12 +621,158 @@ class ReferenceTaskActivityEventRepository:
         items = tuple(
             self._events[event_id]
             for event_id in reversed(self._ordered)
-            if self._events[event_id].scope == scope
+            if self._events[event_id].scope == scope and event_id not in self._expirations
         )
         return TaskActivityEventPage(
             items[offset : offset + limit],
             offset + limit if offset + limit < len(items) else None,
         )
+
+    def list_due_task_activity_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[TaskActivityEventRetentionTarget, ...]:
+        self._require_scope(scope)
+        _require_aware_datetime(as_of, "as_of")
+        targets = tuple(
+            TaskActivityEventRetentionTarget(event.event_id, event.scope, event.retention)
+            for event in self._events.values()
+            if event.scope == scope
+            and event.event_id not in self._expirations
+            and not event.retention.permanent
+            and event.retention.is_expired(as_of)
+        )
+        return tuple(
+            sorted(
+                targets,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.event_id),
+                ),
+            )
+        )
+
+    def apply_task_activity_expirations(
+        self, expirations: tuple[TaskActivityEventExpiration, ...]
+    ) -> TaskActivityExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return TaskActivityExpirationResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity expiration batch is invalid")
+        existing_count = 0
+        for expiration in values:
+            if not isinstance(expiration, TaskActivityEventExpiration):
+                raise TypeError("task activity expiration batch is invalid")
+            self._require_scope(expiration.scope)
+            event = self._events.get(expiration.event_id)
+            if event is None or event.scope != expiration.scope:
+                raise TaskActivityRetentionNotFound("task activity retention target was not found")
+            if (
+                event.retention.permanent
+                or event.retention.policy_id != expiration.retention_policy_id
+                or event.retention.expires_at != expiration.scheduled_expires_at
+                or not event.retention.is_expired(expiration.expired_at)
+            ):
+                raise TaskActivityRetentionConflict(
+                    "task activity expiration does not match canonical retention"
+                )
+            existing = self._expirations.get(expiration.event_id)
+            if existing is not None:
+                if existing != expiration:
+                    raise TaskActivityRetentionConflict(
+                        "task activity event already has a different expiration"
+                    )
+                existing_count += 1
+        stored = dict(self._expirations)
+        stored.update((item.event_id, item) for item in values)
+        self._expirations = stored
+        return TaskActivityExpirationResult(values, existing_count == len(values))
+
+    def get_task_activity_expiration(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration:
+        self._require_scope(scope)
+        expiration = self._expirations.get(event_id)
+        if expiration is None or expiration.scope != scope:
+            raise TaskActivityRetentionNotFound("task activity expiration was not found")
+        return expiration
+
+    def list_unpurged_task_activity_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[TaskActivityEventExpiration, ...]:
+        self._require_scope(scope)
+        return tuple(
+            sorted(
+                (
+                    expiration
+                    for event_id, expiration in self._expirations.items()
+                    if expiration.scope == scope and event_id not in self._purges
+                ),
+                key=lambda item: (item.expired_at.isoformat(), str(item.event_id)),
+            )
+        )
+
+    def apply_task_activity_purges(
+        self, purges: tuple[TaskActivityEventPurge, ...]
+    ) -> TaskActivityPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return TaskActivityPurgeResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity purge batch is invalid")
+        existing_count = 0
+        for purge in values:
+            if not isinstance(purge, TaskActivityEventPurge):
+                raise TypeError("task activity purge batch is invalid")
+            self._require_scope(purge.scope)
+            expiration = self._expirations.get(purge.event_id)
+            if expiration is None or expiration.scope != purge.scope:
+                raise TaskActivityRetentionNotFound(
+                    "task activity expiration was not found for purge"
+                )
+            if (
+                purge.expiration_id != expiration.expiration_id
+                or purge.purged_at < expiration.expired_at
+            ):
+                raise TaskActivityRetentionConflict(
+                    "task activity purge does not match canonical expiration"
+                )
+            existing = self._purges.get(purge.event_id)
+            if existing is not None:
+                if existing != purge:
+                    raise TaskActivityRetentionConflict(
+                        "task activity event already has a different purge"
+                    )
+                existing_count += 1
+            elif purge.event_id not in self._events:
+                raise TaskActivityRetentionNotFound(
+                    "task activity event payload was not found for purge"
+                )
+        events = dict(self._events)
+        ordered = list(self._ordered)
+        stored_purges = dict(self._purges)
+        new_event_ids: list[EventId] = []
+        for purge in values:
+            if purge.event_id in stored_purges:
+                continue
+            events.pop(purge.event_id)
+            ordered = [item for item in ordered if item != purge.event_id]
+            stored_purges[purge.event_id] = purge
+            new_event_ids.append(purge.event_id)
+        self.outbox._cancel_source_jobs(EventOutboxTopic.TASK_ACTIVITY, tuple(new_event_ids))
+        self._events, self._ordered, self._purges = events, ordered, stored_purges
+        return TaskActivityPurgeResult(values, existing_count == len(values))
+
+    def get_task_activity_purge(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge:
+        self._require_scope(scope)
+        purge = self._purges.get(event_id)
+        if purge is None or purge.scope != scope:
+            raise TaskActivityRetentionNotFound("task activity purge was not found")
+        return purge
 
     @staticmethod
     def _require_scope(scope: MemoryScope) -> None:
@@ -642,6 +811,8 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryCandidateStoreResult:
         values = self._validate_batch(candidates)
         first = values[0]
+        if any(candidate.memory_id in self._expirations for candidate in values):
+            raise EpisodicMemoryCandidateConflict("expired episodic candidates cannot be restored")
         source = self._activity_events.get_task_activity_event(first.scope, first.source_event_id)
         if any(
             candidate.scope != source.scope
@@ -656,8 +827,6 @@ class ReferenceEpisodicMemoryCandidateRepository:
             raise EpisodicMemoryCandidateRejected(
                 "episodic candidate batch was rejected by safety policy"
             )
-        if any(candidate.memory_id in self._expirations for candidate in values):
-            raise EpisodicMemoryCandidateConflict("expired episodic candidates cannot be restored")
         existing = tuple(
             sorted(
                 (
@@ -1069,6 +1238,49 @@ class ReferenceEpisodicMemoryCandidateRepository:
         if purge is None or purge.scope != scope:
             raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
         return purge
+
+    def list_due_task_activity_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[TaskActivityEventRetentionTarget, ...]:
+        return self._task_activity_retention.list_due_task_activity_retention(scope, as_of=as_of)
+
+    def apply_task_activity_expirations(
+        self, expirations: tuple[TaskActivityEventExpiration, ...]
+    ) -> TaskActivityExpirationResult:
+        return self._task_activity_retention.apply_task_activity_expirations(expirations)
+
+    def get_task_activity_expiration(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration:
+        return self._task_activity_retention.get_task_activity_expiration(scope, event_id)
+
+    def list_unpurged_task_activity_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[TaskActivityEventExpiration, ...]:
+        return self._task_activity_retention.list_unpurged_task_activity_expirations(scope)
+
+    def apply_task_activity_purges(
+        self, purges: tuple[TaskActivityEventPurge, ...]
+    ) -> TaskActivityPurgeResult:
+        values = tuple(purges)
+        if any(
+            candidate.source_event_id == purge.event_id
+            for purge in values
+            for candidate in self._candidates.values()
+        ):
+            raise TaskActivityRetentionConflict(
+                "task activity event still has dependent episodic candidate payloads"
+            )
+        return self._task_activity_retention.apply_task_activity_purges(values)
+
+    def get_task_activity_purge(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge:
+        return self._task_activity_retention.get_task_activity_purge(scope, event_id)
+
+    @property
+    def _task_activity_retention(self) -> TaskActivityRetentionRepository:
+        return cast(TaskActivityRetentionRepository, self._activity_events)
 
     def _revisions_for(self, base: ActiveEpisodicMemory) -> tuple[EpisodicMemoryRevision, ...]:
         actions = tuple(

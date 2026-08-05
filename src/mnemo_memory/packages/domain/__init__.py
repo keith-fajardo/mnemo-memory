@@ -171,6 +171,11 @@ from .task_activity_events import (
     TaskActivityEvent,
     TaskActivityEventKind,
 )
+from .task_activity_retention import (
+    TaskActivityEventExpiration,
+    TaskActivityEventPurge,
+    TaskActivityEventRetentionTarget,
+)
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
@@ -308,7 +313,10 @@ __all__ = [
     "SourceTrustClass",
     "TaskActivityActor",
     "TaskActivityEvent",
+    "TaskActivityEventExpiration",
     "TaskActivityEventKind",
+    "TaskActivityEventPurge",
+    "TaskActivityEventRetentionTarget",
     "TaskId",
     "TokenEstimator",
     "UnsupportedDbtSupplementalSchema",

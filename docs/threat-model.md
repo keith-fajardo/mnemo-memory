@@ -178,16 +178,20 @@ revision payload query must exclude an expired identity before reconstruction or
 retry cannot restore an expired candidate. A later exact-scope purge marker is deterministic and
 payload-free; its transaction deletes the candidate claim, dependent review/governance payloads,
 links, and newly orphaned evidence while preserving the expiration tombstone and permitted source
-event. Permanent and not-yet-due schedules remain unchanged. The reference and SQLite adapters
-must discover identical expiration and purge sets and retain both states across restart.
+event. The minimized source event has its own payload-free expiration and purge markers. Source
+purge must fail while any candidate payload still depends on it, cancel its task-activity outbox
+job, remove only newly orphaned evidence, and leave candidate tombstones valid after source removal.
+Permanent and not-yet-due schedules remain unchanged. The reference and SQLite adapters must
+discover identical expiration and purge sets and retain both states across restart.
 
 **Verification:** Before/due boundary tests, exact-scope isolation, approval/correction/retraction
 fixtures, replay and conflicting-delivery tests, transaction failure injection, restart tests,
 payload-free schema inspection, and forward-only migration rollback with candidate preservation.
 
-**Residual risk:** Candidate-dependent purge does not yet expire or purge raw task events,
-propagate source or user-requested deletion, clean exports, or clean backups. Those remain required
-before the full retention and deletion promise is complete.
+**Residual risk:** Retention now covers the deliberately minimized task events, not arbitrary raw
+conversations or tool bodies (which Mnemo does not capture here). Source or user-requested deletion
+propagation, export cleanup, and backup cleanup remain required before the full retention and
+deletion promise is complete.
 
 ### Unauthorized memory mutation
 

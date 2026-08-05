@@ -53,6 +53,9 @@ from mnemo_memory.packages.domain import (
     ProjectClientProfile,
     ProjectProcedure,
     TaskActivityEvent,
+    TaskActivityEventExpiration,
+    TaskActivityEventPurge,
+    TaskActivityEventRetentionTarget,
     knowledge_search_tokens,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -211,6 +214,18 @@ class TaskActivityEventStorageFailure(TaskActivityEventRepositoryError):
     pass
 
 
+class TaskActivityRetentionNotFound(TaskActivityEventRepositoryError):
+    pass
+
+
+class TaskActivityRetentionConflict(TaskActivityEventRepositoryError):
+    pass
+
+
+class TaskActivityRetentionStorageFailure(TaskActivityEventRepositoryError):
+    pass
+
+
 class EpisodicMemoryCandidateRepositoryError(Exception):
     """Expected storage-neutral outcome for inactive extracted candidates."""
 
@@ -361,6 +376,44 @@ class TaskActivityEventRepository(Protocol):
     def list_task_activity_events(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> TaskActivityEventPage: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActivityExpirationResult:
+    expirations: tuple[TaskActivityEventExpiration, ...]
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActivityPurgeResult:
+    purges: tuple[TaskActivityEventPurge, ...]
+    idempotent: bool
+
+
+class TaskActivityRetentionRepository(Protocol):
+    def list_due_task_activity_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[TaskActivityEventRetentionTarget, ...]: ...
+
+    def apply_task_activity_expirations(
+        self, expirations: tuple[TaskActivityEventExpiration, ...]
+    ) -> TaskActivityExpirationResult: ...
+
+    def get_task_activity_expiration(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration: ...
+
+    def list_unpurged_task_activity_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[TaskActivityEventExpiration, ...]: ...
+
+    def apply_task_activity_purges(
+        self, purges: tuple[TaskActivityEventPurge, ...]
+    ) -> TaskActivityPurgeResult: ...
+
+    def get_task_activity_purge(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge: ...
 
 
 @dataclass(frozen=True, slots=True)

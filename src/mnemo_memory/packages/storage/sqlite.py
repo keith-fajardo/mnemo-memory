@@ -98,7 +98,10 @@ from mnemo_memory.packages.domain import (
     SessionId,
     TaskActivityActor,
     TaskActivityEvent,
+    TaskActivityEventExpiration,
     TaskActivityEventKind,
+    TaskActivityEventPurge,
+    TaskActivityEventRetentionTarget,
     TaskId,
     Visibility,
     WorkspaceId,
@@ -209,12 +212,17 @@ from .contracts import (
     TaskActivityEventRejected,
     TaskActivityEventStorageFailure,
     TaskActivityEventStoreResult,
+    TaskActivityExpirationResult,
+    TaskActivityPurgeResult,
+    TaskActivityRetentionConflict,
+    TaskActivityRetentionNotFound,
+    TaskActivityRetentionStorageFailure,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 24
+LATEST_SCHEMA_VERSION = 25
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -638,6 +646,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 24:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 24
+            if version < 25:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0025_task_activity_retention.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (25, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 25:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 25
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1301,6 +1321,14 @@ class SQLiteCheckpointRepository:
         try:
             with self._transaction() as connection:
                 self._store_scope(connection, event.scope)
+                expired = connection.execute(
+                    "SELECT 1 FROM task_activity_event_expirations WHERE event_id = ?",
+                    (str(event.event_id),),
+                ).fetchone()
+                if expired is not None:
+                    raise TaskActivityEventConflict(
+                        "expired task activity event cannot be restored"
+                    )
                 existing = connection.execute(
                     "SELECT * FROM task_activity_events WHERE owner_id = ? AND visibility = ? "
                     "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
@@ -1332,9 +1360,12 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 row = connection.execute(
-                    "SELECT * FROM task_activity_events WHERE event_id = ? AND owner_id = ? "
-                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
-                    "AND session_id = ? AND task_id = ?",
+                    "SELECT event.* FROM task_activity_events AS event WHERE event.event_id = ? "
+                    "AND event.owner_id = ? AND event.visibility = ? "
+                    "AND event.workspace_id IS ? AND event.project_id = ? "
+                    "AND event.session_id = ? AND event.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM task_activity_event_expirations AS expiration "
+                    "WHERE expiration.event_id = event.event_id)",
                     (str(event_id), *self._scope_values(scope)),
                 ).fetchone()
                 if row is None:
@@ -1356,9 +1387,13 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 rows = connection.execute(
-                    "SELECT * FROM task_activity_events WHERE owner_id = ? AND visibility = ? "
-                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ? "
-                    "ORDER BY event_sequence DESC LIMIT ? OFFSET ?",
+                    "SELECT event.* FROM task_activity_events AS event "
+                    "WHERE event.owner_id = ? AND event.visibility = ? "
+                    "AND event.workspace_id IS ? AND event.project_id = ? "
+                    "AND event.session_id = ? AND event.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM task_activity_event_expirations AS expiration "
+                    "WHERE expiration.event_id = event.event_id) "
+                    "ORDER BY event.event_sequence DESC LIMIT ? OFFSET ?",
                     (*self._scope_values(scope), limit + 1, offset),
                 ).fetchall()
                 items = tuple(
@@ -1370,6 +1405,315 @@ class SQLiteCheckpointRepository:
                 "task activity event storage operation failed"
             ) from error
         return TaskActivityEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def list_due_task_activity_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[TaskActivityEventRetentionTarget, ...]:
+        self._require_task_activity_scope(scope)
+        _require_aware_datetime(as_of, "as_of")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT event.event_id,event.retention_policy_id,"
+                    "event.retention_permanent,event.retention_created_at,"
+                    "event.retention_observed_at,event.retention_valid_from,"
+                    "event.retention_valid_to,event.retention_expires_at,"
+                    "event.retention_expired_at FROM task_activity_events AS event "
+                    "WHERE event.owner_id = ? AND event.visibility = ? "
+                    "AND event.workspace_id IS ? AND event.project_id = ? "
+                    "AND event.session_id = ? AND event.task_id = ? "
+                    "AND event.retention_permanent = 0 "
+                    "AND event.retention_expires_at IS NOT NULL AND NOT EXISTS ("
+                    "SELECT 1 FROM task_activity_event_expirations AS expiration "
+                    "WHERE expiration.event_id = event.event_id)",
+                    self._scope_values(scope),
+                ).fetchall()
+                targets: list[TaskActivityEventRetentionTarget] = []
+                for row in rows:
+                    schedule = self._task_activity_retention_schedule_from_row(row)
+                    if schedule.is_expired(as_of):
+                        targets.append(
+                            TaskActivityEventRetentionTarget(
+                                EventId.from_string(row["event_id"]), scope, schedule
+                            )
+                        )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
+        return tuple(
+            sorted(
+                targets,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.event_id),
+                ),
+            )
+        )
+
+    def apply_task_activity_expirations(
+        self, expirations: tuple[TaskActivityEventExpiration, ...]
+    ) -> TaskActivityExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return TaskActivityExpirationResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity expiration batch is invalid")
+        for expiration in values:
+            if not isinstance(expiration, TaskActivityEventExpiration):
+                raise TypeError("task activity expiration batch is invalid")
+            self._require_task_activity_scope(expiration.scope)
+        try:
+            with self._transaction() as connection:
+                existing_count = 0
+                pending: list[TaskActivityEventExpiration] = []
+                for expiration in values:
+                    event_row = connection.execute(
+                        "SELECT event_id,retention_policy_id,retention_permanent,"
+                        "retention_created_at,retention_observed_at,retention_valid_from,"
+                        "retention_valid_to,retention_expires_at,retention_expired_at "
+                        "FROM task_activity_events WHERE event_id = ? AND owner_id = ? "
+                        "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                        "AND session_id = ? AND task_id = ?",
+                        (
+                            str(expiration.event_id),
+                            *self._scope_values(expiration.scope),
+                        ),
+                    ).fetchone()
+                    if event_row is None:
+                        raise TaskActivityRetentionNotFound(
+                            "task activity retention target was not found"
+                        )
+                    schedule = self._task_activity_retention_schedule_from_row(event_row)
+                    if (
+                        schedule.permanent
+                        or schedule.policy_id != expiration.retention_policy_id
+                        or schedule.expires_at != expiration.scheduled_expires_at
+                        or not schedule.is_expired(expiration.expired_at)
+                    ):
+                        raise TaskActivityRetentionConflict(
+                            "task activity expiration does not match canonical retention"
+                        )
+                    existing_row = connection.execute(
+                        "SELECT * FROM task_activity_event_expirations WHERE event_id = ?",
+                        (str(expiration.event_id),),
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing = self._task_activity_expiration_from_row(
+                            existing_row, expiration.scope
+                        )
+                        if existing != expiration:
+                            raise TaskActivityRetentionConflict(
+                                "task activity event already has a different expiration"
+                            )
+                        existing_count += 1
+                    else:
+                        pending.append(expiration)
+                for expiration in pending:
+                    connection.execute(
+                        "INSERT INTO task_activity_event_expirations("
+                        "expiration_id,event_id,retention_policy_id,scheduled_expires_at,"
+                        "expired_at,purge_id,purged_at,owner_id,visibility,workspace_id,"
+                        "project_id,session_id,task_id) "
+                        "VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)",
+                        (
+                            str(expiration.expiration_id),
+                            str(expiration.event_id),
+                            str(expiration.retention_policy_id),
+                            expiration.scheduled_expires_at.isoformat(),
+                            expiration.expired_at.isoformat(),
+                            *self._scope_values(expiration.scope),
+                        ),
+                    )
+                return TaskActivityExpirationResult(values, existing_count == len(values))
+        except (TaskActivityRetentionConflict, TaskActivityRetentionNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
+
+    def get_task_activity_expiration(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration:
+        self._require_task_activity_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM task_activity_event_expirations WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise TaskActivityRetentionNotFound("task activity expiration was not found")
+                return self._task_activity_expiration_from_row(row, scope)
+        except TaskActivityRetentionNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
+
+    def list_unpurged_task_activity_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[TaskActivityEventExpiration, ...]:
+        self._require_task_activity_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM task_activity_event_expirations WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND purge_id IS NULL",
+                    self._scope_values(scope),
+                ).fetchall()
+                expirations = tuple(
+                    self._task_activity_expiration_from_row(row, scope) for row in rows
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
+        return tuple(
+            sorted(
+                expirations,
+                key=lambda item: (item.expired_at.isoformat(), str(item.event_id)),
+            )
+        )
+
+    def apply_task_activity_purges(
+        self, purges: tuple[TaskActivityEventPurge, ...]
+    ) -> TaskActivityPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return TaskActivityPurgeResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity purge batch is invalid")
+        for purge in values:
+            if not isinstance(purge, TaskActivityEventPurge):
+                raise TypeError("task activity purge batch is invalid")
+            self._require_task_activity_scope(purge.scope)
+        try:
+            with self._transaction() as connection:
+                existing_count = 0
+                pending: list[TaskActivityEventPurge] = []
+                for purge in values:
+                    expiration_row = connection.execute(
+                        "SELECT * FROM task_activity_event_expirations WHERE event_id = ? "
+                        "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                        "AND project_id = ? AND session_id = ? AND task_id = ?",
+                        (str(purge.event_id), *self._scope_values(purge.scope)),
+                    ).fetchone()
+                    if expiration_row is None:
+                        raise TaskActivityRetentionNotFound(
+                            "task activity expiration was not found for purge"
+                        )
+                    expiration = self._task_activity_expiration_from_row(
+                        expiration_row, purge.scope
+                    )
+                    if (
+                        purge.expiration_id != expiration.expiration_id
+                        or purge.purged_at < expiration.expired_at
+                    ):
+                        raise TaskActivityRetentionConflict(
+                            "task activity purge does not match canonical expiration"
+                        )
+                    if expiration_row["purge_id"] is not None:
+                        existing = self._task_activity_purge_from_row(expiration_row, purge.scope)
+                        if existing != purge:
+                            raise TaskActivityRetentionConflict(
+                                "task activity event already has a different purge"
+                            )
+                        existing_count += 1
+                        continue
+                    event_row = connection.execute(
+                        "SELECT 1 FROM task_activity_events WHERE event_id = ? "
+                        "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                        "AND project_id = ? AND session_id = ? AND task_id = ?",
+                        (str(purge.event_id), *self._scope_values(purge.scope)),
+                    ).fetchone()
+                    if event_row is None:
+                        raise TaskActivityRetentionNotFound(
+                            "task activity event payload was not found for purge"
+                        )
+                    dependent = connection.execute(
+                        "SELECT 1 FROM episodic_memory_candidates WHERE source_event_id = ? "
+                        "LIMIT 1",
+                        (str(purge.event_id),),
+                    ).fetchone()
+                    if dependent is not None:
+                        raise TaskActivityRetentionConflict(
+                            "task activity event still has dependent episodic candidate payloads"
+                        )
+                    pending.append(purge)
+                for purge in pending:
+                    evidence_rows = connection.execute(
+                        "SELECT evidence_id FROM task_activity_event_evidence WHERE event_id = ?",
+                        (str(purge.event_id),),
+                    ).fetchall()
+                    updated = connection.execute(
+                        "UPDATE task_activity_event_expirations SET purge_id = ?, purged_at = ? "
+                        "WHERE event_id = ? AND owner_id = ? AND visibility = ? "
+                        "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                        "AND task_id = ? AND purge_id IS NULL",
+                        (
+                            str(purge.purge_id),
+                            purge.purged_at.isoformat(),
+                            str(purge.event_id),
+                            *self._scope_values(purge.scope),
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        raise TaskActivityRetentionConflict(
+                            "task activity purge state changed concurrently"
+                        )
+                    connection.execute(
+                        "DELETE FROM task_activity_event_evidence WHERE event_id = ?",
+                        (str(purge.event_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM event_outbox WHERE topic = 'task_activity' "
+                        "AND source_event_id = ?",
+                        (str(purge.event_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM task_activity_events WHERE event_id = ?",
+                        (str(purge.event_id),),
+                    )
+                    for evidence_row in evidence_rows:
+                        self._delete_orphaned_evidence(connection, evidence_row["evidence_id"])
+                return TaskActivityPurgeResult(values, existing_count == len(values))
+        except (TaskActivityRetentionConflict, TaskActivityRetentionNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
+
+    def get_task_activity_purge(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge:
+        self._require_task_activity_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM task_activity_event_expirations WHERE event_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "AND purge_id IS NOT NULL",
+                    (str(event_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise TaskActivityRetentionNotFound("task activity purge was not found")
+                return self._task_activity_purge_from_row(row, scope)
+        except TaskActivityRetentionNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention storage operation failed"
+            ) from error
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -4559,6 +4903,58 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _task_activity_retention_schedule_from_row(
+        row: sqlite3.Row,
+    ) -> RetentionSchedule:
+        return RetentionSchedule(
+            policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+            permanent=bool(row["retention_permanent"]),
+            created_at=datetime.fromisoformat(row["retention_created_at"]),
+            observed_at=datetime.fromisoformat(row["retention_observed_at"]),
+            valid_from=datetime.fromisoformat(row["retention_valid_from"]),
+            valid_to=(
+                None
+                if row["retention_valid_to"] is None
+                else datetime.fromisoformat(row["retention_valid_to"])
+            ),
+            expires_at=(
+                None
+                if row["retention_expires_at"] is None
+                else datetime.fromisoformat(row["retention_expires_at"])
+            ),
+            expired_at=(
+                None
+                if row["retention_expired_at"] is None
+                else datetime.fromisoformat(row["retention_expired_at"])
+            ),
+        )
+
+    @staticmethod
+    def _task_activity_expiration_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> TaskActivityEventExpiration:
+        return TaskActivityEventExpiration(
+            expiration_id=EventId.from_string(row["expiration_id"]),
+            event_id=EventId.from_string(row["event_id"]),
+            scope=scope,
+            retention_policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+            scheduled_expires_at=datetime.fromisoformat(row["scheduled_expires_at"]),
+            expired_at=datetime.fromisoformat(row["expired_at"]),
+        )
+
+    @staticmethod
+    def _task_activity_purge_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> TaskActivityEventPurge:
+        return TaskActivityEventPurge(
+            purge_id=EventId.from_string(row["purge_id"]),
+            expiration_id=EventId.from_string(row["expiration_id"]),
+            event_id=EventId.from_string(row["event_id"]),
+            scope=scope,
+            purged_at=datetime.fromisoformat(row["purged_at"]),
+        )
+
+    @staticmethod
     def _task_activity_event_from_row(
         connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
     ) -> TaskActivityEvent:
@@ -4576,28 +4972,7 @@ class SQLiteCheckpointRepository:
             summary=row["summary"],
             source_event_key=row["source_event_key"],
             sensitivity=Sensitivity(row["sensitivity"]),
-            retention=RetentionSchedule(
-                policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
-                permanent=bool(row["retention_permanent"]),
-                created_at=datetime.fromisoformat(row["retention_created_at"]),
-                observed_at=datetime.fromisoformat(row["retention_observed_at"]),
-                valid_from=datetime.fromisoformat(row["retention_valid_from"]),
-                valid_to=(
-                    None
-                    if row["retention_valid_to"] is None
-                    else datetime.fromisoformat(row["retention_valid_to"])
-                ),
-                expires_at=(
-                    None
-                    if row["retention_expires_at"] is None
-                    else datetime.fromisoformat(row["retention_expires_at"])
-                ),
-                expired_at=(
-                    None
-                    if row["retention_expired_at"] is None
-                    else datetime.fromisoformat(row["retention_expired_at"])
-                ),
-            ),
+            retention=SQLiteCheckpointRepository._task_activity_retention_schedule_from_row(row),
             occurred_at=datetime.fromisoformat(row["occurred_at"]),
             evidence_references=tuple(
                 EvidenceReference.from_dict(json.loads(item["payload_json"]))

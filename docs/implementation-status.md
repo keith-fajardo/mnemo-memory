@@ -1515,3 +1515,43 @@ source/user deletion work. The complete repository gate passes with 692 tests, s
 87 product Python files. No raw task-event expiry, source or user-requested deletion, export,
 backup cleanup, automatic scheduler/daemon, retrieval or transport surface, dependency, or team
 mode was added.
+
+#### Issue 16I — Complete
+
+The current bounded issue enforces expiry and physical purge for the explicitly minimized task
+activity source events introduced in Issue 16C. One deterministic exact-task-scope service uses
+each event's canonical non-permanent schedule to append a payload-free expiration tombstone, hide
+the summary/evidence immediately, and later append a payload-free purge marker that atomically
+removes the event, its evidence links, newly orphaned evidence, and its task-activity outbox job.
+Purge fails closed while any candidate payload still depends on the event; Issue 16G/16H expiry and
+purge must remove that dependent payload first. Exact replay is idempotent, mismatched policy,
+scope, schedule, identity, or time conflicts, permanent and not-yet-due events remain available,
+and event retry cannot resurrect expired content. Existing candidate expiration/purge tombstones
+remain valid after their source event is purged. Reference and SQLite must expose identical scoped
+targets and behavior, including restart. Migration 0025 is additive/forward-only in behavior,
+adds payload-free source-event lifecycle metadata, and rebuilds only the existing episodic
+expiration table to detach the source-event foreign key required for source purge; rollback must
+preserve every event, candidate tombstone, and expiration. This issue adds no user-requested or
+source-deletion propagation, export, backup cleanup, automatic scheduler/daemon, context retrieval,
+transport surface, dependency, or team mode.
+
+Implemented strict payload-free `TaskActivityEventExpiration` and `TaskActivityEventPurge`
+contracts plus one authorization-first task-activity retention service. Reference and SQLite
+discover the same due/non-permanent events, validate complete batches before mutation, make exact
+expiration and purge delivery idempotent, reject conflicting policy, schedule, scope, identity, or
+time, hide expired event payloads immediately, and prevent retry resurrection. Source purge checks
+that candidate payloads are gone, preserves candidate expiration/purge tombstones, removes the
+event summary and evidence links, deletes only newly orphaned evidence, and cancels its
+task-activity outbox job atomically. Permanent and not-yet-due events remain readable. Migration
+`0025_task_activity_retention.sql` preserves existing candidate tombstones while detaching their
+source-event foreign key, adds only payload-free source lifecycle metadata, and retains foreign-key
+integrity across rollback/retry. Twelve focused tests cover strict serialization, before/due and
+permanent boundaries, logical exclusion, physical purge, outbox cancellation, evidence removal,
+anti-resurrection, exact scope, adapter parity, dependent candidate ordering, tombstone survival,
+conflicting-batch atomicity, injected SQLite rollback, restart durability, payload-free schema,
+and migration rollback. The product and threat contracts now record minimized source-event
+retention without implying capture or deletion of arbitrary raw conversations/tool bodies. The
+complete repository gate passes with 704 tests, strict typing for 172 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 88 product Python
+files. No user-requested or source-deletion propagation, export, backup cleanup, automatic
+scheduler/daemon, retrieval or transport surface, dependency, or team mode was added.
