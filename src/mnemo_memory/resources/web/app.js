@@ -67,6 +67,84 @@ function setSettings(settings) {
   byId("settings-state").textContent = "Saved locally";
 }
 
+function memoryDetails(title, values) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = title;
+  const list = document.createElement("dl");
+  for (const [label, value] of values) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    list.append(term, description);
+  }
+  details.append(summary, list);
+  return details;
+}
+
+function renderMemories(page) {
+  const target = byId("memories");
+  if (!page.project_registered) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Enable this project to inspect its approved memories.";
+    target.replaceChildren(empty);
+    byId("memories-state").textContent = "Project not enabled";
+    return;
+  }
+  if (!page.items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No approved memories have been recorded for this project task.";
+    target.replaceChildren(empty);
+    byId("memories-state").textContent = "No records";
+    return;
+  }
+  const cards = page.items.map((memory) => {
+    const item = document.createElement("article");
+    item.className = "memory-card";
+    const top = document.createElement("div");
+    top.className = "card-top";
+    const title = document.createElement("h3");
+    title.textContent = memory.kind ? memory.kind.replace("_", " ") : "Retracted fact";
+    const badge = document.createElement("span");
+    badge.className = `badge ${memory.status === "active" ? "ready" : "pending"}`;
+    badge.textContent = memory.status;
+    top.append(title, badge);
+    const body = document.createElement("p");
+    body.textContent = memory.summary ?? "The retained tombstone contains no original payload.";
+    item.append(top, body);
+    for (const evidence of memory.evidence) {
+      item.append(memoryDetails("Evidence", [
+        ["Source", evidence.immutable_source_ref],
+        ["Type", `${evidence.source_type} · ${evidence.trust_class}`],
+        ["Location", evidence.location.uri],
+        ["Observed", evidence.observed_at],
+        ["Digest", evidence.content_hash],
+      ]));
+    }
+    if (memory.governance) {
+      const replacement = memory.governance.replacement_event_id ?? "none — payload retracted";
+      item.append(memoryDetails("Revision action", [
+        ["Action", memory.governance.kind],
+        ["Reason", memory.governance.reason],
+        ["Replacement", replacement],
+        ["Recorded", memory.governance.occurred_at],
+      ]));
+    }
+    return item;
+  });
+  target.replaceChildren(...cards);
+  byId("memories-state").textContent = page.next_offset === null ? `${page.items.length} records` : `${page.items.length} shown · more available`;
+}
+
+async function loadMemories() {
+  const response = await fetch("/api/memories?offset=0&limit=50", {headers: {"Accept": "application/json"}});
+  if (!response.ok) throw new Error("memories");
+  renderMemories(await response.json());
+}
+
 async function loadSettings() {
   const response = await fetch("/api/settings", {headers: {"Accept": "application/json"}});
   if (!response.ok) throw new Error("settings");
@@ -111,3 +189,4 @@ async function refresh() {
 byId("refresh").addEventListener("click", refresh);
 refresh();
 loadSettings().catch(() => { byId("settings-state").textContent = "Unavailable"; });
+loadMemories().catch(() => { byId("memories-state").textContent = "Unavailable"; });

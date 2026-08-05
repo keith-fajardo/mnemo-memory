@@ -556,12 +556,14 @@ project checkpoint, structural memory, and repository documentation remain.
 Run `mnemo-memory start`, then open `http://127.0.0.1:8765/`. The loopback-only dashboard shows
 whether the store is initialized, whether Codex or Claude Code owns the Mnemo registration, whether
 the current project is enabled, and bounded source/dbt/knowledge index counts. It uses packaged
-local assets and does not display memory/document content, absolute paths, scope IDs, credentials,
-or subprocess output. The Settings section stores strict local defaults for repository-note sync,
-explicit approved-event capture, optional provider/model names, future episodic retention, and
-context budgets. It never stores an API key. Restart the MCP process after a settings change;
-existing records keep their original retention schedules. Run `mnemo-memory stop` when you no
-longer want the local web process.
+local assets. Its health response excludes memory/document content, absolute paths, scope IDs,
+credentials, and subprocess output. The Approved Memory section is the explicit content-bearing
+view: it lists only the current registered project task's bounded approved facts, retained evidence,
+and correction or payload-free retraction lineage. It is read-only in this release slice. The
+Settings section stores strict local defaults for repository-note sync, explicit approved-event
+capture, optional provider/model names, future episodic retention, and context budgets. It never
+stores an API key. Restart the MCP process after a settings change; existing records keep their
+original retention schedules. Run `mnemo-memory stop` when you no longer want the local web process.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),

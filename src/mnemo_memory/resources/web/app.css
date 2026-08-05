@@ -38,6 +38,16 @@ legend { padding: 0 8px; color: #bcd0c8; font-size: .82rem; font-weight: 750; }
 .fields input { width: 100%; margin-top: 6px; border: 1px solid #3a5149; border-radius: 8px; padding: 10px; color: #e9f4ef; background: #08100e; }
 .form-actions { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .form-actions p { margin: 0; color: #789087; font-size: .76rem; }
+.memory-list { display: grid; gap: 12px; }
+.memory-card { padding: 18px 20px; border: 1px solid #29423b; border-radius: 13px; background: rgba(17, 31, 27, .82); }
+.memory-card h3 { margin: 0; font-size: .96rem; text-transform: capitalize; }
+.memory-card > p { margin: 12px 0; color: #b9cbc4; line-height: 1.5; }
+.memory-card details { margin-top: 10px; border-top: 1px solid #29423b; padding-top: 10px; color: #8fa49c; font-size: .78rem; }
+.memory-card summary { color: #91d9bd; cursor: pointer; }
+.memory-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px; margin: 10px 0 0; }
+.memory-card dt { color: #6f867d; }
+.memory-card dd { margin: 0; overflow-wrap: anywhere; }
+.empty-state { margin: 0; padding: 24px; border: 1px dashed #3a5149; border-radius: 13px; color: #789087; }
 .privacy .eyebrow { color: #1b644d; }
 .privacy ul { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 32px; margin: 0; padding-left: 20px; }
 .privacy li { line-height: 1.45; }

@@ -9,6 +9,7 @@ import uvicorn
 
 from mnemo_memory.apps.api.app import create_app
 from mnemo_memory.apps.api.dashboard import build_dashboard_status
+from mnemo_memory.apps.api.memories import build_approved_memory_page
 from mnemo_memory.packages.application import (
     PersonalSettingsStore,
     build_lifecycle_service,
@@ -28,6 +29,7 @@ def main() -> None:
             service,
             lambda: build_dashboard_status(config),
             PersonalSettingsStore(config.data_directory),
+            lambda offset, limit: build_approved_memory_page(config, offset=offset, limit=limit),
         ),
         host=config.host,
         port=config.port,

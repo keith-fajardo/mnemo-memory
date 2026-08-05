@@ -1042,6 +1042,34 @@ dependency/provenance validation for 86 entries, and architecture validation for
 files. No dependency, API key, model call, retroactive retention mutation, memory browser, job
 retry, backup, installer change, non-loopback exposure, or team behavior was added.
 
+#### Issue 20C — Read-only approved-memory browser — Complete
+
+This bounded issue adds a read-only browser for the current registered project's approved task
+facts. It must resolve the exact task scope from the canonical local project binding before any
+repository read, return bounded pages containing active, corrected, and payload-free retracted
+records, and expose each retained event's immutable evidence plus correction/retraction lineage.
+The packaged loopback UI may display those records and their evidence, but it must not infer
+missing history or retrieve another project. Storage failures and invalid pagination must produce
+bounded safe errors. This issue adds no mutation endpoint, candidate review, pin, expiry, export,
+deletion, model call, dependency, index/job control, packaging change, non-loopback exposure, or
+team behavior.
+
+Implemented a bounded `/api/memories` read model and packaged dashboard section over the existing
+approved-event application service. Each request resolves the current canonical project binding
+before selecting its exact task scope. The response omits owner/workspace/project/session/task and
+source-key metadata while retaining the user-relevant event identity, lifecycle status, bounded
+summary, immutable evidence, and correction/retraction action. Corrected records link to their
+replacement identity, and retracted records expose only their payload-free tombstone and retained
+governance evidence. An unregistered project returns an empty explicit state; another registered
+project receives only its own records.
+
+All 42 focused memory-browser/lifecycle/settings/resource tests pass, including active, corrected,
+and retracted rendering, cross-project isolation, missing binding behavior, bounded pagination,
+and sanitized storage failures. The complete repository gate passes with 755 tests, strict typing
+for 192 source files, dependency/provenance validation for 86 entries, and architecture validation
+for 102 product Python files. No mutation endpoint, pin, expiry, export, deletion, model call,
+dependency, job control, packaging change, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

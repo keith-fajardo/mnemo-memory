@@ -134,6 +134,7 @@ def test_loopback_dashboard_serves_packaged_assets_and_sanitized_status(tmp_path
     assert 'src="/assets/app.js"' in page.body.decode()
     assert page.headers["content-security-policy"].startswith("default-src 'none'")
     assert 'fetch("/api/dashboard"' in script.body.decode()
+    assert 'fetch("/api/memories?offset=0&limit=50"' in script.body.decode()
     assert status["lifecycle"]["initialized"] is True
     assert status["connections"] == details["connections"]
     encoded = json.dumps(status)

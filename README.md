@@ -352,12 +352,15 @@ dashboard:
 mnemo-memory start
 ```
 
-The dashboard loads only packaged local assets. It shows connection/project readiness and bounded
-index counts, never memory content, absolute project paths, scope IDs, credentials, or command
-output. Its Settings section controls repository-note auto-sync, explicit approved-event capture,
-optional model routing metadata, future retention defaults, and packet budgets. It never accepts an
-API key. Changes apply to new MCP processes and automatic hooks; existing retention schedules are
-not silently rewritten. Stop it with `mnemo-memory stop`.
+The dashboard loads only packaged local assets. Its health response shows connection/project
+readiness and bounded index counts without memory content, absolute project paths, scope IDs,
+credentials, or command output. The Approved Memory section explicitly displays bounded
+decision/failure/tool-outcome facts for the current registered project task, including retained
+evidence and correction/retraction lineage; it never retrieves another project. Its Settings
+section controls repository-note auto-sync, explicit approved-event capture, optional model routing
+metadata, future retention defaults, and packet budgets. It never accepts an API key. Changes apply
+to new MCP processes and automatic hooks; existing retention schedules are not silently rewritten.
+Stop it with `mnemo-memory stop`.
 
 This creates a local database, normally **outside** your repository:
 

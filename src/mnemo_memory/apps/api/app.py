@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from importlib import resources
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
+from mnemo_memory.apps.api.memories import ApprovedMemoryBrowserError
 from mnemo_memory.packages.application.services import APP_VERSION, LifecycleService
 from mnemo_memory.packages.application.settings import (
     PersonalSettings,
@@ -35,6 +36,7 @@ def create_app(
     service: LifecycleService,
     dashboard_status: Callable[[], dict[str, object]] | None = None,
     settings_store: PersonalSettingsStore | None = None,
+    approved_memory_page: Callable[[int, int], dict[str, object]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -115,6 +117,20 @@ def create_app(
             return store.save(PersonalSettings.from_dict(value)).to_dict()
         except PersonalSettingsError:
             raise HTTPException(status_code=422, detail="MNEMO_SETTINGS_INVALID") from None
+
+    @app.get("/api/memories")
+    def get_memories(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> dict[str, object]:
+        if approved_memory_page is None:
+            return {"project_registered": False, "items": [], "next_offset": None}
+        try:
+            return approved_memory_page(offset, limit)
+        except ApprovedMemoryBrowserError:
+            raise HTTPException(
+                status_code=503, detail="MNEMO_MEMORY_BROWSER_UNAVAILABLE"
+            ) from None
 
     return app
 
