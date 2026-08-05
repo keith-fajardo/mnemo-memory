@@ -1070,6 +1070,37 @@ for 192 source files, dependency/provenance validation for 86 entries, and archi
 for 102 product Python files. No mutation endpoint, pin, expiry, export, deletion, model call,
 dependency, job control, packaging change, non-loopback exposure, or team behavior was added.
 
+#### Issue 20D — Approved-memory correction and payload erasure — Complete
+
+This bounded issue adds explicit correction and payload-erasing retraction controls to the current
+project's approved-memory browser. Every write must resolve the canonical local project binding,
+require exact same-loopback-origin and explicit intent headers, validate strict bounded input, and
+use the existing immutable approved-event governance service with deterministic verified
+user-correction evidence. A correction appends one replacement and lineage action; a retraction
+removes the retained event/evidence payload and leaves only its scoped tombstone. Retried identical
+actions must remain idempotent, stale or competing actions must fail safely, and another project
+must not discover or mutate the target. This issue adds no general episodic-candidate UI, pin,
+expiry, export, new deletion model, migration, model call, dependency, job control, packaging
+change, non-loopback exposure, or team behavior.
+
+Implemented same-origin `POST /api/memories/{event_id}/correct` and
+`DELETE /api/memories/{event_id}` controls plus explicit confirmation flows in the packaged UI.
+Both routes require their exact `X-Mnemo-Intent`, reject absent or foreign origins before invoking
+the action, resolve the current canonical task scope, and accept only exact bounded fields. Mnemo
+derives stable action and replacement keys plus verified user-correction evidence from the action
+content, so identical retries are idempotent without trusting a client-supplied authority field.
+Corrections use the existing append-only replacement lineage; erasure uses the existing retraction
+transaction that removes the event and evidence payload and retains only the minimal tombstone.
+
+All 65 focused browser/governance/repository/lifecycle/settings tests pass, including same-origin
+denial, cross-project not-found behavior, strict secret-field rejection, retry idempotency,
+competing-action safety, persisted payload removal, and sanitized API failures. The complete
+repository gate passes with 757 tests, strict typing for 192 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 102 product
+Python files. No general episodic-candidate UI, pin, expiry, export, new deletion model, migration,
+model call, dependency, job control, packaging change, non-loopback exposure, or team behavior was
+added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

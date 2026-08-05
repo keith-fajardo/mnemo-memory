@@ -8,7 +8,13 @@ from importlib import resources
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
-from mnemo_memory.apps.api.memories import ApprovedMemoryBrowserError
+from mnemo_memory.apps.api.memories import (
+    ApprovedMemoryActionConflict,
+    ApprovedMemoryActionError,
+    ApprovedMemoryActionInvalid,
+    ApprovedMemoryActionNotFound,
+    ApprovedMemoryBrowserError,
+)
 from mnemo_memory.packages.application.services import APP_VERSION, LifecycleService
 from mnemo_memory.packages.application.settings import (
     PersonalSettings,
@@ -37,6 +43,8 @@ def create_app(
     dashboard_status: Callable[[], dict[str, object]] | None = None,
     settings_store: PersonalSettingsStore | None = None,
     approved_memory_page: Callable[[int, int], dict[str, object]] | None = None,
+    correct_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
+    retract_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -132,6 +140,24 @@ def create_app(
                 status_code=503, detail="MNEMO_MEMORY_BROWSER_UNAVAILABLE"
             ) from None
 
+    @app.post("/api/memories/{event_id}/correct")
+    def correct_memory(
+        event_id: str, request: Request, value: dict[str, object]
+    ) -> dict[str, object]:
+        _require_memory_write(request, service, "correct-memory")
+        if correct_approved_memory is None:
+            raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE")
+        return _memory_action(lambda: correct_approved_memory(event_id, value))
+
+    @app.delete("/api/memories/{event_id}")
+    def retract_memory(
+        event_id: str, request: Request, value: dict[str, object]
+    ) -> dict[str, object]:
+        _require_memory_write(request, service, "retract-memory")
+        if retract_approved_memory is None:
+            raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE")
+        return _memory_action(lambda: retract_approved_memory(event_id, value))
+
     return app
 
 
@@ -141,3 +167,23 @@ def _same_origin(request: Request, host: str, port: int) -> bool:
     if host == "::1":
         allowed.add(f"http://[::1]:{port}")
     return origin in allowed
+
+
+def _require_memory_write(request: Request, service: LifecycleService, intent: str) -> None:
+    if request.headers.get("x-mnemo-intent") != intent or not _same_origin(
+        request, service.config.host, service.config.port
+    ):
+        raise HTTPException(status_code=403, detail="MNEMO_MEMORY_WRITE_FORBIDDEN")
+
+
+def _memory_action(action: Callable[[], dict[str, object]]) -> dict[str, object]:
+    try:
+        return action()
+    except ApprovedMemoryActionNotFound:
+        raise HTTPException(status_code=404, detail="MNEMO_MEMORY_NOT_FOUND") from None
+    except ApprovedMemoryActionConflict:
+        raise HTTPException(status_code=409, detail="MNEMO_MEMORY_ACTION_CONFLICT") from None
+    except ApprovedMemoryActionInvalid:
+        raise HTTPException(status_code=422, detail="MNEMO_MEMORY_ACTION_INVALID") from None
+    except ApprovedMemoryActionError:
+        raise HTTPException(status_code=503, detail="MNEMO_MEMORY_ACTION_UNAVAILABLE") from None

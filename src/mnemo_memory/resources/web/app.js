@@ -83,6 +83,36 @@ function memoryDetails(title, values) {
   return details;
 }
 
+async function correctMemory(memory) {
+  const summary = window.prompt("Corrected fact", memory.summary);
+  if (summary === null) return;
+  const reason = window.prompt("Why is this correction needed?");
+  if (reason === null) return;
+  if (!window.confirm("Append this correction as a new immutable revision?")) return;
+  byId("memories-state").textContent = "Saving correction…";
+  const response = await fetch(`/api/memories/${encodeURIComponent(memory.event_id)}/correct`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "X-Mnemo-Intent": "correct-memory"},
+    body: JSON.stringify({summary, reason}),
+  });
+  if (!response.ok) { byId("memories-state").textContent = "Correction failed"; return; }
+  await loadMemories();
+}
+
+async function retractMemory(memory) {
+  const reason = window.prompt("Why should this fact be erased?");
+  if (reason === null) return;
+  if (!window.confirm("Erase this fact and its evidence? A payload-free tombstone will remain.")) return;
+  byId("memories-state").textContent = "Erasing payload…";
+  const response = await fetch(`/api/memories/${encodeURIComponent(memory.event_id)}`, {
+    method: "DELETE",
+    headers: {"Content-Type": "application/json", "X-Mnemo-Intent": "retract-memory"},
+    body: JSON.stringify({reason}),
+  });
+  if (!response.ok) { byId("memories-state").textContent = "Erasure failed"; return; }
+  await loadMemories();
+}
+
 function renderMemories(page) {
   const target = byId("memories");
   if (!page.project_registered) {
@@ -132,6 +162,22 @@ function renderMemories(page) {
         ["Replacement", replacement],
         ["Recorded", memory.governance.occurred_at],
       ]));
+    }
+    if (memory.status === "active") {
+      const actions = document.createElement("div");
+      actions.className = "memory-actions";
+      const correct = document.createElement("button");
+      correct.type = "button";
+      correct.className = "secondary";
+      correct.textContent = "Correct";
+      correct.addEventListener("click", () => { correctMemory(memory).catch(() => { byId("memories-state").textContent = "Correction failed"; }); });
+      const retract = document.createElement("button");
+      retract.type = "button";
+      retract.className = "danger";
+      retract.textContent = "Erase fact";
+      retract.addEventListener("click", () => { retractMemory(memory).catch(() => { byId("memories-state").textContent = "Erasure failed"; }); });
+      actions.append(correct, retract);
+      item.append(actions);
     }
     return item;
   });
