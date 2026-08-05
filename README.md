@@ -224,6 +224,11 @@ For a small manifest inventory, `dbt_selector` intersects exact resource-type, p
 fields and returns a bounded cited list of enabled nodes. It is intentionally structured and does
 not execute dbt selector-string syntax.
 
+`dbt_changes` compares the latest explicitly recorded manifest activation transition, or an
+explicit `before_snapshot_id`/`after_snapshot_id` pair. It returns bounded added, modified, and
+removed node identities plus downstream refresh candidates derived from manifest edges. Activation
+order is recorded separately; Mnemo never sorts snapshot UUIDs or timestamps to invent history.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash

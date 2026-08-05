@@ -241,6 +241,13 @@ For a small manifest inventory, request `dbt_selector` with one or more exact
 enabled nodes in stable unique-ID order, and caps the result before packet rendering. This is a
 structured Mnemo query, not dbt selector-string syntax, so it never executes selector expressions.
 
+To review a dbt transition, request `dbt_changes`. With no snapshot IDs it compares the latest two
+explicit manifest activations; advanced callers may provide both `before_snapshot_id` and
+`after_snapshot_id`. Mnemo reports bounded added, modified, and removed resources and bounded
+downstream nodes that may need refresh. Those candidates come only from authoritative manifest
+edges. `require_current: true` omits the result unless the after snapshot matches the current
+bounded repository observation.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

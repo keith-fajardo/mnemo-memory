@@ -1046,6 +1046,7 @@ class ReferenceProjectIndexRepository:
         self._artifacts: dict[DbtSnapshotId, DbtManifestArtifact] = {}
         self._snapshots: dict[DbtSnapshotId, DbtManifestSnapshot] = {}
         self._active: dict[MemoryScope, DbtSnapshotId] = {}
+        self._activations: dict[MemoryScope, list[DbtSnapshotId]] = {}
         self._catalogs: dict[tuple[DbtSnapshotId, str], DbtCatalogArtifact] = {}
         self._run_results: dict[tuple[DbtSnapshotId, str], DbtRunResultsArtifact] = {}
         self._source_freshness: dict[tuple[DbtSnapshotId, str], DbtSourceFreshnessArtifact] = {}
@@ -1078,6 +1079,7 @@ class ReferenceProjectIndexRepository:
                     self._snapshots[existing_id] = snapshot
                     if active is not None:
                         self._snapshots[active] = replace(self._snapshots[active], is_active=False)
+                    self._activations.setdefault(artifact.scope, []).append(existing_id)
                 return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=True)
         if snapshot_id in self._snapshots:
             raise ActiveSnapshotConflict("snapshot identity already exists")
@@ -1096,6 +1098,7 @@ class ReferenceProjectIndexRepository:
             self._active[artifact.scope] = snapshot_id
             if previous is not None:
                 self._snapshots[previous] = replace(self._snapshots[previous], is_active=False)
+            self._activations.setdefault(artifact.scope, []).append(snapshot_id)
         except BaseException:
             self._artifacts.pop(snapshot_id, None)
             self._snapshots.pop(snapshot_id, None)
@@ -1104,6 +1107,9 @@ class ReferenceProjectIndexRepository:
             else:
                 self._active[artifact.scope] = previous
                 self._snapshots[previous] = replace(self._snapshots[previous], is_active=True)
+            activations = self._activations.get(artifact.scope)
+            if activations and activations[-1] == snapshot_id:
+                activations.pop()
             raise
         return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=False)
 
@@ -1118,6 +1124,15 @@ class ReferenceProjectIndexRepository:
         self._require_scope(scope)
         snapshot_id = self._active.get(scope)
         return None if snapshot_id is None else self._snapshots[snapshot_id]
+
+    def latest_transition(
+        self, scope: MemoryScope
+    ) -> tuple[DbtManifestSnapshot, DbtManifestSnapshot] | None:
+        self._require_scope(scope)
+        values = self._activations.get(scope, [])
+        if len(values) < 2:
+            return None
+        return self._snapshots[values[-2]], self._snapshots[values[-1]]
 
     def store_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact

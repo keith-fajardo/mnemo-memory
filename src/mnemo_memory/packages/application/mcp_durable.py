@@ -29,6 +29,7 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtChangesQuery,
     ContextDbtFreshnessQuery,
     ContextDbtSelectorQuery,
     ContextDbtTestCoverageQuery,
@@ -104,6 +105,7 @@ class DurableMcpContextPort:
             test_coverage = request.get("dbt_test_coverage")
             dbt_selector = request.get("dbt_selector")
             dbt_freshness = request.get("dbt_freshness")
+            dbt_changes = request.get("dbt_changes")
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
@@ -155,10 +157,18 @@ class DurableMcpContextPort:
                 raise ValueError("dbt_selector must be an object")
             if dbt_freshness is not None and not isinstance(dbt_freshness, Mapping):
                 raise ValueError("dbt_freshness must be an object")
+            if dbt_changes is not None and not isinstance(dbt_changes, Mapping):
+                raise ValueError("dbt_changes must be an object")
             if (
                 sum(
                     query is not None
-                    for query in (lineage, test_coverage, dbt_selector, dbt_freshness)
+                    for query in (
+                        lineage,
+                        test_coverage,
+                        dbt_selector,
+                        dbt_freshness,
+                        dbt_changes,
+                    )
                 )
                 > 1
             ):
@@ -227,6 +237,7 @@ class DurableMcpContextPort:
                 or test_coverage is not None
                 or dbt_selector is not None
                 or dbt_freshness is not None
+                or dbt_changes is not None
                 or source_query is not None
                 or impact is not None
                 or changes is not None
@@ -244,11 +255,44 @@ class DurableMcpContextPort:
                     and test_coverage is None
                     and dbt_selector is None
                     and dbt_freshness is None
+                    and dbt_changes is None
                 ):
                     return self._context_service.get_context(
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            source_query=source_query,
+                            budget=budget,
+                            source_impact=impact,
+                            source_changes=changes,
+                            source_overview=overview,
+                            knowledge_query=knowledge_query,
+                            semantic_knowledge_query=semantic_knowledge_query,
+                            procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            include_lifecycle_events=include_lifecycle_events,
+                            include_approved_events=include_approved_events,
+                        )
+                    ).to_dict()
+                if dbt_changes is not None:
+                    has_before = "before_snapshot_id" in dbt_changes
+                    has_after = "after_snapshot_id" in dbt_changes
+                    if has_before != has_after:
+                        raise ValueError(
+                            "dbt_changes requires both before_snapshot_id and after_snapshot_id"
+                        )
+                    changes_query = ContextDbtChangesQuery(
+                        int(dbt_changes.get("maximum_changes", 32)),
+                        int(dbt_changes.get("maximum_affected_nodes", 64)),
+                        _optional_id(dbt_changes, "before_snapshot_id", DbtSnapshotId),
+                        _optional_id(dbt_changes, "after_snapshot_id", DbtSnapshotId),
+                        self._resolve_current_dbt_source_state(scope),
+                        bool(dbt_changes.get("require_current", False)),
+                    )
+                    return self._context_service.get_context(
+                        GetUnifiedContext(
+                            scope=scope,
+                            checkpoint_id=checkpoint,
+                            dbt_changes=changes_query,
                             source_query=source_query,
                             budget=budget,
                             source_impact=impact,

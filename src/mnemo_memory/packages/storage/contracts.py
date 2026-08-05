@@ -548,6 +548,12 @@ class ProjectIndexRepository(Protocol):
 
     def get_active_snapshot(self, scope: MemoryScope) -> DbtManifestSnapshot | None: ...
 
+    def latest_transition(
+        self, scope: MemoryScope
+    ) -> tuple[DbtManifestSnapshot, DbtManifestSnapshot] | None:
+        """Return the last explicit activation transition as ``(before, after)``."""
+        ...
+
     def store_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact
     ) -> SupplementalArtifactStoreResult: ...

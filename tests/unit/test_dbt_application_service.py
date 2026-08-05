@@ -29,12 +29,14 @@ from mnemo_memory.packages.application.dbt import (
     IngestSourceFreshness,
     LineageDirection,
     QueryLineage,
+    QueryManifestChanges,
     QueryManifestSelector,
     QuerySourceFreshness,
     QueryTestCoverage,
     ResolveManifestFile,
 )
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtChangesQuery,
     ContextDbtFreshnessQuery,
     ContextDbtTestCoverageQuery,
     ContextLineageQuery,
@@ -107,6 +109,35 @@ def service() -> DbtManifestApplicationService:
     )
 
 
+def manifest_with_added_modified_and_removed_nodes() -> str:
+    value = json.loads(FIXTURE.read_text())
+    nodes = value["nodes"]
+    parent_map = value["parent_map"]
+    child_map = value["child_map"]
+    nodes["model.mnemo_analytics.fct_orders"]["checksum"]["checksum"] = "fact-orders-v2"
+    removed = "test.mnemo_analytics.unique_fct_orders"
+    del nodes[removed]
+    del parent_map[removed]
+    del child_map[removed]
+    child_map["model.mnemo_analytics.fct_orders"].remove(removed)
+    added = "model.mnemo_analytics.new_rollup"
+    new_node = dict(nodes["model.date_utils.dim_calendar"])
+    new_node.update(
+        {
+            "unique_id": added,
+            "package_name": "mnemo_analytics",
+            "name": "new_rollup",
+            "alias": "new_rollup",
+            "original_file_path": "models/marts/new_rollup.sql",
+            "checksum": {"checksum": "new-rollup"},
+        }
+    )
+    nodes[added] = new_node
+    parent_map[added] = []
+    child_map[added] = []
+    return json.dumps(value)
+
+
 def test_supplemental_ingestion_is_exact_scoped_and_idempotent() -> None:
     item, value = service(), scope()
     snapshot = item.ingest(command(value)).snapshot
@@ -133,6 +164,112 @@ def test_supplemental_ingestion_is_exact_scoped_and_idempotent() -> None:
     assert saved.run_results is not None and len(saved.run_results.results) == 2
     with pytest.raises(DbtApplicationNotFound):
         item.get_supplemental(GetDbtSupplementalArtifacts(scope(2), snapshot.snapshot_id))
+
+
+def test_manifest_changes_return_modified_node_and_authoritative_downstream_scope() -> None:
+    item, value = service(), scope()
+    state = SourceStateFingerprint(
+        git_commit="a" * 40,
+        working_tree_fingerprint="sha256:" + "b" * 64,
+        dirty=False,
+    )
+    first = item.ingest(command(value, source_state=state)).snapshot
+    changed_raw = manifest_with_added_modified_and_removed_nodes()
+    second = item.ingest(
+        command(
+            value,
+            changed_raw,
+            expected_active_snapshot_id=first.snapshot_id,
+            source_state=state,
+        )
+    ).snapshot
+
+    result = item.query_changes(QueryManifestChanges(value, current_source_state=state))
+
+    assert result.before_snapshot.snapshot_id == first.snapshot_id
+    assert result.after_snapshot.snapshot_id == second.snapshot_id
+    assert [(change.kind.value, str(change.unique_id)) for change in result.changes] == [
+        ("modified", "model.mnemo_analytics.fct_orders"),
+        ("added", "model.mnemo_analytics.new_rollup"),
+        ("removed", "test.mnemo_analytics.unique_fct_orders"),
+    ]
+    assert {str(node.unique_id) for node in result.affected_nodes} == {
+        "exposure.mnemo_analytics.order_dashboard",
+        "metric.mnemo_analytics.customer_value",
+        "model.mnemo_analytics.fct_orders",
+        "model.mnemo_analytics.mart_customer_value",
+        "model.mnemo_analytics.new_rollup",
+        "semantic_model.mnemo_analytics.customer_value",
+    }
+    assert result.currentness is ArtifactCurrentness.CURRENT
+
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: STAMP)
+    task_value = MemoryScope(
+        value.owner_id,
+        ScopeLevel.TASK,
+        value.visibility,
+        value.workspace_id,
+        value.project_id,
+        SessionId.new(),
+        TaskId.new(),
+    )
+    packet = UnifiedContextService(checkpoints, item).get_context(
+        GetUnifiedContext(
+            task_value,
+            dbt_changes=ContextDbtChangesQuery(current_source_state=state),
+        )
+    )
+    content = json.loads(packet.structural_items[0].content)
+    assert content["query_kind"] == "changes"
+    assert content["currentness"] == "current"
+    assert content["changes"] == [
+        {
+            "kind": "modified",
+            "relative_file": "models/marts/fct_orders.sql",
+            "resource_type": "model",
+            "unique_id": "model.mnemo_analytics.fct_orders",
+        },
+        {
+            "kind": "added",
+            "relative_file": "models/marts/new_rollup.sql",
+            "resource_type": "model",
+            "unique_id": "model.mnemo_analytics.new_rollup",
+        },
+        {
+            "kind": "removed",
+            "relative_file": "tests/unique_fct_orders.sql",
+            "resource_type": "test",
+            "unique_id": "test.mnemo_analytics.unique_fct_orders",
+        },
+    ]
+
+    stale = UnifiedContextService(checkpoints, item).get_context(
+        GetUnifiedContext(
+            task_value,
+            dbt_changes=ContextDbtChangesQuery(
+                current_source_state=SourceStateFingerprint(
+                    working_tree_fingerprint="sha256:" + "c" * 64,
+                    dirty=True,
+                ),
+                require_current=True,
+            ),
+        )
+    )
+    assert stale.structural_items == ()
+    assert stale.omissions[0].reason.value == "stale"
+    with pytest.raises(DbtApplicationNotFound):
+        item.query_changes(
+            QueryManifestChanges(
+                scope(2),
+                before_snapshot_id=first.snapshot_id,
+                after_snapshot_id=second.snapshot_id,
+            )
+        )
+
+    no_history, isolated_scope = service(), scope(3)
+    no_history.ingest(command(isolated_scope))
+    with pytest.raises(DbtApplicationNotFound):
+        no_history.query_changes(QueryManifestChanges(isolated_scope))
 
 
 def test_supplemental_ingestion_rejects_invalid_or_mismatched_artifacts() -> None:

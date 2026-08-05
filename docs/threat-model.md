@@ -233,6 +233,13 @@ require at least one filter. They scan only the already-authorized immutable sna
 disabled nodes, cap matches before context rendering, and never interpret selector expressions,
 Jinja, SQL, or shell syntax.
 
+dbt changed-state comparison reads exactly two already-authorized immutable snapshots. An
+append-only scoped activation ledger supplies latest-transition order; UUID and timestamp ordering
+are never treated as activation evidence. Node classification uses only minimized manifest fields,
+and affected-node traversal uses only stored typed edges with strict change, node, and packet
+limits. Cross-scope snapshot IDs, missing history, stale required state, and storage failure cannot
+widen the read or trigger source, SQL, Jinja, warehouse, or dbt execution.
+
 `sources.json` freshness ingestion accepts only bounded official v3 fields and attaches results to
 source identities in one exact authorized manifest snapshot. Database error text, adapter
 responses, filters, timing details, environment values, and arbitrary payloads are validated only

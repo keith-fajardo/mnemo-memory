@@ -94,6 +94,12 @@ identity and inject a fresh bounded observation into an existing structural quer
 does not accept caller-authored source-state evidence, and any binding or observation failure
 degrades currentness to unknown without changing the structural result.
 
+Changed-state queries compare two immutable minimized manifest projections. Latest-transition
+selection uses a separate append-only activation ledger because UUIDs and artifact timestamps are
+not activation order. Added, modified, and removed classifications use only normalized node fields;
+downstream refresh candidates use the authoritative edges from the before and after snapshots and
+remain explicitly bounded.
+
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.

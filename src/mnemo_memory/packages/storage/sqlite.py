@@ -146,7 +146,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 17
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -428,6 +428,25 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 16:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 16
+            if version < 17:
+                # Permit recovery from an interrupted unreleased local migration where the
+                # additive activation ledger exists but its migration entry was not recorded.
+                activation_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'dbt_manifest_activations'"
+                ).fetchone()
+                if activation_table is None:
+                    _execute_sql_script(
+                        connection,
+                        _migration_text("0017_dbt_manifest_activations.sql"),
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (17, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 17:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 17
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1296,6 +1315,18 @@ class SQLiteCheckpointRepository:
                             "SELECT * FROM dbt_manifest_snapshots WHERE snapshot_id = ?",
                             (str(existing_id),),
                         ).fetchone()
+                        connection.execute(
+                            "INSERT INTO dbt_manifest_activations("
+                            "snapshot_id, owner_id, workspace_id, project_id, activated_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                str(existing_id),
+                                str(artifact.scope.owner_id),
+                                _maybe(artifact.scope.workspace_id),
+                                str(artifact.scope.project_id),
+                                _timestamp(),
+                            ),
+                        )
                     assert duplicate is not None
                     return ManifestSnapshotStoreResult(
                         snapshot=self._snapshot_from_row(duplicate, artifact.scope), idempotent=True
@@ -1344,6 +1375,18 @@ class SQLiteCheckpointRepository:
                 )
                 if updated.rowcount != 1:
                     raise ActiveSnapshotConflict("active snapshot could not be selected")
+                connection.execute(
+                    "INSERT INTO dbt_manifest_activations("
+                    "snapshot_id, owner_id, workspace_id, project_id, activated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        str(snapshot_id),
+                        str(artifact.scope.owner_id),
+                        _maybe(artifact.scope.workspace_id),
+                        str(artifact.scope.project_id),
+                        _timestamp(),
+                    ),
+                )
                 return ManifestSnapshotStoreResult(
                     snapshot=DbtManifestSnapshot(
                         snapshot_id=snapshot_id,
@@ -1381,6 +1424,30 @@ class SQLiteCheckpointRepository:
         except sqlite3.Error as error:
             raise ProjectIndexStorageFailure("project index storage operation failed") from error
         return None if row is None else self._snapshot_from_row(row, scope)
+
+    def latest_transition(
+        self, scope: MemoryScope
+    ) -> tuple[DbtManifestSnapshot, DbtManifestSnapshot] | None:
+        self._require_project_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT snapshot.* FROM dbt_manifest_activations AS activation "
+                    "JOIN dbt_manifest_snapshots AS snapshot "
+                    "ON snapshot.snapshot_id = activation.snapshot_id "
+                    "WHERE activation.owner_id = ? AND activation.workspace_id IS ? "
+                    "AND activation.project_id = ? ORDER BY activation.activation_id DESC LIMIT 2",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index storage operation failed") from error
+        if len(rows) < 2:
+            return None
+        return self._snapshot_from_row(rows[1], scope), self._snapshot_from_row(rows[0], scope)
 
     def store_catalog_projection(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact

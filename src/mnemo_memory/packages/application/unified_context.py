@@ -15,10 +15,12 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationError,
+    DbtApplicationNotFound,
     DbtManifestApplicationService,
     GetDbtSupplementalArtifacts,
     LineageDirection,
     QueryLineage,
+    QueryManifestChanges,
     QueryManifestSelector,
     QuerySourceFreshness,
     QueryTestCoverage,
@@ -167,6 +169,29 @@ class ContextDbtFreshnessQuery:
             raise ValueError("dbt freshness requires exactly one unique_id or relative_path")
         if self.relative_path is not None:
             _validate_source_relative_path(self.relative_path)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextDbtChangesQuery:
+    maximum_changes: int = 32
+    maximum_affected_nodes: int = 64
+    before_snapshot_id: DbtSnapshotId | None = None
+    after_snapshot_id: DbtSnapshotId | None = None
+    current_source_state: SourceStateFingerprint | None = None
+    require_current: bool = False
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.maximum_changes <= 100:
+            raise ValueError("dbt change limit must be between 1 and 100")
+        if not 1 <= self.maximum_affected_nodes <= 100:
+            raise ValueError("dbt affected-node limit must be between 1 and 100")
+        if (self.before_snapshot_id is None) != (self.after_snapshot_id is None):
+            raise ValueError("dbt changes require both historical snapshot IDs")
+        if (
+            self.before_snapshot_id is not None
+            and self.before_snapshot_id == self.after_snapshot_id
+        ):
+            raise ValueError("dbt changes require distinct historical snapshot IDs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +362,7 @@ class GetUnifiedContext:
     dbt_test_coverage: ContextDbtTestCoverageQuery | None = None
     dbt_selector: ContextDbtSelectorQuery | None = None
     dbt_freshness: ContextDbtFreshnessQuery | None = None
+    dbt_changes: ContextDbtChangesQuery | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -347,6 +373,7 @@ class GetUnifiedContext:
                     self.dbt_test_coverage,
                     self.dbt_selector,
                     self.dbt_freshness,
+                    self.dbt_changes,
                 )
             )
             > 1
@@ -402,6 +429,7 @@ class UnifiedContextService:
             and request.dbt_test_coverage is None
             and request.dbt_selector is None
             and request.dbt_freshness is None
+            and request.dbt_changes is None
             and request.source_query is None
             and request.source_impact is None
             and request.source_changes is None
@@ -420,6 +448,8 @@ class UnifiedContextService:
             return self._with_dbt_selector(packet, request)
         if request.dbt_freshness is not None:
             return self._with_dbt_freshness(packet, request)
+        if request.dbt_changes is not None:
+            return self._with_dbt_changes(packet, request)
         return self._with_requested_source_facts(packet, request)
 
     def _with_requested_procedures(
@@ -1293,6 +1323,156 @@ class UnifiedContextService:
             conflicts=packet.conflicts,
         )
         return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_changes(self, packet: ContextPacket, request: GetUnifiedContext) -> ContextPacket:
+        query = request.dbt_changes
+        assert query is not None
+        if self._dbt is None:
+            return _with_omission(
+                packet, "dbt-changes", OmissionReason.LOWER_RANK, "dbt index is unavailable"
+            )
+        try:
+            result = self._dbt.query_changes(
+                QueryManifestChanges(
+                    _project_scope(request.scope),
+                    query.maximum_changes,
+                    query.maximum_affected_nodes,
+                    query.before_snapshot_id,
+                    query.after_snapshot_id,
+                    query.current_source_state,
+                )
+            )
+        except DbtApplicationNotFound:
+            return _with_omission(
+                packet,
+                "dbt-changes",
+                OmissionReason.LOWER_RANK,
+                "no authorized dbt manifest transition is available",
+            )
+        if query.require_current and result.currentness is not ArtifactCurrentness.CURRENT:
+            return _with_omission(
+                packet,
+                "dbt-changes",
+                OmissionReason.STALE,
+                "the after manifest snapshot is not proven current",
+            )
+        if not result.changes:
+            return _with_omission(
+                packet,
+                "dbt-changes",
+                OmissionReason.LOWER_RANK,
+                "the selected manifest transition has no structural node changes",
+            )
+        content = json.dumps(
+            {
+                "query_kind": "changes",
+                "before_snapshot_id": str(result.before_snapshot.snapshot_id),
+                "after_snapshot_id": str(result.after_snapshot.snapshot_id),
+                "currentness": result.currentness.value,
+                "changes": [
+                    {
+                        "kind": change.kind.value,
+                        "unique_id": str(change.unique_id),
+                        "resource_type": change.node.raw_resource_type,
+                        "relative_file": change.node.original_file_path,
+                    }
+                    for change in result.changes
+                ],
+                "affected_nodes": [
+                    {
+                        "unique_id": str(node.unique_id),
+                        "resource_type": node.raw_resource_type,
+                        "relative_file": node.original_file_path,
+                    }
+                    for node in result.affected_nodes
+                ],
+                "truncated": result.truncated,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        remaining = min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        if tokens > remaining:
+            return _with_omission(
+                packet,
+                "dbt-changes",
+                OmissionReason.TOKEN_BUDGET,
+                "dbt change summary exceeds context budget",
+            )
+        evidence_by_id = {
+            evidence.evidence_id: evidence
+            for change in result.changes
+            for evidence in (
+                *(() if change.before is None else (change.before.evidence,)),
+                *(() if change.after is None else (change.after.evidence,)),
+            )
+        }
+        evidence_by_id.update(
+            {node.evidence.evidence_id: node.evidence for node in result.affected_nodes}
+        )
+        evidence = tuple(evidence_by_id.values())
+        item = ContextItem(
+            f"dbt-changes:{result.before_snapshot.snapshot_id}:{result.after_snapshot.snapshot_id}",
+            ContextItemType.STRUCTURAL_FACT,
+            request.scope,
+            content,
+            ContentRepresentation.UNTRUSTED_EVIDENCE,
+            tokens,
+            evidence,
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            Sensitivity.NORMAL,
+            ValidityState.CURRENT
+            if result.currentness is ArtifactCurrentness.CURRENT
+            else ValidityState.STALE,
+            None,
+            ConflictState.NONE,
+            result.after_snapshot.metadata.ingested_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{item.item_id}",
+            item.item_id,
+            (
+                f"mnemo:dbt-transition/{result.before_snapshot.snapshot_id}/"
+                f"{result.after_snapshot.snapshot_id}"
+            ),
+            hashlib.sha256(content.encode()).hexdigest(),
+            evidence,
+        )
+        value = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
+        return (
+            value
+            if not result.truncated
+            else _with_omission(
+                value,
+                "dbt-changes",
+                OmissionReason.LOWER_RANK,
+                "dbt changes or affected nodes were bounded",
+            )
+        )
 
     def _with_checkpoint_source_observation(
         self, packet: ContextPacket, request: GetUnifiedContext

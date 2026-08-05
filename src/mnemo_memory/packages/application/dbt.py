@@ -115,6 +115,12 @@ class LineageDirection(str, Enum):
     DOWNSTREAM = "downstream"
 
 
+class ManifestChangeKind(str, Enum):
+    ADDED = "added"
+    MODIFIED = "modified"
+    REMOVED = "removed"
+
+
 @dataclass(frozen=True, slots=True)
 class IngestManifest:
     scope: MemoryScope
@@ -326,6 +332,57 @@ class SourceFreshnessQueryResult:
     source_node: DbtManifestNode
     observation: DbtSourceFreshnessResult | None
     artifact: DbtSourceFreshnessArtifact | None
+    currentness: ArtifactCurrentness
+    currentness_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class QueryManifestChanges:
+    scope: MemoryScope
+    maximum_changes: int = 32
+    maximum_affected_nodes: int = 64
+    before_snapshot_id: DbtSnapshotId | None = None
+    after_snapshot_id: DbtSnapshotId | None = None
+    current_source_state: SourceStateFingerprint | None = None
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.maximum_changes <= 100:
+            raise ValueError("dbt change limit must be between 1 and 100")
+        if not 1 <= self.maximum_affected_nodes <= 100:
+            raise ValueError("dbt affected-node limit must be between 1 and 100")
+        if (self.before_snapshot_id is None) != (self.after_snapshot_id is None):
+            raise ValueError("dbt changes require both historical snapshot IDs")
+        if (
+            self.before_snapshot_id is not None
+            and self.before_snapshot_id == self.after_snapshot_id
+        ):
+            raise ValueError("dbt changes require distinct historical snapshot IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestNodeChange:
+    kind: ManifestChangeKind
+    before: DbtManifestNode | None
+    after: DbtManifestNode | None
+
+    @property
+    def node(self) -> DbtManifestNode:
+        node = self.after or self.before
+        assert node is not None
+        return node
+
+    @property
+    def unique_id(self) -> DbtNodeId:
+        return self.node.unique_id
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestChangesResult:
+    before_snapshot: DbtManifestSnapshot
+    after_snapshot: DbtManifestSnapshot
+    changes: tuple[ManifestNodeChange, ...]
+    affected_nodes: tuple[DbtManifestNode, ...]
+    truncated: bool
     currentness: ArtifactCurrentness
     currentness_reason: str
 
@@ -709,6 +766,104 @@ class DbtManifestApplicationService:
             snapshot, node, observation, artifact, currentness, currentness_reason
         )
 
+    def query_changes(self, query: QueryManifestChanges) -> ManifestChangesResult:
+        """Compare immutable manifest projections and derive bounded refresh candidates."""
+        try:
+            if query.before_snapshot_id is not None and query.after_snapshot_id is not None:
+                before = self._repository.get_snapshot(query.scope, query.before_snapshot_id)
+                after = self._repository.get_snapshot(query.scope, query.after_snapshot_id)
+            else:
+                transition = self._repository.latest_transition(query.scope)
+                if transition is None:
+                    raise ManifestSnapshotNotFound()
+                before, after = transition
+            before_nodes = {
+                node.unique_id: node
+                for node in self._repository.iter_nodes(query.scope, before.snapshot_id)
+            }
+            after_nodes = {
+                node.unique_id: node
+                for node in self._repository.iter_nodes(query.scope, after.snapshot_id)
+            }
+        except ManifestSnapshotNotFound as error:
+            raise DbtApplicationNotFound(
+                "dbt manifest transition was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+
+        changes: list[ManifestNodeChange] = []
+        for unique_id in sorted(set(before_nodes) | set(after_nodes), key=str):
+            before_node = before_nodes.get(unique_id)
+            after_node = after_nodes.get(unique_id)
+            if before_node is None:
+                changes.append(ManifestNodeChange(ManifestChangeKind.ADDED, None, after_node))
+            elif after_node is None:
+                changes.append(ManifestNodeChange(ManifestChangeKind.REMOVED, before_node, None))
+            elif _manifest_node_signature(before_node) != _manifest_node_signature(after_node):
+                changes.append(
+                    ManifestNodeChange(ManifestChangeKind.MODIFIED, before_node, after_node)
+                )
+        selected = tuple(changes[: query.maximum_changes])
+        affected_ids: set[DbtNodeId] = {
+            change.unique_id for change in selected if change.after is not None
+        }
+        truncated = len(changes) > len(selected)
+        for snapshot, seeds in (
+            (before, tuple(change.unique_id for change in selected if change.before is not None)),
+            (after, tuple(change.unique_id for change in selected if change.after is not None)),
+        ):
+            discovered, bounded = self._bounded_downstream_ids(
+                query.scope,
+                snapshot.snapshot_id,
+                seeds,
+                query.maximum_affected_nodes,
+            )
+            affected_ids.update(discovered & after_nodes.keys())
+            truncated = truncated or bounded
+        ordered_affected = tuple(
+            after_nodes[unique_id] for unique_id in sorted(affected_ids, key=str)
+        )
+        if len(ordered_affected) > query.maximum_affected_nodes:
+            ordered_affected = ordered_affected[: query.maximum_affected_nodes]
+            truncated = True
+        currentness, reason = _currentness(after, None, query.current_source_state)
+        return ManifestChangesResult(
+            before,
+            after,
+            selected,
+            ordered_affected,
+            truncated,
+            currentness,
+            reason,
+        )
+
+    def _bounded_downstream_ids(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        seeds: tuple[DbtNodeId, ...],
+        limit: int,
+    ) -> tuple[set[DbtNodeId], bool]:
+        visited = set(seeds)
+        queue = deque(sorted(seeds, key=str))
+        discovered: set[DbtNodeId] = set()
+        while queue:
+            current = queue.popleft()
+            try:
+                edges = self._repository.direct_downstream(scope, snapshot_id, current)
+            except ProjectIndexRepositoryError as error:
+                raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+            for edge in sorted(edges, key=lambda item: str(item.child_id)):
+                if edge.child_id in visited:
+                    continue
+                visited.add(edge.child_id)
+                discovered.add(edge.child_id)
+                if len(discovered) > limit:
+                    return discovered, True
+                queue.append(edge.child_id)
+        return discovered, False
+
     def _shortest_path(
         self,
         query: QueryLineage,
@@ -948,6 +1103,27 @@ class DbtManifestApplicationService:
                 ),
             )
         )
+
+
+def _manifest_node_signature(node: DbtManifestNode) -> tuple[object, ...]:
+    return (
+        node.resource_type,
+        node.raw_resource_type,
+        node.package_name,
+        node.name,
+        node.alias,
+        node.database,
+        node.schema_name,
+        node.relation_name,
+        node.original_file_path,
+        node.patch_path,
+        node.enabled,
+        node.checksum,
+        node.tags,
+        node.description,
+        node.dependency_ids,
+        node.macro_dependency_ids,
+    )
 
 
 def _currentness(

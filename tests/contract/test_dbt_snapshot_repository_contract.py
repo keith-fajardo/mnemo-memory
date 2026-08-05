@@ -94,6 +94,7 @@ def test_digest_idempotency_replacement_scope_and_conflict(
     )
     assert same.idempotent is True
     assert same.snapshot.snapshot_id == first.snapshot.snapshot_id
+    assert repository.latest_transition(scope) is None
     changed = repository.store_and_activate(
         artifact(scope, stamp=1),
         DbtSnapshotId.new(),
@@ -101,11 +102,29 @@ def test_digest_idempotency_replacement_scope_and_conflict(
     )
     assert changed.snapshot.snapshot_id != first.snapshot.snapshot_id
     assert repository.get_snapshot(scope, first.snapshot.snapshot_id).is_active is False
+    transition = repository.latest_transition(scope)
+    assert transition is not None
+    assert [item.snapshot_id for item in transition] == [
+        first.snapshot.snapshot_id,
+        changed.snapshot.snapshot_id,
+    ]
+    reactivated = repository.store_and_activate(
+        artifact(scope),
+        DbtSnapshotId.new(),
+        expected_active_snapshot_id=changed.snapshot.snapshot_id,
+    )
+    assert reactivated.idempotent is True
+    transition = repository.latest_transition(scope)
+    assert transition is not None
+    assert [item.snapshot_id for item in transition] == [
+        changed.snapshot.snapshot_id,
+        first.snapshot.snapshot_id,
+    ]
     with pytest.raises(ActiveSnapshotConflict):
         repository.store_and_activate(
             artifact(scope, stamp=2),
             DbtSnapshotId.new(),
-            expected_active_snapshot_id=first.snapshot.snapshot_id,
+            expected_active_snapshot_id=changed.snapshot.snapshot_id,
         )
     isolated = project_scope(2)
     assert (

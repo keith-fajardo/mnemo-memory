@@ -233,6 +233,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_manifest_activations")
         connection.execute("DROP TABLE dbt_source_freshness_results")
         connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DROP TABLE dbt_run_result_timings")
@@ -254,7 +255,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 16
+    assert repository.schema_version() == 17
 
 
 def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
@@ -262,9 +263,10 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
     repository = SQLiteCheckpointRepository(database, base_directory=tmp_path)
     repository.migrate()
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE dbt_manifest_activations")
         connection.execute("DROP TABLE dbt_source_freshness_results")
         connection.execute("DROP TABLE dbt_source_freshness_artifacts")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 16")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 16")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=16)
@@ -278,4 +280,4 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 16
+    assert repository.schema_version() == 17

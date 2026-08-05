@@ -122,6 +122,7 @@ def test_snapshot_projection_reopens_and_has_foreign_key_integrity(tmp_path: Pat
 def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> None:
     item = repository(tmp_path)
     with sqlite3.connect(item.path) as connection:
+        connection.execute("DROP TABLE dbt_manifest_activations")
         connection.execute("DROP TABLE dbt_source_freshness_results")
         connection.execute("DROP TABLE dbt_source_freshness_artifacts")
         connection.execute("DELETE FROM schema_migrations WHERE version >= 15")
@@ -154,7 +155,7 @@ def test_v15_edge_constraint_upgrade_rolls_back_atomically(tmp_path: Path) -> No
     assert "dbt_macro_dependency" not in sql
 
     item.migrate()
-    assert item.schema_version() == 16
+    assert item.schema_version() == 17
 
 
 def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) -> None:
@@ -174,3 +175,38 @@ def test_stale_expected_activation_rolls_back_losing_snapshot(tmp_path: Path) ->
         )
     assert second_repository.get_active_snapshot(scope()).snapshot_id == winner.snapshot.snapshot_id  # type: ignore[union-attr]
     assert len(second_repository.list_snapshots(scope()).items) == 2
+
+
+def test_dbt_activation_history_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
+    item = repository(tmp_path)
+    stored = item.store_and_activate(artifact(), DbtSnapshotId.new())
+    with sqlite3.connect(item.path) as connection:
+        connection.execute("DROP TABLE dbt_manifest_activations")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 17")
+
+    with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
+        item.migrate(fail_after_version=17)
+
+    assert item.schema_version() == 16
+    with sqlite3.connect(item.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'dbt_manifest_activations'"
+            ).fetchone()
+            is None
+        )
+    item.migrate()
+    assert item.schema_version() == 17
+    assert item.latest_transition(scope()) is None
+    changed = item.store_and_activate(
+        artifact(stamp=1),
+        DbtSnapshotId.new(),
+        expected_active_snapshot_id=stored.snapshot.snapshot_id,
+    )
+    transition = item.latest_transition(scope())
+    assert transition is not None
+    assert [value.snapshot_id for value in transition] == [
+        stored.snapshot.snapshot_id,
+        changed.snapshot.snapshot_id,
+    ]

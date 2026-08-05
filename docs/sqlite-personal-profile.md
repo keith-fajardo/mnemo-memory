@@ -43,6 +43,13 @@ nodes. It is forward-only and transactional; back up the personal-profile databa
 and restore that backup to reverse a committed migration. An interrupted or injected failure
 leaves schema 15 and its ledger unchanged.
 
+Migration `0017_dbt_manifest_activations.sql` additively records an append-only scoped ledger of
+manifest snapshot activations so changed-state retrieval never infers chronology from UUIDs or
+timestamps. It seeds only the currently active snapshot on upgrade because no trustworthy earlier
+activation order exists. The migration is forward-only and transactional; restore a pre-upgrade
+schema-16 backup to reverse a committed migration. An interrupted or injected failure leaves the
+schema and migration ledger at version 16.
+
 Scope/principal records are retained with `RESTRICT`. Checkpoints, revisions, evidence, and their
 links also use `RESTRICT`, so evidence supporting a durable checkpoint cannot disappear silently.
 The repository contract suite exercises the same public contract intended for a later PostgreSQL

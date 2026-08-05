@@ -1159,3 +1159,34 @@ current structural context. The complete repository gate passes with 583 tests, 
 149 source files, schema validation, dependency/provenance validation for 86 entries, and
 architecture validation for 73 product Python files. No migration, dependency, model call, or MCP
 tool was added.
+
+#### Issue 15L — Complete
+
+The current bounded issue adds deterministic dbt changed-state and affected-node context between
+two authorized immutable manifest activations. The existing `get_context` tool may compare an
+explicit before/after snapshot pair or the latest recorded activation transition, classify bounded
+added, modified, and removed nodes from manifest-owned structural fields, and return bounded
+downstream refresh candidates derived only from authoritative edges in the relevant snapshots.
+Activation order must be recorded explicitly rather than inferred from UUIDs or timestamps;
+idempotent re-ingestion of an already active snapshot must not create a transition. The after
+snapshot carries the existing retrieval-time currentness comparison, and `require_current` must
+fail closed. Cross-scope IDs, missing history, ambiguous files, result and token bounds, and
+storage failure remain explicit without widening retrieval. This issue does not execute dbt,
+interpret selector syntax or SQL/Jinja, retain source bodies, add code excerpts, a dependency,
+model call, or MCP tool. The SQLite activation-history migration requires upgrade atomicity and a
+documented forward-only recovery path.
+
+Implemented `dbt_changes` on the existing `get_context` tool for an explicit before/after pair or
+the latest recorded manifest activation transition. An append-only, scope-constrained activation
+ledger establishes order independently of UUIDs and timestamps, ignores idempotent activation of
+the already-active snapshot, and records reactivation of an older snapshot. Comparison classifies
+bounded added, modified, and removed nodes from minimized manifest fields; bounded refresh
+candidates are the surviving changed nodes and their authoritative downstream dependents across
+the before and after graphs. Results carry exact node evidence, after-snapshot currentness,
+structured truncation, and `require_current` enforcement. Cross-scope IDs and missing history fail
+closed. SQLite migration 0017 is additive, forward-only, transactionally rollback-tested, seeds
+only the known active snapshot on upgrade, and supports recovery from an unreleased table-without-
+ledger state. The complete repository gate passes with 586 tests, strict typing for 149 source
+files, schema validation, dependency/provenance validation for 86 entries, and architecture
+validation for 73 product Python files. No dependency, model call, dbt/warehouse execution, source
+body retention, or MCP tool was added.
