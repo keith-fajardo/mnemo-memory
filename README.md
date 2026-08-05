@@ -698,6 +698,12 @@ Mnemo exposes exactly three local stdio MCP tools:
 - `explain_context` validates a packet returned by `get_context` and reports its sources, ranks,
   omissions, conflicts, staleness, and token accounting without repeating retrieved content.
 
+`get_context` returns the canonical structured packet by default. Its optional `render_for` value
+(`codex` or `claude-code`) returns that unchanged packet beside deterministic, client-labeled line
+records. Automatic-memory hooks choose the matching renderer themselves. Dynamic values are
+JSON-quoted under a fixed trust boundary; rendering cannot retrieve, rerank, persist, authorize, or
+change the packet.
+
 Before return, the context engine removes only exact same-source duplicates, limits
 non-conflicting episodic and knowledge results to two per evidence-source set, and records every
 removal as an omission. Checkpoints, mandatory procedures, and conflict participants are retained.

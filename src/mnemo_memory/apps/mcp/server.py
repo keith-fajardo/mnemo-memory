@@ -8,7 +8,7 @@ import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -36,7 +36,12 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
-from mnemo_memory.packages.context_engine import UnifiedContextEngine, explain_context_packet
+from mnemo_memory.packages.context_engine import (
+    ContextClient,
+    UnifiedContextEngine,
+    explain_context_packet,
+    render_context_packet,
+)
 from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceStateFingerprint
 
 SERVER_NAME = "mnemo-local"
@@ -53,7 +58,8 @@ def create_server(port: McpContextPort) -> FastMCP:
         name="get_context",
         description=(
             "Return a bounded context packet. In an auto-memory-enabled project, omit all five "
-            "scope IDs to use that registered project's stable internal scope."
+            "scope IDs to use that registered project's stable internal scope. Optionally return "
+            "an agent-readable rendering beside the unchanged canonical packet."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     )
@@ -151,10 +157,21 @@ def create_server(port: McpContextPort) -> FastMCP:
                 ),
             ),
         ] = False,
+        render_for: Annotated[
+            str | None,
+            Field(
+                default=None,
+                pattern="^(codex|claude-code)$",
+                description=(
+                    "Optionally return the unchanged canonical packet beside a deterministic "
+                    "client-labeled rendering for Codex or Claude Code."
+                ),
+            ),
+        ] = None,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
         total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
     ) -> dict[str, object]:
-        return port.get_context(
+        canonical = port.get_context(
             {
                 "owner_id": owner_id,
                 "workspace_id": workspace_id,
@@ -181,6 +198,14 @@ def create_server(port: McpContextPort) -> FastMCP:
                 "total_tokens": total_tokens,
             }
         )
+        if render_for is None:
+            return canonical
+        packet = ContextPacket.from_dict(canonical)
+        return {
+            "context_packet": canonical,
+            "rendered_context": render_context_packet(packet, cast(ContextClient, render_for)),
+            "rendered_for": render_for,
+        }
 
     @server.tool(
         name="explain_context",

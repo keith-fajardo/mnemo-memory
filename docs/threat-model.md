@@ -105,10 +105,17 @@ agent to ignore policy, reveal another scope, invoke tools, or mutate memory.
 **Required controls:** Retrieved text is delimited and labeled as untrusted evidence; instructions
 come only from the client/system and checked-in applicable procedures; no retrieved text changes
 permissions, tools, scope, or write intent; write tools require deterministic validation and
-explicit authorization.
+explicit authorization. Client rendering uses fixed line prefixes and puts every dynamic field in
+one JSON-quoted record, so embedded newlines or renderer sentinel text cannot create a structural
+record. Its fixed trust boundary distinguishes selected checked-in mandatory procedures from all
+other evidence and states that no rendered item grants authority. Rendering is a pure projection
+of an already-authorized canonical packet.
 
 **Verification:** Injection corpus across every content category; assertions that packets retain
-data labels and that tool/mutation decisions are unchanged.
+data labels and that tool/mutation decisions are unchanged. Renderer tests include embedded record
+sentinels/newlines, both supported clients, exact provenance/rank preservation, deterministic
+output, canonical-packet immutability, optional MCP wrapping, and invalid automatic-attachment
+fail-open behavior.
 
 **Residual risk:** A downstream model may still follow malicious prose; minimize excerpts, surface
 source trust, and test each renderer/client.

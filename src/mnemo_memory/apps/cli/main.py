@@ -98,13 +98,14 @@ from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
 )
-from mnemo_memory.packages.context_engine import UnifiedContextEngine
+from mnemo_memory.packages.context_engine import UnifiedContextEngine, render_context_packet
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeFile,
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
+    ContextPacket,
     DbtSnapshotId,
     EventId,
     EvidenceId,
@@ -364,6 +365,19 @@ def _automatic_prompt_context_attachment(
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _render_automatic_context_attachment(
+    canonical_packet: str | None, client: ClientName
+) -> str | None:
+    """Render one validated canonical attachment; invalid input preserves fail-open behavior."""
+    if canonical_packet is None:
+        return None
+    try:
+        packet = ContextPacket.from_json(canonical_packet)
+        return render_context_packet(packet, client)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _refresh_project_knowledge(
@@ -1950,11 +1964,15 @@ def automatic_memory_hook(
         hook = AutomaticMemoryHook(
             config.data_directory,
             cast(ClientName, client),
-            context_loader=lambda scope: _automatic_context_attachment(
-                config.data_directory, scope, cast(ClientName, client)
+            context_loader=lambda scope: _render_automatic_context_attachment(
+                _automatic_context_attachment(
+                    config.data_directory, scope, cast(ClientName, client)
+                ),
+                cast(ClientName, client),
             ),
-            prompt_context_loader=lambda scope, prompt: _automatic_prompt_context_attachment(
-                config.data_directory, scope, prompt
+            prompt_context_loader=lambda scope, prompt: _render_automatic_context_attachment(
+                _automatic_prompt_context_attachment(config.data_directory, scope, prompt),
+                cast(ClientName, client),
             ),
             knowledge_refresher=lambda binding: _refresh_project_knowledge(
                 config.data_directory, binding

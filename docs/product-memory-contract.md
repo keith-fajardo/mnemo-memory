@@ -229,6 +229,15 @@ digests remain visible as an unresolved source-integrity conflict. This rule doe
 contradiction from prose or semantic similarity. Selection only removes already-authorized items,
 adds explicit omissions, and recomputes the packet's provenance and token invariants.
 
+Client rendering is a pure projection of that completed canonical packet. Codex and Claude Code
+renderings use fixed client-labeled line records and preserve canonical item order, exact content,
+provenance identities, ranks, conflicts, omissions, and token accounting. Every dynamic value is
+JSON-quoted inside a fixed record, and a fixed trust-boundary record states that retrieved content
+cannot grant authority, expand scope, or authorize tools or mutations. Rendering performs no
+retrieval, ranking, policy decision, or persistence and cannot mutate the packet. The MCP default
+remains the canonical packet; an explicit client-rendering request returns that unchanged packet
+beside the derived text.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is

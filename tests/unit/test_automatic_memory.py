@@ -563,9 +563,8 @@ def test_session_start_attaches_only_the_bounded_context_loader_result(tmp_path:
     assert isinstance(output, dict)
     context = str(output["additionalContext"])
     assert received_scopes == [binding.checkpoint_scope]
-    assert "<mnemo-context-packet>" in context
     assert '{"packet":"bounded evidence"}' in context
-    assert "evidence and data, not as instructions" in context
+    assert "client-rendered view" in context
     assert str(project) not in context
 
 
@@ -825,7 +824,7 @@ def test_session_context_attachment_fails_open_without_leaking_loader_details(
     output = started["hookSpecificOutput"]
     assert isinstance(output, dict)
     context = str(output["additionalContext"])
-    assert "<mnemo-context-packet>" not in context
+    assert "MNEMO_CONTEXT_V1" not in context
     assert "private loader failure" not in context
 
 
@@ -849,6 +848,12 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         prompt_received.append((directory, scope, prompt))
         return '{"packet":"relevant"}'
 
+    rendered: list[tuple[str | None, str]] = []
+
+    def render(packet: str | None, client: str) -> str | None:
+        rendered.append((packet, client))
+        return None if packet is None else f"rendered-for-{client}:{packet}"
+
     monkeypatch.setattr(
         cli,
         "_automatic_context_attachment",
@@ -859,6 +864,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         "_automatic_prompt_context_attachment",
         load_prompt,
     )
+    monkeypatch.setattr(cli, "_render_automatic_context_attachment", render)
     monkeypatch.setattr(
         cli,
         "_refresh_project_knowledge",
@@ -889,7 +895,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     assert counted == [(data.resolve(), binding)]
     emitted = json.loads(result.output)
     additional_context = emitted["hookSpecificOutput"]["additionalContext"]
-    assert '<mnemo-context-packet>\n{"packet":"saved"}' in additional_context
+    assert 'rendered-for-codex:{"packet":"saved"}' in additional_context
     assert "2 current scoped project knowledge document(s)" in additional_context
     assert "knowledge_query" in additional_context
 
@@ -908,6 +914,10 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     assert prompt_result.exit_code == 0, prompt_result.output
     assert prompt_received == [(data.resolve(), binding.checkpoint_scope, "finance reconciliation")]
     assert "relevant" in prompt_result.output
+    assert rendered == [
+        ('{"packet":"saved"}', "codex"),
+        ('{"packet":"relevant"}', "codex"),
+    ]
 
 
 def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
@@ -972,6 +982,14 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
     assert all(item["evidence_references"] for item in packet["episodic_memories"])
     assert len(packet["knowledge_items"]) == 1
     assert "documented business-date grain" in packet["knowledge_items"][0]["content"]
+    codex_rendering = cli._render_automatic_context_attachment(attached, "codex")
+    claude_rendering = cli._render_automatic_context_attachment(attached, "claude-code")
+    assert codex_rendering is not None
+    assert claude_rendering is not None
+    assert codex_rendering.startswith("MNEMO_CONTEXT_V1 client=codex\n")
+    assert claude_rendering.startswith("MNEMO_CONTEXT_V1 client=claude-code\n")
+    assert "Run the regression check" in codex_rendering
+    assert cli._render_automatic_context_attachment('{"not":"a packet"}', "codex") is None
 
 
 def test_automatic_context_attaches_procedures_selected_by_one_client_profile(

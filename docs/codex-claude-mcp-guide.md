@@ -14,6 +14,12 @@ That server provides exactly three tools:
 The server starts when the client needs it and reads the local Mnemo database. It does not upload
 that database, capture every conversation, or call a model on its own.
 
+`get_context` returns the canonical structured packet by default. A direct tool caller may set
+`render_for` to `codex` or `claude-code`; the response then contains the unchanged packet beside a
+deterministic agent-readable rendering. Automatic-memory hooks select this rendering themselves.
+Every retrieved value stays JSON-quoted under a fixed trust boundary, with provenance, conflicts,
+omissions, and canonical token accounting intact.
+
 ## Before connecting
 
 Install the published package and make sure the command works:
@@ -37,7 +43,7 @@ mnemo-memory connect claude-code --auto-memory
 
 This creates a private local project binding; you never enter scope UUIDs. At a new session, the
 hook attaches the bounded saved checkpoint, lessons, approved facts, and latest bounded source
-transition automatically, then asks
+transition automatically in the configured client's rendering, then asks
 the agent to create a compact checkpoint at a stop/compaction boundary. It refreshes Mnemo's
 syntax-only source map at session start, after a checkpoint save, and before an unsaved changed
 session stops. The attachment has a 1,750-token total budget; it does not read or store a raw

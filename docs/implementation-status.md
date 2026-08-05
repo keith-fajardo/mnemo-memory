@@ -1797,3 +1797,47 @@ with 728 tests, strict typing for 183 source files, dependency/provenance valida
 and architecture validation for 96 product Python files. No learned reranking, semantic conflict
 inference, configurable budget change, renderer, persistence, model call, dependency, API/UI, or
 team mode was added.
+
+#### Issue 17E — Complete
+
+The current bounded issue adds deterministic agent-readable rendering for the existing canonical
+packet. Codex and Claude Code receive an explicit client-labeled line-record rendering with a fixed
+trust boundary, stable section order, exact selected content, ranks, provenance identities,
+conflicts, omissions, and canonical token accounting. Dynamic content stays JSON-quoted on one
+record and cannot change the renderer's structural labels. Rendering is a pure projection and
+cannot retrieve, authorize, rank, mutate, or change the canonical packet.
+
+The existing `get_context` tool keeps returning the canonical packet by default. An explicit
+`render_for` value may additionally return that unchanged packet beside its rendering; no new MCP
+tool is added. Opt-in automatic-memory hooks render their already-bounded canonical attachment for
+the configured client before adding it to context. Invalid rendering input fails open and cannot
+prevent either client from operating.
+
+This issue adds no new retrieval, ranking, conflict inference, persistence, model call, dependency,
+API/UI, settings, packaging, or team mode.
+
+Implemented a pure `render_context_packet` projection for `codex` and `claude-code`. The stable
+line-record format names the client and canonical request/token metadata, emits selected items in
+canonical order with exact content, rank, validity, trust, evidence identities, source reference
+and digest, then emits conflicts and omissions. A fixed trust record precedes all dynamic data.
+Every dynamic value is compact JSON on one record, so embedded newlines or record sentinels remain
+quoted data. Rendering leaves the frozen canonical packet unchanged and performs no repository or
+model operation.
+
+The existing `get_context` default response remains the canonical packet. Its optional
+`render_for` input returns `context_packet`, `rendered_context`, and `rendered_for`; the nested
+packet round-trips through the same strict domain contract and can be passed to `explain_context`.
+Automatic-memory session and prompt attachments validate their bounded canonical packet and use
+the configured client's renderer before hook output. Invalid input returns no attachment, and the
+hook remains fail open. No tool was added and the exact three-tool inventory is unchanged.
+
+Renderer tests prove deterministic Codex/Claude labels, exact content and provenance preservation,
+JSON quoting of embedded newlines/sentinels, omissions, canonical immutability, and automatic
+invalid-input failure. Real stdio MCP coverage proves default response compatibility, optional
+wrapping, canonical packet validation, and schema rejection of an unsupported client. The focused
+engine, MCP, and automatic-memory suites pass with 89 tests. The product contract, threat model,
+README, local MCP guide, and client guide record the behavior. The complete repository gate passes
+with 729 tests, strict typing for 184 source files, dependency/provenance validation for 86 entries,
+and architecture validation for 97 product Python files. No new retrieval, ranking, conflict
+inference, persistence, model call, dependency, API/UI, settings, packaging, or team mode was
+added.

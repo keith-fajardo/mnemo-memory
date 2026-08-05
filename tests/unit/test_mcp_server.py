@@ -137,6 +137,9 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "dbt_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
+    assert tools[0].inputSchema["properties"]["render_for"]["anyOf"][0]["pattern"] == (
+        "^(codex|claude-code)$"
+    )
     assert "record_event" in tools[2].inputSchema["properties"]["operation"]["pattern"]
     assert "event_summary" in tools[2].inputSchema["properties"]
     assert set(tools[1].inputSchema["properties"]) == {"context_packet"}
@@ -1074,6 +1077,16 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             packet = ContextPacket.from_dict(context.structuredContent or {})
             assert packet.active_task_checkpoint is not None
             assert str(result["checkpoint_revision_id"]) in packet.provenance[0].source_reference
+            rendered = await session.call_tool("get_context", {**IDS, "render_for": "codex"})
+            assert rendered.isError is False
+            rendered_result = rendered.structuredContent or {}
+            assert rendered_result["rendered_for"] == "codex"
+            assert str(rendered_result["rendered_context"]).startswith(
+                "MNEMO_CONTEXT_V1 client=codex\n"
+            )
+            rendered_packet = ContextPacket.from_dict(rendered_result["context_packet"])
+            assert rendered_packet.active_task_checkpoint == packet.active_task_checkpoint
+            assert str(rendered_packet.request_id) in str(rendered_result["rendered_context"])
             explanation = await session.call_tool(
                 "explain_context", {"context_packet": context.structuredContent or {}}
             )
@@ -1093,6 +1106,10 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert oversized.isError is True
             assert "MNEMO_INVALID_CONTEXT_PACKET" in str(oversized.content)
             assert "must-not-escape" not in str(oversized.content)
+            unsupported_rendering = await session.call_tool(
+                "get_context", {**IDS, "render_for": "unsupported"}
+            )
+            assert unsupported_rendering.isError is True
             invalid = await session.call_tool("save_checkpoint", {"operation": "invalid"})
             assert invalid.isError is True
             still_valid = await session.call_tool("get_context", IDS)

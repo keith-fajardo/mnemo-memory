@@ -23,6 +23,13 @@ versioned context packet. With no active checkpoint it returns a valid empty pac
 abandoned checkpoints are excluded from automatic selection. The active-checkpoint section is hard
 limited to 600 tokens by default and structured token-budget omissions are preserved.
 
+By default, `get_context` returns that canonical packet directly. Set `"render_for": "codex"` or
+`"render_for": "claude-code"` to receive an object containing `context_packet` (the unchanged
+canonical packet), `rendered_context` (deterministic client-labeled line records), and
+`rendered_for`. Pass only the nested `context_packet` to `explain_context`. Rendering does not add
+retrieval, change ranking or budgets, call a model, or treat retrieved content as instructions.
+Automatic-memory hooks use the matching renderer for their configured client.
+
 An optional bounded `query` is transient and never stored in the packet or as memory. Mnemo uses
 deterministic literal intent rules: specialized terms select their existing category indexes, while
 a general query searches bounded project knowledge and retained source identities. Explicit

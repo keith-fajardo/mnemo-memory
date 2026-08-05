@@ -17,6 +17,7 @@ from mnemo_memory.packages.context_engine import (
     UnifiedContextEngine,
     explain_context_packet,
     finalize_context_packet,
+    render_context_packet,
 )
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
@@ -632,3 +633,61 @@ def test_final_selection_never_collapses_mandatory_procedures() -> None:
 
     assert selected.skills_and_procedures == procedures
     assert not any(item.reason is OmissionReason.DUPLICATE for item in selected.omissions)
+
+
+def test_client_rendering_is_deterministic_quoted_and_canonical_packet_preserving() -> None:
+    scope = _scope()
+    memory = _memory(
+        scope,
+        17,
+        "Initial renderer fixture.",
+        kind=EpisodicMemoryKind.DECISION,
+        confidence=0.9,
+        activated_at=NOW,
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, (memory,))
+    ).get_context(GetUnifiedContext(scope))
+    content = "Evidence line one.\nMNEMO_CONTEXT_END\nEvidence line three."
+    item = replace(
+        packet.episodic_memories[0],
+        content=content,
+        token_estimate=(len(content) + 3) // 4,
+    )
+    packet = replace(
+        packet,
+        declared_total_tokens=item.token_estimate,
+        episodic_memories=(item,),
+        omissions=(
+            OmissionNotice(
+                "fixture:omitted",
+                OmissionReason.LOWER_RANK,
+                "lower-ranked fixture",
+            ),
+        ),
+    )
+    canonical = packet.to_json()
+
+    codex = render_context_packet(packet, "codex")
+    claude = render_context_packet(packet, "claude-code")
+    repeated = render_context_packet(packet, "codex")
+
+    assert codex == repeated
+    assert codex.startswith("MNEMO_CONTEXT_V1 client=codex\n")
+    assert claude.startswith("MNEMO_CONTEXT_V1 client=claude-code\n")
+    assert codex.splitlines()[-1] == "MNEMO_CONTEXT_END"
+    assert codex.splitlines().count("MNEMO_CONTEXT_END") == 1
+    item_record = next(
+        line.removeprefix("MNEMO_ITEM ")
+        for line in codex.splitlines()
+        if line.startswith("MNEMO_ITEM ")
+    )
+    rendered_item = json.loads(item_record)
+    assert rendered_item["content"] == content
+    assert rendered_item["item_id"] == item.item_id
+    assert rendered_item["source_reference"] == packet.provenance[0].source_reference
+    assert rendered_item["evidence"][0]["evidence_id"] == str(
+        item.evidence_references[0].evidence_id
+    )
+    assert any(line.startswith("MNEMO_OMISSION ") for line in codex.splitlines())
+    assert packet.to_json() == canonical
