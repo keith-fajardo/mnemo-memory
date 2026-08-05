@@ -291,7 +291,7 @@ or workspace-inherited dependencies.
 
 > Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
 > project intentionally does not yet provide automatic transcript capture, semantic cross-language
-> call graphs, a UI, or team workspaces.
+> call graphs, or team workspaces.
 >
 > The multi-language source-structure work described below is currently in this development branch; it is
 > not retroactively part of the immutable `0.1.0a2` PyPI release.
@@ -439,8 +439,8 @@ You may run **both** commands. They are independent registrations:
 
 `mnemo-memory connect` by itself does not connect anything; it shows the available client-specific
 subcommands. `--auto-memory` is the recommended one-time project opt-in. After registering,
-restart the relevant client. Each client sees exactly the same two Mnemo MCP tools:
-`save_checkpoint` and `get_context`.
+restart the relevant client. Each client sees exactly the same five Mnemo MCP tools:
+`get_context`, `list_skills`, `get_skill`, `explain_context`, and `save_checkpoint`.
 
 Inside the enabled repository, those tools resolve its private generated scope automatically. You
 do not copy UUIDs into prompts or environment variables, and an agent must not invent friendly
@@ -916,6 +916,9 @@ uv build --no-sources
 The verified package target is Python 3.12 on macOS and Linux. Built-artifact verification runs
 outside the source checkout so migrations and schemas are proven to load from the installed
 `mnemo_memory` package.
+The aggregate check also builds source-independent archives, performs an isolated
+`uv tool install --reinstall` from the wheel, connects a sample project with automatic memory,
+and calls `get_context` without UUID arguments through two fresh registered MCP processes.
 
 The manual, environment-gated TestPyPI and PyPI workflows build and verify the wheel and source
 distribution once, bind them to a SHA-256 checksum bundle, and publish only those two artifacts

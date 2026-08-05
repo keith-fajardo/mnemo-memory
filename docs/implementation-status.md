@@ -975,7 +975,7 @@ Exact-client profiles take precedence over `any`; multiple equally matching prof
 The profile revision/digest remains cited alongside each selected procedure. Mnemo does not infer
 an arbitrary named-agent role from hook events, inspect prompts, or execute project Markdown.
 
-### Settings, inspection, and packaging — In progress
+### Settings, inspection, and packaging — Complete
 
 #### Issue 20A — Loopback onboarding and health dashboard — Complete
 
@@ -1387,6 +1387,46 @@ The complete repository gate passes with 806 tests, strict typing for 203 source
 dependency/provenance validation for 87 registered entries, and architecture validation for 107
 product Python files. No release workflow was triggered, no artifact was published, and no version,
 runtime dependency, distribution format, install behavior, or upgrade behavior changed.
+
+#### Issue 20N — Milestone 8 install and recovery exit audit — Complete
+
+This bounded audit must execute the written personal workflow from a source-independent built
+distribution: install it once into an isolated uv tool environment, initialize private storage,
+connect an isolated Codex-compatible registration with automatic memory for a sample project, and
+start a fresh registered MCP process whose `get_context` call omits every UUID. The result must
+truthfully report no active checkpoint before one is saved, then preserve the exact checkpoint and
+source snapshot across another fresh process. The audit must also compose the real verified backup
+service with a simulated failed upgrade and prove both unchanged live canonical data and readable
+recovery data. Existing uninstall separation and diagnostic redaction evidence must be mapped to
+the remaining exit gates. This issue adds no installer format, restore command, package publication,
+runtime dependency, model call, non-loopback exposure, team behavior, or incremental feature.
+
+The aggregate repository gate now includes a source-independent personal installation check. It
+builds and inspects the exact wheel and source distribution, installs the wheel once with isolated
+`uv tool install --offline --reinstall`, initializes a private store, and follows the written
+automatic-memory connection command against an isolated Codex-compatible registration. The
+read-back launcher exposes the current five-tool inventory. Its first fresh `get_context` call
+supplies no UUID and truthfully returns no active checkpoint while citing the exact source snapshot;
+`save_checkpoint` also omits UUIDs, and a second independently launched MCP process returns that
+exact immutable checkpoint revision and the same source-snapshot provenance.
+
+The upgrade audit composes `PersonalUpgradeService` with the real lifecycle, backup, SQLite, and
+approved-event services. A simulated owning-manager installation failure occurs only after a
+verified backup. The exact canonical event remains readable and identical in both the unchanged
+live store and recovery database. Existing upgrade tests cover successful manager/validation
+ordering and prior service-state restoration. The safe-uninstall suite proves application removal
+preserves data by default and requires the separate `--delete-data --yes` choice for irreversible
+deletion. The private-diagnostics suite proves the bundle remains useful for absent/corrupt stores
+while excluding content, identities, paths, environment/configuration values, credentials, command
+output, exception details, and durable logs.
+
+The focused real backup/upgrade suite passes with 13 tests, and the installed personal workflow
+check passes from built artifacts outside the source environment. The complete repository gate
+passes with 807 tests, strict typing for 203 source files, dependency/provenance validation for 87
+registered entries, architecture validation for 107 product Python files, and the installed-package
+gate. Every Milestone 8 build item and exit condition now has executable evidence, so Milestone 8 is
+complete. No new installer format, restore command, package publication, runtime dependency, model
+call, non-loopback exposure, team behavior, or incremental feature was added.
 
 ### Personal checkpoint inspection — Complete
 

@@ -20,7 +20,22 @@ from mnemo_memory.packages.application import (
     PersonalBackupResult,
     PersonalUpgradeError,
     PersonalUpgradeService,
+    RecordApprovedEpisodicEvent,
+    build_checkpoint_runtime,
+    build_lifecycle_service,
 )
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.domain import (
+    ApprovedEventKind,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
+    SourceId,
+    SourceTrustClass,
+    VerificationStatus,
+)
+from mnemo_memory.packages.storage import SQLiteCheckpointRepository
 
 NOW = datetime(2026, 8, 5, 16, 0, tzinfo=UTC)
 
@@ -89,6 +104,20 @@ def _manager_environment(tmp_path: Path, manager: InstallationManager) -> tuple[
     executable.write_text("#!/bin/sh\nexit 0\n")
     executable.chmod(0o700)
     return environment, executable
+
+
+def _evidence() -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.TOOL_RESULT,
+        SourceTrustClass.VERIFIED_TOOL_RESULT,
+        "fixture://upgrade-recovery",
+        "sha256:" + "a" * 64,
+        EvidenceLocation("fixture://upgrade-recovery"),
+        NOW,
+        VerificationStatus.VERIFIED,
+    )
 
 
 def test_uv_upgrade_backs_up_first_validates_with_new_cli_and_preserves_stopped_state(
@@ -267,6 +296,48 @@ def test_upgrade_failure_paths_keep_backup_and_bound_service_state(tmp_path: Pat
     assert not any(
         isinstance(item, tuple) and len(item) > 3 and item[3] == "start" for item in validation_log
     )
+
+
+def test_failed_upgrade_preserves_live_data_and_a_readable_recovery_copy(tmp_path: Path) -> None:
+    project = tmp_path / "sample project"
+    project.mkdir()
+    config = LocalConfig.defaults(tmp_path / "profile")
+    lifecycle = build_lifecycle_service(config)
+    lifecycle.initialize()
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    with build_checkpoint_runtime(config) as runtime:
+        event = runtime.checkpoint_service.record_approved_event(
+            RecordApprovedEpisodicEvent(
+                binding.checkpoint_scope,
+                ApprovedEventKind.DECISION,
+                "Keep this canonical decision through upgrade recovery.",
+                "upgrade-recovery:decision",
+                (_evidence(),),
+            )
+        ).event
+
+    environment, executable = _manager_environment(tmp_path, InstallationManager.UV)
+    with pytest.raises(PersonalUpgradeError) as failure:
+        PersonalUpgradeService(
+            config,
+            lifecycle=lifecycle,
+            environment_root=environment,
+            executable_resolver=lambda _: str(executable),
+            command_runner=lambda _: 1,
+        ).upgrade()
+
+    assert failure.value.code == "MNEMO_UPGRADE_INSTALL_FAILED"
+    backup = failure.value.backup
+    assert backup is not None and backup.backup_path.is_file()
+    live = SQLiteCheckpointRepository(
+        config.database_path, base_directory=config.data_directory
+    ).get_approved_event_record(binding.checkpoint_scope, event.event_id)
+    recovered = SQLiteCheckpointRepository(
+        backup.backup_path, base_directory=config.data_directory
+    ).get_approved_event_record(binding.checkpoint_scope, event.event_id)
+    assert live.event is not None
+    assert recovered.event is not None
+    assert live.event.to_dict() == recovered.event.to_dict() == event.to_dict()
 
 
 def test_upgrade_stop_timeout_never_invokes_installer(tmp_path: Path) -> None:

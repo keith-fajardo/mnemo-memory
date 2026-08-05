@@ -22,6 +22,24 @@ digest to this repository and its exact release workflow. That establishes how t
 were published; it does not replace reviewing the project, pinning the version you intend to
 install, or treating all installed software as privileged code.
 
+## Install and connect your first project
+
+Install the command once, then opt in each repository where you want Mnemo memory:
+
+```bash
+uv tool install mnemo-unified-context==0.1.0a2
+mnemo-memory init
+cd /path/to/your/project
+mnemo-memory connect codex --auto-memory --yes --project-dir .
+```
+
+Use `claude-code` instead of `codex`, or run both connection commands, when appropriate. The
+connection registers the installed launcher and creates one private local binding and static source
+snapshot for that canonical project. A fresh MCP process started inside the project can then call
+`get_context` without UUID arguments; before any checkpoint has been saved, it truthfully returns
+no active checkpoint. You repeat only the connection step for another repository. Mnemo never
+changes the client's configured model endpoint.
+
 ## Does Mnemo remember an entire codebase?
 
 `mnemo-memory init` only creates your private local store; it does not guess which directory you
