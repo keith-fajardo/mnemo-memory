@@ -206,6 +206,19 @@ query text, or evidence locations. Explanation performs no retrieval or mutation
 that a caller-supplied packet originated from Mnemo; its output labels that basis and is never
 authentication, authorization, or mutation evidence.
 
+The deterministic plan may route a transient query into already-registered lexical knowledge and
+retained source-identity indexes. General queries search both bounded categories; a specialized
+literal intent searches only its selected categories. A closed list of question and category words
+may be removed from the source query so the remaining identifiers still use the existing exact,
+prefix, and all-term match contract. Explicit category and structured requests are never
+overwritten. Semantic retrieval remains explicit and uses only an already-built local projection.
+
+When lexical and semantic knowledge are both explicitly requested, their raw term counts and
+cosine-derived values are never compared. Mnemo deduplicates exact revision/section identities and
+uses reciprocal-rank fusion with `k=60`; path, revision, and section identity provide deterministic
+ties. Each included section records whether lexical, local-vector, or both rank signals contributed.
+Each candidate stream is scoped and bounded before fusion.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is

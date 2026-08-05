@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
@@ -34,6 +34,31 @@ from mnemo_memory.packages.storage import (
 )
 
 _WORD = re.compile(r"[a-z0-9_./:-]+")
+_QUESTION_TERMS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "do",
+        "does",
+        "find",
+        "for",
+        "how",
+        "in",
+        "is",
+        "me",
+        "of",
+        "please",
+        "show",
+        "the",
+        "to",
+        "used",
+        "using",
+        "what",
+        "where",
+        "which",
+    }
+)
 
 
 class RetrievalCategory(StrEnum):
@@ -81,13 +106,20 @@ class DeterministicContextPlanner:
     _STRUCTURAL_TERMS = frozenset(
         {
             "code",
+            "class",
             "dbt",
+            "defined",
             "dependency",
             "downstream",
             "file",
+            "function",
             "impact",
+            "implementation",
+            "implemented",
             "lineage",
+            "located",
             "model",
+            "module",
             "schema",
             "source",
             "symbol",
@@ -166,7 +198,11 @@ class DeterministicContextPlanner:
                     matched = True
             if not matched:
                 intents.add(QueryIntent.GENERAL)
+                categories.update({RetrievalCategory.KNOWLEDGE, RetrievalCategory.STRUCTURAL})
                 reasons.append("no specialized literal intent matched the bounded query")
+                reasons.append(
+                    "general queries select bounded lexical knowledge and source candidates"
+                )
 
         return RetrievalPlan(
             tuple(sorted(intents, key=lambda item: item.value)),
@@ -203,7 +239,7 @@ class UnifiedContextEngine:
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         plan = self.plan(request)
-        packet = self._assembler.get_context(request)
+        packet = self._assembler.get_context(_planned_request(request, plan))
         if RetrievalCategory.EPISODIC not in plan.categories:
             return packet
         try:
@@ -282,6 +318,55 @@ def _query_terms(query: str | None) -> frozenset[str]:
     if query is None:
         return frozenset()
     return frozenset(_WORD.findall(query.casefold()))
+
+
+def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnifiedContext:
+    query = request.query
+    if query is None:
+        return request
+    knowledge_query = request.knowledge_query
+    source_query = request.source_query
+    if (
+        RetrievalCategory.KNOWLEDGE in plan.categories
+        and knowledge_query is None
+        and not request.include_checkpoint_file_knowledge
+    ):
+        knowledge_query = query
+    if RetrievalCategory.STRUCTURAL in plan.categories and not _has_structural_query(request):
+        source_query = _source_identity_query(query)
+    if knowledge_query == request.knowledge_query and source_query == request.source_query:
+        return request
+    return replace(request, knowledge_query=knowledge_query, source_query=source_query)
+
+
+def _has_structural_query(request: GetUnifiedContext) -> bool:
+    return any(
+        value is not None
+        for value in (
+            request.lineage,
+            request.dbt_test_coverage,
+            request.dbt_selector,
+            request.dbt_freshness,
+            request.dbt_changes,
+            request.source_query,
+            request.source_impact,
+            request.source_changes,
+            request.source_overview,
+            request.checkpoint_source_impact,
+        )
+    )
+
+
+def _source_identity_query(query: str) -> str:
+    generic = (
+        _QUESTION_TERMS
+        | DeterministicContextPlanner._STRUCTURAL_TERMS
+        | DeterministicContextPlanner._EPISODIC_TERMS
+        | DeterministicContextPlanner._KNOWLEDGE_TERMS
+        | DeterministicContextPlanner._PROCEDURAL_TERMS
+    )
+    retained = tuple(term for term in _WORD.findall(query.casefold()) if term not in generic)[:8]
+    return " ".join(retained) if retained else query
 
 
 def _episodic_score(memory: ActiveEpisodicMemory, query: str | None, now: datetime) -> float:

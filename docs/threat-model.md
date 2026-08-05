@@ -69,6 +69,13 @@ reads stop at 50 items; a further page is disclosed only as a payload-free lower
 Every included memory carries the original scope and evidence plus rank, score, retrieval method,
 source trust, and matching provenance. Section and total token limits are enforced before packet
 construction. Expected storage failure returns a sanitized omission and cannot widen the read.
+Natural-query routing does not derive scope or source registration from text. It invokes only the
+existing exact project-scope knowledge and source repository methods. General queries select both
+bounded lexical categories; literal category terms select only their declared categories. A closed
+question/intent-word list may reduce a source query, but remaining terms still use the existing
+exact/prefix/all-term identity matcher. Explicit queries are not replaced, semantic search is never
+enabled implicitly, and lexical/vector knowledge candidates are separately authorized and bounded
+before exact-section deduplication and reciprocal-rank fusion.
 
 **Verification:** Adversarial unit, repository-contract, integration, cache, export, and local CLI
 tests with identical text across projects, including enabled and unregistered directories. Required

@@ -23,6 +23,14 @@ versioned context packet. With no active checkpoint it returns a valid empty pac
 abandoned checkpoints are excluded from automatic selection. The active-checkpoint section is hard
 limited to 600 tokens by default and structured token-budget omissions are preserved.
 
+An optional bounded `query` is transient and never stored in the packet or as memory. Mnemo uses
+deterministic literal intent rules: specialized terms select their existing category indexes, while
+a general query searches bounded project knowledge and retained source identities. Explicit
+`knowledge_query`, `semantic_knowledge_query`, `source_query`, structured source/dbt requests, and
+procedure tags are never overwritten. Semantic knowledge remains explicit; when both lexical and
+local semantic knowledge are requested, exact sections are deduplicated and ranked with
+reciprocal-rank fusion rather than incomparable raw scores.
+
 `explain_context` accepts the complete structured packet returned by `get_context`. It validates
 the packet and returns only source/evidence metadata, ranks and retrieval methods, exclusions,
 conflicts, staleness, and token accounting. It never repeats checkpoint, memory, note, or code

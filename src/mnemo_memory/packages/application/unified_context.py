@@ -92,6 +92,13 @@ class SemanticKnowledgeRetrieverPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _RankedKnowledgeMatch:
+    match: KnowledgeDocumentSectionMatch
+    score: float
+    retrieval_method: str
+
+
+@dataclass(frozen=True, slots=True)
 class DbtCodeExcerpt:
     relative_path: str
     start_line: int
@@ -563,7 +570,7 @@ class UnifiedContextService:
     def _with_requested_knowledge(
         self, packet: ContextPacket, request: GetUnifiedContext
     ) -> ContextPacket:
-        """Attach bounded literal note sections with exact revision provenance.
+        """Attach bounded lexical/vector note sections with exact revision provenance.
 
         Local documents are user-authored but remain untrusted evidence. Selecting an active stored
         revision does not prove that its filesystem source is current, so items label that fact as
@@ -579,17 +586,16 @@ class UnifiedContextService:
             return _with_omission(
                 packet, "knowledge", OmissionReason.LOWER_RANK, "knowledge index is unavailable"
             )
-        matches: list[KnowledgeDocumentSectionMatch] = []
+        lexical_matches: tuple[KnowledgeDocumentSectionMatch, ...] = ()
         if query is not None:
             terms = normalize_knowledge_query(query)
             if not terms:
                 raise ValueError("knowledge query requires at least one searchable term")
             assert self._knowledge is not None
-            matches.extend(
-                self._knowledge.search_current_sections(
-                    _project_scope(request.scope), terms, 8, 128
-                )
+            lexical_matches = self._knowledge.search_current_sections(
+                _project_scope(request.scope), terms, 8, 128
             )
+        semantic_matches: tuple[KnowledgeDocumentSectionMatch, ...] = ()
         if semantic_query is not None:
             if self._semantic_knowledge is None:
                 return _with_omission(
@@ -601,7 +607,7 @@ class UnifiedContextService:
             semantic = self._semantic_knowledge.search_sections(
                 _project_scope(request.scope), semantic_query
             )
-            matches.extend(
+            semantic_matches = tuple(
                 KnowledgeDocumentSectionMatch(
                     section.revision,
                     section.section_index,
@@ -610,16 +616,16 @@ class UnifiedContextService:
                 )
                 for section, similarity in semantic
             )
-        selected: dict[tuple[object, int], KnowledgeDocumentSectionMatch] = {}
-        for match in matches:
-            section_key = (match.revision.revision_id, match.section_index)
-            previous = selected.get(section_key)
-            if previous is None or match.score > previous.score:
-                selected[section_key] = match
+        selected = _fuse_knowledge_matches(
+            lexical_matches,
+            semantic_matches,
+            use_reciprocal_rank=query is not None and semantic_query is not None,
+        )
         conflict_pairs: list[tuple[tuple[object, int], tuple[object, int]]] = []
         conflict_documents: set[tuple[object, object]] = set()
         if self._knowledge is not None:
-            for selected_key, match in tuple(selected.items()):
+            for selected_key, ranked_match in tuple(selected.items()):
+                match = ranked_match.match
                 target_path = _knowledge_conflict_target(match)
                 if target_path is None:
                     continue
@@ -634,7 +640,11 @@ class UnifiedContextService:
                 target_key: tuple[object, int] = (target.revision_id, 0)
                 selected.setdefault(
                     target_key,
-                    KnowledgeDocumentSectionMatch(target, 0, target.document.sections[0], 1),
+                    _RankedKnowledgeMatch(
+                        KnowledgeDocumentSectionMatch(target, 0, target.document.sections[0], 1),
+                        0.0,
+                        "declared-conflict-evidence",
+                    ),
                 )
                 document_pair = (match.revision.document.document_id, target.document.document_id)
                 if (
@@ -648,8 +658,8 @@ class UnifiedContextService:
             selected.values(),
             key=lambda item: (
                 -item.score,
-                item.revision.document.relative_path,
-                item.section_index,
+                item.match.revision.document.relative_path,
+                item.match.section_index,
             ),
         )[:8]
         remaining = min(
@@ -659,8 +669,16 @@ class UnifiedContextService:
         items: list[ContextItem] = []
         notices: list[ProvenanceNotice] = list(packet.provenance)
         item_ids: dict[tuple[object, int], ContextItem] = {}
-        for rank, match in enumerate(matches, start=1):
-            item, notice = _knowledge_context_item(packet, request.scope, match, rank)
+        for rank, ranked_match in enumerate(matches, start=1):
+            match = ranked_match.match
+            item, notice = _knowledge_context_item(
+                packet,
+                request.scope,
+                match,
+                rank,
+                ranked_match.score,
+                ranked_match.retrieval_method,
+            )
             if item.token_estimate > remaining:
                 packet = _with_omission(
                     packet,
@@ -2603,11 +2621,52 @@ def _profile_evidence(profile: ProjectClientProfile) -> EvidenceReference:
     )
 
 
+def _fuse_knowledge_matches(
+    lexical: tuple[KnowledgeDocumentSectionMatch, ...],
+    semantic: tuple[KnowledgeDocumentSectionMatch, ...],
+    *,
+    use_reciprocal_rank: bool,
+) -> dict[tuple[object, int], _RankedKnowledgeMatch]:
+    """Deduplicate scoped matches and fuse independent ranks without comparing raw scales."""
+    if not use_reciprocal_rank:
+        values = lexical if lexical else semantic
+        method = "scoped-literal-knowledge" if lexical else "local-vector-knowledge"
+        selected: dict[tuple[object, int], _RankedKnowledgeMatch] = {}
+        for match in values:
+            key = (match.revision.revision_id, match.section_index)
+            selected.setdefault(key, _RankedKnowledgeMatch(match, float(match.score), method))
+        return selected
+
+    matches: dict[tuple[object, int], KnowledgeDocumentSectionMatch] = {}
+    scores: dict[tuple[object, int], float] = {}
+    signals: dict[tuple[object, int], list[str]] = {}
+    for name, stream in (("scoped-literal", lexical), ("local-vector", semantic)):
+        seen: set[tuple[object, int]] = set()
+        for rank, match in enumerate(stream, start=1):
+            key = (match.revision.revision_id, match.section_index)
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.setdefault(key, match)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+            signals.setdefault(key, []).append(name)
+    return {
+        key: _RankedKnowledgeMatch(
+            match,
+            round(scores[key], 12),
+            f"reciprocal-rank-fusion/k60:{'+'.join(signals[key])}",
+        )
+        for key, match in matches.items()
+    }
+
+
 def _knowledge_context_item(
     packet: ContextPacket,
     task_scope: MemoryScope,
     match: KnowledgeDocumentSectionMatch,
     rank: int,
+    score: float,
+    retrieval_method: str,
 ) -> tuple[ContextItem, ProvenanceNotice]:
     """Render one exact stored note section without private absolute paths or implicit authority."""
     revision, document = match.revision, match.revision.document
@@ -2654,7 +2713,7 @@ def _knowledge_context_item(
         SourceTrustClass.USER_AUTHORED,
         Sensitivity.NORMAL,
         ValidityState.UNKNOWN,
-        RankingMetadata(rank, float(match.score), "scoped-literal-knowledge"),
+        RankingMetadata(rank, score, retrieval_method),
         ConflictState.NONE,
         revision.created_at,
     )

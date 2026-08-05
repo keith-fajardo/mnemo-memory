@@ -11,10 +11,12 @@ from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
 )
+from mnemo_memory.packages.context_engine import UnifiedContextEngine
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     ContextBudget,
     ContextPacket,
+    CurrentKnowledgeDocumentSection,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -41,6 +43,7 @@ from mnemo_memory.packages.knowledge import (
     SemanticKnowledgeIndexRequest,
 )
 from mnemo_memory.packages.storage import (
+    ActiveEpisodicMemoryPage,
     ReferenceCheckpointRepository,
     ReferenceKnowledgeDocumentRepository,
 )
@@ -95,6 +98,27 @@ class _LocalProvider:
         return (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
+class _FixedSemanticRetriever:
+    def __init__(self, section: CurrentKnowledgeDocumentSection) -> None:
+        self.section = section
+
+    def search_sections(
+        self, scope: MemoryScope, query: str
+    ) -> tuple[tuple[CurrentKnowledgeDocumentSection, float], ...]:
+        assert scope == project_scope()
+        assert query == "authentication return route"
+        return ((self.section, 0.99),)
+
+
+class _NoActiveEpisodicMemory:
+    def list_active_episodic_memories(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> ActiveEpisodicMemoryPage:
+        assert scope.level is ScopeLevel.TASK
+        assert offset == 0 and limit == 50
+        return ActiveEpisodicMemoryPage((), None)
+
+
 def test_unified_context_adds_cited_bounded_untrusted_knowledge() -> None:
     repository = ReferenceKnowledgeDocumentRepository()
     document = KnowledgeDocumentParser().parse(
@@ -123,6 +147,24 @@ def test_unified_context_adds_cited_bounded_untrusted_knowledge() -> None:
     assert packet.provenance[-1].item_id == item.item_id
 
 
+def test_transient_general_query_generates_scoped_lexical_knowledge_candidates() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    document = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "notes/oauth.md"),
+        "# OAuth callback\nValidate the callback state before exchanging the code.",
+    )
+    revision = KnowledgeDocumentRevision(KnowledgeDocumentRevisionId.new(), document, 1, None, NOW)
+    repository.apply_sync(project_scope(), (revision,), ())
+    engine = UnifiedContextEngine(service(repository), _NoActiveEpisodicMemory())
+
+    packet = engine.get_context(GetUnifiedContext(task_scope(), query="oauth callback"))
+
+    assert len(packet.knowledge_items) == 1
+    assert "callback state" in packet.knowledge_items[0].content
+    assert packet.knowledge_items[0].source_scope.level is ScopeLevel.TASK
+    assert "query" not in packet.to_dict()
+
+
 def test_unified_context_can_attach_explicit_local_semantic_knowledge() -> None:
     repository = ReferenceKnowledgeDocumentRepository()
     document = KnowledgeDocumentParser().parse(
@@ -149,6 +191,54 @@ def test_unified_context_can_attach_explicit_local_semantic_knowledge() -> None:
     assert len(packet.knowledge_items) == 1
     assert "invoice totals" in packet.knowledge_items[0].content
     assert packet.knowledge_items[0].evidence_references
+
+
+def test_lexical_and_local_vector_results_use_reciprocal_rank_fusion() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    first = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "notes/a-oauth.md"),
+        "# OAuth\nOAuth OAuth callback handling.",
+    )
+    second = KnowledgeDocumentParser().parse(
+        KnowledgeDocumentParseRequest(project_scope(), "notes/b-callback.md"),
+        "# Callback\nOAuth callback.",
+    )
+    revisions = (
+        KnowledgeDocumentRevision(KnowledgeDocumentRevisionId.new(), first, 1, None, NOW),
+        KnowledgeDocumentRevision(KnowledgeDocumentRevisionId.new(), second, 1, None, NOW),
+    )
+    repository.apply_sync(project_scope(), revisions, ())
+    second_section = next(
+        item
+        for item in repository.iter_current_sections(project_scope(), 128)
+        if item.revision.document.document_id == second.document_id
+    )
+    context = UnifiedContextService(
+        CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW),
+        None,
+        knowledge=repository,
+        semantic_knowledge=_FixedSemanticRetriever(second_section),
+    )
+
+    packet = context.get_context(
+        GetUnifiedContext(
+            task_scope(),
+            knowledge_query="oauth callback",
+            semantic_knowledge_query="authentication return route",
+        )
+    )
+
+    assert [item.item_id.split(":")[1] for item in packet.knowledge_items] == [
+        str(second.document_id),
+        str(first.document_id),
+    ]
+    first_rank = packet.knowledge_items[0].ranking
+    second_rank = packet.knowledge_items[1].ranking
+    assert first_rank is not None and second_rank is not None
+    assert first_rank.retrieval_method == ("reciprocal-rank-fusion/k60:scoped-literal+local-vector")
+    assert second_rank.retrieval_method == "reciprocal-rank-fusion/k60:scoped-literal"
+    assert first_rank.score is not None and second_rank.score is not None
+    assert first_rank.score > second_rank.score
 
 
 def test_explicit_knowledge_conflict_is_preserved_without_inference() -> None:

@@ -1707,3 +1707,48 @@ authenticity and denial-of-service boundary. The complete repository gate passes
 strict typing for 182 source files, dependency/provenance validation for 86 entries, and
 architecture validation for 95 product Python files. No new retrieval, reranking, conflict
 inference, renderer, persistence, model call, dependency, API/UI, or team mode was added.
+
+#### Issue 17C — Complete
+
+The current bounded issue makes the deterministic query plan execute against existing authorized
+category indexes. A transient general query selects both lexical knowledge and retained source
+identity search; a specialized query selects only its literal categories. Source routing removes
+only a closed list of question/intent words so identifiers remain exact, bounded, and explainable.
+Explicit knowledge, semantic, source, dbt, and procedure requests remain authoritative and are
+never overwritten. No semantic search is enabled implicitly.
+
+When a caller explicitly requests both lexical and already-local semantic knowledge, the assembler
+must deduplicate sections and fuse their independent ranks with reciprocal-rank fusion (`k=60`)
+instead of comparing incomparable term counts and cosine-derived integers. Each result records the
+signals that contributed to its fused score and retains deterministic path/revision tie breakers.
+Authorization stays inside each repository query before fusion.
+
+This issue adds no model/provider call beyond an already-explicit semantic request, dbt intent
+inference, procedure-tag inference, cross-category budget changes, conflict inference, persistence,
+dependency, renderer, API/UI, or team mode.
+
+Implemented deterministic execution of the transient query plan against the existing scoped
+knowledge and retained source-identity indexes. A specialized literal query routes only to the
+selected categories; a general query routes to both bounded lexical categories. A fixed closed
+question/category-word list reduces source queries while leaving exact identifiers for the
+existing exact/prefix/all-term matcher. Explicit lexical, semantic, source, source-impact/change/
+overview, dbt, and procedure requests are preserved unchanged. The query is not persisted or
+returned, and semantic retrieval remains explicit.
+
+The knowledge assembler now keeps lexical and explicit local-vector result streams separate,
+deduplicates exact revision/section identities, and uses reciprocal-rank fusion with `k=60` when
+both were requested. Raw term counts and cosine-derived integers are never compared. Fused scores
+and contributing signal names are returned in ranking metadata, with deterministic path/section
+ties; declared conflict evidence remains retained after fusion. Each repository query still
+receives the authorized project scope before candidate generation.
+
+Five context-engine tests and ten knowledge-context tests cover deterministic general/specialized
+routing, explicit-query preservation, absence of implicit semantic search, actual scoped candidate
+generation, query non-persistence, independent lexical/vector ranks, exact-section deduplication,
+RRF ordering/score/method provenance, and existing source/knowledge behavior. The product contract,
+threat model, README, and local MCP guide record the rules. The complete repository gate passes
+with 723 tests, strict typing for 182 source files, dependency/provenance validation for 86 entries,
+and architecture validation for 95 product Python files. No model/provider call beyond an
+already-explicit semantic request, dbt intent inference, procedure-tag inference, cross-category
+budget change, conflict inference, persistence, dependency, renderer, API/UI, or team mode was
+added.

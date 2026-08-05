@@ -213,6 +213,42 @@ def test_planner_is_deterministic_explicit_and_does_not_need_a_model() -> None:
         GetUnifiedContext(_scope(), query="   ")
 
 
+def test_general_query_routes_only_to_existing_authorized_lexical_categories() -> None:
+    scope = _scope()
+    assembler = EmptyAssembler()
+    engine = UnifiedContextEngine(assembler, ScopedMemoryRepository(scope, ()))
+
+    engine.get_context(GetUnifiedContext(scope, query="oauth callback"))
+
+    routed = assembler.requests[0]
+    assert routed.query == "oauth callback"
+    assert routed.knowledge_query == "oauth callback"
+    assert routed.semantic_knowledge_query is None
+    assert routed.source_query == "oauth callback"
+
+    engine.get_context(GetUnifiedContext(scope, query="show notes about oauth"))
+    knowledge_only = assembler.requests[1]
+    assert knowledge_only.knowledge_query == "show notes about oauth"
+    assert knowledge_only.source_query is None
+
+    engine.get_context(GetUnifiedContext(scope, query="where is oauth_callback implemented"))
+    structural_only = assembler.requests[2]
+    assert structural_only.knowledge_query is None
+    assert structural_only.source_query == "oauth_callback"
+
+    engine.get_context(
+        GetUnifiedContext(
+            scope,
+            query="where is the code",
+            source_query="explicit_symbol",
+            knowledge_query="explicit note",
+        )
+    )
+    explicit = assembler.requests[3]
+    assert explicit.source_query == "explicit_symbol"
+    assert explicit.knowledge_query == "explicit note"
+
+
 def test_engine_authorizes_before_scoring_and_returns_ranked_cited_memories() -> None:
     scope = _scope()
     matching = _memory(

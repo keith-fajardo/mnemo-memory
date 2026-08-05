@@ -692,7 +692,9 @@ Mnemo exposes exactly three local stdio MCP tools:
   downstream, or directed shortest-path request. In an auto-memory-enabled repository the
   retrieval and checkpoint tools use the registered
   project/task scope when all UUID fields are omitted; advanced callers may supply the complete
-  explicit scope.
+  explicit scope. Its optional transient `query` deterministically selects existing scoped lexical
+  memory, knowledge, and source-identity retrieval without being persisted or implicitly enabling
+  semantic search.
 - `explain_context` validates a packet returned by `get_context` and reports its sources, ranks,
   omissions, conflicts, staleness, and token accounting without repeating retrieved content.
 
