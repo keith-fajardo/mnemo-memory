@@ -222,12 +222,15 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
     path = tmp_path / "pin-migration.sqlite3"
     repository = SQLiteCheckpointRepository(path, base_directory=tmp_path)
     repository.migrate()
-    assert repository.schema_version() == 27
+    assert repository.schema_version() == 28
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER approved_episodic_event_pin_target_scope_match")
         connection.execute("DROP TABLE approved_episodic_event_pin_evidence")
         connection.execute("DROP TABLE approved_episodic_event_pin_actions")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 27")
+        connection.execute("DROP TRIGGER project_index_sync_scope_match_update")
+        connection.execute("DROP TRIGGER project_index_sync_scope_match_insert")
+        connection.execute("DROP TABLE project_index_sync_status")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 27")
     assert repository.schema_version() == 26
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -242,4 +245,4 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
         )
 
     repository.migrate()
-    assert repository.schema_version() == 27
+    assert repository.schema_version() == 28

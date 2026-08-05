@@ -22,6 +22,11 @@ function card(title, state, body, command) {
   return item;
 }
 
+function indexDetail(index) {
+  const synced = index.last_sync_at === null ? "never synced" : `last sync ${index.last_sync_at}`;
+  return `freshness ${index.staleness} · ${synced}`;
+}
+
 function render(data) {
   const lifecycle = data.lifecycle;
   byId("service-state").textContent = lifecycle.initialized ? "Store ready" : "Setup needed";
@@ -43,9 +48,9 @@ function render(data) {
   const dbt = data.indexes.dbt;
   const knowledge = data.indexes.knowledge;
   byId("indexes").replaceChildren(
-    card("Source structure", source.status, `${source.files} files · ${source.symbols} symbols · ${source.relationships} relationships`, null),
-    card("dbt lineage", dbt.status, `${dbt.nodes} nodes · ${dbt.relationships} relationships`, null),
-    card("Project knowledge", knowledge.status, `${knowledge.documents} current documents`, null),
+    card("Source structure", source.status, `${source.files} files · ${source.symbols} symbols · ${source.relationships} relationships · ${indexDetail(source)}`, null),
+    card("dbt lineage", dbt.status, `${dbt.nodes} nodes · ${dbt.relationships} relationships · ${indexDetail(dbt)}`, null),
+    card("Project knowledge", knowledge.status, `${knowledge.documents} current documents · ${indexDetail(knowledge)}`, null),
   );
   const privacy = byId("privacy-list");
   privacy.replaceChildren(...[

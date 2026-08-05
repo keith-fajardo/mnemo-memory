@@ -90,7 +90,7 @@ def test_diagnostic_bundle_is_private_closed_and_integrity_verifiable(tmp_path: 
         },
         "created_at": "2026-08-05T18:30:12.345678+00:00",
         "format": "mnemo.personal-diagnostics.v1",
-        "lifecycle": {"initialized": True, "running": False, "schema_version": 27},
+        "lifecycle": {"initialized": True, "running": False, "schema_version": 28},
         "privacy": {
             "content_included": False,
             "credentials_included": False,
@@ -106,7 +106,7 @@ def test_diagnostic_bundle_is_private_closed_and_integrity_verifiable(tmp_path: 
         "storage": {
             "foreign_keys": True,
             "integrity": True,
-            "schema_version": 27,
+            "schema_version": 28,
             "status": "healthy",
         },
     }

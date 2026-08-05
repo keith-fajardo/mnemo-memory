@@ -723,6 +723,10 @@ class KnowledgeDocumentRepository(Protocol):
 
     def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]: ...
 
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        """Return the last successful exact-scope sync, including an empty sync."""
+        ...
+
     def get_current_revision(
         self, scope: MemoryScope, document_id: KnowledgeDocumentId
     ) -> KnowledgeDocumentRevision: ...
@@ -1028,6 +1032,10 @@ class SourceSnapshotStoreResult:
 
 
 class ProjectIndexRepository(Protocol):
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        """Return the last successful exact-scope dbt manifest sync."""
+        ...
+
     def store_and_activate(
         self,
         artifact: DbtManifestArtifact,
@@ -1117,6 +1125,10 @@ class ProjectIndexRepository(Protocol):
 
 class SourceStructureRepository(Protocol):
     """Scoped durable storage for rebuildable, static source projections."""
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        """Return the last successful exact-scope source-structure sync."""
+        ...
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult: ...
 

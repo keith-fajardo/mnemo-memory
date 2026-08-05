@@ -508,7 +508,7 @@ def test_candidate_migration_is_forward_only_atomic_and_preserves_source_event(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 27
+    assert sqlite.schema_version() == 28
     with sqlite3.connect(sqlite.path) as connection:
         columns = {
             row[1]

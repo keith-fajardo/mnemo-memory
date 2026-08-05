@@ -1294,6 +1294,37 @@ entries, and architecture validation for 106 product Python files. No log persis
 control, backup/restore, installer/release workflow change, dependency, model call, non-loopback
 exposure, or team behavior was added.
 
+#### Issue 20K — Index freshness and last-sync inspection — Complete
+
+This bounded issue adds exact-project last-successful-sync timestamps for the existing knowledge,
+source-structure, and dbt indexes and reports their honest currentness through the loopback
+dashboard. Successful idempotent and empty syncs count as sync attempts; failed transactions must
+not advance status. Source currentness may use only the existing bounded content-free Git
+observation, while unavailable or insufficient evidence remains `unknown`. This issue adds no
+source scan on dashboard reads, scheduler, durable job queue, retry control, release workflow,
+dependency, model call, non-loopback exposure, or team behavior.
+
+Implemented schema-28 `project_index_sync_status` as a content-free exact-project operational
+projection. Knowledge, source-structure, and dbt repositories now expose one storage-neutral
+last-sync query, and both Reference and SQLite adapters advance it for successful empty,
+idempotent, and changed syncs. SQLite updates share the index transaction, remain isolated by the
+complete owner/workspace/project scope, survive restart, and do not advance after a rejected write.
+Existing index history is deliberately not backfilled because it cannot prove the last complete
+sync time. Migration failure rolls back both schema and ledger and has a documented verified-backup
+recovery boundary.
+
+The loopback dashboard reports counts, last successful sync, and currentness for all three indexes
+without returning paths or identities. dbt uses its authoritative artifact currentness; source
+status compares only the existing bounded Git commit/dirty observation and reports `unknown` when
+that evidence cannot prove current or stale; knowledge remains `unknown`. Dashboard reads never
+scan source files. The web UI displays the same status and `never synced` explicitly.
+
+All 64 focused storage, migration, dashboard, source, dbt, knowledge, and packaged-resource tests
+pass. The complete repository gate passes with 798 tests, strict typing for 202 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 106 product
+Python files. No scheduler, durable job queue, retry control, release workflow, dependency, model
+call, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

@@ -235,7 +235,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 27
+LATEST_SCHEMA_VERSION = 28
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -700,6 +700,23 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 27:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 27
+            if version < 28:
+                status_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'project_index_sync_status'"
+                ).fetchone()
+                if status_table is None:
+                    _execute_sql_script(
+                        connection,
+                        _migration_text("0028_project_index_sync_status.sql"),
+                    )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (28, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 28:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 28
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -3374,6 +3391,7 @@ class SQLiteCheckpointRepository:
                             ),
                         )
                     assert duplicate is not None
+                    self._record_index_sync(connection, artifact.scope, "dbt")
                     return ManifestSnapshotStoreResult(
                         snapshot=self._snapshot_from_row(duplicate, artifact.scope), idempotent=True
                     )
@@ -3433,6 +3451,7 @@ class SQLiteCheckpointRepository:
                         _timestamp(),
                     ),
                 )
+                self._record_index_sync(connection, artifact.scope, "dbt")
                 return ManifestSnapshotStoreResult(
                     snapshot=DbtManifestSnapshot(
                         snapshot_id=snapshot_id,
@@ -3450,6 +3469,10 @@ class SQLiteCheckpointRepository:
             raise
         except sqlite3.Error as error:
             raise ProjectIndexStorageFailure("project index storage operation failed") from error
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._require_project_scope(scope)
+        return self._index_last_sync_at(scope, "dbt")
 
     def get_snapshot(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestSnapshot:
         self._require_project_scope(scope)
@@ -4044,6 +4067,7 @@ class SQLiteCheckpointRepository:
                     )
                     if active is None or active["snapshot_id"] != str(snapshot_id):
                         self._record_source_activation(connection, scope, snapshot_id)
+                    self._record_index_sync(connection, scope, "source")
                     return SourceSnapshotStoreResult(
                         self._source_snapshot_from_row(duplicate, scope), idempotent=True
                     )
@@ -4141,6 +4165,7 @@ class SQLiteCheckpointRepository:
                 if updated.rowcount != 1:
                     raise SourceIndexStorageFailure("source snapshot activation failed")
                 self._record_source_activation(connection, scope, artifact.snapshot.snapshot_id)
+                self._record_index_sync(connection, scope, "source")
                 return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
         except SourceIndexStorageFailure:
             raise
@@ -4260,6 +4285,42 @@ class SQLiteCheckpointRepository:
             "INSERT OR IGNORE INTO projects(project_id, workspace_id, owner_id) VALUES (?, ?, ?)",
             (str(scope.project_id), _maybe(scope.workspace_id), str(scope.owner_id)),
         )
+
+    @staticmethod
+    def _record_index_sync(
+        connection: sqlite3.Connection, scope: MemoryScope, index_kind: str
+    ) -> None:
+        connection.execute(
+            "INSERT INTO project_index_sync_status("
+            "project_id, index_kind, owner_id, workspace_id, last_sync_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(project_id, index_kind) DO UPDATE SET "
+            "owner_id = excluded.owner_id, workspace_id = excluded.workspace_id, "
+            "last_sync_at = excluded.last_sync_at",
+            (
+                str(scope.project_id),
+                index_kind,
+                str(scope.owner_id),
+                _maybe(scope.workspace_id),
+                _timestamp(),
+            ),
+        )
+
+    def _index_last_sync_at(self, scope: MemoryScope, index_kind: str) -> datetime | None:
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT last_sync_at FROM project_index_sync_status WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND index_kind = ?",
+                    (
+                        str(scope.owner_id),
+                        _maybe(scope.workspace_id),
+                        str(scope.project_id),
+                        index_kind,
+                    ),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise ProjectIndexStorageFailure("project index status read failed") from error
+        return None if row is None else datetime.fromisoformat(row["last_sync_at"])
 
     @staticmethod
     def _record_source_activation(
@@ -6712,6 +6773,7 @@ class _KnowledgeOperations:
                         backend._knowledge_document_policy,
                     )
                 _KnowledgeOperations._rebuild_knowledge_search_index(connection, scope)
+                backend._record_index_sync(connection, scope, "knowledge")
                 rows = connection.execute(
                     "SELECT source.document_id, source.relative_path, source.content_digest, "
                     "source.current_revision_id, revision.revision_number "
@@ -6991,6 +7053,13 @@ class SQLiteKnowledgeDocumentRepository:
     def list_active_documents(self, scope: MemoryScope) -> tuple[KnownKnowledgeDocument, ...]:
         return _KnowledgeOperations.list_active_knowledge_documents(self._backend, scope)
 
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._backend._require_project_scope(scope)
+        try:
+            return self._backend._index_last_sync_at(scope, "knowledge")
+        except ProjectIndexStorageFailure as error:
+            raise KnowledgeDocumentStorageFailure("knowledge status read failed") from error
+
     def get_current_revision(
         self, scope: MemoryScope, document_id: KnowledgeDocumentId
     ) -> KnowledgeDocumentRevision:
@@ -7071,6 +7140,13 @@ class SQLiteSourceStructureRepository:
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
         return self._backend.store_source_and_activate(artifact)
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._backend._require_project_scope(scope)
+        try:
+            return self._backend._index_last_sync_at(scope, "source")
+        except ProjectIndexStorageFailure as error:
+            raise SourceIndexStorageFailure("source index status read failed") from error
 
     def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
         return self._backend.get_active_source_snapshot(scope)

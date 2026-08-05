@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock
 from typing import TypeVar, cast
 
@@ -196,8 +197,15 @@ class ReferenceKnowledgeDocumentRepository:
     tombstone object.  This mirrors the intended SQLite deletion behavior.
     """
 
-    def __init__(self, policy: KnowledgeDocumentSafetyPolicy | None = None) -> None:
+    def __init__(
+        self,
+        policy: KnowledgeDocumentSafetyPolicy | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._policy = policy or KnowledgeDocumentSafetyPolicy()
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._last_sync: dict[MemoryScope, datetime] = {}
         self._active: dict[KnowledgeDocumentId, KnownKnowledgeDocument] = {}
         self._revisions: dict[KnowledgeDocumentRevisionId, KnowledgeDocumentRevision] = {}
         self._tombstones: dict[KnowledgeDocumentId, KnowledgeDocumentTombstone] = {}
@@ -213,6 +221,10 @@ class ReferenceKnowledgeDocumentRepository:
                 key=lambda item: (item.relative_path, str(item.document_id)),
             )
         )
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._require_scope(scope)
+        return self._last_sync.get(scope)
 
     def get_current_revision(
         self, scope: MemoryScope, document_id: KnowledgeDocumentId
@@ -370,6 +382,9 @@ class ReferenceKnowledgeDocumentRepository:
             stored_tombstones,
             stored_embeddings,
         )
+        observed_at = self._clock()
+        _require_aware_datetime(observed_at, "knowledge last sync")
+        self._last_sync[scope] = observed_at
         return KnowledgeDocumentSyncStoreResult(
             self.list_active_documents(scope), len(revisions), len(tombstones)
         )
@@ -2571,7 +2586,9 @@ class ReferenceCheckpointRepository:
 class ReferenceProjectIndexRepository:
     """Behavior reference for immutable project-scoped dbt artifact snapshots."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._last_sync: dict[MemoryScope, datetime] = {}
         self._artifacts: dict[DbtSnapshotId, DbtManifestArtifact] = {}
         self._snapshots: dict[DbtSnapshotId, DbtManifestSnapshot] = {}
         self._active: dict[MemoryScope, DbtSnapshotId] = {}
@@ -2582,6 +2599,10 @@ class ReferenceProjectIndexRepository:
         self._active_catalog: dict[DbtSnapshotId, str] = {}
         self._active_run_results: dict[DbtSnapshotId, str] = {}
         self._active_source_freshness: dict[DbtSnapshotId, str] = {}
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._require_scope(scope)
+        return self._last_sync.get(scope)
 
     def store_and_activate(
         self,
@@ -2609,6 +2630,9 @@ class ReferenceProjectIndexRepository:
                     if active is not None:
                         self._snapshots[active] = replace(self._snapshots[active], is_active=False)
                     self._activations.setdefault(artifact.scope, []).append(existing_id)
+                observed_at = self._clock()
+                _require_aware_datetime(observed_at, "dbt last sync")
+                self._last_sync[artifact.scope] = observed_at
                 return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=True)
         if snapshot_id in self._snapshots:
             raise ActiveSnapshotConflict("snapshot identity already exists")
@@ -2640,6 +2664,9 @@ class ReferenceProjectIndexRepository:
             if activations and activations[-1] == snapshot_id:
                 activations.pop()
             raise
+        observed_at = self._clock()
+        _require_aware_datetime(observed_at, "dbt last sync")
+        self._last_sync[artifact.scope] = observed_at
         return ManifestSnapshotStoreResult(snapshot=snapshot, idempotent=False)
 
     def get_snapshot(self, scope: MemoryScope, snapshot_id: DbtSnapshotId) -> DbtManifestSnapshot:
@@ -2858,10 +2885,16 @@ class ReferenceProjectIndexRepository:
 class ReferenceSourceStructureRepository:
     """Atomic in-memory reference for immutable multi-language source snapshots."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._last_sync: dict[MemoryScope, datetime] = {}
         self._artifacts: dict[CodeSnapshotId, CodeStructureArtifact] = {}
         self._active: dict[MemoryScope, CodeSnapshotId] = {}
         self._activations: dict[MemoryScope, list[CodeSnapshotId]] = {}
+
+    def last_sync_at(self, scope: MemoryScope) -> datetime | None:
+        self._require_scope(scope)
+        return self._last_sync.get(scope)
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
         self._require_scope(artifact.snapshot.scope)
@@ -2876,6 +2909,9 @@ class ReferenceSourceStructureRepository:
                     self._activations.setdefault(artifact.snapshot.scope, []).append(
                         snapshot.snapshot.snapshot_id
                     )
+                observed_at = self._clock()
+                _require_aware_datetime(observed_at, "source last sync")
+                self._last_sync[artifact.snapshot.scope] = observed_at
                 return SourceSnapshotStoreResult(snapshot.snapshot, idempotent=True)
         snapshot_id = artifact.snapshot.snapshot_id
         if snapshot_id in self._artifacts:
@@ -2892,6 +2928,9 @@ class ReferenceSourceStructureRepository:
                 self._active[artifact.snapshot.scope] = previous
             raise
         self._activations.setdefault(artifact.snapshot.scope, []).append(snapshot_id)
+        observed_at = self._clock()
+        _require_aware_datetime(observed_at, "source last sync")
+        self._last_sync[artifact.snapshot.scope] = observed_at
         return SourceSnapshotStoreResult(artifact.snapshot, idempotent=False)
 
     def get_active_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:

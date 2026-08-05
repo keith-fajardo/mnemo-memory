@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import shutil
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 
+from mnemo_memory.connectors.automatic_memory.git_observation import (
+    GitObservationStore,
+    GitSourceObservation,
+    GitSourceObserver,
+)
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
 from mnemo_memory.packages.application import LocalConfig, build_checkpoint_runtime
@@ -13,6 +19,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
 )
+from mnemo_memory.packages.domain import CodeSnapshot, MemoryScope
 
 
 def build_dashboard_status(
@@ -25,15 +32,27 @@ def build_dashboard_status(
             project_directory or Path.cwd()
         )
     indexes: dict[str, object] = {
-        "knowledge": {"status": "not_registered", "documents": 0},
+        "knowledge": {
+            "status": "not_registered",
+            "documents": 0,
+            "staleness": "unknown",
+            "last_sync_at": None,
+        },
         "source": {
             "status": "not_registered",
             "files": 0,
             "symbols": 0,
             "relationships": 0,
             "staleness": "unknown",
+            "last_sync_at": None,
         },
-        "dbt": {"status": "not_registered", "nodes": 0, "relationships": 0},
+        "dbt": {
+            "status": "not_registered",
+            "nodes": 0,
+            "relationships": 0,
+            "staleness": "unknown",
+            "last_sync_at": None,
+        },
     }
     if binding is not None:
         try:
@@ -49,31 +68,54 @@ def build_dashboard_status(
                     "knowledge": {
                         "status": "ready" if knowledge else "empty",
                         "documents": len(knowledge),
+                        "staleness": "unknown",
+                        "last_sync_at": _timestamp(
+                            runtime.knowledge_document_repository.last_sync_at(binding.scope)
+                        ),
                     },
                     "source": {
                         "status": "ready" if source is not None else "empty",
                         "files": 0 if source is None else source.file_count,
                         "symbols": 0 if source is None else source.symbol_count,
                         "relationships": 0 if source is None else source.edge_count,
-                        "staleness": "unknown",
+                        "staleness": _source_staleness(
+                            config, binding.project_root, binding.scope, source
+                        ),
+                        "last_sync_at": _timestamp(
+                            runtime.source_structure_repository.last_sync_at(binding.scope)
+                        ),
                     },
                     "dbt": {
                         "status": "ready" if dbt is not None else "empty",
                         "nodes": 0 if dbt is None else dbt.node_count,
                         "relationships": 0 if dbt is None else dbt.edge_count,
+                        "staleness": ("unknown" if dbt is None else dbt.metadata.currentness.value),
+                        "last_sync_at": _timestamp(runtime.repository.last_sync_at(binding.scope)),
                     },
                 }
         except Exception:
             indexes = {
-                "knowledge": {"status": "unavailable", "documents": 0},
+                "knowledge": {
+                    "status": "unavailable",
+                    "documents": 0,
+                    "staleness": "unknown",
+                    "last_sync_at": None,
+                },
                 "source": {
                     "status": "unavailable",
                     "files": 0,
                     "symbols": 0,
                     "relationships": 0,
                     "staleness": "unknown",
+                    "last_sync_at": None,
                 },
-                "dbt": {"status": "unavailable", "nodes": 0, "relationships": 0},
+                "dbt": {
+                    "status": "unavailable",
+                    "nodes": 0,
+                    "relationships": 0,
+                    "staleness": "unknown",
+                    "last_sync_at": None,
+                },
             }
     return {
         "connections": {
@@ -89,6 +131,33 @@ def build_dashboard_status(
         },
         "project": {"registered": binding is not None},
     }
+
+
+def _timestamp(value: datetime | None) -> str | None:
+    return None if value is None else value.astimezone(UTC).isoformat()
+
+
+def _source_staleness(
+    config: LocalConfig,
+    project_root: Path,
+    scope: MemoryScope,
+    snapshot: CodeSnapshot | None,
+) -> str:
+    if snapshot is None:
+        return "unknown"
+    stored = GitObservationStore(config.data_directory).get(scope, snapshot.source_digest)
+    current = GitSourceObserver().observe(project_root, snapshot.source_digest)
+    return _compare_source_observations(stored, current)
+
+
+def _compare_source_observations(
+    stored: GitSourceObservation | None, current: GitSourceObservation | None
+) -> str:
+    if stored is None or current is None:
+        return "unknown"
+    if stored.commit_id != current.commit_id or stored.dirty != current.dirty:
+        return "stale"
+    return "unknown" if stored.dirty else "current"
 
 
 def _launcher() -> Path | None:

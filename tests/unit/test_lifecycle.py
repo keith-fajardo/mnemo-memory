@@ -59,7 +59,7 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
     assert first["initialized"] is True
     assert second["initialized"] is False
-    assert first["schema_version"] == 27
+    assert first["schema_version"] == 28
     assert value.config.config_path.exists()
     assert value.config.database_path.exists()
 
@@ -176,7 +176,14 @@ def test_dashboard_status_reports_only_bounded_current_project_counts(
     assert result["project"] == {"registered": True}
     assert result["indexes"]["source"]["status"] == "ready"  # type: ignore[index]
     assert result["indexes"]["source"]["files"] == 0  # type: ignore[index]
-    assert result["indexes"]["knowledge"] == {"status": "empty", "documents": 0}  # type: ignore[index]
+    assert result["indexes"]["knowledge"] == {  # type: ignore[index]
+        "status": "empty",
+        "documents": 0,
+        "staleness": "unknown",
+        "last_sync_at": None,
+    }
+    assert result["indexes"]["source"]["staleness"] == "unknown"  # type: ignore[index]
+    assert isinstance(result["indexes"]["source"]["last_sync_at"], str)  # type: ignore[index]
     encoded = json.dumps(result, sort_keys=True)
     assert str(project) not in encoded
     assert str(binding.scope.project_id) not in encoded

@@ -44,6 +44,14 @@ requires an exact live scoped target at action time. The migration is forward-on
 transactional: an injected failure leaves schema 26 and its ledger unchanged. Restore the
 pre-upgrade schema-26 backup to reverse a committed migration 0027.
 
+Migration `0028_project_index_sync_status.sql` additively stores only the last successful sync
+timestamp for each knowledge, source-structure, and dbt index in one exact project scope. Existing
+indexes are not backfilled because an old activation or document revision cannot prove the time of
+the last complete sync. Runtime updates occur in the same transaction as the successful index
+write, including empty and idempotent syncs, so failed writes cannot advance status. The migration
+is forward-only and transactional; restore the verified pre-upgrade schema-27 backup to reverse a
+committed migration 0028.
+
 Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
 projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
 result, and timing row to both its digest-addressed supplemental artifact and an existing manifest
