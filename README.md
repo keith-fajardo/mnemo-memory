@@ -720,6 +720,12 @@ matches your files:
 - **stale** means comparable evidence differs;
 - **unknown** means there is not enough comparable evidence.
 
+After a successful wrapped dbt command, Mnemo records a bounded local state observation with the
+full Git HEAD ID, dirty state, a SHA-256 fingerprint of changed/deleted/untracked paths and their
+current content digests, and an explicit `--target` when supplied. Paths and bodies are not stored.
+Missing Git, unsafe paths, oversized changes, or observation failure leave state unknown and never
+make dbt fail. A different explicit target is stale even when the Git tree otherwise matches.
+
 Verified current manifest structure outranks an older checkpoint’s recollection of repository
 structure. Mnemo preserves such a disagreement as evidence rather than asking a model to resolve
 it.

@@ -240,6 +240,13 @@ as needed and discarded before persistence. Retrieval returns the immutable obse
 timestamp; it never contacts the warehouse, recomputes freshness, or upgrades a missing result to
 pass.
 
+dbt Git-state observation executes only fixed read-only Git argument vectors without a shell and
+uses a short timeout. Changed, deleted, and untracked paths are bounded, canonicalized under the
+project root, and rejected on traversal, escaping symlinks, unsupported file types, or file/total
+byte limits. Mnemo hashes status/path bytes and current content locally but persists only the final
+SHA-256 fingerprint plus full HEAD, dirty state, and explicit target; paths, bodies, diffs, commit
+messages, remotes, credentials, stderr, and environment values are never stored or logged.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

@@ -593,6 +593,11 @@ explicit equivalent:
 mnemo-memory dbt exec -- run --select orders+
 ```
 
+Successful wrapped ingestion also observes bounded local Git state: full HEAD ID, dirty boolean,
+a content-sensitive SHA-256 fingerprint for changed/deleted/untracked paths, and an explicit dbt
+target when present. Only the digest and safe scalar metadata are retained. Git failure, unsafe
+paths or symlinks, or configured file/byte limits produce unknown currentness without affecting dbt.
+
 ## What Mnemo does not do
 
 - It does not automatically capture every conversation or terminal command.

@@ -1106,3 +1106,29 @@ failure. The complete repository gate passes with 577 tests, strict typing for 1
 schema validation, dependency/provenance validation for 86 entries, and architecture validation
 for 72 product Python files. No external dependency, model call, warehouse access, dbt execution,
 or MCP tool was added.
+
+#### Issue 15J — Complete
+
+The current bounded issue activates dbt manifest source-state fingerprints during successful local
+command-wrapper and explicit existing-manifest ingestion. Mnemo must observe only a full Git HEAD
+object ID, dirty boolean, a deterministic SHA-256 fingerprint over a bounded set of changed,
+deleted, and untracked repository paths plus their current content digests, and an explicit dbt
+`--target` value when supplied. Git calls must be shell-free, read-only, timed out, and failure
+isolated; unsafe paths, symlinks escaping the project, too many files, too many bytes, missing Git,
+or observation failure must yield unknown state rather than fail dbt. No path, source body, diff,
+commit message, remote, credential, or environment value may be stored or logged. This issue does
+not add retrieval-time probing, changed-state indexing, code excerpts, a migration, dependency,
+model call, or MCP tool.
+
+Implemented bounded, shell-free Git source-state observation for successful dbt command-wrapper
+ingestion and explicit existing-manifest ingestion. Stored provenance is limited to the full Git
+HEAD object ID, dirty state, an irreversible SHA-256 working-tree fingerprint, and a safe explicit
+dbt target. Fingerprinting covers bounded changed, deleted, and untracked paths and their current
+content digests without retaining or logging paths, bodies, diffs, commit messages, remotes,
+credentials, or environment values. Traversal, escaping symlinks, non-regular files, oversized
+status or content, missing Git, malformed output, timeouts, and observation failures yield unknown
+state without failing dbt. Target differences now produce deterministic stale or unknown
+currentness. The complete repository gate passes with 580 tests, strict typing for 149 source
+files, schema validation, dependency/provenance validation for 86 entries, and architecture
+validation for 73 product Python files. No migration, dependency, model call, or MCP tool was
+added.

@@ -11,6 +11,7 @@ from mnemo_memory.connectors.dbt.artifacts import (
     DbtSourceFreshnessParser,
 )
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
+from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -161,6 +162,40 @@ def test_dbt_hook_attaches_new_supplemental_artifacts_to_an_unchanged_manifest(
     assert supplemental.source_freshness is not None
 
 
+def test_dbt_hook_records_bounded_git_state_and_explicit_target(tmp_path: Path) -> None:
+    commit = b"b" * 40
+
+    def run(arguments: tuple[str, ...], _: Path) -> bytes | None:
+        if arguments == ("rev-parse", "--is-inside-work-tree"):
+            return b"true\n"
+        if arguments == ("rev-parse", "--verify", "HEAD"):
+            return commit + b"\n"
+        if arguments[0] == "status":
+            return b""
+        return None
+
+    _, manifest, hooks, service, original = _configured_hook(tmp_path, DbtGitStateObserver(run))
+    context = CommandContext(
+        original.executable,
+        ("run", "--target", "production"),
+        original.working_directory,
+        original.integration,
+        original.invocation_id,
+        original.started_at,
+    )
+    manifest.write_bytes(FIXTURE.read_bytes())
+
+    outcome = hooks.after_dbt(context, hooks.before_dbt(context), _success())
+
+    assert outcome.status is HookStatus.ACTIVATED
+    snapshot = service.get_active_status(GetActiveManifestStatus(scope())).snapshot
+    assert snapshot is not None and snapshot.metadata.source_state is not None
+    assert snapshot.metadata.source_state.git_commit == commit.decode()
+    assert snapshot.metadata.source_state.dirty is False
+    assert snapshot.metadata.source_state.target_name == "production"
+    assert snapshot.metadata.source_state.working_tree_fingerprint is not None
+
+
 def test_dbt_hook_keeps_a_valid_manifest_when_supplemental_artifacts_are_invalid(
     tmp_path: Path,
 ) -> None:
@@ -262,6 +297,7 @@ def test_dbt_hook_storage_failure_keeps_the_prior_active_snapshot(tmp_path: Path
 
 def _configured_hook(
     tmp_path: Path,
+    git_observer: DbtGitStateObserver | None = None,
 ) -> tuple[Path, Path, DbtManifestHooks, DbtManifestApplicationService, CommandContext]:
     project = tmp_path / "dbt Δ project"
     target = project / "target"
@@ -271,7 +307,7 @@ def _configured_hook(
     store = LocalDbtProjectBindingStore(tmp_path / "memory")
     store.set(DbtProjectBinding(project.resolve(), scope()))
     service = _service()
-    hooks = DbtManifestHooks(store, lambda: service, lambda: NOW)
+    hooks = DbtManifestHooks(store, lambda: service, lambda: NOW, git_observer)
     context = CommandContext(
         Path(__file__).resolve(), ("run",), project.resolve(), "dbt", "hook-1", NOW
     )

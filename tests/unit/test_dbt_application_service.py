@@ -740,6 +740,24 @@ def test_currentness_uses_exact_digest_or_comparable_source_state() -> None:
         item.get_active_status(GetActiveManifestStatus(value)).currentness
         is ArtifactCurrentness.UNKNOWN
     )
+    targeted, targeted_scope = service(), scope(2)
+    targeted.ingest(
+        command(
+            targeted_scope,
+            source_state=SourceStateFingerprint(
+                git_commit="abc", dirty=False, target_name="production"
+            ),
+        )
+    )
+    target_mismatch = targeted.get_active_status(
+        GetActiveManifestStatus(
+            targeted_scope,
+            current_source_state=SourceStateFingerprint(
+                git_commit="abc", dirty=False, target_name="development"
+            ),
+        )
+    )
+    assert target_mismatch.currentness is ArtifactCurrentness.STALE
 
 
 def test_reference_and_sqlite_return_the_same_normalized_lineage(tmp_path: Path) -> None:

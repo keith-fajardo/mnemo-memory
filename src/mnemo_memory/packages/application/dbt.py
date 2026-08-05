@@ -962,6 +962,10 @@ def _currentness(
     stored = snapshot.metadata.source_state
     if current_source_state is None or stored is None:
         return ArtifactCurrentness.UNKNOWN, "no comparable current source-state evidence"
+    if stored.target_name != current_source_state.target_name:
+        if stored.target_name is not None and current_source_state.target_name is not None:
+            return ArtifactCurrentness.STALE, "dbt target differs"
+        return ArtifactCurrentness.UNKNOWN, "dbt target is not safely comparable"
     if current_source_state.working_tree_fingerprint and stored.working_tree_fingerprint:
         if current_source_state.working_tree_fingerprint == stored.working_tree_fingerprint:
             return ArtifactCurrentness.CURRENT, "working-tree fingerprint matches"

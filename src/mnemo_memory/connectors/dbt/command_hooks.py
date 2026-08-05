@@ -8,6 +8,7 @@ from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 
+from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBindingError,
     LocalDbtProjectBindingStore,
@@ -58,16 +59,27 @@ def _option_path(arguments: tuple[str, ...], option: str, cwd: Path) -> Path | N
     return None
 
 
+def _option_value(arguments: tuple[str, ...], option: str) -> str | None:
+    for index, argument in enumerate(arguments):
+        if argument.startswith(f"{option}="):
+            return argument.removeprefix(f"{option}=")
+        if argument == option and index + 1 < len(arguments):
+            return arguments[index + 1]
+    return None
+
+
 class DbtManifestHooks:
     def __init__(
         self,
         bindings: LocalDbtProjectBindingStore,
         service_factory: Callable[[], DbtManifestApplicationService],
         clock: Callable[[], datetime],
+        git_observer: DbtGitStateObserver | None = None,
     ) -> None:
         self._bindings = bindings
         self._service_factory = service_factory
         self._clock = clock
+        self._git_observer = git_observer or DbtGitStateObserver()
 
     def before_dbt(self, context: CommandContext) -> DbtBeforeState:
         root = _option_path(context.arguments, "--project-dir", context.working_directory)
@@ -112,7 +124,9 @@ class DbtManifestHooks:
             active.metadata.content_digest if active else None,
         )
 
-    def after_dbt(self, _: CommandContext, state: object, result: CommandResult) -> HookOutcome:
+    def after_dbt(
+        self, context: CommandContext, state: object, result: CommandResult
+    ) -> HookOutcome:
         if not isinstance(state, DbtBeforeState):
             return HookOutcome(HookStatus.FAILED, "MNEMO_DBT_HOOK_STATE_INVALID")
         if state.scope is None:
@@ -127,6 +141,14 @@ class DbtManifestHooks:
             raw = state.manifest_path.read_bytes()
             digest = sha256(raw).hexdigest()
             service = self._service_factory()
+            source_state = (
+                self._git_observer.observe(
+                    state.project_root,
+                    target_name=_option_value(context.arguments, "--target"),
+                )
+                if state.project_root is not None
+                else None
+            )
             if (
                 digest == state.previous_digest
                 and digest == state.expected_active_content_digest
@@ -142,6 +164,7 @@ class DbtManifestHooks:
                         "manifest.json",
                         self._clock(),
                         expected_active_snapshot_id=state.expected_active_snapshot_id,
+                        source_state=source_state,
                     )
                 )
                 snapshot_id = stored.snapshot.snapshot_id

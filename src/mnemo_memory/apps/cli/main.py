@@ -34,6 +34,7 @@ from mnemo_memory.connectors.dbt.artifacts import (
     DbtSourceFreshnessParser,
 )
 from mnemo_memory.connectors.dbt.command_hooks import DbtManifestHooks
+from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -652,7 +653,13 @@ def _ingest_existing_manifest(
         with _dbt_runtime(resolve_local_config(data_directory)) as runtime:
             assert runtime.dbt_manifest_service is not None
             stored = runtime.dbt_manifest_service.ingest(
-                IngestManifest(binding.scope, manifest.read_bytes(), "manifest.json", observed_at)
+                IngestManifest(
+                    binding.scope,
+                    manifest.read_bytes(),
+                    "manifest.json",
+                    observed_at,
+                    source_state=DbtGitStateObserver().observe(binding.project_root),
+                )
             )
             supplemental = _ingest_supplemental_artifacts(
                 runtime.dbt_manifest_service,
@@ -838,11 +845,20 @@ def dbt_ingest(
             scope = binding.scope
         with _dbt_runtime(resolve_local_config(data_dir)) as runtime:
             assert runtime.dbt_manifest_service is not None
+            try:
+                project_root = find_dbt_project_root(manifest.parent)
+            except DbtProjectBindingError:
+                project_root = None
             command = IngestManifest(
                 scope,
                 raw,
                 "manifest.json",
                 datetime.now(UTC),
+                source_state=(
+                    DbtGitStateObserver().observe(project_root)
+                    if project_root is not None
+                    else None
+                ),
             )
             if dry_run:
                 artifact = DbtManifestParser().parse_for_ingestion(

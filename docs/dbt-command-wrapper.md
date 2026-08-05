@@ -107,6 +107,13 @@ invalidate the manifest. Mnemo retains relation/column identities and node run s
 warehouse comments, statistics, adapter messages, database errors, freshness filters, compiled SQL,
 environment values, and arbitrary arguments are discarded.
 
+At successful manifest ingestion, the wrapper performs a separate shell-free, read-only, timed
+Git observation. It stores only full HEAD, dirty state, a SHA-256 fingerprint derived from a
+bounded list of changed/deleted/untracked paths and current file digests, and an explicit
+`--target`. It never stores path names, file bodies, diffs, commit messages, remotes, credentials,
+or environment values. Failure or unsafe/bounded-out input leaves source state unknown and does
+not change dbt's result.
+
 The command’s default summary is written to stderr so dbt’s normal stdout remains usable. Add
 `--json-summary` when an automation needs a structured wrapper result.
 

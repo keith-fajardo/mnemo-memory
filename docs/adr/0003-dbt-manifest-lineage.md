@@ -83,6 +83,12 @@ counts/periods, execution time, metadata, and evidence. It discards database err
 responses, filters, timing details, and environment values, and never recomputes the authoritative
 dbt status.
 
+Successful local ingestion may attach a bounded `SourceStateFingerprint` containing full Git HEAD,
+dirty state, a content-sensitive SHA-256 working-tree fingerprint, and an explicit dbt target.
+Observation is shell-free, read-only, timed, and failure-isolated. Paths, bodies, diffs, messages,
+remotes, credentials, and environment values are excluded. Target disagreement is stale; a missing
+target on only one side is not safely comparable.
+
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.
