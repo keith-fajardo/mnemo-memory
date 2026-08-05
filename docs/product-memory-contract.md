@@ -157,6 +157,16 @@ the policy explicitly defines “last use.” Expired content is excluded immedi
 canonical storage and rebuildable projections by a durable job. Future backup retention must be
 documented before backups are implemented.
 
+For an extracted episodic candidate and any memory approved from it, the canonical schedule is the
+schedule copied from its permitted source event. A deterministic exact-task-scope sweep may append
+one payload-free expiration record only when that non-permanent schedule is due. The record binds
+the memory, source event, policy, scheduled time, actual sweep time, and scope; exact replay is
+idempotent and conflicting metadata fails closed. Once recorded, candidate, review, active-memory,
+governance, and revision payload reads exclude the identity immediately, including after restart.
+Approval, correction, retraction, confidence, or access cannot extend this schedule. The current
+expiration slice does not yet physically purge the candidate or its source event, execute raw-event
+retention, propagate source deletion, or define export and backup cleanup.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is

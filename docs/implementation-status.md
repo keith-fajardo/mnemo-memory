@@ -1441,3 +1441,39 @@ with 673 tests, strict typing for 167 source files, schema validation, dependenc
 validation for 86 entries, and architecture validation for 85 product Python files. No expiry or
 retention execution, physical purge, export/deletion propagation, automatic governance, context
 retrieval, transport surface, daemon, dependency, or team mode was added.
+
+#### Issue 16G — Complete
+
+The current bounded issue enforces the canonical retention schedule copied onto extracted episodic
+candidates and approved memories. One deterministic exact-scope sweep at an explicit aware time
+discovers non-permanent candidates whose scheduled expiry is due and atomically appends one
+payload-free expiration record per memory identity. Expiration identity is deterministic by memory,
+policy, and scheduled time; repeated discovery or delivery is idempotent while conflicting policy,
+scope, schedule, or time fails closed. Once recorded, the candidate or memory payload is immediately
+excluded from candidate get/list, review, active get/list, governance, and revision reads, including
+after restart; approval, correction, retraction, confidence, or access cannot extend retention.
+Permanent and not-yet-due schedules remain untouched. Reference and SQLite must expose only scoped
+payload-free expiration metadata and produce identical due sets. Migration 0023 is additive and
+forward-only with rollback coverage. This issue adds no raw task-event expiry, physical purge,
+source/dependent deletion propagation, export, backup behavior, automatic scheduler/daemon,
+context retrieval, API/CLI/MCP surface, dependency, or team mode.
+
+Implemented strict payload-free `EpisodicMemoryExpiration` records and one exact-task-scope
+retention service. Both adapters discover only due non-permanent schedules copied from canonical
+source events, sort the same target set deterministically, validate the entire batch before an
+atomic append, make exact delivery idempotent, and reject mismatched source, scope, policy,
+schedule, or time. Expiration immediately excludes candidate, review, active-memory, governance,
+and revision payloads and prevents extraction retry from restoring content; approval, correction,
+retraction, confidence, and access do not change the schedule. SQLite persists exclusion across
+restart through additive forward-only migration `0023_episodic_memory_expirations.sql`, whose
+table contains only identity, scope, policy, and time metadata guarded against noncanonical
+targets. Twelve focused tests cover strict serialization, deterministic identity, before/due and
+permanent boundaries, complete payload exclusion, correction and retraction, exact-scope reads,
+adapter parity, replay idempotency, conflicting-batch atomicity, injected SQLite rollback, restart
+durability, payload-free schema inspection, and migration rollback with candidate preservation.
+The product and threat contracts record logical expiry and its remaining physical-purge boundary.
+The complete repository gate passes with 685 tests, strict typing for 170 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 87 product
+Python files. No raw task-event expiry, physical purge, source/dependent deletion propagation,
+export, backup behavior, automatic scheduler/daemon, retrieval or transport surface, dependency,
+or team mode was added.

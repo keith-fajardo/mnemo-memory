@@ -5,9 +5,12 @@ from .extraction import (
     EpisodicCandidateExtractionResult,
     EpisodicCandidateExtractionService,
 )
+from .retention import EpisodicRetentionService, EpisodicRetentionSweepResult
 
 __all__ = [
     "EpisodicCandidateExtractionError",
     "EpisodicCandidateExtractionResult",
     "EpisodicCandidateExtractionService",
+    "EpisodicRetentionService",
+    "EpisodicRetentionSweepResult",
 ]

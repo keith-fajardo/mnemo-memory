@@ -319,6 +319,7 @@ def test_task_activity_migration_rolls_back_and_preserves_existing_outbox_jobs(
         created_at=approved.occurred_at,
     ).job_id
     with sqlite3.connect(repository.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
         connection.execute("DROP TABLE active_episodic_memories")
@@ -343,7 +344,7 @@ def test_task_activity_migration_rolls_back_and_preserves_existing_outbox_jobs(
         )
 
     repository.migrate()
-    assert repository.schema_version() == 22
+    assert repository.schema_version() == 23
     assert repository.get_event_job(scope, approved_job_id).source_event_id == approved.event_id
     with sqlite3.connect(repository.path) as connection:
         columns = {

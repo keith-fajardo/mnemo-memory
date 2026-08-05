@@ -361,6 +361,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
     sqlite.append_task_activity_event(event)
     sqlite.store_episodic_memory_candidates((candidate,))
     with sqlite3.connect(sqlite.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
         connection.execute("DROP TABLE active_episodic_memories")
@@ -371,8 +372,11 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         sqlite.migrate(fail_after_version=21)
     assert sqlite.schema_version() == 20
-    assert sqlite.get_episodic_memory_candidate(candidate.scope, candidate.memory_id) == candidate
     with sqlite3.connect(sqlite.path) as connection:
+        assert connection.execute(
+            "SELECT memory_id FROM episodic_memory_candidates WHERE memory_id = ?",
+            (str(candidate.memory_id),),
+        ).fetchone() == (str(candidate.memory_id),)
         assert (
             connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -382,7 +386,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 22
+    assert sqlite.schema_version() == 23
     with sqlite3.connect(sqlite.path) as connection:
         review_columns = {
             row[1]
@@ -673,9 +677,10 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
     candidate, _, governance = _approved("sqlite", tmp_path)
     assert isinstance(governance, SQLiteCheckpointRepository)
     with sqlite3.connect(governance.path) as connection:
+        connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 22")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 22")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         governance.migrate(fail_after_version=22)
@@ -694,7 +699,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
         )
 
     governance.migrate()
-    assert governance.schema_version() == 22
+    assert governance.schema_version() == 23
     with sqlite3.connect(governance.path) as connection:
         columns = {
             row[1]

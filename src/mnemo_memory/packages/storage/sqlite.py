@@ -61,9 +61,11 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EpisodicMemoryRevisionStatus,
     EventId,
@@ -153,11 +155,15 @@ from .contracts import (
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryExpirationConflict,
+    EpisodicMemoryExpirationNotFound,
+    EpisodicMemoryExpirationResult,
     EpisodicMemoryGovernanceConflict,
     EpisodicMemoryGovernanceNotFound,
     EpisodicMemoryGovernanceRejected,
     EpisodicMemoryGovernanceResult,
     EpisodicMemoryGovernanceStorageFailure,
+    EpisodicMemoryRetentionStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -203,7 +209,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 22
+LATEST_SCHEMA_VERSION = 23
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -603,6 +609,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 22:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 22
+            if version < 23:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0023_episodic_memory_expirations.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (23, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 23:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 23
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1373,6 +1391,18 @@ class SQLiteCheckpointRepository:
                     (str(first.source_event_id), first.extractor_version),
                 ).fetchall()
                 if existing_rows:
+                    expired = connection.execute(
+                        "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                        "JOIN episodic_memory_candidates AS candidate "
+                        "ON candidate.memory_id = expiration.memory_id "
+                        "WHERE candidate.source_event_id = ? AND candidate.extractor_version = ? "
+                        "LIMIT 1",
+                        (str(first.source_event_id), first.extractor_version),
+                    ).fetchone()
+                    if expired is not None:
+                        raise EpisodicMemoryCandidateConflict(
+                            "expired episodic candidates cannot be restored"
+                        )
                     existing = tuple(
                         self._episodic_candidate_from_row(connection, row, first.scope)
                         for row in existing_rows
@@ -1402,9 +1432,13 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 row = connection.execute(
-                    "SELECT * FROM episodic_memory_candidates WHERE memory_id = ? "
-                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
-                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    "SELECT candidate.* FROM episodic_memory_candidates AS candidate "
+                    "WHERE candidate.memory_id = ? AND candidate.owner_id = ? "
+                    "AND candidate.visibility = ? AND candidate.workspace_id IS ? "
+                    "AND candidate.project_id = ? AND candidate.session_id = ? "
+                    "AND candidate.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = candidate.memory_id)",
                     (str(memory_id), *self._scope_values(scope)),
                 ).fetchone()
                 if row is None:
@@ -1428,7 +1462,7 @@ class SQLiteCheckpointRepository:
         self._require_episodic_candidate_scope(scope)
         if offset < 0 or limit < 1:
             raise ValueError("candidate offset must be non-negative and limit must be positive")
-        source_filter = "" if source_event_id is None else " AND source_event_id = ?"
+        source_filter = "" if source_event_id is None else " AND candidate.source_event_id = ?"
         parameters: tuple[object, ...] = self._scope_values(scope)
         if source_event_id is not None:
             parameters += (str(source_event_id),)
@@ -1436,11 +1470,14 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 rows = connection.execute(
-                    "SELECT * FROM episodic_memory_candidates WHERE owner_id = ? "
-                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
-                    "AND session_id = ? AND task_id = ?"
+                    "SELECT candidate.* FROM episodic_memory_candidates AS candidate "
+                    "WHERE candidate.owner_id = ? AND candidate.visibility = ? "
+                    "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
+                    "AND candidate.session_id = ? AND candidate.task_id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = candidate.memory_id)"
                     + source_filter
-                    + " ORDER BY candidate_sequence DESC LIMIT ? OFFSET ?",
+                    + " ORDER BY candidate.candidate_sequence DESC LIMIT ? OFFSET ?",
                     parameters,
                 ).fetchall()
                 items = tuple(
@@ -1460,9 +1497,13 @@ class SQLiteCheckpointRepository:
         try:
             with self._transaction() as connection:
                 candidate_row = connection.execute(
-                    "SELECT * FROM episodic_memory_candidates WHERE memory_id = ? "
-                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
-                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    "SELECT candidate.* FROM episodic_memory_candidates AS candidate "
+                    "WHERE candidate.memory_id = ? AND candidate.owner_id = ? "
+                    "AND candidate.visibility = ? AND candidate.workspace_id IS ? "
+                    "AND candidate.project_id = ? AND candidate.session_id = ? "
+                    "AND candidate.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = candidate.memory_id)",
                     (str(action.candidate_id), *self._scope_values(action.scope)),
                 ).fetchone()
                 if candidate_row is None:
@@ -1539,9 +1580,13 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 row = connection.execute(
-                    "SELECT * FROM episodic_candidate_reviews WHERE candidate_id = ? "
-                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
-                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    "SELECT review.* FROM episodic_candidate_reviews AS review "
+                    "WHERE review.candidate_id = ? AND review.owner_id = ? "
+                    "AND review.visibility = ? AND review.workspace_id IS ? "
+                    "AND review.project_id = ? AND review.session_id = ? "
+                    "AND review.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = review.candidate_id)",
                     (str(candidate_id), *self._scope_values(scope)),
                 ).fetchone()
                 if row is None:
@@ -1566,7 +1611,9 @@ class SQLiteCheckpointRepository:
                     "ON candidate.memory_id = active.memory_id WHERE active.memory_id = ? "
                     "AND candidate.owner_id = ? AND candidate.visibility = ? "
                     "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
-                    "AND candidate.session_id = ? AND candidate.task_id = ?",
+                    "AND candidate.session_id = ? AND candidate.task_id = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = active.memory_id)",
                     (str(memory_id), *self._scope_values(scope)),
                 ).fetchone()
                 if row is None:
@@ -1593,7 +1640,9 @@ class SQLiteCheckpointRepository:
                     "ON review.action_id = active.approval_action_id "
                     "WHERE review.owner_id = ? AND review.visibility = ? "
                     "AND review.workspace_id IS ? AND review.project_id = ? "
-                    "AND review.session_id = ? AND review.task_id = ? "
+                    "AND review.session_id = ? AND review.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = active.memory_id) "
                     "ORDER BY review.action_sequence DESC",
                     self._scope_values(scope),
                 ).fetchall()
@@ -1700,9 +1749,13 @@ class SQLiteCheckpointRepository:
         try:
             with self._connect() as connection:
                 row = connection.execute(
-                    "SELECT * FROM episodic_memory_governance WHERE action_id = ? "
-                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
-                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    "SELECT governance.* FROM episodic_memory_governance AS governance "
+                    "WHERE governance.action_id = ? AND governance.owner_id = ? "
+                    "AND governance.visibility = ? AND governance.workspace_id IS ? "
+                    "AND governance.project_id = ? AND governance.session_id = ? "
+                    "AND governance.task_id = ? AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = governance.memory_id)",
                     (str(action_id), *self._scope_values(scope)),
                 ).fetchone()
                 if row is None:
@@ -1733,6 +1786,168 @@ class SQLiteCheckpointRepository:
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise EpisodicMemoryGovernanceStorageFailure(
                 "episodic memory governance storage operation failed"
+            ) from error
+
+    def list_due_episodic_memory_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[EpisodicMemoryRetentionTarget, ...]:
+        self._require_episodic_candidate_scope(scope)
+        _require_aware_datetime(as_of, "as_of")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT candidate.memory_id,candidate.source_event_id,"
+                    "candidate.retention_policy_id,candidate.retention_permanent,"
+                    "candidate.retention_created_at,candidate.retention_observed_at,"
+                    "candidate.retention_valid_from,candidate.retention_valid_to,"
+                    "candidate.retention_expires_at,candidate.retention_expired_at "
+                    "FROM episodic_memory_candidates AS candidate "
+                    "WHERE candidate.owner_id = ? AND candidate.visibility = ? "
+                    "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
+                    "AND candidate.session_id = ? AND candidate.task_id = ? "
+                    "AND candidate.retention_permanent = 0 "
+                    "AND candidate.retention_expires_at IS NOT NULL AND NOT EXISTS ("
+                    "SELECT 1 FROM episodic_memory_expirations AS expiration "
+                    "WHERE expiration.memory_id = candidate.memory_id)",
+                    self._scope_values(scope),
+                ).fetchall()
+                targets = tuple(
+                    EpisodicMemoryRetentionTarget(
+                        MemoryId.from_string(row["memory_id"]),
+                        EventId.from_string(row["source_event_id"]),
+                        scope,
+                        self._episodic_retention_schedule_from_candidate_row(row),
+                    )
+                    for row in rows
+                    if self._episodic_retention_schedule_from_candidate_row(row).is_expired(as_of)
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryRetentionStorageFailure(
+                "episodic memory retention storage operation failed"
+            ) from error
+        return tuple(
+            sorted(
+                targets,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.memory_id),
+                ),
+            )
+        )
+
+    def apply_episodic_memory_expirations(
+        self, expirations: tuple[EpisodicMemoryExpiration, ...]
+    ) -> EpisodicMemoryExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return EpisodicMemoryExpirationResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory expiration batch is invalid")
+        for expiration in values:
+            if not isinstance(expiration, EpisodicMemoryExpiration):
+                raise TypeError("episodic memory expiration batch is invalid")
+            self._require_episodic_candidate_scope(expiration.scope)
+        try:
+            with self._transaction() as connection:
+                existing_count = 0
+                pending: list[EpisodicMemoryExpiration] = []
+                for expiration in values:
+                    candidate_row = connection.execute(
+                        "SELECT candidate.memory_id,candidate.source_event_id,"
+                        "candidate.retention_policy_id,candidate.retention_permanent,"
+                        "candidate.retention_created_at,candidate.retention_observed_at,"
+                        "candidate.retention_valid_from,candidate.retention_valid_to,"
+                        "candidate.retention_expires_at,candidate.retention_expired_at "
+                        "FROM episodic_memory_candidates AS candidate "
+                        "WHERE candidate.memory_id = ? AND candidate.owner_id = ? "
+                        "AND candidate.visibility = ? AND candidate.workspace_id IS ? "
+                        "AND candidate.project_id = ? AND candidate.session_id = ? "
+                        "AND candidate.task_id = ?",
+                        (
+                            str(expiration.memory_id),
+                            *self._scope_values(expiration.scope),
+                        ),
+                    ).fetchone()
+                    if candidate_row is None:
+                        raise EpisodicMemoryExpirationNotFound(
+                            "episodic memory retention target was not found"
+                        )
+                    schedule = self._episodic_retention_schedule_from_candidate_row(candidate_row)
+                    if (
+                        EventId.from_string(candidate_row["source_event_id"])
+                        != expiration.source_event_id
+                        or schedule.permanent
+                        or schedule.policy_id != expiration.retention_policy_id
+                        or schedule.expires_at != expiration.scheduled_expires_at
+                        or not schedule.is_expired(expiration.expired_at)
+                    ):
+                        raise EpisodicMemoryExpirationConflict(
+                            "episodic memory expiration does not match canonical retention"
+                        )
+                    existing_row = connection.execute(
+                        "SELECT * FROM episodic_memory_expirations WHERE memory_id = ?",
+                        (str(expiration.memory_id),),
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing = self._episodic_memory_expiration_from_row(
+                            existing_row, expiration.scope
+                        )
+                        if existing != expiration:
+                            raise EpisodicMemoryExpirationConflict(
+                                "episodic memory already has a different expiration"
+                            )
+                        existing_count += 1
+                    else:
+                        pending.append(expiration)
+                for expiration in pending:
+                    connection.execute(
+                        "INSERT INTO episodic_memory_expirations("
+                        "expiration_id,memory_id,source_event_id,retention_policy_id,"
+                        "scheduled_expires_at,expired_at,owner_id,visibility,workspace_id,"
+                        "project_id,session_id,task_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            str(expiration.expiration_id),
+                            str(expiration.memory_id),
+                            str(expiration.source_event_id),
+                            str(expiration.retention_policy_id),
+                            expiration.scheduled_expires_at.isoformat(),
+                            expiration.expired_at.isoformat(),
+                            *self._scope_values(expiration.scope),
+                        ),
+                    )
+                return EpisodicMemoryExpirationResult(values, existing_count == len(values))
+        except (EpisodicMemoryExpirationConflict, EpisodicMemoryExpirationNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryRetentionStorageFailure(
+                "episodic memory retention storage operation failed"
+            ) from error
+
+    def get_episodic_memory_expiration(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryExpiration:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM episodic_memory_expirations WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(memory_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicMemoryExpirationNotFound(
+                        "episodic memory expiration was not found"
+                    )
+                return self._episodic_memory_expiration_from_row(row, scope)
+        except EpisodicMemoryExpirationNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryRetentionStorageFailure(
+                "episodic memory retention storage operation failed"
             ) from error
 
     def append_approved_event(
@@ -4242,6 +4457,47 @@ class SQLiteCheckpointRepository:
         )
 
     @staticmethod
+    def _episodic_retention_schedule_from_candidate_row(
+        row: sqlite3.Row,
+    ) -> RetentionSchedule:
+        return RetentionSchedule(
+            policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+            permanent=bool(row["retention_permanent"]),
+            created_at=datetime.fromisoformat(row["retention_created_at"]),
+            observed_at=datetime.fromisoformat(row["retention_observed_at"]),
+            valid_from=datetime.fromisoformat(row["retention_valid_from"]),
+            valid_to=(
+                None
+                if row["retention_valid_to"] is None
+                else datetime.fromisoformat(row["retention_valid_to"])
+            ),
+            expires_at=(
+                None
+                if row["retention_expires_at"] is None
+                else datetime.fromisoformat(row["retention_expires_at"])
+            ),
+            expired_at=(
+                None
+                if row["retention_expired_at"] is None
+                else datetime.fromisoformat(row["retention_expired_at"])
+            ),
+        )
+
+    @staticmethod
+    def _episodic_memory_expiration_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> EpisodicMemoryExpiration:
+        return EpisodicMemoryExpiration(
+            expiration_id=EventId.from_string(row["expiration_id"]),
+            memory_id=MemoryId.from_string(row["memory_id"]),
+            source_event_id=EventId.from_string(row["source_event_id"]),
+            scope=scope,
+            retention_policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
+            scheduled_expires_at=datetime.fromisoformat(row["scheduled_expires_at"]),
+            expired_at=datetime.fromisoformat(row["expired_at"]),
+        )
+
+    @staticmethod
     def _episodic_review_from_row(
         connection: sqlite3.Connection, row: sqlite3.Row, scope: MemoryScope
     ) -> EpisodicCandidateReviewAction:
@@ -4333,7 +4589,9 @@ class SQLiteCheckpointRepository:
                 "ON candidate.memory_id = active.memory_id WHERE active.memory_id = ? "
                 "AND candidate.owner_id = ? AND candidate.visibility = ? "
                 "AND candidate.workspace_id IS ? AND candidate.project_id = ? "
-                "AND candidate.session_id = ? AND candidate.task_id = ?",
+                "AND candidate.session_id = ? AND candidate.task_id = ? "
+                "AND NOT EXISTS (SELECT 1 FROM episodic_memory_expirations AS expiration "
+                "WHERE expiration.memory_id = active.memory_id)",
                 (str(memory_id), *SQLiteCheckpointRepository._scope_values(scope)),
             ).fetchone(),
         )

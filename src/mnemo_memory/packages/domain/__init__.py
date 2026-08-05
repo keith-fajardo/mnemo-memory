@@ -95,6 +95,10 @@ from .episodic_candidates import (
     replay_episodic_memory_revisions,
 )
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
+from .episodic_retention import (
+    EpisodicMemoryExpiration,
+    EpisodicMemoryRetentionTarget,
+)
 from .event_outbox import EventOutboxJob, EventOutboxTopic
 from .identifiers import (
     AgentId,
@@ -238,9 +242,11 @@ __all__ = [
     "EpisodicExtractionProposal",
     "EpisodicExtractionRequest",
     "EpisodicMemoryCandidate",
+    "EpisodicMemoryExpiration",
     "EpisodicMemoryGovernanceAction",
     "EpisodicMemoryGovernanceKind",
     "EpisodicMemoryKind",
+    "EpisodicMemoryRetentionTarget",
     "EpisodicMemoryRevision",
     "EpisodicMemoryRevisionStatus",
     "EventId",

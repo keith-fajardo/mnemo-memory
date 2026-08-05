@@ -32,7 +32,9 @@ from mnemo_memory.packages.domain import (
     DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
     EpisodicMemoryCandidate,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
+    EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EventId,
     EventOutboxJob,
@@ -276,6 +278,22 @@ class EpisodicMemoryGovernanceStorageFailure(EpisodicMemoryGovernanceRepositoryE
     pass
 
 
+class EpisodicMemoryRetentionRepositoryError(Exception):
+    """Expected outcome for payload-free deterministic episodic expiration."""
+
+
+class EpisodicMemoryExpirationNotFound(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
+class EpisodicMemoryExpirationConflict(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
+class EpisodicMemoryRetentionStorageFailure(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -414,6 +432,26 @@ class EpisodicMemoryGovernanceRepository(Protocol):
     def list_episodic_memory_revisions(
         self, scope: MemoryScope, memory_id: MemoryId
     ) -> tuple[EpisodicMemoryRevision, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryExpirationResult:
+    expirations: tuple[EpisodicMemoryExpiration, ...]
+    idempotent: bool
+
+
+class EpisodicMemoryRetentionRepository(Protocol):
+    def list_due_episodic_memory_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[EpisodicMemoryRetentionTarget, ...]: ...
+
+    def apply_episodic_memory_expirations(
+        self, expirations: tuple[EpisodicMemoryExpiration, ...]
+    ) -> EpisodicMemoryExpirationResult: ...
+
+    def get_episodic_memory_expiration(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryExpiration: ...
 
 
 @dataclass(frozen=True, slots=True)

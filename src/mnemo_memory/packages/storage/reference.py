@@ -37,7 +37,9 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
+    EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EpisodicMemoryRevisionStatus,
     EventId,
@@ -103,6 +105,9 @@ from .contracts import (
     EpisodicMemoryCandidatePage,
     EpisodicMemoryCandidateRejected,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryExpirationConflict,
+    EpisodicMemoryExpirationNotFound,
+    EpisodicMemoryExpirationResult,
     EpisodicMemoryGovernanceConflict,
     EpisodicMemoryGovernanceNotFound,
     EpisodicMemoryGovernanceRejected,
@@ -154,6 +159,11 @@ _SupplementalArtifactT = TypeVar(
     DbtRunResultsArtifact,
     DbtSourceFreshnessArtifact,
 )
+
+
+def _require_aware_datetime(value: datetime, name: str) -> None:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
 
 
 class ReferenceKnowledgeDocumentRepository:
@@ -620,6 +630,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self._governance: dict[EventId, EpisodicMemoryGovernanceAction] = {}
         self._governance_keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._governance_order: dict[MemoryId, list[EventId]] = {}
+        self._expirations: dict[MemoryId, EpisodicMemoryExpiration] = {}
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -652,6 +663,10 @@ class ReferenceEpisodicMemoryCandidateRepository:
             )
         )
         if existing:
+            if any(candidate.memory_id in self._expirations for candidate in existing):
+                raise EpisodicMemoryCandidateConflict(
+                    "expired episodic candidates cannot be restored"
+                )
             if existing == values:
                 return EpisodicMemoryCandidateStoreResult(existing, True)
             raise EpisodicMemoryCandidateConflict(
@@ -671,7 +686,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryCandidate:
         self._require_scope(scope)
         candidate = self._candidates.get(memory_id)
-        if candidate is None or candidate.scope != scope:
+        if candidate is None or candidate.scope != scope or memory_id in self._expirations:
             raise EpisodicMemoryCandidateNotFound("episodic memory candidate was not found")
         return candidate
 
@@ -690,6 +705,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
             self._candidates[memory_id]
             for memory_id in reversed(self._ordered)
             if self._candidates[memory_id].scope == scope
+            and memory_id not in self._expirations
             and (
                 source_event_id is None
                 or self._candidates[memory_id].source_event_id == source_event_id
@@ -704,6 +720,8 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self, action: EpisodicCandidateReviewAction
     ) -> EpisodicMemoryReviewResult:
         self._require_scope(action.scope)
+        if action.candidate_id in self._expirations:
+            raise EpisodicMemoryReviewNotFound("episodic memory candidate was not found for review")
         candidate = self.get_episodic_memory_candidate(action.scope, action.candidate_id)
         if not self._review_policy.assess(candidate, action).accepted:
             raise EpisodicMemoryReviewRejected(
@@ -744,7 +762,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicCandidateReviewAction:
         self._require_scope(scope)
         action = self._reviews.get(candidate_id)
-        if action is None or action.scope != scope:
+        if action is None or action.scope != scope or candidate_id in self._expirations:
             raise EpisodicMemoryReviewNotFound("episodic memory review was not found")
         return action
 
@@ -753,7 +771,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> ActiveEpisodicMemory:
         self._require_scope(scope)
         base = self._active.get(memory_id)
-        if base is None or base.scope != scope:
+        if base is None or base.scope != scope or memory_id in self._expirations:
             raise ActiveEpisodicMemoryNotFound("active episodic memory was not found")
         revisions = self._revisions_for(base)
         current = revisions[-1]
@@ -786,7 +804,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryGovernanceResult:
         self._require_scope(action.scope)
         base = self._active.get(action.memory_id)
-        if base is None or base.scope != action.scope:
+        if base is None or base.scope != action.scope or action.memory_id in self._expirations:
             raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
         existing = self._governance.get(action.action_id)
         if existing is not None:
@@ -857,7 +875,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> EpisodicMemoryGovernanceAction:
         self._require_scope(scope)
         action = self._governance.get(action_id)
-        if action is None or action.scope != scope:
+        if action is None or action.scope != scope or action.memory_id in self._expirations:
             raise EpisodicMemoryGovernanceNotFound(
                 "episodic memory governance action was not found"
             )
@@ -868,9 +886,89 @@ class ReferenceEpisodicMemoryCandidateRepository:
     ) -> tuple[EpisodicMemoryRevision, ...]:
         self._require_scope(scope)
         base = self._active.get(memory_id)
-        if base is None or base.scope != scope:
+        if base is None or base.scope != scope or memory_id in self._expirations:
             raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
         return self._revisions_for(base)
+
+    def list_due_episodic_memory_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[EpisodicMemoryRetentionTarget, ...]:
+        self._require_scope(scope)
+        _require_aware_datetime(as_of, "as_of")
+        targets = tuple(
+            EpisodicMemoryRetentionTarget(
+                candidate.memory_id,
+                candidate.source_event_id,
+                candidate.scope,
+                candidate.retention,
+            )
+            for candidate in self._candidates.values()
+            if candidate.scope == scope
+            and candidate.memory_id not in self._expirations
+            and not candidate.retention.permanent
+            and candidate.retention.is_expired(as_of)
+        )
+        return tuple(
+            sorted(
+                targets,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.memory_id),
+                ),
+            )
+        )
+
+    def apply_episodic_memory_expirations(
+        self, expirations: tuple[EpisodicMemoryExpiration, ...]
+    ) -> EpisodicMemoryExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return EpisodicMemoryExpirationResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory expiration batch is invalid")
+        existing_count = 0
+        for expiration in values:
+            if not isinstance(expiration, EpisodicMemoryExpiration):
+                raise TypeError("episodic memory expiration batch is invalid")
+            self._require_scope(expiration.scope)
+            candidate = self._candidates.get(expiration.memory_id)
+            if candidate is None or candidate.scope != expiration.scope:
+                raise EpisodicMemoryExpirationNotFound(
+                    "episodic memory retention target was not found"
+                )
+            schedule = candidate.retention
+            if (
+                candidate.source_event_id != expiration.source_event_id
+                or schedule.permanent
+                or schedule.expires_at != expiration.scheduled_expires_at
+                or schedule.policy_id != expiration.retention_policy_id
+                or not schedule.is_expired(expiration.expired_at)
+            ):
+                raise EpisodicMemoryExpirationConflict(
+                    "episodic memory expiration does not match canonical retention"
+                )
+            existing = self._expirations.get(expiration.memory_id)
+            if existing is not None:
+                if existing != expiration:
+                    raise EpisodicMemoryExpirationConflict(
+                        "episodic memory already has a different expiration"
+                    )
+                existing_count += 1
+        stored = dict(self._expirations)
+        stored.update((item.memory_id, item) for item in values)
+        self._expirations = stored
+        return EpisodicMemoryExpirationResult(values, existing_count == len(values))
+
+    def get_episodic_memory_expiration(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryExpiration:
+        self._require_scope(scope)
+        expiration = self._expirations.get(memory_id)
+        if expiration is None or expiration.scope != scope:
+            raise EpisodicMemoryExpirationNotFound("episodic memory expiration was not found")
+        return expiration
 
     def _revisions_for(self, base: ActiveEpisodicMemory) -> tuple[EpisodicMemoryRevision, ...]:
         actions = tuple(
