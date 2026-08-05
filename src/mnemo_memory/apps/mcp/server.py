@@ -14,6 +14,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
+from mnemo_memory.connectors.dbt.code_excerpt import DbtLocalCodeExcerptReader
 from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
@@ -366,6 +367,7 @@ def main(data_directory: Path | None = None) -> None:
                     runtime.knowledge_document_repository,
                     semantic_knowledge,
                     KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
+                    DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
                 ),
                 observer.observe,
                 None if binding is None else binding.checkpoint_scope,

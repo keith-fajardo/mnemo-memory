@@ -240,6 +240,14 @@ and affected-node traversal uses only stored typed edges with strict change, nod
 limits. Cross-scope snapshot IDs, missing history, stale required state, and storage failure cannot
 widen the read or trigger source, SQL, Jinja, warehouse, or dbt execution.
 
+Optional dbt code excerpts are requested only after exact scope and manifest-node resolution. The
+local reader accepts only canonical registered-project `.sql`, `.yml`, and `.yaml` paths, follows
+no escaping symlink, requires a bounded regular UTF-8 file, and caps both selected lines and bytes.
+Deterministic prohibited-secret checks run before return. The excerpt is never persisted, parsed,
+executed, or used as lineage authority; it is separately cited as untrusted current repository
+evidence. Any binding, path, decoding, size, secret, read, or budget failure yields only a bounded
+omission and cannot broaden retrieval.
+
 `sources.json` freshness ingestion accepts only bounded official v3 fields and attaches results to
 source identities in one exact authorized manifest snapshot. Database error text, adapter
 responses, filters, timing details, environment values, and arbitrary payloads are validated only

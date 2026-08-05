@@ -100,6 +100,11 @@ not activation order. Added, modified, and removed classifications use only norm
 downstream refresh candidates use the authoritative edges from the before and after snapshots and
 remain explicitly bounded.
 
+An opt-in local excerpt may accompany the already-resolved starting node. It is a separately cited,
+bounded, secret-checked current repository observation and remains untrusted evidence. It never
+changes the authoritative manifest graph, supplies an inferred edge, or becomes durable source
+content.
+
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.

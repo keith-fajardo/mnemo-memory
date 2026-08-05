@@ -30,6 +30,7 @@ from mnemo_memory.packages.application.checkpoints import (
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
     ContextDbtChangesQuery,
+    ContextDbtCodeExcerptQuery,
     ContextDbtFreshnessQuery,
     ContextDbtSelectorQuery,
     ContextDbtTestCoverageQuery,
@@ -428,6 +429,24 @@ class DurableMcpContextPort:
                     lineage["path_to_unique_id"], str
                 ):
                     raise ValueError("dbt_lineage.path_to_unique_id must be a string")
+                include_excerpt = lineage.get("include_code_excerpt", False)
+                if not isinstance(include_excerpt, bool):
+                    raise ValueError("dbt_lineage.include_code_excerpt must be a boolean")
+                excerpt_options = {"excerpt_start_line", "excerpt_maximum_lines"} & set(lineage)
+                if excerpt_options and not include_excerpt:
+                    raise ValueError("dbt lineage excerpt options require include_code_excerpt")
+                for field_name in excerpt_options:
+                    value = lineage[field_name]
+                    if isinstance(value, bool) or not isinstance(value, int):
+                        raise ValueError(f"dbt_lineage.{field_name} must be an integer")
+                excerpt_query = (
+                    ContextDbtCodeExcerptQuery(
+                        int(lineage.get("excerpt_start_line", 1)),
+                        int(lineage.get("excerpt_maximum_lines", 20)),
+                    )
+                    if include_excerpt
+                    else None
+                )
                 dbt_query = ContextLineageQuery(
                     DbtNodeId(_string(lineage, "unique_id")) if has_unique_id else None,
                     direction,
@@ -445,6 +464,7 @@ class DurableMcpContextPort:
                     DbtNodeId(cast(str, lineage["path_to_unique_id"]))
                     if "path_to_unique_id" in lineage
                     else None,
+                    excerpt_query,
                 )
                 return self._context_service.get_context(
                     GetUnifiedContext(

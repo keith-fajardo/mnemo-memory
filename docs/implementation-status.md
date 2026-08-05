@@ -1190,3 +1190,32 @@ ledger state. The complete repository gate passes with 586 tests, strict typing 
 files, schema validation, dependency/provenance validation for 86 entries, and architecture
 validation for 73 product Python files. No dependency, model call, dbt/warehouse execution, source
 body retention, or MCP tool was added.
+
+#### Issue 15M — Complete
+
+The current bounded issue adds optional minimal current-file excerpts to an exact dbt lineage
+request through the existing `get_context` tool. Only after scope authorization and unambiguous
+manifest node resolution may local composition read that node's registered-project `.sql`, `.yml`,
+or `.yaml` file. The caller must opt in and may select a positive start line and at most 40 lines;
+the reader must also cap file and returned bytes, reject traversal, absolute paths, unsupported
+types, non-regular files, escaping symlinks, prohibited secrets, invalid text, missing or ambiguous
+bindings, and observation failures. Excerpts carry an immutable digest/line evidence reference,
+are rendered as untrusted evidence, remain separately currentness-labeled, and never become
+authoritative lineage. Failure or token pressure yields a bounded omission without failing or
+widening structural retrieval. This issue does not persist source content, read arbitrary files,
+add changed-state behavior, a migration, dependency, model call, MCP tool, SQL/Jinja parsing, or
+warehouse/dbt execution.
+
+Implemented opt-in starting-node excerpts on existing `dbt_lineage` requests. After exact scope
+and manifest-file resolution, local composition may read only the registered dbt project's
+canonical `.sql`, `.yml`, or `.yaml` path, starting at a caller-selected positive line for at most
+40 lines. Files and returned text are byte-capped; traversal, absolute paths, unsupported types,
+non-regular files, escaping symlinks, invalid UTF-8/NUL content, oversized input, prohibited
+secrets, ambiguous or missing bindings, invalid bounds, and read/observation failures yield a safe
+omission while lineage remains available. Returned text is never persisted or interpreted. It is
+rendered as separately current, untrusted repository evidence with deterministic file/excerpt
+digests and exact line provenance, while manifest currentness remains explicit and authoritative
+edges remain unchanged. The complete repository gate passes with 589 tests, strict typing for 151
+source files, schema validation, dependency/provenance validation for 86 entries, and architecture
+validation for 74 product Python files. No migration, dependency, model call, MCP tool, SQL/Jinja
+parser, warehouse/dbt execution, or durable source-content storage was added.

@@ -248,6 +248,14 @@ downstream nodes that may need refresh. Those candidates come only from authorit
 edges. `require_current: true` omits the result unless the after snapshot matches the current
 bounded repository observation.
 
+For a small view of the current starting file, add `include_code_excerpt: true` to an exact
+`dbt_lineage` request. `excerpt_start_line` defaults to 1 and `excerpt_maximum_lines` defaults to 20
+and cannot exceed 40. Mnemo reads only the resolved node's registered-project `.sql`, `.yml`, or
+`.yaml` file, returns the selected lines with digest/line evidence, and treats them as untrusted
+current-file content. The excerpt does not establish dependencies or make a stale manifest current.
+Unsafe paths, secrets, unsupported or oversized files, and insufficient budget produce an
+omission while the lineage result remains usable.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

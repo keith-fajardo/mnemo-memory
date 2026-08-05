@@ -46,6 +46,7 @@ from mnemo_memory.packages.domain import (
     ContextPacket,
     CurrentKnowledgeDocumentSection,
     DbtFreshnessThreshold,
+    DbtManifestNode,
     DbtNodeId,
     DbtSnapshotId,
     EvidenceId,
@@ -91,6 +92,38 @@ class SemanticKnowledgeRetrieverPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class DbtCodeExcerpt:
+    relative_path: str
+    start_line: int
+    end_line: int
+    content: str
+    evidence: EvidenceReference
+
+
+class DbtCodeExcerptReaderPort(Protocol):
+    def read(
+        self,
+        scope: MemoryScope,
+        relative_path: str,
+        *,
+        start_line: int,
+        maximum_lines: int,
+    ) -> DbtCodeExcerpt | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ContextDbtCodeExcerptQuery:
+    start_line: int = 1
+    maximum_lines: int = 20
+
+    def __post_init__(self) -> None:
+        if self.start_line < 1:
+            raise ValueError("dbt excerpt start line must be positive")
+        if not 1 <= self.maximum_lines <= 40:
+            raise ValueError("dbt excerpt line limit must be between 1 and 40")
+
+
+@dataclass(frozen=True, slots=True)
 class ContextLineageQuery:
     unique_id: DbtNodeId | None
     direction: LineageDirection
@@ -104,6 +137,7 @@ class ContextLineageQuery:
     require_current: bool = False
     relative_path: str | None = None
     destination_unique_id: DbtNodeId | None = None
+    code_excerpt: ContextDbtCodeExcerptQuery | None = None
 
     def __post_init__(self) -> None:
         if (self.unique_id is None) == (self.relative_path is None):
@@ -401,6 +435,7 @@ class UnifiedContextService:
         knowledge: KnowledgeDocumentRepository | None = None,
         semantic_knowledge: SemanticKnowledgeRetrieverPort | None = None,
         procedures: ProjectProcedureRegistry | None = None,
+        dbt_code_excerpts: DbtCodeExcerptReaderPort | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
@@ -409,6 +444,7 @@ class UnifiedContextService:
         self._knowledge = knowledge
         self._semantic_knowledge = semantic_knowledge
         self._procedures = procedures
+        self._dbt_code_excerpts = dbt_code_excerpts
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -871,7 +907,115 @@ class UnifiedContextService:
             omissions=omissions,
             conflicts=packet.conflicts,
         )
+        if query.code_excerpt is not None:
+            result_packet = self._with_dbt_code_excerpt(
+                result_packet,
+                request,
+                result.start_node,
+                result.currentness,
+                query.code_excerpt,
+            )
         return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_code_excerpt(
+        self,
+        packet: ContextPacket,
+        request: GetUnifiedContext,
+        node: DbtManifestNode,
+        manifest_currentness: ArtifactCurrentness,
+        query: ContextDbtCodeExcerptQuery,
+    ) -> ContextPacket:
+        if self._dbt_code_excerpts is None or node.original_file_path is None:
+            return _with_omission(
+                packet,
+                "dbt-code-excerpt",
+                OmissionReason.LOWER_RANK,
+                "a safe local dbt excerpt is unavailable",
+            )
+        try:
+            excerpt = self._dbt_code_excerpts.read(
+                _project_scope(request.scope),
+                node.original_file_path,
+                start_line=query.start_line,
+                maximum_lines=query.maximum_lines,
+            )
+        except Exception:
+            excerpt = None
+        if excerpt is None:
+            return _with_omission(
+                packet,
+                "dbt-code-excerpt",
+                OmissionReason.LOWER_RANK,
+                "a safe local dbt excerpt is unavailable",
+            )
+        content = json.dumps(
+            {
+                "query_kind": "code_excerpt",
+                "node_unique_id": str(node.unique_id),
+                "relative_file": excerpt.relative_path,
+                "start_line": excerpt.start_line,
+                "end_line": excerpt.end_line,
+                "manifest_currentness": manifest_currentness.value,
+                "excerpt": excerpt.content,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        remaining = min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        if tokens > remaining:
+            return _with_omission(
+                packet,
+                "dbt-code-excerpt",
+                OmissionReason.TOKEN_BUDGET,
+                "dbt code excerpt exceeds context budget",
+            )
+        item = ContextItem(
+            f"dbt-code:{node.unique_id}:{excerpt.start_line}:{excerpt.end_line}",
+            ContextItemType.STRUCTURAL_FACT,
+            request.scope,
+            content,
+            ContentRepresentation.UNTRUSTED_EVIDENCE,
+            tokens,
+            (excerpt.evidence,),
+            SourceTrustClass.CURRENT_STRUCTURAL,
+            Sensitivity.NORMAL,
+            ValidityState.CURRENT,
+            None,
+            ConflictState.NONE,
+            excerpt.evidence.observed_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{item.item_id}",
+            item.item_id,
+            excerpt.evidence.immutable_source_ref,
+            hashlib.sha256(content.encode()).hexdigest(),
+            (excerpt.evidence,),
+        )
+        return ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
+            conflicts=packet.conflicts,
+        )
 
     def _with_dbt_test_coverage(
         self, packet: ContextPacket, request: GetUnifiedContext

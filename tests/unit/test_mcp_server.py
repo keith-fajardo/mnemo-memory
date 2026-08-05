@@ -14,7 +14,12 @@ from mcp.types import Tool
 
 from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
 from mnemo_memory.connectors.dbt.artifacts import DbtSourceFreshnessParser
+from mnemo_memory.connectors.dbt.code_excerpt import DbtLocalCodeExcerptReader
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBinding,
+    LocalDbtProjectBindingStore,
+)
 from mnemo_memory.packages.application import (
     IngestManifest,
     IngestSourceFreshness,
@@ -611,6 +616,84 @@ def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: 
         '"start_node":"model.mnemo_analytics.fct_orders"' in item.content
         for item in packet.structural_items
     )
+
+
+def test_durable_port_returns_an_opt_in_bounded_current_dbt_excerpt(tmp_path: Path) -> None:
+    project = tmp_path / "dbt excerpt project"
+    model = project / "models" / "marts" / "fct_orders.sql"
+    model.parent.mkdir(parents=True)
+    project.joinpath("dbt_project.yml").write_text("name: excerpt\n")
+    model.write_text("select\n  order_id,\n  amount\nfrom raw.orders\n")
+    config = LocalConfig.defaults(tmp_path / "dbt excerpt data")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    bindings = LocalDbtProjectBindingStore(config.data_directory)
+    bindings.set(DbtProjectBinding(project.resolve(), project_scope))
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "manifest.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(
+                runtime.checkpoint_service,
+                runtime.dbt_manifest_service,
+                dbt_code_excerpts=DbtLocalCodeExcerptReader(
+                    bindings, lambda: datetime(2026, 8, 5, tzinfo=UTC)
+                ),
+            ),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                        "include_code_excerpt": True,
+                        "excerpt_start_line": 2,
+                        "excerpt_maximum_lines": 2,
+                    }
+                )
+            )
+        )
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                        "excerpt_start_line": 2,
+                    }
+                )
+            )
+
+    excerpts = [
+        json.loads(item.content)
+        for item in packet.structural_items
+        if json.loads(item.content).get("query_kind") == "code_excerpt"
+    ]
+    assert excerpts == [
+        {
+            "end_line": 3,
+            "excerpt": "  order_id,\n  amount",
+            "manifest_currentness": "unknown",
+            "node_unique_id": "model.mnemo_analytics.fct_orders",
+            "query_kind": "code_excerpt",
+            "relative_file": "models/marts/fct_orders.sql",
+            "start_line": 2,
+        }
+    ]
 
 
 def test_durable_port_resolves_current_dbt_state_after_scope_validation(tmp_path: Path) -> None:

@@ -229,6 +229,12 @@ explicit `before_snapshot_id`/`after_snapshot_id` pair. It returns bounded added
 removed node identities plus downstream refresh candidates derived from manifest edges. Activation
 order is recorded separately; Mnemo never sorts snapshot UUIDs or timestamps to invent history.
 
+An exact `dbt_lineage` request may set `include_code_excerpt: true` to add a small current local
+excerpt for the resolved starting node. Optional `excerpt_start_line` and
+`excerpt_maximum_lines` select at most 40 lines from a registered `.sql`, `.yml`, or `.yaml` file.
+The excerpt is untrusted convenience evidence—not lineage—and is omitted on unsafe paths, secret
+matches, unsupported or oversized files, binding failure, or token pressure.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash
