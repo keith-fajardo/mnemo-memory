@@ -65,6 +65,7 @@ from mnemo_memory.packages.domain import (
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryPurge,
     EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EpisodicMemoryRevisionStatus,
@@ -163,6 +164,10 @@ from .contracts import (
     EpisodicMemoryGovernanceRejected,
     EpisodicMemoryGovernanceResult,
     EpisodicMemoryGovernanceStorageFailure,
+    EpisodicMemoryPurgeConflict,
+    EpisodicMemoryPurgeNotFound,
+    EpisodicMemoryPurgeResult,
+    EpisodicMemoryPurgeStorageFailure,
     EpisodicMemoryRetentionStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
@@ -209,7 +214,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 23
+LATEST_SCHEMA_VERSION = 24
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -621,6 +626,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 23:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 23
+            if version < 24:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0024_episodic_memory_purges.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (24, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 24:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 24
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1385,6 +1402,17 @@ class SQLiteCheckpointRepository:
                     raise EpisodicMemoryCandidateConflict(
                         "episodic candidate authority fields do not match the source event"
                     )
+                if any(
+                    connection.execute(
+                        "SELECT 1 FROM episodic_memory_expirations WHERE memory_id = ?",
+                        (str(candidate.memory_id),),
+                    ).fetchone()
+                    is not None
+                    for candidate in values
+                ):
+                    raise EpisodicMemoryCandidateConflict(
+                        "expired episodic candidates cannot be restored"
+                    )
                 existing_rows = connection.execute(
                     "SELECT * FROM episodic_memory_candidates WHERE source_event_id = ? "
                     "AND extractor_version = ? ORDER BY proposal_index ASC",
@@ -1948,6 +1976,185 @@ class SQLiteCheckpointRepository:
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise EpisodicMemoryRetentionStorageFailure(
                 "episodic memory retention storage operation failed"
+            ) from error
+
+    def list_unpurged_episodic_memory_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[EpisodicMemoryExpiration, ...]:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM episodic_memory_expirations WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND purge_id IS NULL",
+                    self._scope_values(scope),
+                ).fetchall()
+                expirations = tuple(
+                    self._episodic_memory_expiration_from_row(row, scope) for row in rows
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryPurgeStorageFailure(
+                "episodic memory purge storage operation failed"
+            ) from error
+        return tuple(
+            sorted(
+                expirations,
+                key=lambda item: (item.expired_at.isoformat(), str(item.memory_id)),
+            )
+        )
+
+    def apply_episodic_memory_purges(
+        self, purges: tuple[EpisodicMemoryPurge, ...]
+    ) -> EpisodicMemoryPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return EpisodicMemoryPurgeResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory purge batch is invalid")
+        for purge in values:
+            if not isinstance(purge, EpisodicMemoryPurge):
+                raise TypeError("episodic memory purge batch is invalid")
+            self._require_episodic_candidate_scope(purge.scope)
+        try:
+            with self._transaction() as connection:
+                existing_count = 0
+                pending: list[EpisodicMemoryPurge] = []
+                for purge in values:
+                    expiration_row = connection.execute(
+                        "SELECT * FROM episodic_memory_expirations WHERE memory_id = ? "
+                        "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                        "AND project_id = ? AND session_id = ? AND task_id = ?",
+                        (str(purge.memory_id), *self._scope_values(purge.scope)),
+                    ).fetchone()
+                    if expiration_row is None:
+                        raise EpisodicMemoryPurgeNotFound(
+                            "episodic memory expiration was not found for purge"
+                        )
+                    expiration = self._episodic_memory_expiration_from_row(
+                        expiration_row, purge.scope
+                    )
+                    if (
+                        purge.expiration_id != expiration.expiration_id
+                        or purge.purged_at < expiration.expired_at
+                    ):
+                        raise EpisodicMemoryPurgeConflict(
+                            "episodic memory purge does not match canonical expiration"
+                        )
+                    if expiration_row["purge_id"] is not None:
+                        existing = self._episodic_memory_purge_from_row(expiration_row, purge.scope)
+                        if existing != purge:
+                            raise EpisodicMemoryPurgeConflict(
+                                "episodic memory already has a different purge"
+                            )
+                        existing_count += 1
+                        continue
+                    candidate_row = connection.execute(
+                        "SELECT 1 FROM episodic_memory_candidates WHERE memory_id = ? "
+                        "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                        "AND project_id = ? AND session_id = ? AND task_id = ?",
+                        (str(purge.memory_id), *self._scope_values(purge.scope)),
+                    ).fetchone()
+                    if candidate_row is None:
+                        raise EpisodicMemoryPurgeNotFound(
+                            "episodic memory payload was not found for purge"
+                        )
+                    pending.append(purge)
+
+                for purge in pending:
+                    evidence_rows = connection.execute(
+                        "SELECT evidence_id FROM episodic_memory_candidate_evidence "
+                        "WHERE memory_id = ? UNION SELECT link.evidence_id "
+                        "FROM episodic_candidate_review_evidence AS link "
+                        "JOIN episodic_candidate_reviews AS review "
+                        "ON review.action_id = link.action_id WHERE review.candidate_id = ? "
+                        "UNION SELECT link.evidence_id "
+                        "FROM episodic_memory_governance_evidence AS link "
+                        "JOIN episodic_memory_governance AS governance "
+                        "ON governance.action_id = link.action_id WHERE governance.memory_id = ?",
+                        (
+                            str(purge.memory_id),
+                            str(purge.memory_id),
+                            str(purge.memory_id),
+                        ),
+                    ).fetchall()
+                    updated = connection.execute(
+                        "UPDATE episodic_memory_expirations SET purge_id = ?, purged_at = ? "
+                        "WHERE memory_id = ? AND owner_id = ? AND visibility = ? "
+                        "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                        "AND task_id = ? AND purge_id IS NULL",
+                        (
+                            str(purge.purge_id),
+                            purge.purged_at.isoformat(),
+                            str(purge.memory_id),
+                            *self._scope_values(purge.scope),
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        raise EpisodicMemoryPurgeConflict(
+                            "episodic memory purge state changed concurrently"
+                        )
+                    connection.execute(
+                        "DELETE FROM episodic_memory_governance_evidence WHERE action_id IN ("
+                        "SELECT action_id FROM episodic_memory_governance WHERE memory_id = ?)",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM episodic_memory_governance WHERE memory_id = ?",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM active_episodic_memories WHERE memory_id = ?",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM episodic_candidate_review_evidence WHERE action_id IN ("
+                        "SELECT action_id FROM episodic_candidate_reviews WHERE candidate_id = ?)",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM episodic_candidate_reviews WHERE candidate_id = ?",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM episodic_memory_candidate_evidence WHERE memory_id = ?",
+                        (str(purge.memory_id),),
+                    )
+                    connection.execute(
+                        "DELETE FROM episodic_memory_candidates WHERE memory_id = ?",
+                        (str(purge.memory_id),),
+                    )
+                    for evidence_row in evidence_rows:
+                        self._delete_orphaned_evidence(connection, evidence_row["evidence_id"])
+                return EpisodicMemoryPurgeResult(values, existing_count == len(values))
+        except (EpisodicMemoryPurgeConflict, EpisodicMemoryPurgeNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryPurgeStorageFailure(
+                "episodic memory purge storage operation failed"
+            ) from error
+
+    def get_episodic_memory_purge(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryPurge:
+        self._require_episodic_candidate_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM episodic_memory_expirations WHERE memory_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ? "
+                    "AND purge_id IS NOT NULL",
+                    (str(memory_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
+                return self._episodic_memory_purge_from_row(row, scope)
+        except EpisodicMemoryPurgeNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise EpisodicMemoryPurgeStorageFailure(
+                "episodic memory purge storage operation failed"
             ) from error
 
     def append_approved_event(
@@ -4495,6 +4702,40 @@ class SQLiteCheckpointRepository:
             retention_policy_id=RetentionPolicyId.from_string(row["retention_policy_id"]),
             scheduled_expires_at=datetime.fromisoformat(row["scheduled_expires_at"]),
             expired_at=datetime.fromisoformat(row["expired_at"]),
+        )
+
+    @staticmethod
+    def _episodic_memory_purge_from_row(
+        row: sqlite3.Row, scope: MemoryScope
+    ) -> EpisodicMemoryPurge:
+        return EpisodicMemoryPurge(
+            purge_id=EventId.from_string(row["purge_id"]),
+            expiration_id=EventId.from_string(row["expiration_id"]),
+            memory_id=MemoryId.from_string(row["memory_id"]),
+            scope=scope,
+            purged_at=datetime.fromisoformat(row["purged_at"]),
+        )
+
+    @staticmethod
+    def _delete_orphaned_evidence(connection: sqlite3.Connection, evidence_id: str) -> None:
+        connection.execute(
+            "DELETE FROM evidence WHERE evidence_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM checkpoint_evidence WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM checkpoint_revision_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM approved_episodic_event_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM approved_episodic_event_governance_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM task_activity_event_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM episodic_memory_candidate_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM episodic_candidate_review_evidence "
+            "WHERE evidence_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM episodic_memory_governance_evidence "
+            "WHERE evidence_id = ?)",
+            (evidence_id,) * 9,
         )
 
     @staticmethod

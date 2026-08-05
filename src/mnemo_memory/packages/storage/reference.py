@@ -39,6 +39,7 @@ from mnemo_memory.packages.domain import (
     EpisodicMemoryCandidate,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
+    EpisodicMemoryPurge,
     EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EpisodicMemoryRevisionStatus,
@@ -112,6 +113,9 @@ from .contracts import (
     EpisodicMemoryGovernanceNotFound,
     EpisodicMemoryGovernanceRejected,
     EpisodicMemoryGovernanceResult,
+    EpisodicMemoryPurgeConflict,
+    EpisodicMemoryPurgeNotFound,
+    EpisodicMemoryPurgeResult,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -631,6 +635,7 @@ class ReferenceEpisodicMemoryCandidateRepository:
         self._governance_keys: dict[tuple[MemoryScope, str], EventId] = {}
         self._governance_order: dict[MemoryId, list[EventId]] = {}
         self._expirations: dict[MemoryId, EpisodicMemoryExpiration] = {}
+        self._purges: dict[MemoryId, EpisodicMemoryPurge] = {}
 
     def store_episodic_memory_candidates(
         self, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -651,6 +656,8 @@ class ReferenceEpisodicMemoryCandidateRepository:
             raise EpisodicMemoryCandidateRejected(
                 "episodic candidate batch was rejected by safety policy"
             )
+        if any(candidate.memory_id in self._expirations for candidate in values):
+            raise EpisodicMemoryCandidateConflict("expired episodic candidates cannot be restored")
         existing = tuple(
             sorted(
                 (
@@ -969,6 +976,99 @@ class ReferenceEpisodicMemoryCandidateRepository:
         if expiration is None or expiration.scope != scope:
             raise EpisodicMemoryExpirationNotFound("episodic memory expiration was not found")
         return expiration
+
+    def list_unpurged_episodic_memory_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[EpisodicMemoryExpiration, ...]:
+        self._require_scope(scope)
+        return tuple(
+            sorted(
+                (
+                    expiration
+                    for memory_id, expiration in self._expirations.items()
+                    if expiration.scope == scope and memory_id not in self._purges
+                ),
+                key=lambda item: (item.expired_at.isoformat(), str(item.memory_id)),
+            )
+        )
+
+    def apply_episodic_memory_purges(
+        self, purges: tuple[EpisodicMemoryPurge, ...]
+    ) -> EpisodicMemoryPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return EpisodicMemoryPurgeResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory purge batch is invalid")
+        existing_count = 0
+        for purge in values:
+            if not isinstance(purge, EpisodicMemoryPurge):
+                raise TypeError("episodic memory purge batch is invalid")
+            self._require_scope(purge.scope)
+            expiration = self._expirations.get(purge.memory_id)
+            if expiration is None or expiration.scope != purge.scope:
+                raise EpisodicMemoryPurgeNotFound(
+                    "episodic memory expiration was not found for purge"
+                )
+            if (
+                purge.expiration_id != expiration.expiration_id
+                or purge.purged_at < expiration.expired_at
+            ):
+                raise EpisodicMemoryPurgeConflict(
+                    "episodic memory purge does not match canonical expiration"
+                )
+            existing = self._purges.get(purge.memory_id)
+            if existing is not None:
+                if existing != purge:
+                    raise EpisodicMemoryPurgeConflict(
+                        "episodic memory already has a different purge"
+                    )
+                existing_count += 1
+            elif purge.memory_id not in self._candidates:
+                raise EpisodicMemoryPurgeNotFound("episodic memory payload was not found for purge")
+
+        candidates = dict(self._candidates)
+        ordered = list(self._ordered)
+        reviews = dict(self._reviews)
+        review_keys = dict(self._review_keys)
+        active = dict(self._active)
+        active_ordered = list(self._active_ordered)
+        governance = dict(self._governance)
+        governance_keys = dict(self._governance_keys)
+        governance_order = {
+            memory_id: list(action_ids) for memory_id, action_ids in self._governance_order.items()
+        }
+        stored_purges = dict(self._purges)
+        for purge in values:
+            if purge.memory_id in stored_purges:
+                continue
+            candidates.pop(purge.memory_id)
+            ordered = [item for item in ordered if item != purge.memory_id]
+            review = reviews.pop(purge.memory_id, None)
+            if review is not None:
+                review_keys.pop((review.scope, review.source_action_key), None)
+            active.pop(purge.memory_id, None)
+            active_ordered = [item for item in active_ordered if item != purge.memory_id]
+            action_ids = governance_order.pop(purge.memory_id, [])
+            for action_id in action_ids:
+                action = governance.pop(action_id)
+                governance_keys.pop((action.scope, action.source_action_key), None)
+            stored_purges[purge.memory_id] = purge
+        self._candidates, self._ordered = candidates, ordered
+        self._reviews, self._review_keys = reviews, review_keys
+        self._active, self._active_ordered = active, active_ordered
+        self._governance, self._governance_keys = governance, governance_keys
+        self._governance_order, self._purges = governance_order, stored_purges
+        return EpisodicMemoryPurgeResult(values, existing_count == len(values))
+
+    def get_episodic_memory_purge(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryPurge:
+        self._require_scope(scope)
+        purge = self._purges.get(memory_id)
+        if purge is None or purge.scope != scope:
+            raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
+        return purge
 
     def _revisions_for(self, base: ActiveEpisodicMemory) -> tuple[EpisodicMemoryRevision, ...]:
         actions = tuple(

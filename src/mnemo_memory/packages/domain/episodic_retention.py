@@ -12,6 +12,7 @@ from .identifiers import EventId, MemoryId, RetentionPolicyId
 from .models import MemoryScope, RetentionSchedule, ScopeLevel, _parse_datetime, _require_aware
 
 _EXPIRATION_NAMESPACE = UUID("18bd4af5-9992-4d30-a559-752e98631b19")
+_PURGE_NAMESPACE = UUID("1ea4554d-e7c6-47f3-b7cc-cea58f1610a1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,4 +139,71 @@ class EpisodicMemoryExpiration:
             RetentionPolicyId.from_string(str(value["retention_policy_id"])),
             _parse_datetime(value["scheduled_expires_at"], "scheduled_expires_at"),
             _parse_datetime(value["expired_at"], "expired_at"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryPurge:
+    purge_id: EventId
+    expiration_id: EventId
+    memory_id: MemoryId
+    scope: MemoryScope
+    purged_at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.purge_id, EventId) or not isinstance(self.expiration_id, EventId):
+            raise TypeError("episodic memory purge identity is invalid")
+        if not isinstance(self.memory_id, MemoryId):
+            raise TypeError("episodic memory purge target identity is invalid")
+        if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.TASK:
+            raise ValueError("episodic memory purge requires task scope")
+        _require_aware(self.purged_at, "purged_at")
+        if self.purge_id != self.identity(self.expiration_id):
+            raise ValueError("episodic memory purge identity is not deterministic")
+
+    @staticmethod
+    def identity(expiration_id: EventId) -> EventId:
+        if not isinstance(expiration_id, EventId):
+            raise TypeError("episodic memory purge expiration identity is invalid")
+        return EventId(uuid5(_PURGE_NAMESPACE, str(expiration_id)))
+
+    @classmethod
+    def create(cls, expiration: EpisodicMemoryExpiration, purged_at: datetime) -> Self:
+        if not isinstance(expiration, EpisodicMemoryExpiration):
+            raise TypeError("episodic memory purge requires an expiration")
+        _require_aware(purged_at, "purged_at")
+        if purged_at < expiration.expired_at:
+            raise ValueError("episodic memory cannot be purged before expiration")
+        return cls(
+            cls.identity(expiration.expiration_id),
+            expiration.expiration_id,
+            expiration.memory_id,
+            expiration.scope,
+            purged_at,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "purge_id": str(self.purge_id),
+            "expiration_id": str(self.expiration_id),
+            "memory_id": str(self.memory_id),
+            "scope": self.scope.to_dict(),
+            "purged_at": self.purged_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        expected = {"purge_id", "expiration_id", "memory_id", "scope", "purged_at"}
+        if set(value) != expected:
+            raise ValueError("episodic memory purge fields are invalid")
+        scope = value["scope"]
+        text = tuple(value[name] for name in ("purge_id", "expiration_id", "memory_id"))
+        if not isinstance(scope, Mapping) or not all(isinstance(item, str) for item in text):
+            raise TypeError("episodic memory purge serialization is invalid")
+        return cls(
+            EventId.from_string(str(value["purge_id"])),
+            EventId.from_string(str(value["expiration_id"])),
+            MemoryId.from_string(str(value["memory_id"])),
+            MemoryScope.from_dict(scope),
+            _parse_datetime(value["purged_at"], "purged_at"),
         )

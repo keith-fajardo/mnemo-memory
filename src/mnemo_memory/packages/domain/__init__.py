@@ -97,6 +97,7 @@ from .episodic_candidates import (
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .episodic_retention import (
     EpisodicMemoryExpiration,
+    EpisodicMemoryPurge,
     EpisodicMemoryRetentionTarget,
 )
 from .event_outbox import EventOutboxJob, EventOutboxTopic
@@ -246,6 +247,7 @@ __all__ = [
     "EpisodicMemoryGovernanceAction",
     "EpisodicMemoryGovernanceKind",
     "EpisodicMemoryKind",
+    "EpisodicMemoryPurge",
     "EpisodicMemoryRetentionTarget",
     "EpisodicMemoryRevision",
     "EpisodicMemoryRevisionStatus",

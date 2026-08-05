@@ -1477,3 +1477,41 @@ dependency/provenance validation for 86 entries, and architecture validation for
 Python files. No raw task-event expiry, physical purge, source/dependent deletion propagation,
 export, backup behavior, automatic scheduler/daemon, retrieval or transport surface, dependency,
 or team mode was added.
+
+#### Issue 16H — Complete
+
+The current bounded issue physically purges candidate-dependent episodic payloads after the
+Issue 16G expiration record exists. One deterministic exact-task-scope operation discovers only
+unpurged payload-free expiration records, appends one payload-free purge marker per memory, and
+atomically removes the candidate claim, candidate evidence links, review reason/evidence links,
+active marker, governance claims/reasons/evidence links, and any newly orphaned evidence rows.
+The expiration record remains as the scoped anti-resurrection tombstone, identical delivery is
+idempotent, conflicting scope, identity, expiration, or time fails closed, and extraction retry
+cannot restore purged content. The permitted source task event and evidence it still references
+remain intact. Reference and SQLite must produce identical purge targets and results, including
+after restart. Migration 0024 is additive/forward-only in behavior and rebuilds only the expiration
+table to detach its candidate foreign key while preserving every expiration row; rollback must
+preserve the pre-purge candidate and expiration. This issue adds no raw task-event expiry, source
+or user-requested deletion, export, backup cleanup, automatic scheduler/daemon, context retrieval,
+transport surface, dependency, or team mode.
+
+Implemented strict deterministic `EpisodicMemoryPurge` markers and an exact-task-scope purge sweep
+over payload-free expiration metadata. Both adapters validate the full batch before mutation,
+retain the expiration tombstone, make exact replay idempotent, reject conflicting expiration,
+scope, identity, or time, and permanently prevent candidate restoration. Reference removes every
+candidate-dependent object from its in-memory projections. SQLite atomically marks the tombstone,
+deletes candidate, review, active, governance, and evidence-link rows in dependency order, and
+deletes only evidence rows no longer referenced by any Mnemo evidence-bearing record; source-event
+and shared evidence remain intact. Migration `0024_episodic_memory_purges.sql` rebuilds only the
+payload-free expiration table, preserves every expiration row, detaches its candidate foreign key,
+adds immutable purge metadata, and has rollback and foreign-key-integrity coverage. Seven added
+focused tests cover strict payload-free serialization, end-to-end purge and anti-resurrection on
+both adapters, physical SQLite row/evidence removal, source preservation, adapter parity,
+cross-scope and conflicting replay, batch atomicity, injected transaction rollback, restart
+durability, and migration rollback with candidate/expiration preservation. The product and threat
+contracts now distinguish candidate-dependent physical purge from remaining raw-event and
+source/user deletion work. The complete repository gate passes with 692 tests, strict typing for
+170 source files, dependency/provenance validation for 86 entries, and architecture validation for
+87 product Python files. No raw task-event expiry, source or user-requested deletion, export,
+backup cleanup, automatic scheduler/daemon, retrieval or transport surface, dependency, or team
+mode was added.

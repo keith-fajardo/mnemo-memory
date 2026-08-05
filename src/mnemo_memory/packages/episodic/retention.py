@@ -7,6 +7,7 @@ from datetime import datetime
 
 from mnemo_memory.packages.domain import (
     EpisodicMemoryExpiration,
+    EpisodicMemoryPurge,
     MemoryScope,
     ScopeLevel,
 )
@@ -16,6 +17,12 @@ from mnemo_memory.packages.storage.contracts import EpisodicMemoryRetentionRepos
 @dataclass(frozen=True, slots=True)
 class EpisodicRetentionSweepResult:
     expirations: tuple[EpisodicMemoryExpiration, ...]
+    idempotent: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicPurgeSweepResult:
+    purges: tuple[EpisodicMemoryPurge, ...]
     idempotent: bool
 
 
@@ -32,3 +39,19 @@ class EpisodicRetentionService:
         expirations = tuple(EpisodicMemoryExpiration.create(target, as_of) for target in targets)
         stored = self._repository.apply_episodic_memory_expirations(expirations)
         return EpisodicRetentionSweepResult(stored.expirations, stored.idempotent)
+
+    def purge_expired(self, scope: MemoryScope, *, purged_at: datetime) -> EpisodicPurgeSweepResult:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise ValueError("episodic purge requires explicit task scope")
+        if (
+            not isinstance(purged_at, datetime)
+            or purged_at.tzinfo is None
+            or purged_at.utcoffset() is None
+        ):
+            raise ValueError("purged_at must be timezone-aware")
+        expirations = self._repository.list_unpurged_episodic_memory_expirations(scope)
+        purges = tuple(
+            EpisodicMemoryPurge.create(expiration, purged_at) for expiration in expirations
+        )
+        stored = self._repository.apply_episodic_memory_purges(purges)
+        return EpisodicPurgeSweepResult(stored.purges, stored.idempotent)

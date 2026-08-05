@@ -175,17 +175,19 @@ the canonical schedule copied from the source event; append a deterministic payl
 expiration record atomically; make identical delivery idempotent and conflicting policy, source,
 scope, schedule, or time fail closed. Every candidate, review, active-memory, governance, and
 revision payload query must exclude an expired identity before reconstruction or ranking. Storage
-retry cannot restore an expired candidate. Permanent and not-yet-due schedules remain unchanged.
-The reference and SQLite adapters must discover identical due sets and retain exclusion across
-restart.
+retry cannot restore an expired candidate. A later exact-scope purge marker is deterministic and
+payload-free; its transaction deletes the candidate claim, dependent review/governance payloads,
+links, and newly orphaned evidence while preserving the expiration tombstone and permitted source
+event. Permanent and not-yet-due schedules remain unchanged. The reference and SQLite adapters
+must discover identical expiration and purge sets and retain both states across restart.
 
 **Verification:** Before/due boundary tests, exact-scope isolation, approval/correction/retraction
 fixtures, replay and conflicting-delivery tests, transaction failure injection, restart tests,
 payload-free schema inspection, and forward-only migration rollback with candidate preservation.
 
-**Residual risk:** The current expiration record provides immediate logical exclusion but not
-physical purge, raw task-event expiry, dependent deletion propagation, export cleanup, or backup
-cleanup. Those remain required before the full retention and deletion promise is complete.
+**Residual risk:** Candidate-dependent purge does not yet expire or purge raw task events,
+propagate source or user-requested deletion, clean exports, or clean backups. Those remain required
+before the full retention and deletion promise is complete.
 
 ### Unauthorized memory mutation
 

@@ -34,6 +34,7 @@ from mnemo_memory.packages.domain import (
     EpisodicMemoryCandidate,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
+    EpisodicMemoryPurge,
     EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EventId,
@@ -294,6 +295,18 @@ class EpisodicMemoryRetentionStorageFailure(EpisodicMemoryRetentionRepositoryErr
     pass
 
 
+class EpisodicMemoryPurgeNotFound(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
+class EpisodicMemoryPurgeConflict(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
+class EpisodicMemoryPurgeStorageFailure(EpisodicMemoryRetentionRepositoryError):
+    pass
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 
@@ -440,6 +453,12 @@ class EpisodicMemoryExpirationResult:
     idempotent: bool
 
 
+@dataclass(frozen=True, slots=True)
+class EpisodicMemoryPurgeResult:
+    purges: tuple[EpisodicMemoryPurge, ...]
+    idempotent: bool
+
+
 class EpisodicMemoryRetentionRepository(Protocol):
     def list_due_episodic_memory_retention(
         self, scope: MemoryScope, *, as_of: datetime
@@ -452,6 +471,18 @@ class EpisodicMemoryRetentionRepository(Protocol):
     def get_episodic_memory_expiration(
         self, scope: MemoryScope, memory_id: MemoryId
     ) -> EpisodicMemoryExpiration: ...
+
+    def list_unpurged_episodic_memory_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[EpisodicMemoryExpiration, ...]: ...
+
+    def apply_episodic_memory_purges(
+        self, purges: tuple[EpisodicMemoryPurge, ...]
+    ) -> EpisodicMemoryPurgeResult: ...
+
+    def get_episodic_memory_purge(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryPurge: ...
 
 
 @dataclass(frozen=True, slots=True)

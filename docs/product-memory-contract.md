@@ -164,8 +164,11 @@ the memory, source event, policy, scheduled time, actual sweep time, and scope; 
 idempotent and conflicting metadata fails closed. Once recorded, candidate, review, active-memory,
 governance, and revision payload reads exclude the identity immediately, including after restart.
 Approval, correction, retraction, confidence, or access cannot extend this schedule. The current
-expiration slice does not yet physically purge the candidate or its source event, execute raw-event
-retention, propagate source deletion, or define export and backup cleanup.
+purge operation then removes the candidate claim and its dependent review/governance payloads and
+newly orphaned evidence while retaining the payload-free expiration record as an anti-resurrection
+tombstone. It does not remove the permitted source task event or evidence still referenced by that
+event. Raw-event retention, source/user deletion propagation, export cleanup, and backup cleanup
+remain separate lifecycle operations.
 
 ## Correction and conflict handling
 

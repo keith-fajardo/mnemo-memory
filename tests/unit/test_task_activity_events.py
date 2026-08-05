@@ -344,7 +344,7 @@ def test_task_activity_migration_rolls_back_and_preserves_existing_outbox_jobs(
         )
 
     repository.migrate()
-    assert repository.schema_version() == 23
+    assert repository.schema_version() == 24
     assert repository.get_event_job(scope, approved_job_id).source_event_id == approved.event_id
     with sqlite3.connect(repository.path) as connection:
         columns = {
