@@ -282,6 +282,22 @@ Mnemo returns enabled test nodes with exact dependency evidence and the latest s
 when present. It does not infer transitive or column coverage, and a test without a saved result is
 not reported as passing.
 
+For a bounded manifest inventory, use exact structured fields instead of selector syntax:
+
+```json
+{
+  "dbt_selector": {
+    "resource_type": "model",
+    "package_name": "analytics",
+    "tag": "mart",
+    "maximum_nodes": 32
+  }
+}
+```
+
+Supplied filters are intersected over enabled nodes in one scoped snapshot. Mnemo returns stable
+cited matches and never evaluates dbt selector strings or expands the result through lineage.
+
 ## Ask for static code impact from an exact file
 
 For a supported parsed language, use `source_impact.relative_path` when the changed file is known.

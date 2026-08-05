@@ -117,6 +117,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_changes" in tools[0].inputSchema["properties"]
     assert "source_overview" in tools[0].inputSchema["properties"]
     assert "dbt_test_coverage" in tools[0].inputSchema["properties"]
+    assert "dbt_selector" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
     assert "record_event" in tools[1].inputSchema["properties"]["operation"]["pattern"]
@@ -713,6 +714,51 @@ def test_durable_port_returns_direct_dbt_test_coverage_through_get_context(
     value = json.loads(packet.structural_items[0].content)
     assert value["subject_node"] == "model.mnemo_analytics.fct_orders"
     assert value["test_unique_id"] == "test.mnemo_analytics.unique_fct_orders"
+
+
+def test_durable_port_returns_exact_bounded_dbt_selector_matches(tmp_path: Path) -> None:
+    config = LocalConfig.defaults(tmp_path / "dbt selector")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+            )
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_selector={
+                        "resource_type": "model",
+                        "package_name": "mnemo_analytics",
+                        "tag": "mart",
+                        "maximum_nodes": 2,
+                    }
+                )
+            )
+        )
+
+    values = [json.loads(item.content) for item in packet.structural_items]
+    assert [value["node_unique_id"] for value in values] == [
+        "model.mnemo_analytics.dim_customers",
+        "model.mnemo_analytics.fct_orders",
+    ]
+    assert all(value["query_kind"] == "selector" for value in values)
+    assert any(omission.item_id == "dbt-selector" for omission in packet.omissions)
 
 
 def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) -> None:

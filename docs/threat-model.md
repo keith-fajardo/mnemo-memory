@@ -228,6 +228,11 @@ persisted enabled test nodes that directly depend on it, and cap returned tests 
 rendering. Latest status is joined only from the run-results projection attached to that exact
 snapshot. Missing execution evidence remains absent and cannot be promoted to a passing result.
 
+Structured dbt selectors accept only bounded exact resource-type, package, and tag strings and
+require at least one filter. They scan only the already-authorized immutable snapshot, exclude
+disabled nodes, cap matches before context rendering, and never interpret selector expressions,
+Jinja, SQL, or shell syntax.
+
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.
 

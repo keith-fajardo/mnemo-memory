@@ -29,6 +29,7 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
+    ContextDbtSelectorQuery,
     ContextDbtTestCoverageQuery,
     ContextLineageQuery,
     ContextSourceChangeQuery,
@@ -85,6 +86,7 @@ class DurableMcpContextPort:
             )
             lineage = request.get("dbt_lineage")
             test_coverage = request.get("dbt_test_coverage")
+            dbt_selector = request.get("dbt_selector")
             source_query = request.get("source_query")
             source_impact = request.get("source_impact")
             source_changes = request.get("source_changes")
@@ -132,7 +134,9 @@ class DurableMcpContextPort:
                 raise ValueError("source_overview must be an object")
             if test_coverage is not None and not isinstance(test_coverage, Mapping):
                 raise ValueError("dbt_test_coverage must be an object")
-            if lineage is not None and test_coverage is not None:
+            if dbt_selector is not None and not isinstance(dbt_selector, Mapping):
+                raise ValueError("dbt_selector must be an object")
+            if sum(query is not None for query in (lineage, test_coverage, dbt_selector)) > 1:
                 raise ValueError("request only one dbt structural query at a time")
             impact = (
                 None
@@ -196,6 +200,7 @@ class DurableMcpContextPort:
             if (
                 lineage is not None
                 or test_coverage is not None
+                or dbt_selector is not None
                 or source_query is not None
                 or impact is not None
                 or changes is not None
@@ -208,11 +213,49 @@ class DurableMcpContextPort:
                     raise CheckpointApplicationStorageFailure("dbt project index is unavailable")
                 if lineage is not None and not isinstance(lineage, Mapping):
                     raise ValueError("dbt_lineage must be an object")
-                if lineage is None and test_coverage is None:
+                if lineage is None and test_coverage is None and dbt_selector is None:
                     return self._context_service.get_context(
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
+                            source_query=source_query,
+                            budget=budget,
+                            source_impact=impact,
+                            source_changes=changes,
+                            source_overview=overview,
+                            knowledge_query=knowledge_query,
+                            semantic_knowledge_query=semantic_knowledge_query,
+                            procedure_tags=tuple(cast(list[str], procedure_tags)),
+                            include_lifecycle_events=include_lifecycle_events,
+                            include_approved_events=include_approved_events,
+                        )
+                    ).to_dict()
+                if dbt_selector is not None:
+                    for field_name in ("resource_type", "package_name", "tag"):
+                        value = dbt_selector.get(field_name)
+                        if value is not None and not isinstance(value, str):
+                            raise ValueError(f"dbt_selector.{field_name} must be a string")
+                    selector_query = ContextDbtSelectorQuery(
+                        cast(str, dbt_selector["resource_type"])
+                        if "resource_type" in dbt_selector
+                        else None,
+                        cast(str, dbt_selector["package_name"])
+                        if "package_name" in dbt_selector
+                        else None,
+                        cast(str, dbt_selector["tag"]) if "tag" in dbt_selector else None,
+                        int(dbt_selector.get("maximum_nodes", 32)),
+                        _optional_id(dbt_selector, "snapshot_id", DbtSnapshotId),
+                        dbt_selector.get("current_content_digest")
+                        if isinstance(dbt_selector.get("current_content_digest"), str)
+                        else None,
+                        None,
+                        bool(dbt_selector.get("require_current", False)),
+                    )
+                    return self._context_service.get_context(
+                        GetUnifiedContext(
+                            scope=scope,
+                            checkpoint_id=checkpoint,
+                            dbt_selector=selector_query,
                             source_query=source_query,
                             budget=budget,
                             source_impact=impact,

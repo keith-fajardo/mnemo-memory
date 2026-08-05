@@ -236,6 +236,11 @@ resource, plus their latest persisted `run_results.json` status when one is avai
 run result stays unobserved rather than being treated as a pass, and no attached tests produces a
 bounded omission rather than inferred coverage.
 
+For a small manifest inventory, request `dbt_selector` with one or more exact
+`resource_type`, `package_name`, or `tag` filters. Mnemo intersects the supplied fields, returns
+enabled nodes in stable unique-ID order, and caps the result before packet rendering. This is a
+structured Mnemo query, not dbt selector-string syntax, so it never executes selector expressions.
+
 For example, to use Mnemo while working on this Mnemo repository:
 
 1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.

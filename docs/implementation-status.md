@@ -1058,3 +1058,24 @@ unknown/cross-scope subjects, truncation, staleness, and token-budget omissions 
 The complete repository gate passes with 569 tests, strict typing for 147 source files, schema
 validation, dependency/provenance validation for 86 entries, and architecture validation for 72
 product Python files. No external dependency, migration, model call, or MCP tool was added.
+
+#### Issue 15H — Complete
+
+The current bounded issue adds a deterministic structured dbt selector query to the existing
+`get_context` tool. A caller may intersect exact `resource_type`, `package_name`, and `tag`
+filters against enabled nodes in one authorized immutable manifest snapshot; at least one filter
+is required. Results must be stably ordered, capped before packet rendering, carry exact node
+evidence and snapshot currentness, and report no match without widening scope. This is not an
+implementation of dbt selector-string syntax and does not add graph expansion, freshness,
+changed-state indexing, code excerpts, a migration, dependency, model call, or MCP tool.
+
+Implemented `dbt_selector` on the existing `get_context` tool as a small structured intersection
+over exact manifest `resource_type`, `package_name`, and `tag` values. The application requires at
+least one filter, reads only the selected authorized immutable snapshot, excludes disabled nodes,
+sorts matches by dbt unique ID, and caps them at 100 before context rendering. Each returned fact
+carries node evidence and snapshot currentness; no match, stale required state, result truncation,
+and packet-budget truncation remain explicit. No dbt selector expression, graph traversal, SQL,
+Jinja, or shell input is interpreted. The complete repository gate passes with 571 tests, strict
+typing for 147 source files, schema validation, dependency/provenance validation for 86 entries,
+and architecture validation for 72 product Python files. No external dependency, migration,
+model call, or MCP tool was added.

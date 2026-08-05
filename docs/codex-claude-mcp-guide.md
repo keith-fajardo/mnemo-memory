@@ -199,6 +199,11 @@ For direct dbt test coverage, the agent uses `dbt_test_coverage` with one exact 
 resource and includes the latest saved run status when available. It never treats a missing test
 result as success or infers transitive or column-level coverage.
 
+For an exact manifest inventory, the agent can send `dbt_selector` with a resource type, package,
+tag, or their intersection. Results are enabled manifest nodes in stable order with snapshot and
+node evidence. Mnemo does not evaluate dbt selector strings or expand the selected nodes through
+the graph.
+
 ## Scope, in practical terms
 
 Mnemo uses stable owner, workspace, project, session, and task identities internally. They prevent

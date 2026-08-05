@@ -24,6 +24,7 @@ from mnemo_memory.packages.application.dbt import (
     IngestRunResults,
     LineageDirection,
     QueryLineage,
+    QueryManifestSelector,
     QueryTestCoverage,
     ResolveManifestFile,
 )
@@ -390,6 +391,38 @@ def test_task_context_returns_direct_test_coverage_with_latest_run_evidence() ->
         "failures": 1,
     }
     assert len(packet.structural_items[0].evidence_references) == 3
+
+
+def test_manifest_selector_intersects_exact_filters_with_stable_bounds_and_scope() -> None:
+    item, value = service(), scope()
+    snapshot = item.ingest(command(value)).snapshot
+
+    result = item.query_selector(
+        QueryManifestSelector(
+            value,
+            resource_type="model",
+            package_name="mnemo_analytics",
+            tag="mart",
+            maximum_nodes=2,
+            snapshot_id=snapshot.snapshot_id,
+        )
+    )
+
+    assert [str(node.unique_id) for node in result.nodes] == [
+        "model.mnemo_analytics.dim_customers",
+        "model.mnemo_analytics.fct_orders",
+    ]
+    assert result.truncated is True
+    assert all(node.evidence for node in result.nodes)
+    assert item.query_selector(QueryManifestSelector(value, package_name="missing")).nodes == ()
+    with pytest.raises(DbtApplicationNotFound):
+        item.query_selector(
+            QueryManifestSelector(
+                scope(2),
+                tag="mart",
+                snapshot_id=snapshot.snapshot_id,
+            )
+        )
 
 
 def test_task_context_uses_its_project_scope_for_dbt_lineage() -> None:

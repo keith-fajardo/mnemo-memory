@@ -220,6 +220,10 @@ The same existing `get_context` tool accepts `dbt_test_coverage` for one exact d
 manifest file. It returns directly attached enabled tests and their latest persisted run status
 when available, without treating missing execution data as a pass.
 
+For a small manifest inventory, `dbt_selector` intersects exact resource-type, package, and tag
+fields and returns a bounded cited list of enabled nodes. It is intentionally structured and does
+not execute dbt selector-string syntax.
+
 From an enabled repository, you can also inspect a bounded static impact candidate directly:
 
 ```bash

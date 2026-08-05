@@ -257,6 +257,37 @@ class TestCoverageQueryResult:
     currentness_reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class QueryManifestSelector:
+    scope: MemoryScope
+    resource_type: str | None = None
+    package_name: str | None = None
+    tag: str | None = None
+    maximum_nodes: int = 32
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+
+    def __post_init__(self) -> None:
+        if self.resource_type is None and self.package_name is None and self.tag is None:
+            raise ValueError("dbt selector requires at least one exact filter")
+        for field_name in ("resource_type", "package_name", "tag"):
+            value = getattr(self, field_name)
+            if value is not None and (not value.strip() or len(value) > 256):
+                raise ValueError(f"dbt selector {field_name} must be a bounded non-empty string")
+        if not 1 <= self.maximum_nodes <= 100:
+            raise ValueError("dbt selector node limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestSelectorQueryResult:
+    snapshot: DbtManifestSnapshot
+    nodes: tuple[DbtManifestNode, ...]
+    truncated: bool
+    currentness: ArtifactCurrentness
+    currentness_reason: str
+
+
 class DbtManifestApplicationService:
     """Coordinates authoritative parsing with immutable scoped snapshot storage."""
 
@@ -513,6 +544,42 @@ class DbtManifestApplicationService:
             tuple(node for node, _ in selected),
             tuple(edge for _, edge in selected),
             len(attached) > len(selected),
+            currentness,
+            currentness_reason,
+        )
+
+    def query_selector(self, query: QueryManifestSelector) -> ManifestSelectorQueryResult:
+        """Intersect exact manifest fields without evaluating dbt selector syntax."""
+        try:
+            snapshot = (
+                self._repository.get_snapshot(query.scope, query.snapshot_id)
+                if query.snapshot_id is not None
+                else self._repository.get_active_snapshot(query.scope)
+            )
+            if snapshot is None:
+                raise ManifestSnapshotNotFound()
+            nodes = self._repository.iter_nodes(query.scope, snapshot.snapshot_id)
+        except ManifestSnapshotNotFound as error:
+            raise DbtApplicationNotFound(
+                "dbt selector snapshot was not found in the authorized scope"
+            ) from error
+        except ProjectIndexRepositoryError as error:
+            raise DbtApplicationStorageFailure("dbt project index is unavailable") from error
+        matched = tuple(
+            node
+            for node in sorted(nodes, key=lambda item: str(item.unique_id))
+            if node.enabled
+            and (query.resource_type is None or node.raw_resource_type == query.resource_type)
+            and (query.package_name is None or node.package_name == query.package_name)
+            and (query.tag is None or query.tag in node.tags)
+        )
+        currentness, currentness_reason = _currentness(
+            snapshot, query.current_content_digest, query.current_source_state
+        )
+        return ManifestSelectorQueryResult(
+            snapshot,
+            matched[: query.maximum_nodes],
+            len(matched) > query.maximum_nodes,
             currentness,
             currentness_reason,
         )

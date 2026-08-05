@@ -55,3 +55,7 @@ attached enabled manifest tests, bounded to at most 100. Test identity and depen
 come from the selected manifest snapshot; an optional latest status comes only from the persisted
 `run_results.json` projection for that same snapshot. Missing results are not passes, and no tests
 does not trigger transitive inference.
+A `dbt_selector` request intersects exact resource-type, package, and tag fields over enabled nodes
+in the selected snapshot. At least one field is required, results are capped at 100 before context
+rendering, and no match stays a scoped omission. Mnemo does not parse or execute dbt selector
+strings.

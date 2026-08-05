@@ -19,6 +19,7 @@ from mnemo_memory.packages.application.dbt import (
     GetDbtSupplementalArtifacts,
     LineageDirection,
     QueryLineage,
+    QueryManifestSelector,
     QueryTestCoverage,
     ResolveManifestFile,
 )
@@ -126,6 +127,28 @@ class ContextDbtTestCoverageQuery:
             _validate_source_relative_path(self.relative_path)
         if not 1 <= self.maximum_tests <= 100:
             raise ValueError("dbt test coverage limit must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextDbtSelectorQuery:
+    resource_type: str | None = None
+    package_name: str | None = None
+    tag: str | None = None
+    maximum_nodes: int = 32
+    snapshot_id: DbtSnapshotId | None = None
+    current_content_digest: str | None = None
+    current_source_state: SourceStateFingerprint | None = None
+    require_current: bool = False
+
+    def __post_init__(self) -> None:
+        if self.resource_type is None and self.package_name is None and self.tag is None:
+            raise ValueError("dbt selector requires at least one exact filter")
+        for field_name in ("resource_type", "package_name", "tag"):
+            value = getattr(self, field_name)
+            if value is not None and (not value.strip() or len(value) > 256):
+                raise ValueError(f"dbt selector {field_name} must be a bounded non-empty string")
+        if not 1 <= self.maximum_nodes <= 100:
+            raise ValueError("dbt selector node limit must be between 1 and 100")
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,9 +317,16 @@ class GetUnifiedContext:
     procedure_tags: tuple[str, ...] = ()
     procedure_profile: ProjectClientProfile | None = None
     dbt_test_coverage: ContextDbtTestCoverageQuery | None = None
+    dbt_selector: ContextDbtSelectorQuery | None = None
 
     def __post_init__(self) -> None:
-        if self.lineage is not None and self.dbt_test_coverage is not None:
+        if (
+            sum(
+                query is not None
+                for query in (self.lineage, self.dbt_test_coverage, self.dbt_selector)
+            )
+            > 1
+        ):
             raise ValueError("request only one dbt structural query at a time")
         if self.procedure_tags:
             object.__setattr__(
@@ -346,6 +376,7 @@ class UnifiedContextService:
         if (
             request.lineage is None
             and request.dbt_test_coverage is None
+            and request.dbt_selector is None
             and request.source_query is None
             and request.source_impact is None
             and request.source_changes is None
@@ -360,6 +391,8 @@ class UnifiedContextService:
             return self._with_dbt_lineage(packet, request)
         if request.dbt_test_coverage is not None:
             return self._with_dbt_test_coverage(packet, request)
+        if request.dbt_selector is not None:
+            return self._with_dbt_selector(packet, request)
         return self._with_requested_source_facts(packet, request)
 
     def _with_requested_procedures(
@@ -924,6 +957,142 @@ class UnifiedContextService:
                     "dbt-test-coverage",
                     OmissionReason.LOWER_RANK,
                     "dbt test coverage result limit reached",
+                ),
+            )
+        result_packet = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + sum(item.token_estimate for item in facts),
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, *facts),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=tuple(notices),
+            omissions=omissions,
+            conflicts=packet.conflicts,
+        )
+        return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_selector(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        """Attach exact enabled manifest matches for a small structured selector."""
+        query = request.dbt_selector
+        assert query is not None
+        if self._dbt is None:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet, "dbt-selector", OmissionReason.LOWER_RANK, "dbt index is unavailable"
+                ),
+                request,
+            )
+        result = self._dbt.query_selector(
+            QueryManifestSelector(
+                _project_scope(request.scope),
+                query.resource_type,
+                query.package_name,
+                query.tag,
+                query.maximum_nodes,
+                query.snapshot_id,
+                query.current_content_digest,
+                query.current_source_state,
+            )
+        )
+        if query.require_current and result.currentness is not ArtifactCurrentness.CURRENT:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-selector",
+                    OmissionReason.STALE,
+                    "structural facts are not current",
+                ),
+                request,
+            )
+        if not result.nodes:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-selector",
+                    OmissionReason.LOWER_RANK,
+                    "no enabled manifest nodes match the exact selector",
+                ),
+                request,
+            )
+        facts: list[ContextItem] = []
+        notices = list(packet.provenance)
+        omissions = packet.omissions
+        remaining = min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        for node in result.nodes:
+            content = json.dumps(
+                {
+                    "query_kind": "selector",
+                    "snapshot_id": str(result.snapshot.snapshot_id),
+                    "node_unique_id": str(node.unique_id),
+                    "resource_type": node.raw_resource_type,
+                    "package_name": node.package_name,
+                    "tags": list(node.tags),
+                    "relative_file": node.original_file_path,
+                    "currentness": result.currentness.value,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            tokens = (len(content) + 3) // 4
+            if tokens > remaining:
+                omissions += (
+                    OmissionNotice(
+                        f"dbt-selector:{node.unique_id}",
+                        OmissionReason.TOKEN_BUDGET,
+                        "dbt selector results exceed context budget",
+                    ),
+                )
+                break
+            context_item = ContextItem(
+                item_id=f"dbt-selector:{result.snapshot.snapshot_id}:{node.unique_id}",
+                item_type=ContextItemType.STRUCTURAL_FACT,
+                source_scope=request.scope,
+                content=content,
+                content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+                token_estimate=tokens,
+                evidence_references=(node.evidence,),
+                source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+                sensitivity=Sensitivity.NORMAL,
+                validity=ValidityState.CURRENT
+                if result.currentness is ArtifactCurrentness.CURRENT
+                else ValidityState.STALE,
+                ranking=None,
+                conflict_state=ConflictState.NONE,
+                observed_at=result.snapshot.metadata.ingested_at,
+            )
+            facts.append(context_item)
+            remaining -= tokens
+            notices.append(
+                ProvenanceNotice(
+                    f"provenance:{context_item.item_id}",
+                    context_item.item_id,
+                    f"mnemo:dbt/snapshot/{result.snapshot.snapshot_id}/selector/{node.unique_id}",
+                    hashlib.sha256(content.encode()).hexdigest(),
+                    (node.evidence,),
+                )
+            )
+        if result.truncated:
+            omissions += (
+                OmissionNotice(
+                    "dbt-selector",
+                    OmissionReason.LOWER_RANK,
+                    "dbt selector node limit reached",
                 ),
             )
         result_packet = ContextPacket(
