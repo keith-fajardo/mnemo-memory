@@ -118,7 +118,7 @@ def test_local_semantic_projection_is_scoped_idempotent_and_current_only(
     first = revision("docs/reconciliation.md", "# Invoices\nReconcile invoice totals before close.")
     other = revision("docs/release.md", "# Deployment\nUse the release checklist.")
     repo.apply_sync(scope(), (first, other), ())
-    provider = FakeLocalEmbeddingProvider()
+    provider = CountingEmbeddingProvider()
     indexer = LocalSemanticKnowledgeIndexer(repo, provider)
     retriever = LocalSemanticKnowledgeRetriever(repo, provider)
 
@@ -129,6 +129,7 @@ def test_local_semantic_projection_is_scoped_idempotent_and_current_only(
     assert initial.indexed_section_count == 2
     assert repeat.indexed_section_count == 0
     assert repeat.reused_section_count == 2
+    assert provider.passage_calls == 1
     assert result.indexed_section_count == 2
     assert result.matches[0].section.revision == first
     assert result.matches[0].similarity == 1.0

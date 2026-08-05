@@ -754,7 +754,7 @@ the lineage start identity. It resolves only one scoped active-snapshot node and
 authoritative manifest edges for impact; no match or an ambiguous shared file is rejected rather
 than inferred from SQL.
 
-### Personal knowledge and Obsidian — In progress
+### Personal knowledge and Obsidian — Complete
 
 The first completed foundation is a storage-independent, deterministic Markdown/Obsidian document
 parser. It requires explicit scope and a safe relative source identity; records a stable document
@@ -827,6 +827,44 @@ and only that current revision is searchable. An author may also declare one exa
 retrieves both scoped current revisions and preserves an unresolved cited conflict; it does not
 infer disagreement from prose, leak another scope, or choose a winner over authoritative structural
 evidence.
+
+#### Issue 18A — Complete
+
+The current bounded issue supplies the two missing Milestone 6 exit assertions over existing
+behavior. Re-indexing unchanged current sections must perform zero additional local embedding
+provider calls. A production unified packet must combine a checkpoint, relevant Markdown section,
+and authoritative dbt lineage within all section and total budgets; the note must retain its local
+path, heading, citation, and untrusted-evidence label even when its body contains an attempted
+instruction override.
+
+This issue adds no connector, parser, persistence, retrieval strategy, model/provider, dependency,
+MCP/CLI surface, UI, packaging, procedural memory, or team behavior.
+
+The Milestone 6 audit confirms the explicit filesystem and Obsidian connectors, stable scoped
+document identity, content hashes, immutable revisions, unique-digest rename detection, destructive
+payload tombstones, bounded frontmatter/headings/sections, declared links/backlinks, and exact
+revision citations. Current scoped FTS retrieval is primary; the local vector index is a rebuildable
+projection. Editing a note is its correction revision, project Markdown wins only an exact lexical
+tie with an Obsidian result, and explicit same-project conflict frontmatter preserves both cited
+revisions. All document bodies remain untrusted evidence.
+
+The semantic idempotency test now counts provider invocations: the initial two-section index uses
+one batch call, while an unchanged repeat reuses both sections with no additional call. A new
+production unified-context test combines an 80-token active checkpoint, a relevant Markdown
+section containing an attempted instruction/scope override, and authoritative upstream dbt facts.
+The checkpoint objective is unchanged, the note retains `docs/reconciliation.md`, its
+`Reconciliation policy` heading, citation, and `untrusted_evidence` representation, no procedure is
+created from its prose, and every section plus total token invariant passes.
+
+All 68 focused parser/discovery/sync/storage/retrieval/navigation/semantic/context/policy tests and
+the three Obsidian binding/disable tests pass. Create, modify, digest-proven rename, delete,
+scope-isolated search, current-revision-only retrieval, malicious-note labeling, explicit conflict,
+and embedding cleanup are covered for reference and SQLite behavior where applicable. The complete
+repository gate passes with 730 tests, strict typing for 184 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 97 product Python
+files. Milestone 6 is complete; no new connector, parser, persistence, retrieval strategy,
+model/provider, dependency, MCP/CLI surface, UI, packaging, procedural memory, or team behavior was
+added by the exit audit.
 
 ### Procedural memory — In progress
 
