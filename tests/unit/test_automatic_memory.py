@@ -1943,3 +1943,24 @@ def test_automatic_enable_reuses_an_existing_dbt_scope(
     automatic = LocalMemoryProjectBindingStore(data).get(project)
     assert automatic is not None
     assert automatic.scope == expected
+
+
+def test_dbt_binding_scope_lookup_fails_closed_when_local_paths_are_ambiguous(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    store = LocalDbtProjectBindingStore(data)
+    scope = LocalMemoryProjectBindingStore(data).personal_profile().scope()
+    first = tmp_path / "first dbt project"
+    first.mkdir()
+    first.joinpath("dbt_project.yml").write_text("name: first\n")
+    store.set(DbtProjectBinding(first.resolve(), scope))
+
+    resolved = store.get_for_scope(scope)
+
+    assert resolved is not None and resolved.project_root == first.resolve()
+    second = tmp_path / "second dbt project"
+    second.mkdir()
+    second.joinpath("dbt_project.yml").write_text("name: second\n")
+    store.set(DbtProjectBinding(second.resolve(), scope))
+    assert store.get_for_scope(scope) is None

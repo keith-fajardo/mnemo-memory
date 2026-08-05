@@ -14,7 +14,12 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
+from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBindingError,
+    LocalDbtProjectBindingStore,
+)
 from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
     LocalConfigurationError,
@@ -29,6 +34,7 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
+from mnemo_memory.packages.domain import MemoryScope, SourceStateFingerprint
 
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
@@ -326,6 +332,18 @@ def main(data_directory: Path | None = None) -> None:
             runtime.repository,
             lambda: datetime.now(UTC),
         )
+        dbt_bindings = LocalDbtProjectBindingStore(runtime.config.data_directory)
+        dbt_state_observer = DbtGitStateObserver()
+
+        def current_dbt_source_state(scope: MemoryScope) -> SourceStateFingerprint | None:
+            try:
+                dbt_binding = dbt_bindings.get_for_scope(scope)
+            except DbtProjectBindingError:
+                return None
+            if dbt_binding is None:
+                return None
+            return dbt_state_observer.observe(dbt_binding.project_root)
+
         # Construction is inert: FastEmbed is imported and model weights are requested only when
         # a caller explicitly sends semantic_knowledge_query after local semantic indexing.
         from mnemo_memory.packages.knowledge import LocalSemanticKnowledgeRetriever
@@ -349,6 +367,7 @@ def main(data_directory: Path | None = None) -> None:
                 ),
                 observer.observe,
                 None if binding is None else binding.checkpoint_scope,
+                current_dbt_source_state,
             )
         ).run(transport="stdio")
 

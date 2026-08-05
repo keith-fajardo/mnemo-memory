@@ -597,6 +597,10 @@ Successful wrapped ingestion also observes bounded local Git state: full HEAD ID
 a content-sensitive SHA-256 fingerprint for changed/deleted/untracked paths, and an explicit dbt
 target when present. Only the digest and safe scalar metadata are retained. Git failure, unsafe
 paths or symlinks, or configured file/byte limits produce unknown currentness without affecting dbt.
+On a later dbt structural `get_context` request, the local MCP process automatically resolves the
+registered dbt project for the authorized project identity and repeats that bounded observation.
+Matching evidence is labeled current and differing evidence stale; unavailable or ambiguous
+evidence stays unknown. The request cannot supply or override a raw Git fingerprint.
 
 ## What Mnemo does not do
 

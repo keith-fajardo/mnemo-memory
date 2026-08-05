@@ -89,6 +89,11 @@ Observation is shell-free, read-only, timed, and failure-isolated. Paths, bodies
 remotes, credentials, and environment values are excluded. Target disagreement is stale; a missing
 target on only one side is not safely comparable.
 
+The MCP composition may resolve one unambiguous local dbt binding by the already-resolved project
+identity and inject a fresh bounded observation into an existing structural query. The transport
+does not accept caller-authored source-state evidence, and any binding or observation failure
+degrades currentness to unknown without changing the structural result.
+
 ## References reviewed
 
 Reviewed 2026-08-02: [dbt manifest artifact documentation](https://docs.getdbt.com/reference/artifacts/manifest-json), [dbt schema registry](https://schemas.getdbt.com/), and [manifest v12 schema](https://schemas.getdbt.com/dbt/manifest/v12.json). The dbt documentation maps Core 1.8–1.11 to manifest v12 and cautions that dbt and manifest versions are related but distinct.

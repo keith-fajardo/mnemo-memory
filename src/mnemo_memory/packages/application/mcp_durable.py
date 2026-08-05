@@ -55,6 +55,7 @@ from mnemo_memory.packages.domain import (
     ProjectId,
     ScopeLevel,
     SessionId,
+    SourceStateFingerprint,
     TaskId,
     Visibility,
     WorkspaceId,
@@ -71,11 +72,25 @@ class DurableMcpContextPort:
         context_service: UnifiedContextService | None = None,
         after_checkpoint_save: Callable[[CheckpointView], object] | None = None,
         default_scope: MemoryScope | None = None,
+        current_dbt_source_state: (
+            Callable[[MemoryScope], SourceStateFingerprint | None] | None
+        ) = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
         self._after_checkpoint_save = after_checkpoint_save
         self._default_scope = default_scope
+        self._current_dbt_source_state = current_dbt_source_state
+
+    def _resolve_current_dbt_source_state(
+        self, scope: MemoryScope
+    ) -> SourceStateFingerprint | None:
+        if self._current_dbt_source_state is None:
+            return None
+        try:
+            return self._current_dbt_source_state(scope)
+        except Exception:
+            return None
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -261,7 +276,7 @@ class DurableMcpContextPort:
                         dbt_freshness.get("current_content_digest")
                         if isinstance(dbt_freshness.get("current_content_digest"), str)
                         else None,
-                        None,
+                        self._resolve_current_dbt_source_state(scope),
                         bool(dbt_freshness.get("require_current", False)),
                         cast(str, dbt_freshness["relative_path"]) if has_relative_path else None,
                     )
@@ -300,7 +315,7 @@ class DurableMcpContextPort:
                         dbt_selector.get("current_content_digest")
                         if isinstance(dbt_selector.get("current_content_digest"), str)
                         else None,
-                        None,
+                        self._resolve_current_dbt_source_state(scope),
                         bool(dbt_selector.get("require_current", False)),
                     )
                     return self._context_service.get_context(
@@ -336,7 +351,7 @@ class DurableMcpContextPort:
                         test_coverage.get("current_content_digest")
                         if isinstance(test_coverage.get("current_content_digest"), str)
                         else None,
-                        None,
+                        self._resolve_current_dbt_source_state(scope),
                         bool(test_coverage.get("require_current", False)),
                         cast(str, test_coverage["relative_path"]) if has_relative_path else None,
                     )
@@ -380,7 +395,7 @@ class DurableMcpContextPort:
                     lineage.get("current_content_digest")
                     if isinstance(lineage.get("current_content_digest"), str)
                     else None,
-                    None,
+                    self._resolve_current_dbt_source_state(scope),
                     bool(lineage.get("require_current", False)),
                     cast(str, lineage["relative_path"]) if has_relative_path else None,
                     DbtNodeId(cast(str, lineage["path_to_unique_id"]))

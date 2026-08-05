@@ -11,14 +11,28 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
 from typing import cast
 
-from mnemo_memory.packages.application import GetCheckpoint, LocalConfig, build_checkpoint_runtime
+from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
+from mnemo_memory.connectors.dbt.project_binding import (
+    DbtProjectBinding,
+    LocalDbtProjectBindingStore,
+)
+from mnemo_memory.packages.application import (
+    GetCheckpoint,
+    IngestManifest,
+    LocalConfig,
+    build_checkpoint_runtime,
+)
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.domain import CheckpointId, ContextPacket, MemoryScope
 
 ROOT = Path(__file__).parents[2]
+DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
 SCOPE = {
     "owner_id": "11111111-1111-4111-8111-111111111111",
     "workspace_id": "22222222-2222-4222-8222-222222222222",
@@ -31,11 +45,11 @@ SCOPE = {
 class McpProcess:
     """Minimal JSON-RPC client so tests can intentionally terminate the server process."""
 
-    def __init__(self, data_directory: Path) -> None:
+    def __init__(self, data_directory: Path, *, working_directory: Path = ROOT) -> None:
         self._next_id = 1
         self.process = subprocess.Popen(
             [sys.executable, "-m", "mnemo_memory.cli", "mcp", "serve", "--stdio"],
-            cwd=ROOT,
+            cwd=working_directory,
             env={**os.environ, "MNEMO_DATA_DIR": str(data_directory)},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -229,6 +243,85 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
         )
     finally:
         process_c.close()
+
+
+def test_fresh_registered_process_labels_dbt_context_current_without_scope_ids(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "registered dbt project"
+    project.mkdir()
+    project.joinpath("dbt_project.yml").write_text("name: registered\n")
+    project.joinpath("model.sql").write_text("select 1\n")
+    subprocess.run(("git", "init", "--quiet"), cwd=project, check=True)
+    subprocess.run(("git", "add", "."), cwd=project, check=True)
+    subprocess.run(
+        (
+            "git",
+            "-c",
+            "user.name=Mnemo Test",
+            "-c",
+            "user.email=mnemo-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ),
+        cwd=project,
+        check=True,
+    )
+    data_directory = tmp_path / "registered data"
+    project_scope = MemoryScope.from_dict(
+        {
+            **SCOPE,
+            "level": "project",
+            "visibility": "project",
+            "session_id": None,
+            "task_id": None,
+            "agent_id": None,
+        }
+    )
+    LocalDbtProjectBindingStore(data_directory).set(
+        DbtProjectBinding(project.resolve(), project_scope)
+    )
+    LocalMemoryProjectBindingStore(data_directory).enable(project, project_scope=project_scope)
+    source_state = DbtGitStateObserver().observe(project)
+    assert source_state is not None
+    with build_checkpoint_runtime(
+        LocalConfig.defaults(data_directory), dbt_parser=DbtManifestParser()
+    ) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "manifest.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+                source_state=source_state,
+            )
+        )
+
+    process = McpProcess(data_directory, working_directory=project)
+    try:
+        packet = ContextPacket.from_dict(
+            structured(
+                process.tool(
+                    "get_context",
+                    {
+                        "dbt_lineage": {
+                            "relative_path": "models/marts/fct_orders.sql",
+                            "direction": "downstream",
+                        }
+                    },
+                )
+            )
+        )
+    finally:
+        process.close()
+
+    assert packet.structural_items
+    assert all(
+        json.loads(item.content)["currentness"] == "current" for item in packet.structural_items
+    )
 
 
 def test_abrupt_acknowledged_write_and_two_process_conflict_are_durable(tmp_path: Path) -> None:

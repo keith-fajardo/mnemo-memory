@@ -122,6 +122,28 @@ class LocalDbtProjectBindingStore:
         except (TypeError, ValueError) as error:
             raise DbtProjectBindingError("MNEMO_DBT_BINDING_INVALID") from error
 
+    def get_for_scope(self, scope: MemoryScope) -> DbtProjectBinding | None:
+        """Return one unambiguous local binding for an exact project identity."""
+        if not isinstance(scope, MemoryScope) or scope.project_id is None:
+            return None
+        matches: list[DbtProjectBinding] = []
+        for root, value in self._read().items():
+            if not isinstance(root, str) or not isinstance(value, dict):
+                raise DbtProjectBindingError("MNEMO_DBT_BINDING_INVALID")
+            try:
+                binding = DbtProjectBinding(Path(root), MemoryScope.from_dict(value))
+            except (TypeError, ValueError) as error:
+                raise DbtProjectBindingError("MNEMO_DBT_BINDING_INVALID") from error
+            bound = binding.scope
+            if (
+                bound.owner_id == scope.owner_id
+                and bound.workspace_id == scope.workspace_id
+                and bound.project_id == scope.project_id
+                and bound.visibility == scope.visibility
+            ):
+                matches.append(binding)
+        return matches[0] if len(matches) == 1 else None
+
     def set(self, binding: DbtProjectBinding) -> None:
         data = self._read()
         data[str(binding.project_root.resolve())] = binding.scope.to_dict()

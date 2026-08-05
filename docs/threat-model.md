@@ -246,6 +246,11 @@ project root, and rejected on traversal, escaping symlinks, unsupported file typ
 byte limits. Mnemo hashes status/path bytes and current content locally but persists only the final
 SHA-256 fingerprint plus full HEAD, dirty state, and explicit target; paths, bodies, diffs, commit
 messages, remotes, credentials, stderr, and environment values are never stored or logged.
+Retrieval-time comparison occurs only after strict scope parsing and only for an unambiguous local
+dbt binding with the same owner, workspace, project, and visibility identity. MCP callers cannot
+submit a commit or fingerprint as current-state evidence. Missing, corrupt, ambiguous, mismatched,
+or unregistered bindings and observation failures return unknown currentness without exposing the
+configured path or Git diagnostics.
 
 **Residual risk:** A connector with legitimate filesystem access can observe allowed content;
 minimize its permission and dependency surface.

@@ -725,6 +725,9 @@ full Git HEAD ID, dirty state, a SHA-256 fingerprint of changed/deleted/untracke
 current content digests, and an explicit `--target` when supplied. Paths and bodies are not stored.
 Missing Git, unsafe paths, oversized changes, or observation failure leave state unknown and never
 make dbt fail. A different explicit target is stale even when the Git tree otherwise matches.
+For dbt structural requests, a fresh MCP process resolves the exact registered project only after
+scope validation and compares a new bounded observation automatically. Callers cannot provide raw
+fingerprint evidence; missing, ambiguous, or invalid local bindings leave currentness unknown.
 
 Verified current manifest structure outranks an older checkpoint’s recollection of repository
 structure. Mnemo preserves such a disagreement as evidence rather than asking a model to resolve

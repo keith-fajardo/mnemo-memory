@@ -32,6 +32,7 @@ from mnemo_memory.packages.domain import (
     ProjectId,
     ScopeLevel,
     SessionId,
+    SourceStateFingerprint,
     TaskId,
     Visibility,
     WorkspaceId,
@@ -608,6 +609,83 @@ def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: 
     assert all(
         '"start_node":"model.mnemo_analytics.fct_orders"' in item.content
         for item in packet.structural_items
+    )
+
+
+def test_durable_port_resolves_current_dbt_state_after_scope_validation(tmp_path: Path) -> None:
+    config = LocalConfig.defaults(tmp_path / "current manifest")
+    project_scope = MemoryScope(
+        OwnerId.from_string(IDS["owner_id"]),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string(IDS["workspace_id"]),
+        ProjectId.from_string(IDS["project_id"]),
+    )
+    source_state = SourceStateFingerprint(
+        git_commit="a" * 40,
+        working_tree_fingerprint="sha256:" + "b" * 64,
+        dirty=False,
+    )
+    resolved_scopes: list[MemoryScope] = []
+
+    def resolve(scope: MemoryScope) -> SourceStateFingerprint:
+        resolved_scopes.append(scope)
+        return source_state
+
+    with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                project_scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 5, tzinfo=UTC),
+                source_state=source_state,
+            )
+        )
+        context_service = UnifiedContextService(
+            runtime.checkpoint_service, runtime.dbt_manifest_service
+        )
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            context_service,
+            current_dbt_source_state=resolve,
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                    }
+                )
+            )
+        )
+        failed_observation = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            context_service,
+            current_dbt_source_state=lambda _scope: (_ for _ in ()).throw(OSError()),
+        )
+        unknown = ContextPacket.from_dict(
+            failed_observation.get_context(
+                context_payload(
+                    dbt_lineage={
+                        "relative_path": "models/marts/fct_orders.sql",
+                        "direction": "downstream",
+                    }
+                )
+            )
+        )
+
+    assert len(resolved_scopes) == 1
+    assert resolved_scopes[0].project_id == project_scope.project_id
+    assert packet.structural_items
+    assert all(
+        json.loads(item.content)["currentness"] == "current" for item in packet.structural_items
+    )
+    assert unknown.structural_items
+    assert all(
+        json.loads(item.content)["currentness"] == "unknown" for item in unknown.structural_items
     )
 
 

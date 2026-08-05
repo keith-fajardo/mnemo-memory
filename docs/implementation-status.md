@@ -1132,3 +1132,30 @@ currentness. The complete repository gate passes with 580 tests, strict typing f
 files, schema validation, dependency/provenance validation for 86 entries, and architecture
 validation for 73 product Python files. No migration, dependency, model call, or MCP tool was
 added.
+
+#### Issue 15K — Complete
+
+The current bounded issue activates retrieval-time dbt source-state comparison for existing
+structural queries. After exact scope resolution, a fresh local MCP process may resolve one
+unambiguous registered dbt project for that project identity, perform the existing bounded Git
+observation, and pass the resulting fingerprint to lineage, path, test-coverage, selector, and
+freshness queries. Missing, corrupt, ambiguous, or mismatched bindings and any observation failure
+must leave currentness unknown without failing `get_context`; a caller cannot submit or override
+raw source-state evidence. Authorization remains ahead of structural retrieval, paths remain local
+configuration rather than durable identity, and no repository content, path, diff, environment
+value, or Git diagnostic may be stored, logged, or returned. This issue does not add changed-state
+indexing, code excerpts, a migration, dependency, model call, MCP tool, or retrieval for an
+unregistered scope.
+
+Implemented retrieval-time comparison for every existing dbt structural query through an
+application callback supplied by the MCP composition root. The callback resolves exactly one
+machine-local dbt binding by owner, workspace, project, and visibility identity only after strict
+scope parsing, then uses the existing bounded Git observer; ambiguity, corruption, missing
+registration, and callback or Git failure yield unknown currentness without failing context
+retrieval. Raw commits and fingerprints are not accepted from MCP callers. Unit coverage proves
+matching evidence is current and observer failures are unknown, while an independent fresh-process
+integration test starts MCP inside a registered dbt project, omits all scope UUIDs, and receives
+current structural context. The complete repository gate passes with 583 tests, strict typing for
+149 source files, schema validation, dependency/provenance validation for 86 entries, and
+architecture validation for 73 product Python files. No migration, dependency, model call, or MCP
+tool was added.
