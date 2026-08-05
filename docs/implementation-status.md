@@ -1632,7 +1632,7 @@ files. No filesystem output, import, CLI/API/MCP surface, checkpoint/approved-fa
 structural export, stored-export cleanup, backup behavior, migration, dependency, model call, or
 team mode was added.
 
-### Issue 17 — Unified context engine — In progress
+### Issue 17 — Unified context engine — Complete
 
 #### Issue 17A — Complete
 
@@ -1841,3 +1841,32 @@ with 729 tests, strict typing for 184 source files, dependency/provenance valida
 and architecture validation for 97 product Python files. No new retrieval, ranking, conflict
 inference, persistence, model call, dependency, API/UI, settings, packaging, or team mode was
 added.
+
+#### Issue 17F — Complete
+
+The Milestone 5 completion audit maps every durable build requirement to production evidence.
+`DeterministicContextPlanner` supplies literal inspectable classification and retrieval plans;
+scoped repositories generate candidates before scoring. Episodic selection combines lexical,
+temporal, confidence, and kind-importance signals. Knowledge uses scoped lexical FTS and explicit
+local-vector scoring, then reciprocal-rank fusion. Source identities use deterministic
+exact/prefix/all-term structural rank, while dbt queries use authoritative structured traversal.
+Procedure tags are exact and checked-in. Final selection supplies conflicts, exact deduplication,
+source diversity, and hard budgets. Codex/Claude rendering preserves the canonical packet, and
+`explain_context` reports ranks, sources, exclusions, conflicts, and staleness without content.
+
+The current deterministic resumption evaluation passes with no-memory required-fact recall at 0%,
+Mnemo required-fact recall and provenance coverage at 100%, no stale decision presented as current,
+and a 499-token packet versus a 2,948-token transcript: 83.07% context reduction and 81.58% total
+fresh-input reduction. The unified checkpoint-plus-dbt evaluation passes exact upstream/downstream
+precision and recall, provenance, staleness, scope, every hard budget, 72.98% structural reduction,
+and 77.65% combined reduction. Both invoke no model.
+
+The real isolated cross-client evaluation passes on Codex CLI 0.146.0 and Claude Code 2.1.221.
+Codex-to-Claude, Claude-to-Codex, and alternating revision paths each retain 100% required-fact and
+provenance coverage with a 453-token runtime packet versus the 2,948-token transcript (84.63%
+context reduction). It also proves zero cross-project disclosure, unchanged client configuration,
+stale-writer recovery, prompt failure for a missing launcher, and sanitized corrupt-store failure.
+The complete repository gate remains green with 729 tests, strict typing for 184 source files,
+dependency/provenance validation for 86 entries, and architecture validation for 97 product Python
+files. Milestone 5 is complete; no incremental ranking, new dependency, model call, API/UI,
+packaging, or team feature was added during the audit.
