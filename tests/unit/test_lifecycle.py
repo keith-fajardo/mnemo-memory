@@ -138,6 +138,7 @@ def test_loopback_dashboard_serves_packaged_assets_and_sanitized_status(tmp_path
     assert '"X-Mnemo-Intent": "correct-memory"' in script.body.decode()
     assert '"X-Mnemo-Intent": "retract-memory"' in script.body.decode()
     assert '"X-Mnemo-Intent": "pin-memory"' in script.body.decode()
+    assert '"X-Mnemo-Intent": "export-memories"' in script.body.decode()
     assert status["lifecycle"]["initialized"] is True
     assert status["connections"] == details["connections"]
     encoded = json.dumps(status)

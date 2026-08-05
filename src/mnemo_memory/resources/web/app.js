@@ -210,6 +210,23 @@ async function loadMemories() {
   renderMemories(await response.json());
 }
 
+async function exportMemories() {
+  if (!window.confirm("Download every approved-memory record and its provenance for this project?")) return;
+  byId("memories-state").textContent = "Preparing export…";
+  const response = await fetch("/api/memories/export", {
+    method: "POST",
+    headers: {"X-Mnemo-Intent": "export-memories"},
+  });
+  if (!response.ok) { byId("memories-state").textContent = "Export failed"; return; }
+  const download = document.createElement("a");
+  const url = URL.createObjectURL(await response.blob());
+  download.href = url;
+  download.download = "mnemo-approved-memories.json";
+  download.click();
+  URL.revokeObjectURL(url);
+  byId("memories-state").textContent = "Export downloaded";
+}
+
 async function loadSettings() {
   const response = await fetch("/api/settings", {headers: {"Accept": "application/json"}});
   if (!response.ok) throw new Error("settings");
@@ -252,6 +269,9 @@ async function refresh() {
 }
 
 byId("refresh").addEventListener("click", refresh);
+byId("export-memories").addEventListener("click", () => {
+  exportMemories().catch(() => { byId("memories-state").textContent = "Export failed"; });
+});
 refresh();
 loadSettings().catch(() => { byId("settings-state").textContent = "Unavailable"; });
 loadMemories().catch(() => { byId("memories-state").textContent = "Unavailable"; });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ from mnemo_memory.apps.api.memories import (
     ApprovedMemoryActionInvalid,
     ApprovedMemoryActionNotFound,
     ApprovedMemoryBrowserError,
+    ApprovedMemoryExportError,
+    ApprovedMemoryExportNotFound,
+    build_approved_memory_export,
     build_approved_memory_page,
     correct_approved_memory,
     retract_approved_memory,
@@ -146,6 +150,35 @@ def test_memory_browser_is_scoped_and_preserves_evidence_and_revision_lineage(
         "next_offset": None,
     }
 
+    exported = json.loads(
+        build_approved_memory_export(config, project_directory=project, exported_at=NOW)
+    )
+    digest = exported.pop("content_digest")
+    canonical = json.dumps(
+        exported,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert digest == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    assert exported["format_version"] == "mnemo.approved-memory-export.v1"
+    assert exported["scope"] == binding.checkpoint_scope.to_dict()
+    assert exported["exported_at"] == NOW.isoformat()
+    export_records = {item["event_id"]: item for item in exported["records"]}
+    assert export_records[str(active.event_id)]["event"]["source_event_key"] == "browser:active"
+    assert export_records[str(original.event_id)]["governance"]["kind"] == "corrected"
+    assert export_records[str(replacement_id)]["event"] is None
+    assert export_records[str(replacement_id)]["governance"]["kind"] == "retracted"
+    assert (
+        json.loads(build_approved_memory_export(config, project_directory=other, exported_at=NOW))[
+            "records"
+        ]
+        == []
+    )
+    with pytest.raises(ApprovedMemoryExportNotFound):
+        build_approved_memory_export(config, project_directory=unregistered, exported_at=NOW)
+
 
 def test_memory_browser_api_bounds_pagination_and_sanitizes_failures(tmp_path: Path) -> None:
     config = LocalConfig.defaults(tmp_path / "profile")
@@ -171,6 +204,33 @@ def test_memory_browser_api_bounds_pagination_and_sanitizes_failures(tmp_path: P
     assert failed.status_code == 503
     assert failed.json() == {"detail": "MNEMO_MEMORY_BROWSER_UNAVAILABLE"}
     assert "private storage detail" not in failed.text
+
+
+def test_approved_memory_export_includes_every_application_page(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = LocalConfig.defaults(tmp_path / "profile")
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(project)
+    expected_ids: set[str] = set()
+    with build_checkpoint_runtime(config) as runtime:
+        for index in range(101):
+            event = runtime.checkpoint_service.record_approved_event(
+                RecordApprovedEpisodicEvent(
+                    binding.checkpoint_scope,
+                    ApprovedEventKind.TOOL_OUTCOME,
+                    f"Validated bounded export record {index}.",
+                    f"browser-export:{index}",
+                    (_evidence(f"browser-export-{index}"),),
+                )
+            ).event
+            expected_ids.add(str(event.event_id))
+
+    payload = json.loads(
+        build_approved_memory_export(config, project_directory=project, exported_at=NOW)
+    )
+
+    assert len(payload["records"]) == 101
+    assert {item["event_id"] for item in payload["records"]} == expected_ids
 
 
 def test_browser_actions_correct_idempotently_and_erase_payload_in_exact_scope(
@@ -274,12 +334,17 @@ def test_memory_write_api_requires_explicit_same_origin_intent_and_safe_errors(
         actions.append(("pin", event_id, value))
         return {"idempotent": False}
 
+    def export() -> str:
+        actions.append(("export", "", None))
+        return '{"format_version":"mnemo.approved-memory-export.v1"}'
+
     client = TestClient(
         create_app(
             service,
             correct_approved_memory=correct,
             retract_approved_memory=retract,
             set_approved_memory_pin=pin,
+            approved_memory_export=export,
         ),
         base_url="http://127.0.0.1:8765",
     )
@@ -325,7 +390,30 @@ def test_memory_write_api_requires_explicit_same_origin_intent_and_safe_errors(
         },
     )
     assert pinned_response.status_code == 200
-    assert [item[0] for item in actions] == ["correct", "retract", "pin"]
+    assert client.post("/api/memories/export").status_code == 403
+    assert (
+        client.post(
+            "/api/memories/export",
+            headers={
+                "Origin": "https://attacker.example",
+                "X-Mnemo-Intent": "export-memories",
+            },
+        ).status_code
+        == 403
+    )
+    exported = client.post(
+        "/api/memories/export",
+        headers={
+            "Origin": "http://127.0.0.1:8765",
+            "X-Mnemo-Intent": "export-memories",
+        },
+    )
+    assert exported.status_code == 200
+    assert exported.headers["content-disposition"] == (
+        'attachment; filename="mnemo-approved-memories.json"'
+    )
+    assert exported.json()["format_version"] == "mnemo.approved-memory-export.v1"
+    assert [item[0] for item in actions] == ["correct", "retract", "pin", "export"]
 
     def unavailable(_: str, __: object) -> dict[str, object]:
         raise ApprovedMemoryActionError("private failure detail")
@@ -344,3 +432,20 @@ def test_memory_write_api_requires_explicit_same_origin_intent_and_safe_errors(
     assert failed.status_code == 503
     assert failed.json() == {"detail": "MNEMO_MEMORY_ACTION_UNAVAILABLE"}
     assert "private failure detail" not in failed.text
+
+    def export_unavailable() -> str:
+        raise ApprovedMemoryExportError("private export failure")
+
+    export_failed = TestClient(
+        create_app(service, approved_memory_export=export_unavailable),
+        base_url="http://127.0.0.1:8765",
+    ).post(
+        "/api/memories/export",
+        headers={
+            "Origin": "http://127.0.0.1:8765",
+            "X-Mnemo-Intent": "export-memories",
+        },
+    )
+    assert export_failed.status_code == 503
+    assert export_failed.json() == {"detail": "MNEMO_MEMORY_EXPORT_UNAVAILABLE"}
+    assert "private export failure" not in export_failed.text

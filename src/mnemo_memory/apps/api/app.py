@@ -14,6 +14,8 @@ from mnemo_memory.apps.api.memories import (
     ApprovedMemoryActionInvalid,
     ApprovedMemoryActionNotFound,
     ApprovedMemoryBrowserError,
+    ApprovedMemoryExportError,
+    ApprovedMemoryExportNotFound,
 )
 from mnemo_memory.packages.application.services import APP_VERSION, LifecycleService
 from mnemo_memory.packages.application.settings import (
@@ -46,6 +48,7 @@ def create_app(
     correct_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
     retract_approved_memory: Callable[[str, object], dict[str, object]] | None = None,
     set_approved_memory_pin: Callable[[str, object], dict[str, object]] | None = None,
+    approved_memory_export: Callable[[], str] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Mnemo local dashboard", version=APP_VERSION, docs_url=None, redoc_url=None)
 
@@ -140,6 +143,23 @@ def create_app(
             raise HTTPException(
                 status_code=503, detail="MNEMO_MEMORY_BROWSER_UNAVAILABLE"
             ) from None
+
+    @app.post("/api/memories/export")
+    def export_memories(request: Request) -> Response:
+        _require_memory_write(request, service, "export-memories")
+        if approved_memory_export is None:
+            raise HTTPException(status_code=503, detail="MNEMO_MEMORY_EXPORT_UNAVAILABLE")
+        try:
+            payload = approved_memory_export()
+        except ApprovedMemoryExportNotFound:
+            raise HTTPException(status_code=404, detail="MNEMO_MEMORY_EXPORT_NOT_FOUND") from None
+        except ApprovedMemoryExportError:
+            raise HTTPException(status_code=503, detail="MNEMO_MEMORY_EXPORT_UNAVAILABLE") from None
+        return Response(
+            payload,
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="mnemo-approved-memories.json"'},
+        )
 
     @app.post("/api/memories/{event_id}/correct")
     def correct_memory(

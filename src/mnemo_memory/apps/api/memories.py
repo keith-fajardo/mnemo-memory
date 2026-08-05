@@ -45,6 +45,14 @@ class ApprovedMemoryBrowserError(RuntimeError):
     """Stable failure reading the current project's approved memories."""
 
 
+class ApprovedMemoryExportError(RuntimeError):
+    """Stable failure exporting the current project's approved memories."""
+
+
+class ApprovedMemoryExportNotFound(ApprovedMemoryExportError):
+    pass
+
+
 class ApprovedMemoryActionError(RuntimeError):
     """Safe base outcome for an explicit browser mutation."""
 
@@ -97,6 +105,48 @@ def build_approved_memory_page(
         "items": [_record_value(item) for item in page.items],
         "next_offset": page.next_offset,
     }
+
+
+def build_approved_memory_export(
+    config: LocalConfig,
+    *,
+    project_directory: Path | None = None,
+    exported_at: datetime | None = None,
+) -> str:
+    """Return a canonical exact-scope snapshot of every approved-memory record."""
+    timestamp = datetime.now(UTC) if exported_at is None else exported_at
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("memory export timestamp must be timezone-aware")
+    try:
+        binding = LocalMemoryProjectBindingStore(config.data_directory).get(
+            project_directory or Path.cwd()
+        )
+    except (AutomaticMemoryBindingError, OSError, ValueError) as error:
+        raise ApprovedMemoryExportError("MNEMO_MEMORY_EXPORT_UNAVAILABLE") from error
+    if binding is None:
+        raise ApprovedMemoryExportNotFound("MNEMO_MEMORY_EXPORT_NOT_FOUND")
+    records: list[dict[str, object]] = []
+    try:
+        with build_checkpoint_runtime(config) as runtime:
+            offset = 0
+            while True:
+                page = runtime.checkpoint_service.list_approved_event_records(
+                    ListApprovedEpisodicEventRecords(binding.checkpoint_scope, offset, 100)
+                )
+                records.extend(_export_record_value(item) for item in page.items)
+                if page.next_offset is None:
+                    break
+                offset = page.next_offset
+    except (CheckpointApplicationError, LocalRuntimeError, OSError, ValueError) as error:
+        raise ApprovedMemoryExportError("MNEMO_MEMORY_EXPORT_UNAVAILABLE") from error
+    content: dict[str, object] = {
+        "format_version": "mnemo.approved-memory-export.v1",
+        "scope": binding.checkpoint_scope.to_dict(),
+        "exported_at": timestamp.astimezone(UTC).isoformat(),
+        "records": records,
+    }
+    digest = "sha256:" + hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
+    return _canonical_json({**content, "content_digest": digest})
 
 
 def correct_approved_memory(
@@ -306,6 +356,27 @@ def _record_value(record: ApprovedEpisodicEventRecord) -> dict[str, object]:
             "evidence": [_evidence_value(item) for item in governance.evidence_references],
         },
     }
+
+
+def _export_record_value(record: ApprovedEpisodicEventRecord) -> dict[str, object]:
+    return {
+        "event_id": str(record.event_id),
+        "scope": record.scope.to_dict(),
+        "status": record.status.value,
+        "pinned": record.pinned,
+        "event": None if record.event is None else record.event.to_dict(),
+        "governance": None if record.governance is None else record.governance.to_dict(),
+    }
+
+
+def _canonical_json(value: dict[str, object]) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _evidence_value(reference: EvidenceReference) -> dict[str, object]:

@@ -360,7 +360,10 @@ evidence and correction/retraction lineage; it never retrieves another project. 
 same-origin controls can append an evidence-backed correction or erase an active fact's retained
 payload while preserving its minimal tombstone. They can also pin an active fact so it is selected
 before unpinned recency within the same bounded project-task retrieval; correction transfers that
-pin and erasure removes it. Its Settings section controls repository-note
+pin and erasure removes it. An explicit same-origin **Export JSON** action downloads every record
+in that exact task scope with full evidence and governance serialization, current pin state, and a
+canonical content digest; Mnemo does not retain another server-side copy of the download. Its
+Settings section controls repository-note
 auto-sync, explicit approved-event capture, optional model routing metadata, future retention
 defaults, and packet budgets. It never accepts an API key. Changes apply to new MCP processes and
 automatic hooks; existing retention schedules are not silently rewritten. Stop it with

@@ -335,6 +335,13 @@ is supplied. Context returns only active facts. Retraction removes the original 
 and evidence links while retaining a bounded tombstone and the evidence for the retraction itself.
 It does not delete checkpoints, notes, exports, or future backups.
 
+The loopback dashboard's **Export JSON** button downloads every approved fact and tombstone in the
+current enabled task scope. The canonical file contains the exact internal scope, immutable event
+and governance records, complete evidence references, current pin state, a UTC export timestamp,
+and a SHA-256 content digest. Export requires an explicit same-origin action, uses a fixed filename
+that does not reveal the repository, and creates no additional server-side copy. Keep the downloaded
+file private: later correction, retraction, or Mnemo uninstall cannot recall a copy you control.
+
 You also do not supply or guess owner/workspace/project/session/task UUIDs. When the local MCP
 server starts inside an enabled repository, it resolves that repository's saved internal scope.
 Calling `get_context` with no scope fields is therefore valid there; supplying only part of a scope

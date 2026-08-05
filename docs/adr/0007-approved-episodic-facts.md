@@ -53,10 +53,18 @@ pinned fact atomically records an unpin before payload erasure. Historical pin a
 audit metadata, while corrected and retracted review records are never reported as currently
 pinned.
 
+The personal dashboard can also create an on-demand `mnemo.approved-memory-export.v1` JSON
+snapshot. It resolves one registered task scope before reading, traverses the existing bounded
+application query, retains full event/governance evidence plus payload-free tombstones and current
+pin state, and digests canonical content. The explicit same-origin response uses a fixed filename
+and is not persisted by Mnemo. It is a user-held inspection export, not an import or backup format;
+historical pin-action rows remain governed audit metadata rather than being duplicated into it.
+
 ## Consequences
 
 This provides a durable, privacy-bounded event substrate plus explicit personal governance. It does
 not infer decisions or mistakes from a diff, failed command, or model reasoning. The retraction
-contract applies only to the canonical approved-fact payload and its direct evidence links; it is
-not a claim about future exports or backups. General retention, backup deletion, automatic capture,
+contract applies only to the canonical approved-fact payload and its direct evidence links; it
+cannot recall a user-controlled export and is not a claim about future backups. General retention,
+backup deletion, automatic capture,
 and background event processing remain separate, explicitly designed milestones.

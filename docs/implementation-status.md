@@ -1135,6 +1135,35 @@ dependency/provenance validation for 86 entries, and architecture validation for
 Python files. No general candidate browser, expiry, export, new deletion behavior, model call,
 dependency, job control, packaging change, non-loopback exposure, or team behavior was added.
 
+#### Issue 20F — Exact-scope approved-memory export — Complete
+
+This bounded issue adds an explicit JSON download for every approved-memory record in the current
+registered task scope. The export must include full immutable event and governance serialization,
+payload-free retraction tombstones, current pin state, exact scope, a UTC export timestamp, and a
+digest over canonical content. It must page through the existing application query rather than
+introducing a second storage path, require same-loopback-origin plus explicit export intent, and
+use a fixed non-identifying filename. An unregistered or different project must not receive the
+target export, and storage failures must remain sanitized. This issue adds no import, expiry,
+general production-episodic browser, job control, backup/installer change, dependency, model call,
+non-loopback exposure, or team behavior.
+
+Implemented a canonical `mnemo.approved-memory-export.v1` JSON response assembled through the
+existing 100-record application pages. Each record carries exact scope, lifecycle status, current
+pin state, and the full immutable event/governance serialization; retracted records retain only
+their existing payload-free tombstone. The envelope records a normalized UTC export timestamp and
+SHA-256 digest over canonical content. The dashboard requests the download only after confirmation
+and sends the explicit `export-memories` intent from the same loopback origin; the response uses a
+fixed `mnemo-approved-memories.json` filename and Mnemo persists no duplicate export copy.
+
+All 34 focused browser/lifecycle tests pass, including 101-record multi-page completeness, content
+digest verification, exact-scope serialization, correction/retraction provenance, empty-project
+behavior, unregistered-project rejection, cross-project isolation, same-origin denial, fixed
+filename, and sanitized failure handling. The complete repository gate passes with 761 tests,
+strict typing for 193 source files, dependency/provenance validation for 86 entries, and
+architecture validation for 102 product Python files. No import, expiry, general
+production-episodic browser, job control, backup/installer change, dependency, model call,
+non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

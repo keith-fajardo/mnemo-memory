@@ -304,10 +304,12 @@ summaries, exports, or backups, or is resurrected during re-ingestion.
 projection/cache invalidation; job cancellation; source re-ingestion checks; export disclosure;
 backup policy defined before backups ship.
 
-For the current approved-fact-only retraction slice, the canonical event payload and its direct
-evidence links are removed atomically after the scoped tombstone is inserted. Approved facts have
-no FTS, vector, cache, export, or backup projection in this profile. This narrow control does not
-claim general checkpoint, knowledge, export, or backup deletion.
+For approved facts, the canonical event payload and its direct evidence links are removed atomically
+after the scoped tombstone is inserted. Approved facts have no FTS, vector, cache, or backup
+projection in this profile. An explicit same-origin export returns an exact-task-scope canonical
+download with evidence, governance, tombstones, current pin state, and a content digest; Mnemo does
+not persist another copy. A later retraction cannot recall a user-controlled downloaded export.
+This narrow control does not claim general checkpoint, knowledge, or backup deletion.
 
 For extracted production episodic state, one user-authored exact-task-scope action writes a
 deterministic payload-free memory or source tombstone before removing content. Individual memory
