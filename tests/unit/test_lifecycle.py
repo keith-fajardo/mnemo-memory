@@ -74,6 +74,8 @@ def test_cli_help_explains_the_user_facing_workflow() -> None:
     assert "Local-first durable task checkpoints and dbt lineage context." in root.output
     assert "Run a deterministic interactive Mnemo setup guide." in root.output
     assert "Register Mnemo with an AI coding client." in root.output
+    assert "Create and verify a private SQLite recovery backup." in root.output
+    assert "Back up and upgrade the uv- or pipx-managed Mnemo installation." in root.output
     assert "Enable automatic task handoffs for this project and client." in memory.output
     assert "Print this enabled project's bounded active handoff" in memory.output
     assert "Show bounded saved structural changes" in memory.output

@@ -73,6 +73,8 @@ from mnemo_memory.packages.application import (
     PersonalBackupError,
     PersonalBackupService,
     PersonalSettingsStore,
+    PersonalUpgradeError,
+    PersonalUpgradeService,
     RetractApprovedEpisodicEvent,
     SynchronizeKnowledgeDocuments,
     build_checkpoint_runtime,
@@ -600,6 +602,20 @@ def backup(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  #
         result = PersonalBackupService(resolve_local_config(data_dir)).create()
     except (PersonalBackupError, ValueError) as error:
         raise typer.BadParameter("MNEMO_BACKUP_FAILED") from error
+    _show(result.to_dict())
+
+
+@app.command(help="Back up and upgrade the uv- or pipx-managed Mnemo installation.")
+def upgrade(data_dir: Path | None = typer.Option(None, "--data-dir")) -> None:  # noqa: B008
+    try:
+        result = PersonalUpgradeService(resolve_local_config(data_dir)).upgrade()
+    except PersonalUpgradeError as error:
+        _show(error.to_dict())
+        raise typer.Exit(code=1) from error
+    except ValueError as error:
+        failure = PersonalUpgradeError("MNEMO_UPGRADE_CONFIGURATION_INVALID")
+        _show(failure.to_dict())
+        raise typer.Exit(code=1) from error
     _show(result.to_dict())
 
 

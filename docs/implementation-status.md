@@ -1195,6 +1195,40 @@ Python files. No upgrade execution, restore mutation, retention/expiry, index/jo
 diagnostic bundle, installer/uninstaller change, dependency, model call, non-loopback exposure, or
 team behavior was added.
 
+#### Issue 20H — Backup-gated one-command upgrade — Complete
+
+This bounded issue adds `mnemo-memory upgrade` for installations actually owned by uv or pipx.
+The command must identify ownership from the running isolated environment before taking action,
+resolve only the matching manager executable, create and verify an Issue 20G backup before any
+installer invocation, stop and await the local daemon when necessary, run the manager's documented
+package-specific upgrade command without exposing its output, run the upgraded CLI's initialization
+to apply/validate migrations, and restore the prior running/stopped state. Unsupported or ambiguous
+environments, missing managers, backup failure, stop timeout, installer failure, post-upgrade
+validation failure, and restart failure must return bounded codes; a post-backup failure must report
+the recovery artifact. This issue adds no automatic package downgrade or database restore,
+installation/uninstall command, expiry, index/job control, diagnostic bundle, dependency, release
+workflow change, model call, non-loopback exposure, or team behavior.
+
+Implemented `mnemo-memory upgrade` with isolated-environment ownership detection for one regular
+uv receipt or pipx metadata marker. It resolves only that manager's executable and uses the
+documented `uv tool upgrade mnemo-unified-context` or `pipx upgrade mnemo-unified-context`
+argument vector without a shell. The command requires an initialized schema, publishes a verified
+Issue 20G backup, stops and waits up to five seconds for a running service, suppresses manager
+stdin/stdout/stderr, runs the upgraded CLI's `init` validation, and restarts only when the service
+was previously running. Installer failure attempts to restore that prior service; later validation
+or restart failure leaves the recovery artifact and a bounded code without silently replacing
+data or downgrading the package.
+
+All 41 focused upgrade/backup/lifecycle tests pass, including uv and pipx ownership, exact command
+vectors, backup-before-installer ordering, initialized-store gating, missing/ambiguous ownership,
+missing manager, malformed process state, stop timeout, installer/validation/restart failure,
+installer-output suppression, prior running/stopped preservation, recovery metadata, and sanitized
+CLI configuration errors. The complete repository gate passes with 773 tests, strict typing for
+197 source files, dependency/provenance validation for 86 entries, and architecture validation for
+104 product Python files. No automatic package downgrade or database restore,
+installation/uninstall command, expiry, index/job control, diagnostic bundle, dependency, release
+workflow change, model call, non-loopback exposure, or team behavior was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

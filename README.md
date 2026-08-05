@@ -380,7 +380,19 @@ private `backups` directory. Its filename records the schema version, UTC creati
 SHA-256 digest. Mnemo validates database integrity and foreign keys before publishing the file and
 never overwrites an existing artifact. The backup contains the same private data as the live store;
 keep it protected and remove it explicitly when no longer needed. Automatic invocation by the
-one-command upgrade workflow is a later packaging step.
+one-command upgrade workflow is available when the running Mnemo executable is owned by uv or
+pipx:
+
+```bash
+mnemo-memory upgrade
+```
+
+The wrapper verifies the owning isolated environment, creates the backup first, stops a running
+local service, invokes only that manager's package-specific upgrade, validates migrations through
+the upgraded CLI, and restores the prior running or stopped state. Installer output is suppressed
+so it cannot enter logs or terminal capture. If a post-backup step fails, the bounded JSON result
+identifies the recovery artifact. Mnemo does not automatically downgrade the package or replace the
+live database on failure.
 
 This creates a local database, normally **outside** your repository:
 

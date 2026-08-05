@@ -98,6 +98,12 @@ from .knowledge import (
 )
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
+from .upgrades import (
+    InstallationManager,
+    PersonalUpgradeError,
+    PersonalUpgradeResult,
+    PersonalUpgradeService,
+)
 
 __all__ = [
     "AbandonCheckpoint",
@@ -147,6 +153,7 @@ __all__ = [
     "IngestRunResults",
     "IngestSourceFreshness",
     "IngestSupplementalResult",
+    "InstallationManager",
     "KnowledgeApplicationConflict",
     "KnowledgeApplicationError",
     "KnowledgeApplicationInvalidScope",
@@ -171,6 +178,9 @@ __all__ = [
     "PersonalSettings",
     "PersonalSettingsError",
     "PersonalSettingsStore",
+    "PersonalUpgradeError",
+    "PersonalUpgradeResult",
+    "PersonalUpgradeService",
     "QueryLineage",
     "QueryManifestChanges",
     "QueryManifestSelector",

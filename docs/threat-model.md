@@ -334,6 +334,15 @@ history before atomic publication, and cleans partial candidates without changin
 Files and their directory use restrictive personal-mode permissions. Retraction, uninstall, and
 future deletion propagation cannot recall a backup the user has copied elsewhere.
 
+The upgrade wrapper trusts neither a generic executable name nor an arbitrary client request. It
+runs only from an isolated environment with exactly one regular uv or pipx ownership marker,
+resolves that matching manager without a shell, and creates the verified backup before stopping the
+daemon or invoking an installer. Installer stdin and output are disconnected, command arguments are
+fixed, and errors expose only bounded codes plus recovery metadata. A failed installer attempts to
+restore a previously running service; failed post-upgrade validation leaves it stopped rather than
+serving an unverified schema. Package downgrade and database restore remain explicit recovery
+operations.
+
 ### Local service exposure
 
 **Scenario:** The local API or MCP service binds beyond loopback, trusts filesystem permissions

@@ -310,6 +310,21 @@ and preserve the live database before performing any manual recovery; this comma
 recovery artifact but deliberately does not replace data. Application uninstall and later memory
 retraction do not remove user-held backups.
 
+For an installation managed by uv or pipx, perform the backup and package upgrade as one command:
+
+```bash
+mnemo-memory upgrade
+```
+
+Mnemo accepts exactly one ownership marker in its running isolated environment and resolves only
+that manager executable. It publishes a verified backup before stopping a running local service or
+invoking the installer. On success it runs the upgraded CLI's initialization to apply and validate
+migrations, then restarts the service only if it was previously running. The manager output is
+discarded. A bounded failure result includes the recovery artifact after backup succeeds and says
+whether an installer-failure restart restored the prior service. Validation and restart failures
+leave the service stopped for inspection. The command does not silently downgrade the package or
+restore the database; retain the reported backup for explicit recovery.
+
 After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
 the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also
