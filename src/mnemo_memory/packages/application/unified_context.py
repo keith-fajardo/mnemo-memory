@@ -3218,7 +3218,10 @@ def _append_source_items(
             ProvenanceNotice(
                 f"provenance:{context_item.item_id}",
                 context_item.item_id,
-                f"mnemo:source/{snapshot.snapshot_id}/edge/{edge.source_symbol_id}",
+                (
+                    f"mnemo:source/{snapshot.snapshot_id}/edge/{edge.source_symbol_id}/"
+                    f"{hashlib.sha256(f'{edge.kind.value}:{ref}'.encode()).hexdigest()}"
+                ),
                 hashlib.sha256(content.encode()).hexdigest(),
                 (evidence,),
             )

@@ -1752,3 +1752,48 @@ and architecture validation for 95 product Python files. No model/provider call 
 already-explicit semantic request, dbt intent inference, procedure-tag inference, cross-category
 budget change, conflict inference, persistence, dependency, renderer, API/UI, or team mode was
 added.
+
+#### Issue 17D — Complete
+
+The current bounded issue finalizes an assembled packet with three conservative deterministic
+controls. Items with the same scope, sensitivity, content, source reference, and source digest are
+exact duplicates; one authority/rank-stable survivor remains and every removed identity receives a
+`duplicate` omission. Non-conflicting knowledge and episodic results are limited to two items per
+exact evidence-source set so one source cannot consume a category; lower-ranked removals receive a
+diversity omission. Checkpoints, mandatory procedures, and all conflict participants are protected.
+
+Two included items citing the same source reference with different digests become an unresolved
+source-integrity conflict. Both remain, their context items are marked unresolved, and their exact
+evidence is retained. Existing declared conflicts are also reflected on their item state. No prose,
+claim, or semantic contradiction inference is performed. Selection only removes items from an
+already authorized packet and recomputes token/provenance invariants; it performs no repository
+read or mutation.
+
+This issue adds no learned reranking, semantic conflict inference, configurable budget change,
+renderer, persistence, model call, dependency, API/UI, or team mode.
+
+Implemented one deterministic final-selection pass over an already-authorized canonical packet.
+It collapses only items whose scope, sensitivity, content, source reference, and source digest all
+match, chooses a stable source-authority/validity/rank survivor, merges the exact evidence set, and
+records each removed identity as a duplicate omission. Non-conflicting episodic and knowledge
+items are limited to the two highest-ranked results for one exact evidence-source set. Active
+checkpoints, mandatory procedures, and every declared conflict participant are protected from
+both controls. Removed-item provenance is excluded and declared token totals are recomputed from
+the retained packet.
+
+The same pass creates one deterministic unresolved conflict when included items cite one exact
+source reference with different digests, retains every participant and its evidence, and reflects
+declared unresolved/resolved conflict state on each context item. It performs no semantic or prose
+contradiction inference. Checkpoint-lesson and source-edge provenance references are now
+item-specific so ordinary multi-lesson revisions and multi-edge symbols cannot be misclassified as
+digest conflicts.
+
+Five focused final-selection tests cover exact duplicate evidence merging, authority/rank survival,
+two-per-source diversity, deterministic source-integrity conflicts, existing declared conflict
+state, mandatory-procedure protection, omissions, and token reconciliation. Existing checkpoint
+and multi-language source tests verify item-specific producer provenance. The product contract,
+threat model, and README record the behavior and its limits. The complete repository gate passes
+with 728 tests, strict typing for 183 source files, dependency/provenance validation for 86 entries,
+and architecture validation for 96 product Python files. No learned reranking, semantic conflict
+inference, configurable budget change, renderer, persistence, model call, dependency, API/UI, or
+team mode was added.

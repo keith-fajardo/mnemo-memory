@@ -833,6 +833,7 @@ def test_source_query_returns_typescript_static_import_and_call_facts(tmp_path: 
         for item in packet.structural_items
     )
     assert len(packet.provenance) == len(packet.structural_items)
+    assert len({notice.source_reference for notice in packet.provenance}) == len(packet.provenance)
 
 
 def test_source_impact_context_returns_bounded_dependents_with_provenance(tmp_path: Path) -> None:

@@ -698,6 +698,12 @@ Mnemo exposes exactly three local stdio MCP tools:
 - `explain_context` validates a packet returned by `get_context` and reports its sources, ranks,
   omissions, conflicts, staleness, and token accounting without repeating retrieved content.
 
+Before return, the context engine removes only exact same-source duplicates, limits
+non-conflicting episodic and knowledge results to two per evidence-source set, and records every
+removal as an omission. Checkpoints, mandatory procedures, and conflict participants are retained.
+If one source reference appears with different digests, both versions remain visible as an
+unresolved source-integrity conflict; Mnemo does not guess which prose is correct.
+
 A checkpoint has a stable logical ID and immutable revisions. Revision, completion, and
 abandonment requests include the current revision ID, so two clients cannot silently overwrite one
 another. Completed and abandoned checkpoints are excluded from automatic active selection.

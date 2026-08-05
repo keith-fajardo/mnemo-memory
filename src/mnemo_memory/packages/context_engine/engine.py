@@ -33,6 +33,8 @@ from mnemo_memory.packages.storage import (
     EpisodicMemoryReviewRepositoryError,
 )
 
+from .selection import finalize_context_packet
+
 _WORD = re.compile(r"[a-z0-9_./:-]+")
 _QUESTION_TERMS = frozenset(
     {
@@ -241,15 +243,17 @@ class UnifiedContextEngine:
         plan = self.plan(request)
         packet = self._assembler.get_context(_planned_request(request, plan))
         if RetrievalCategory.EPISODIC not in plan.categories:
-            return packet
+            return finalize_context_packet(packet)
         try:
             page = self._episodic_memories.list_active_episodic_memories(request.scope, limit=50)
         except EpisodicMemoryReviewRepositoryError:
-            return _with_omission(
-                packet,
-                "episodic-memory",
-                OmissionReason.LOWER_RANK,
-                "episodic memory storage is unavailable",
+            return finalize_context_packet(
+                _with_omission(
+                    packet,
+                    "episodic-memory",
+                    OmissionReason.LOWER_RANK,
+                    "episodic memory storage is unavailable",
+                )
             )
 
         ranked = sorted(
@@ -291,26 +295,28 @@ class UnifiedContextEngine:
                 )
             )
         if not items and tuple(omissions) == packet.omissions:
-            return packet
-        return ContextPacket(
-            packet.schema_version,
-            packet.request_id,
-            packet.owner_scope,
-            packet.query_id,
-            packet.task_id,
-            packet.created_at,
-            packet.expires_at,
-            packet.declared_total_tokens + sum(item.token_estimate for item in items),
-            packet.budget,
-            packet.producer_version,
-            active_task_checkpoint=packet.active_task_checkpoint,
-            episodic_memories=(*packet.episodic_memories, *items),
-            knowledge_items=packet.knowledge_items,
-            structural_items=packet.structural_items,
-            skills_and_procedures=packet.skills_and_procedures,
-            provenance=tuple(provenance),
-            conflicts=packet.conflicts,
-            omissions=tuple(omissions),
+            return finalize_context_packet(packet)
+        return finalize_context_packet(
+            ContextPacket(
+                packet.schema_version,
+                packet.request_id,
+                packet.owner_scope,
+                packet.query_id,
+                packet.task_id,
+                packet.created_at,
+                packet.expires_at,
+                packet.declared_total_tokens + sum(item.token_estimate for item in items),
+                packet.budget,
+                packet.producer_version,
+                active_task_checkpoint=packet.active_task_checkpoint,
+                episodic_memories=(*packet.episodic_memories, *items),
+                knowledge_items=packet.knowledge_items,
+                structural_items=packet.structural_items,
+                skills_and_procedures=packet.skills_and_procedures,
+                provenance=tuple(provenance),
+                conflicts=packet.conflicts,
+                omissions=tuple(omissions),
+            )
         )
 
 

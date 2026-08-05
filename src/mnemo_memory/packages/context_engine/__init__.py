@@ -8,6 +8,7 @@ from .engine import (
     UnifiedContextEngine,
 )
 from .explanation import ContextExplanation, explain_context_packet
+from .selection import finalize_context_packet
 
 __all__ = [
     "ContextExplanation",
@@ -17,4 +18,5 @@ __all__ = [
     "RetrievalPlan",
     "UnifiedContextEngine",
     "explain_context_packet",
+    "finalize_context_packet",
 ]

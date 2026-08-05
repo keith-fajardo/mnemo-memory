@@ -77,12 +77,22 @@ exact/prefix/all-term identity matcher. Explicit queries are not replaced, seman
 enabled implicitly, and lexical/vector knowledge candidates are separately authorized and bounded
 before exact-section deduplication and reciprocal-rank fusion.
 
+Final selection operates only on this already-authorized packet. Exact same-source duplicates may
+collapse only when scope, sensitivity, content, source reference, and digest match, and the survivor
+retains their evidence. A source-reference digest disagreement creates an unresolved conflict and
+protects every participant from deduplication and diversity removal. Declared conflicts, active
+checkpoints, and mandatory procedures are likewise protected. Diversity removes only lower-ranked,
+non-conflicting knowledge or episodic items beyond two for one exact evidence-source set. No prose
+or semantic contradiction inference can elevate, suppress, or authorize an item.
+
 **Verification:** Adversarial unit, repository-contract, integration, cache, export, and local CLI
 tests with identical text across projects, including enabled and unregistered directories. Required
 result is zero leaked IDs, metadata, counts, or payloads. Context-engine tests additionally record
 the exact scope passed before scoring, compare same-text isolation, verify stable ranking and
 provenance, exercise zero-token and 50-candidate bounds, and ensure storage errors do not expose
-their payload.
+their payload. Final-selection tests cover exact duplicate evidence merging, source diversity,
+mandatory-item protection, deterministic digest conflicts, declared conflict state, and exact token
+reconciliation.
 
 **Residual risk:** Team authorization is not designed; team mode must not reuse personal-mode
 nullability.

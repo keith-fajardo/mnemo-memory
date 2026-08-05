@@ -16,12 +16,14 @@ from mnemo_memory.packages.context_engine import (
     RetrievalCategory,
     UnifiedContextEngine,
     explain_context_packet,
+    finalize_context_packet,
 )
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     ConflictNotice,
     ConflictState,
     ContextBudget,
+    ContextItemType,
     ContextPacket,
     DurableClaim,
     EpisodicMemoryKind,
@@ -395,3 +397,238 @@ def test_explanation_reports_selection_metadata_without_repeating_content() -> N
     assert "stale conflicting claim" not in encoded
     assert '"content"' not in encoded
     assert '"location"' not in encoded
+
+
+def test_final_selection_collapses_only_exact_same_source_duplicates() -> None:
+    scope = _scope()
+    memories = (
+        _memory(
+            scope,
+            6,
+            "Keep one exact duplicate and preserve all of its evidence.",
+            kind=EpisodicMemoryKind.DECISION,
+            confidence=0.95,
+            activated_at=NOW,
+        ),
+        _memory(
+            scope,
+            7,
+            "Initially different content.",
+            kind=EpisodicMemoryKind.DECISION,
+            confidence=0.85,
+            activated_at=NOW - timedelta(days=1),
+        ),
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, memories)
+    ).get_context(GetUnifiedContext(scope))
+    first, second = packet.episodic_memories
+    duplicate = replace(
+        second,
+        content=first.content,
+        token_estimate=first.token_estimate,
+    )
+    first_provenance, second_provenance = packet.provenance
+    duplicate_provenance = replace(
+        second_provenance,
+        source_reference=first_provenance.source_reference,
+        source_digest=first_provenance.source_digest,
+    )
+    candidate = replace(
+        packet,
+        declared_total_tokens=first.token_estimate + duplicate.token_estimate,
+        episodic_memories=(first, duplicate),
+        provenance=(first_provenance, duplicate_provenance),
+    )
+
+    selected = finalize_context_packet(candidate)
+
+    assert [item.item_id for item in selected.episodic_memories] == [first.item_id]
+    assert {
+        str(item.evidence_id) for item in selected.episodic_memories[0].evidence_references
+    } == {
+        str(memories[0].memory.evidence_references[0].evidence_id),
+        str(memories[1].memory.evidence_references[0].evidence_id),
+    }
+    assert selected.omissions[-1] == OmissionNotice(
+        duplicate.item_id,
+        OmissionReason.DUPLICATE,
+        "exact same-source duplicate retained under one higher-authority identity",
+    )
+    assert selected.declared_total_tokens == selected.computed_total_tokens
+
+
+def test_final_selection_limits_non_conflicting_items_from_one_evidence_source() -> None:
+    scope = _scope()
+    memories = tuple(
+        _memory(
+            scope,
+            seed,
+            f"Distinct ranked memory {seed}.",
+            kind=EpisodicMemoryKind.OUTCOME,
+            confidence=1.0 - seed / 100,
+            activated_at=NOW - timedelta(days=seed),
+        )
+        for seed in (8, 9, 10)
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, memories)
+    ).get_context(GetUnifiedContext(scope))
+    shared_evidence = packet.episodic_memories[0].evidence_references
+    candidate = replace(
+        packet,
+        episodic_memories=tuple(
+            replace(item, evidence_references=shared_evidence) for item in packet.episodic_memories
+        ),
+        provenance=tuple(
+            replace(notice, evidence_references=shared_evidence) for notice in packet.provenance
+        ),
+    )
+
+    selected = finalize_context_packet(candidate)
+
+    assert [item.ranking.rank for item in selected.episodic_memories if item.ranking] == [1, 2]
+    assert selected.omissions[-1].item_id == packet.episodic_memories[2].item_id
+    assert selected.omissions[-1].reason is OmissionReason.LOWER_RANK
+    assert selected.declared_total_tokens == selected.computed_total_tokens
+
+
+def test_final_selection_preserves_and_marks_source_digest_conflicts() -> None:
+    scope = _scope()
+    memories = (
+        _memory(
+            scope,
+            11,
+            "First observed source revision.",
+            kind=EpisodicMemoryKind.DECISION,
+            confidence=0.9,
+            activated_at=NOW,
+        ),
+        _memory(
+            scope,
+            12,
+            "Different observed source revision.",
+            kind=EpisodicMemoryKind.DECISION,
+            confidence=0.8,
+            activated_at=NOW - timedelta(days=1),
+        ),
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, memories)
+    ).get_context(GetUnifiedContext(scope))
+    first_provenance, second_provenance = packet.provenance
+    candidate = replace(
+        packet,
+        provenance=(
+            first_provenance,
+            replace(second_provenance, source_reference=first_provenance.source_reference),
+        ),
+    )
+
+    selected = finalize_context_packet(candidate)
+    repeated = finalize_context_packet(candidate)
+
+    assert len(selected.episodic_memories) == 2
+    assert len(selected.conflicts) == 1
+    assert selected.conflicts == repeated.conflicts
+    assert selected.conflicts[0].state is ConflictState.UNRESOLVED
+    assert set(selected.conflicts[0].item_ids) == {
+        item.item_id for item in selected.episodic_memories
+    }
+    assert all(
+        item.conflict_state is ConflictState.UNRESOLVED for item in selected.episodic_memories
+    )
+
+
+def test_final_selection_reflects_existing_declared_conflict_state() -> None:
+    scope = _scope()
+    memories = (
+        _memory(
+            scope,
+            13,
+            "One declared conflict participant.",
+            kind=EpisodicMemoryKind.OUTCOME,
+            confidence=0.9,
+            activated_at=NOW,
+        ),
+        _memory(
+            scope,
+            14,
+            "Another declared conflict participant.",
+            kind=EpisodicMemoryKind.OUTCOME,
+            confidence=0.8,
+            activated_at=NOW - timedelta(days=1),
+        ),
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, memories)
+    ).get_context(GetUnifiedContext(scope))
+    conflict = ConflictNotice(
+        "conflict:declared-fixture",
+        tuple(item.item_id for item in packet.episodic_memories),
+        tuple(
+            evidence for item in packet.episodic_memories for evidence in item.evidence_references
+        ),
+        ConflictState.UNRESOLVED,
+    )
+
+    selected = finalize_context_packet(replace(packet, conflicts=(conflict,)))
+
+    assert all(
+        item.conflict_state is ConflictState.UNRESOLVED for item in selected.episodic_memories
+    )
+
+
+def test_final_selection_never_collapses_mandatory_procedures() -> None:
+    scope = _scope()
+    memories = (
+        _memory(
+            scope,
+            15,
+            "Mandatory procedure content.",
+            kind=EpisodicMemoryKind.LESSON,
+            confidence=0.9,
+            activated_at=NOW,
+        ),
+        _memory(
+            scope,
+            16,
+            "Initially distinct procedure content.",
+            kind=EpisodicMemoryKind.LESSON,
+            confidence=0.8,
+            activated_at=NOW - timedelta(days=1),
+        ),
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, memories)
+    ).get_context(GetUnifiedContext(scope))
+    first, second = packet.episodic_memories
+    procedures = (
+        replace(first, item_type=ContextItemType.MANDATORY_PROCEDURE),
+        replace(
+            second,
+            item_type=ContextItemType.MANDATORY_PROCEDURE,
+            content=first.content,
+            token_estimate=first.token_estimate,
+        ),
+    )
+    first_provenance, second_provenance = packet.provenance
+    candidate = replace(
+        packet,
+        declared_total_tokens=sum(item.token_estimate for item in procedures),
+        episodic_memories=(),
+        skills_and_procedures=procedures,
+        provenance=(
+            first_provenance,
+            replace(
+                second_provenance,
+                source_reference=first_provenance.source_reference,
+                source_digest=first_provenance.source_digest,
+            ),
+        ),
+    )
+
+    selected = finalize_context_packet(candidate)
+
+    assert selected.skills_and_procedures == procedures
+    assert not any(item.reason is OmissionReason.DUPLICATE for item in selected.omissions)

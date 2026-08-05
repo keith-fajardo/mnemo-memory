@@ -919,7 +919,7 @@ class CheckpointApplicationService:
                         item_id=item.item_id,
                         source_reference=(
                             f"mnemo:checkpoint/{revision.checkpoint_id}/"
-                            f"revision/{revision.revision_id}"
+                            f"revision/{revision.revision_id}/lesson/{len(items) - 1}"
                         ),
                         source_digest=hashlib.sha256(content.encode()).hexdigest(),
                         evidence_references=evidence,

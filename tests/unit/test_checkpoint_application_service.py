@@ -673,7 +673,8 @@ def test_context_retains_a_prior_evidence_backed_lesson_after_revision() -> None
     assert remembered["revision_id"] == str(initial.revision.revision_id)
     assert item.evidence_references == (first_evidence,)
     assert item.validity.value == "unknown"
-    assert packet.provenance[1].source_reference.endswith(str(initial.revision.revision_id))
+    assert packet.provenance[1].source_reference.endswith("/lesson/0")
+    assert str(initial.revision.revision_id) in packet.provenance[1].source_reference
     assert packet.declared_total_tokens == packet.computed_total_tokens
 
 

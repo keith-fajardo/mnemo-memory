@@ -219,6 +219,16 @@ uses reciprocal-rank fusion with `k=60`; path, revision, and section identity pr
 ties. Each included section records whether lexical, local-vector, or both rank signals contributed.
 Each candidate stream is scoped and bounded before fusion.
 
+Final packet selection is conservative and deterministic. Items are exact duplicates only when
+their scope, sensitivity, content, source reference, and source digest all match; one
+authority/rank-stable identity remains while its combined evidence is preserved. At most two
+non-conflicting knowledge or episodic items may consume a category from the same exact evidence
+source set. Active checkpoints, mandatory checked-in procedures, and every declared conflict
+participant are exempt from removal. Two included items citing one source reference with different
+digests remain visible as an unresolved source-integrity conflict. This rule does not infer a
+contradiction from prose or semantic similarity. Selection only removes already-authorized items,
+adds explicit omissions, and recomputes the packet's provenance and token invariants.
+
 ## Correction and conflict handling
 
 Corrections append a new revision; they do not rewrite historical evidence. The prior revision is
