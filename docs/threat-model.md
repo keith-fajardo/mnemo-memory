@@ -450,6 +450,29 @@ atomic v11-to-v12 rollback/retry.
 **Residual risk:** Automatic source refresh composition, dbt observation, checkpoint retention,
 deletion/export, remote authentication, and backup propagation remain separate issues.
 
+### Cross-tenant dbt manifest projection
+
+**Scenario:** A manifest is activated in another project, a stale writer replaces the current
+graph, an edge substitutes an endpoint from another snapshot, a private viewer enumerates model
+paths or counts, or raw dbt/SQL/warehouse content is retained unnecessarily.
+
+**Required controls:** Manifest snapshot, node, edge, activation, and sync rows repeat exact project
+scope and force RLS. A project-keyed advisory transaction lock and expected-active comparison
+serialize activation. Composite foreign keys bind child rows and both edge endpoints to one exact
+snapshot. Explicit activations define history; a partial unique index and fixed-search-path trigger
+permit one active snapshot and reject unrecorded or immutable-field updates. Runtime privileges are
+column-limited. Persistence accepts only minimized metadata, node, edge, source-state digest, and
+evidence fields and excludes raw artifacts, SQL, compiled content, adapter responses, warehouse
+payloads, credentials, and environment values.
+
+**Verification:** Real PostgreSQL tests cover digest replay, CAS rejection, activation and
+reactivation, deterministic graph queries, invalid endpoints, conflicting identity rollback,
+restart durability, foreign-project/private-viewer denial, least-privilege columns, trigger denial,
+and atomic v12-to-v13 migration rollback/retry.
+
+**Residual risk:** Supplemental dbt artifacts, authenticated remote composition, projection
+deletion/export/import, backup propagation, and scheduled ingestion remain separate issues.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

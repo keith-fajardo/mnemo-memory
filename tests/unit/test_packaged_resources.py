@@ -102,6 +102,9 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/postgres_migrations/0012_team_checkpoint_source_observations.sql"
     ).is_file()
+    assert package_files.joinpath(
+        "resources/postgres_migrations/0013_team_dbt_manifest.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()
     assert package_files.joinpath("resources/web/index.html").is_file()
     assert package_files.joinpath("resources/web/app.js").is_file()

@@ -7,12 +7,14 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from importlib import resources
+from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
 import pg8000.dbapi  # type: ignore[import-untyped]
 import pytest
 
+from mnemo_memory.connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
@@ -37,6 +39,9 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    DbtManifestArtifact,
+    DbtNodeId,
+    DbtSnapshotId,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicExportBundle,
@@ -121,6 +126,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLEpisodicMemoryRepository,
     PostgreSQLEventOutboxRepository,
     PostgreSQLKnowledgeDocumentRepository,
+    PostgreSQLProjectIndexRepository,
     PostgreSQLSourceStructureRepository,
     PostgreSQLTaskActivityEventRepository,
     PostgreSQLTeamControlPlaneRepository,
@@ -136,6 +142,7 @@ from mnemo_memory.packages.storage import (
 )
 from mnemo_memory.packages.storage.contracts import (
     ActiveEpisodicMemoryNotFound,
+    ActiveSnapshotConflict,
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventSecretRejected,
@@ -156,6 +163,10 @@ from mnemo_memory.packages.storage.contracts import (
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
+    InvalidManifestGraph,
+    ManifestNodeNotFound,
+    ManifestSnapshotNotFound,
+    ProjectIndexStorageFailure,
     SourceIndexStorageFailure,
     SourceSnapshotNotFound,
 )
@@ -425,6 +436,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert observation_sql.count("FORCE ROW LEVEL SECURITY") == 1
     assert "checkpoint source observation revision mismatch" in observation_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in observation_sql
+    dbt_manifest_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0013_team_dbt_manifest.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert dbt_manifest_sql.count("FORCE ROW LEVEL SECURITY") == 5
+    assert "dbt manifest snapshot immutable fields cannot change" in dbt_manifest_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in dbt_manifest_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -792,25 +811,41 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath(
+                    "resources",
+                    "postgres_migrations",
+                    "0012_team_checkpoint_source_observations.sql",
+                )
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=13).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 13))
+            cursor.execute("SELECT to_regclass('mnemo_team.dbt_manifest_snapshots')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-                9,
-                10,
-                11,
-                12,
-            )
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 14))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3164,6 +3199,199 @@ def test_postgres_source_structure_is_atomic_searchable_and_scoped(
                 "UPDATE mnemo_team.source_structure_snapshots SET is_active = false WHERE "
                 "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
                 (str(workspace.workspace_id), str(first.snapshot.snapshot_id)),
+            )
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+
+_DBT_MANIFEST_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
+
+
+def _dbt_manifest_artifact(scope: MemoryScope, stamp: int = 0) -> DbtManifestArtifact:
+    raw = _DBT_MANIFEST_FIXTURE.read_text(encoding="utf-8")
+    if stamp:
+        raw = raw.replace("customer-stage", f"customer-stage-{stamp}")
+    return DbtManifestParser().parse(
+        raw,
+        ManifestParseRequest(
+            scope,
+            "fixtures/dbt/manifest-v12.json",
+            NOW + timedelta(seconds=stamp),
+        ),
+    )
+
+
+def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        workspace.workspace_id,
+        project.project_id,
+    )
+    repository = PostgreSQLProjectIndexRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    first_graph = _dbt_manifest_artifact(scope)
+    first_id = DbtSnapshotId.new()
+    first = repository.store_and_activate(first_graph, first_id)
+    assert not first.idempotent and first.snapshot.is_active
+    assert first.snapshot.node_count == len(first_graph.nodes)
+    assert first.snapshot.edge_count == len(first_graph.edges)
+    replay = repository.store_and_activate(
+        first_graph, DbtSnapshotId.new(), expected_active_snapshot_id=first_id
+    )
+    assert replay.idempotent and replay.snapshot == first.snapshot
+    assert repository.latest_transition(scope) is None
+    assert repository.last_sync_at(scope) is not None
+    assert repository.get_active_snapshot(scope) == first.snapshot
+    assert repository.get_snapshot(scope, first_id) == first.snapshot
+    assert repository.iter_nodes(scope, first_id) == first_graph.nodes
+    assert repository.iter_edges(scope, first_id) == first_graph.edges
+
+    selected = first_graph.nodes[-1]
+    assert repository.get_node(scope, first_id, selected.unique_id) == selected
+    assert repository.get_nodes(scope, first_id, (selected.unique_id,)) == (selected,)
+    assert repository.find_nodes_by_original_file_path(
+        scope, first_id, "models/marts/fct_orders.sql"
+    ) == tuple(
+        node
+        for node in first_graph.nodes
+        if node.original_file_path == "models/marts/fct_orders.sql"
+    )
+    child = next(node for node in first_graph.nodes if node.dependency_ids)
+    upstream = repository.direct_upstream(scope, first_id, child.unique_id)
+    assert upstream
+    assert repository.get_upstream_edges(scope, first_id, (child.unique_id,)) == upstream
+    parent = upstream[0].parent_id
+    downstream = repository.direct_downstream(scope, first_id, parent)
+    assert upstream[0] in downstream
+    assert repository.get_downstream_edges(scope, first_id, (parent,)) == downstream
+
+    second_graph = _dbt_manifest_artifact(scope, 1)
+    second_id = DbtSnapshotId.new()
+    second = repository.store_and_activate(
+        second_graph, second_id, expected_active_snapshot_id=first_id
+    )
+    assert not second.idempotent and second.snapshot.is_active
+    assert not repository.get_snapshot(scope, first_id).is_active
+    assert repository.latest_transition(scope) == (
+        repository.get_snapshot(scope, first_id),
+        second.snapshot,
+    )
+    page = repository.list_snapshots(scope, limit=1)
+    assert page.items == (second.snapshot,) and page.next_offset == 1
+    assert repository.list_snapshots(scope, offset=1, limit=1).items[0].snapshot_id == first_id
+
+    reactivated = repository.store_and_activate(
+        first_graph, DbtSnapshotId.new(), expected_active_snapshot_id=second_id
+    )
+    assert reactivated.idempotent and reactivated.snapshot.snapshot_id == first_id
+    assert repository.latest_transition(scope) == (
+        repository.get_snapshot(scope, second_id),
+        reactivated.snapshot,
+    )
+    with pytest.raises(ActiveSnapshotConflict):
+        repository.store_and_activate(
+            _dbt_manifest_artifact(scope, 2),
+            DbtSnapshotId.new(),
+            expected_active_snapshot_id=second_id,
+        )
+    with pytest.raises(ActiveSnapshotConflict):
+        repository.store_and_activate(
+            _dbt_manifest_artifact(scope, 2),
+            first_id,
+            expected_active_snapshot_id=first_id,
+        )
+    invalid_edge = replace(first_graph.edges[0], parent_id=DbtNodeId("model.absent"))
+    with pytest.raises(InvalidManifestGraph, match="manifest edge endpoint"):
+        repository.store_and_activate(
+            replace(first_graph, edges=(invalid_edge,)),
+            DbtSnapshotId.new(),
+            expected_active_snapshot_id=first_id,
+        )
+    assert repository.get_active_snapshot(scope) == reactivated.snapshot
+
+    restarted = PostgreSQLProjectIndexRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_active_snapshot(scope) == reactivated.snapshot
+    assert restarted.iter_nodes(scope, first_id) == first_graph.nodes
+    foreign_scope = replace(scope, project_id=ProjectId.new())
+    assert restarted.get_active_snapshot(foreign_scope) is None
+    assert (
+        restarted.find_nodes_by_original_file_path(
+            foreign_scope, first_id, "models/marts/fct_orders.sql"
+        )
+        == ()
+    )
+    with pytest.raises(ManifestSnapshotNotFound):
+        restarted.get_snapshot(foreign_scope, first_id)
+    with pytest.raises(ManifestNodeNotFound):
+        restarted.get_node(foreign_scope, first_id, selected.unique_id)
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLProjectIndexRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert viewer.get_active_snapshot(scope) is None
+    with pytest.raises(ProjectIndexStorageFailure, match="project index database operation failed"):
+        viewer.store_and_activate(_dbt_manifest_artifact(scope, 3), DbtSnapshotId.new())
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_column_privilege(current_user, "
+            "'mnemo_team.dbt_manifest_snapshots', 'content_digest', 'UPDATE'), "
+            "has_column_privilege(current_user, "
+            "'mnemo_team.dbt_manifest_snapshots', 'is_active', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.dbt_manifest_snapshots', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, True, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (
+                str(workspace.owner_id),
+                str(workspace.workspace_id),
+                TeamOperation.CONTRIBUTE.value,
+            ),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "UPDATE mnemo_team.dbt_manifest_snapshots SET is_active = false WHERE "
+                "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(first_id)),
             )
     finally:
         connection.rollback()

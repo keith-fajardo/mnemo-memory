@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 12
+POSTGRES_TEAM_SCHEMA_VERSION = 13
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -54,6 +54,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (10, "0010_team_episodic_deletions.sql"),
     (11, "0011_team_source_structure.sql"),
     (12, "0012_team_checkpoint_source_observations.sql"),
+    (13, "0013_team_dbt_manifest.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -250,6 +251,13 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT UPDATE (last_synced_at) ON "
                 f"mnemo_team.source_structure_sync_status TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.checkpoint_source_observations TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_snapshots TO {role}",
+                f"GRANT UPDATE (is_active) ON mnemo_team.dbt_manifest_snapshots TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_nodes TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.dbt_lineage_edges TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_activations TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_sync_status TO {role}",
+                f"GRANT UPDATE (last_synced_at) ON mnemo_team.dbt_manifest_sync_status TO {role}",
             )
             for statement in statements:
                 cursor.execute(statement)

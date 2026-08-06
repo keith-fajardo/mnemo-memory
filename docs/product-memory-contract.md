@@ -48,6 +48,15 @@ identity-and-time record means co-observation, not causation, and stores no chec
 payload. This storage boundary does not authenticate the principal or provide checkpoint retention,
 deletion propagation, export, or a remote team service.
 
+Team dbt manifests use the same minimized authoritative project-index contract as personal mode.
+PostgreSQL stores immutable exact-project snapshots, typed nodes and lineage edges, explicit
+activation history, and last-sync state behind forced row-level security. A project-keyed
+transaction lock and expected-active comparison serialize activation; exact content replay reuses
+the retained snapshot, while composite foreign keys bind every edge endpoint to the same scoped
+graph. Runtime access cannot mutate metadata or delete projections. The projection contains no raw
+manifest, SQL, compiled content, macro body, warehouse response, credential, or environment value.
+Catalog, run-results, and source-freshness parity remain a separate projection boundary.
+
 Team task activity retains only the existing explicitly minimized event contract, never raw
 interaction bodies. PostgreSQL applies deterministic secret/sensitivity policy before persistence
 and atomically inserts one deterministic delivery job with an accepted event. Queue claims require

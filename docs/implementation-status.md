@@ -2045,6 +2045,45 @@ added. No automatic parsing, causal inference, checkpoint retention/deletion/exp
 worker, import, remote service, OAuth, backup, quota, dashboard, source governance, or usable team
 mode was added.
 
+#### Issue 21P — PostgreSQL team dbt manifest projection parity — Complete
+
+The current bounded issue implements the core manifest portion of the existing
+`ProjectIndexRepository` contract for PostgreSQL. Immutable project-scoped snapshots, minimized
+manifest metadata, typed nodes and lineage edges, explicit activation history, and last-sync state
+must commit atomically behind forced row-level security. Exact content-digest replay reuses and
+reactivates the retained snapshot; compare-and-swap activation, conflicting snapshot identities,
+invalid graph endpoints, and cross-tenant access must fail closed. Reads and bounded graph batches
+must authorize before reconstruction and survive restart without retaining raw dbt artifacts,
+compiled SQL, source SQL, environment values, or adapter responses.
+
+This issue does not add catalog, run-results, or source-freshness projection parity; personal
+import; a remote service; OAuth; backup; quota; dashboard; source governance; or usable team mode.
+
+Implemented PostgreSQL schema version 13 and the core manifest portion of the existing
+`ProjectIndexRepository` contract. Snapshot, minimized node, typed edge, activation, and sync rows
+repeat exact project scope and force RLS. Composite foreign keys bind child rows and both edge
+endpoints to the exact scoped snapshot. No raw manifest, SQL, compiled content, macro body, adapter
+response, warehouse payload, credential, or environment value is retained.
+
+One project-keyed advisory transaction lock serializes expected-active comparison, complete graph
+storage, activation, and sync update. Exact content-digest replay reuses and can reactivate the
+retained immutable snapshot; explicit activation rows define transitions independently of UUIDs or
+timestamps. A fixed-search-path trigger rejects immutable-field changes and active-state changes
+that do not match the latest activation. Runtime updates are column-limited. Exact snapshot,
+node/file, adjacency, batch, transition, sync, and deterministic pagination reads authorize in the
+database before reconstruction.
+
+ADR 0024, the product contract, and threat model document minimization, authorization, activation,
+and forward-only recovery. Real PostgreSQL tests prove atomic v12-to-v13 rollback/retry, exact
+replay, CAS conflicts, two activations and reactivation, graph and batch parity, invalid endpoint
+rejection, conflicting identity rollback, deterministic pagination, restart durability,
+foreign-project/private-viewer denial, immutable-column privileges, and trigger enforcement. The
+complete repository gate passes with 826 default tests plus 17 mandatory real-PostgreSQL tests,
+strict typing for 218 source files, dependency/provenance validation for 93 entries, architecture
+validation for 118 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No dependency was added. Supplemental dbt projection parity remains the next bounded
+team-backend issue.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

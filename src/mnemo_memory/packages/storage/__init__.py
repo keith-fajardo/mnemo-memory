@@ -111,6 +111,7 @@ from .postgres import (
 from .postgres_approved import PostgreSQLApprovedEpisodicEventRepository
 from .postgres_candidates import PostgreSQLEpisodicMemoryRepository
 from .postgres_checkpoints import PostgreSQLCheckpointRepository
+from .postgres_dbt import PostgreSQLProjectIndexRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
 from .postgres_source_structure import PostgreSQLSourceStructureRepository
@@ -228,6 +229,7 @@ __all__ = [
     "PostgreSQLEpisodicMemoryRepository",
     "PostgreSQLEventOutboxRepository",
     "PostgreSQLKnowledgeDocumentRepository",
+    "PostgreSQLProjectIndexRepository",
     "PostgreSQLSourceStructureRepository",
     "PostgreSQLTaskActivityEventRepository",
     "PostgreSQLTeamControlPlaneRepository",
