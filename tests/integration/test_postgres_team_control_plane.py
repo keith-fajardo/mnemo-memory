@@ -1568,6 +1568,10 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
 
     expiring_aggregate, expiring_revision = _checkpoint_pair(scope, "f")
     repository.create_checkpoint_aggregate(expiring_aggregate, expiring_revision)
+    assert tuple(
+        item.checkpoint_id
+        for item in repository.list_active_checkpoints_updated_before(scope, updated_before=NOW)
+    ) == (expiring_aggregate.checkpoint_id,)
     expired = repository.expire_checkpoint(
         scope,
         expiring_aggregate.checkpoint_id,

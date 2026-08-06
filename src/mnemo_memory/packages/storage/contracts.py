@@ -1208,6 +1208,14 @@ class CheckpointRepository(Protocol):
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> CheckpointPage: ...
 
+    def list_active_checkpoints_updated_before(
+        self,
+        scope: MemoryScope,
+        *,
+        updated_before: datetime,
+        limit: int = 100,
+    ) -> tuple[CheckpointAggregate, ...]: ...
+
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None: ...
 
 

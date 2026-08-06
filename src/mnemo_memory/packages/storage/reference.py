@@ -2758,6 +2758,27 @@ class ReferenceCheckpointRepository:
         next_offset = offset + limit if offset + limit < len(active) else None
         return CheckpointPage(items=items, next_offset=next_offset)
 
+    def list_active_checkpoints_updated_before(
+        self,
+        scope: MemoryScope,
+        *,
+        updated_before: datetime,
+        limit: int = 100,
+    ) -> tuple[CheckpointAggregate, ...]:
+        self._require_scope(scope)
+        _require_aware_datetime(updated_before, "updated_before")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("checkpoint retention limit must be between 1 and 100")
+        due = [
+            aggregate
+            for aggregate in self._aggregates.values()
+            if aggregate.scope == scope
+            and aggregate.lifecycle_status is CheckpointStatus.ACTIVE
+            and aggregate.updated_at <= updated_before
+        ]
+        due.sort(key=lambda item: (item.updated_at, str(item.checkpoint_id)))
+        return tuple(due[:limit])
+
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None

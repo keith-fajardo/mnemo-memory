@@ -1111,6 +1111,35 @@ class SQLiteCheckpointRepository:
             next_offset=offset + limit if len(rows) > limit else None,
         )
 
+    def list_active_checkpoints_updated_before(
+        self,
+        scope: MemoryScope,
+        *,
+        updated_before: datetime,
+        limit: int = 100,
+    ) -> tuple[CheckpointAggregate, ...]:
+        self._require_checkpoint_scope(scope)
+        _require_aware_datetime(updated_before, "updated_before")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("checkpoint retention limit must be between 1 and 100")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM checkpoint_aggregates WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? AND lifecycle_status = 'active' "
+                    "AND julianday(updated_at) <= julianday(?) "
+                    "ORDER BY julianday(updated_at) ASC, checkpoint_id ASC LIMIT ?",
+                    (
+                        *self._scope_values(scope),
+                        updated_before.astimezone(UTC).isoformat(),
+                        limit,
+                    ),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise RepositoryStorageFailure("checkpoint storage operation failed") from error
+        return tuple(self._aggregate_from_row(row) for row in rows)
+
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None

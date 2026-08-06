@@ -79,6 +79,7 @@ _ContextLoader = Callable[[MemoryScope], str | None]
 _PromptContextLoader = Callable[[MemoryScope, str], str | None]
 _KnowledgeRefresher = Callable[[MemoryProjectBinding], None]
 _KnowledgeStatusLoader = Callable[[MemoryProjectBinding], int]
+_RetentionSweeper = Callable[[MemoryProjectBinding], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,7 @@ class AutomaticMemoryHook:
     prompt_context_loader: _PromptContextLoader | None = None
     knowledge_refresher: _KnowledgeRefresher | None = None
     knowledge_status_loader: _KnowledgeStatusLoader | None = None
+    retention_sweeper: _RetentionSweeper | None = None
     git_observer: GitSourceObserver | None = None
 
     def handle(self, event: object) -> dict[str, object]:
@@ -155,6 +157,7 @@ class AutomaticMemoryHook:
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
         if event_name == "SessionStart":
+            self._expire_due_checkpoints(binding)
             _SessionStateStore(self.data_directory).save(
                 session_id,
                 dirty=False,
@@ -212,6 +215,15 @@ class AutomaticMemoryHook:
                 )
             return self._checkpoint_output(instruction)
         return {}
+
+    def _expire_due_checkpoints(self, binding: MemoryProjectBinding) -> None:
+        """Run one bounded retention pass without ever blocking the client session."""
+        if self.retention_sweeper is None:
+            return
+        try:
+            self.retention_sweeper(binding)
+        except Exception:  # The client hook is deliberately fail-open.
+            return
 
     def _current_checkpoint_marker(self, scope: MemoryScope) -> str | None:
         """Read one scoped durable revision identity without exposing checkpoint content."""

@@ -2426,6 +2426,42 @@ PostgreSQL tests, strict typing for 232 source files, dependency/provenance vali
 entries, architecture validation for 127 product Python files, schema validation, and the isolated
 installed-package MCP workflow. No dependency was added.
 
+#### Issue 21Z — Scheduled checkpoint retention expiry — Complete
+
+The current bounded issue makes the existing checkpoint expiry lifecycle operational from the
+configured personal episodic-retention period. An automatic-memory session start may run one
+bounded, exact-task, oldest-first sweep over active checkpoints whose last canonical write is due;
+the sweep must use the existing compare-and-swap expiry transition, preserve immutable history and
+evidence, remain idempotent after restart, and fail open without blocking the coding agent.
+
+Authorization and exact scope filtering must happen before time ordering. Retrieval must not
+silently extend retention, concurrent checkpoint changes must not be expired from a stale
+selection, and no physical purge, remote listener, OAuth, backup propagation, quota, dashboard,
+team knowledge governance, source approval, or dependency belongs to this issue.
+
+Implemented one storage-independent retention service and oldest-first, exact-task due discovery
+for Reference, SQLite, and PostgreSQL repositories. A pass uses the configured 1–3650 day period,
+is capped at 100 active checkpoints, rereads the selected aggregate and current revision, and uses
+the existing expected-revision expiry transition. Concurrent saves or terminal changes are skipped;
+the committed expiry preserves immutable content, evidence, and lifecycle history, while repeated
+or restarted passes are idempotent. SQLite compares timestamp values chronologically rather than by
+offset-bearing text.
+
+Automatic-memory `SessionStart` now runs one personal retention pass before current-checkpoint
+selection. The callback loads the current secret-free setting only when invoked and fails open on
+invalid settings, storage failure, or any retention error, so Codex or Claude Code remains usable.
+No retrieval path updates the canonical write time. PostgreSQL exposes the same scope-first due
+query behind existing forced RLS without adding a listener or unauthenticated scheduler.
+
+ADR 0034, the product contract, user guide, README, and threat model record the last-write clock,
+bounded execution, stale-selection defense, logical-expiry boundary, and residual backup/team
+scheduling risk. Focused tests cover exact-scope cutoff selection, evidence preservation, restart
+idempotence, concurrent revision, installed-hook configuration, and fail-open behavior. The complete
+repository gate passes with 856 default tests plus 21 mandatory real-PostgreSQL tests, strict typing
+for 234 source files, dependency/provenance validation for 93 entries, architecture validation for
+128 product Python files, schema validation, and the isolated installed-package MCP workflow. No
+dependency or schema migration was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

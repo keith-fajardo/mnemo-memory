@@ -47,8 +47,12 @@ without a partial revision or event. PostgreSQL may also attach one immutable ex
 observation to a revision only when the matching authorized project snapshot already exists. That
 identity-and-time record means co-observation, not causation, and stores no checkpoint or source
 payload. Expiry appends an evidence-preserving terminal revision and removes that handoff from
-current selection. This storage boundary does not authenticate the principal or provide scheduled
-checkpoint retention, physical deletion propagation, or a remote team service. Complete
+current selection. Scope-first due discovery selects at most 100 active checkpoints by oldest
+canonical `updated_at`; the application rereads their current identities and uses the normal
+compare-and-swap expiry transition so a concurrent save wins. Automatic-memory session start uses
+the configured 1–3650 day personal episodic-retention period for one exact task and fails open.
+Retrieval never updates the schedule. This storage boundary does not authenticate a remote
+principal or provide physical deletion propagation or a remote team service. Complete
 aggregate, revision, and lifecycle-event history is portable through a strict exact-task bundle;
 source observations are excluded because their source snapshots are rebuildable projections.
 An explicit user deletion is distinct from expiry: it writes one deterministic payload-free

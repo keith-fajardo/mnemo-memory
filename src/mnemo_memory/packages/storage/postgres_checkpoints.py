@@ -402,6 +402,34 @@ class PostgreSQLCheckpointRepository:
             items = tuple(self._aggregate_from_row(row, scope) for row in rows[:limit])
             return CheckpointPage(items, offset + limit if len(rows) > limit else None)
 
+    def list_active_checkpoints_updated_before(
+        self,
+        scope: MemoryScope,
+        *,
+        updated_before: datetime,
+        limit: int = 100,
+    ) -> tuple[CheckpointAggregate, ...]:
+        self._require_scope(scope)
+        if (
+            not isinstance(updated_before, datetime)
+            or updated_before.tzinfo is None
+            or updated_before.utcoffset() is None
+        ):
+            raise ValueError("updated_before must be timezone-aware")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("checkpoint retention limit must be between 1 and 100")
+        with self._transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT " + _AGGREGATE_COLUMNS + " FROM mnemo_team.checkpoint_aggregates "
+                "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND lifecycle_status = 'active' AND updated_at <= %s "
+                "ORDER BY updated_at ASC, checkpoint_id ASC LIMIT %s",
+                (*self._scope_values(scope), updated_before, limit),
+            )
+            return tuple(self._aggregate_from_row(row, scope) for row in cursor.fetchall())
+
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None

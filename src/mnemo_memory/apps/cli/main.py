@@ -52,6 +52,7 @@ from mnemo_memory.packages.application import (
     CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationEpisodicEventNotFound,
     CheckpointApplicationError,
+    CheckpointRetentionService,
     CheckpointRuntime,
     CorrectApprovedEpisodicEvent,
     DbtApplicationConflict,
@@ -2147,6 +2148,18 @@ def automatic_memory_hook(
     try:
         raw = json.load(sys.stdin)
         config = resolve_local_config(data_dir)
+
+        def expire_due_checkpoints(binding: MemoryProjectBinding) -> None:
+            retention_days = (
+                PersonalSettingsStore(config.data_directory).load().episodic_retention_days
+            )
+            with build_checkpoint_runtime(config) as runtime:
+                CheckpointRetentionService(runtime.repository).expire_due(
+                    binding.checkpoint_scope,
+                    as_of=datetime.now(UTC),
+                    retention_days=retention_days,
+                )
+
         hook = AutomaticMemoryHook(
             config.data_directory,
             cast(ClientName, client),
@@ -2166,6 +2179,7 @@ def automatic_memory_hook(
             knowledge_status_loader=lambda binding: _project_knowledge_document_count(
                 config.data_directory, binding
             ),
+            retention_sweeper=expire_due_checkpoints,
         )
         result = hook.handle(raw)
     except (OSError, ValueError, json.JSONDecodeError):

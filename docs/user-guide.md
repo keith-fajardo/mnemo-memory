@@ -675,8 +675,11 @@ evidence. **Pin** moves an active fact ahead of unpinned recency inside the same
 it does not widen scope or override current repository facts. A correction transfers its pin to
 the replacement, and erasing the fact removes the current pin. The Settings section stores strict
 local defaults for repository-note sync, explicit approved-event capture, optional provider/model
-names, future episodic retention, and context budgets. It never stores an API key. Restart the MCP
-process after a settings change; existing records keep their original retention schedules. Run
+names, episodic retention, and context budgets. It never stores an API key. For automatic task
+memory, a session start expires active checkpoints whose last canonical write is at least that many
+days old; reading a checkpoint never renews it, and expiry preserves its audit history. Restart the
+MCP process after other settings changes; existing extracted episodic records keep their original
+retention schedules. Run
 `mnemo-memory stop` when you no longer want the local web process.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the

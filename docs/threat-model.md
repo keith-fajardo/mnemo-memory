@@ -200,11 +200,36 @@ lifecycle ordering.
 An injected v2-to-v3 migration failure must retain ledger `(1, 2)` and no checkpoint table before
 an idempotent retry reaches v3.
 
-**Residual risk:** PostgreSQL does not authenticate the principal and does not yet implement
-scheduled checkpoint retention, physical deletion, backup propagation, or the remote-service
-boundary. Checkpoint outbox and source-observation parity are implemented separately.
+**Residual risk:** PostgreSQL does not authenticate the principal and does not yet provide a team
+scheduler, physical deletion propagation, backup propagation, or the remote-service boundary.
+Scope-first due discovery and the storage-independent retention service are implemented, while
+automatic scheduling is composed only for the local personal hook. Checkpoint outbox and
+source-observation parity are implemented separately.
 The adapter remains unavailable to agents until the authenticated team composition and remaining
 production controls are complete.
+
+### Cross-scope or stale checkpoint retention selection
+
+**Scenario:** A retention sweep enumerates another task's checkpoints, expires a checkpoint that
+was revised after discovery, treats a read as renewal, processes an unbounded backlog, or blocks a
+coding client when local storage is unavailable.
+
+**Required controls:** Due discovery receives one complete task scope and adapters authorize and
+filter it before comparing timestamps or ordering results. Only active aggregates at or before the
+configured cutoff are returned, oldest-first with a stable identity tie-breaker and a maximum of
+100. The application rereads the aggregate and revision, verifies unchanged identity, update time,
+active status, and cutoff, then uses the existing expected-revision expiry transition. Concurrent
+changes are skipped. Retrieval never writes `updated_at`. The personal automatic-memory hook runs
+the sweep only at session start and catches every callback failure so the agent remains usable.
+
+**Verification:** Reference and SQLite tests cover exact-scope isolation, cutoff boundaries,
+bounded results, preserved evidence, restart idempotence, and a synthetic concurrent revision.
+Automatic-hook tests cover session-start invocation and failure isolation. The real PostgreSQL
+suite exercises scope-first due discovery behind forced RLS.
+
+**Residual risk:** Expired checkpoint payload remains in immutable audit history until explicit
+deletion; backups and external exports require their own propagation policy. Team scheduling waits
+for the authenticated remote service and its operational controls.
 
 ### Cross-tenant team event delivery and lease races
 
@@ -562,8 +587,8 @@ fails closed. The record stores identities and time only and is explicitly non-c
 restart durability, cross-task/private-project denial, read/insert-only runtime privileges, and
 atomic v11-to-v12 rollback/retry.
 
-**Residual risk:** Automatic source refresh composition, dbt observation, scheduled checkpoint
-retention, remote authentication, and backup propagation remain separate issues. Portable
+**Residual risk:** Automatic source refresh composition, dbt observation, remote team scheduling,
+remote authentication, and backup propagation remain separate issues. Portable
 checkpoint history including deletion tombstones, terminal expiry, and physical canonical deletion
 are implemented separately.
 

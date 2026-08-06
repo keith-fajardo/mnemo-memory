@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
 
@@ -233,10 +234,12 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     project.mkdir()
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
+    swept: list[MemoryProjectBinding] = []
     hook = AutomaticMemoryHook(
         data,
         "codex",
         knowledge_refresher=lambda current: cli._refresh_project_knowledge(data, current),
+        retention_sweeper=swept.append,
     )
 
     started = hook.handle(
@@ -253,6 +256,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "include_approved_events" in str(context)
     assert "approved decision" in str(context)
     assert "current_source_digest" in str(context)
+    assert swept == [binding]
     assert "Do not claim that you know prior changes" in str(context)
     assert str(project) not in str(context)
 
@@ -306,6 +310,74 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     state = (data / "automatic-memory-session-state.json").read_text()
     assert str(project) not in state
     assert "transcript" not in state.lower()
+
+
+def test_session_start_retention_failure_never_blocks_the_client(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+
+    def unavailable(_: MemoryProjectBinding) -> None:
+        raise RuntimeError("sensitive storage detail")
+
+    result = AutomaticMemoryHook(
+        data,
+        "codex",
+        retention_sweeper=unavailable,
+    ).handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    assert "hookSpecificOutput" in result
+    assert "sensitive storage detail" not in json.dumps(result)
+
+
+def test_installed_hook_expires_a_checkpoint_due_under_personal_settings(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    handoff = _create_test_handoff(data, binding)
+    old_write = (datetime.now(UTC) - timedelta(days=181)).isoformat()
+    with sqlite3.connect(data / "mnemo.sqlite3") as connection:
+        connection.execute(
+            "UPDATE checkpoint_aggregates SET created_at = ?, updated_at = ? "
+            "WHERE checkpoint_id = ?",
+            (
+                old_write,
+                old_write,
+                str(handoff.aggregate.checkpoint_id),
+            ),
+        )
+
+    result = _run_hook_process(
+        data,
+        {"hook_event_name": "SessionStart", "session_id": "fresh", "cwd": str(project)},
+    )
+
+    assert "hookSpecificOutput" in result
+    repository = SQLiteCheckpointRepository(data / "mnemo.sqlite3", base_directory=data)
+    assert (
+        repository.get_aggregate(
+            binding.checkpoint_scope, handoff.aggregate.checkpoint_id
+        ).lifecycle_status.value
+        == "expired"
+    )
+
+
+def test_invalid_retention_settings_do_not_block_the_installed_hook(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    (data / "settings.json").write_text("{}", encoding="utf-8")
+
+    result = _run_hook_process(
+        data,
+        {"hook_event_name": "SessionStart", "session_id": "fresh", "cwd": str(project)},
+    )
+
+    assert "hookSpecificOutput" in result
+    assert "MNEMO_MEMORY_HOOK_UNAVAILABLE" not in json.dumps(result)
 
 
 def test_repository_verification_failure_never_clears_pending_handoff(

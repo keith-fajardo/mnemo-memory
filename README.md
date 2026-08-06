@@ -371,9 +371,11 @@ pin and erasure removes it. An explicit same-origin **Export JSON** action downl
 in that exact task scope with full evidence and governance serialization, current pin state, and a
 canonical content digest; Mnemo does not retain another server-side copy of the download. Its
 Settings section controls repository-note
-auto-sync, explicit approved-event capture, optional model routing metadata, future retention
-defaults, and packet budgets. It never accepts an API key. Changes apply to new MCP processes and
-automatic hooks; existing retention schedules are not silently rewritten. Stop it with
+auto-sync, explicit approved-event capture, optional model routing metadata, retention defaults,
+and packet budgets. On automatic-memory session start, active checkpoints older than the configured
+period since their last canonical write are expired from current retrieval while their audit
+history remains; reads do not renew them. It never accepts an API key. Changes apply to new MCP
+processes and automatic hooks; existing extracted-memory schedules are not silently rewritten. Stop it with
 `mnemo-memory stop`.
 
 Create an integrity-checked recovery point before any manual installation change:
