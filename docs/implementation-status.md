@@ -1797,6 +1797,50 @@ workflow. No dependency was added. No retention expiry/purge, deletion/export, e
 call, worker/scheduler, source approval workflow, dbt/source-structure parity, personal import,
 remote service, OAuth, backup, quota, dashboard, or usable team mode was added.
 
+#### Issue 21J — PostgreSQL team episodic-memory retention and purge — Complete
+
+The current bounded issue implements the existing `EpisodicMemoryRetentionRepository` contract for
+PostgreSQL extracted candidates and approved memories. A forward-only migration and adapter
+extension must preserve exact task scope, canonical source retention, deterministic payload-free
+expiration identity, due-only selection, immediate exclusion from candidate/review/active/
+governance/revision reads, atomic dependent-payload purge, anti-resurrection tombstones, stable
+replay, and batch rollback/idempotency. Every row and operation must use forced RLS and the existing
+principal/workspace/operation boundary, with real-database tests for migration rollback, restart
+durability, runtime privilege limits, conflicting batches, and cross-tenant/cross-task denial.
+
+This issue does not add task-activity-event retention/purge, explicit deletion/export, scheduler or
+worker, checkpoint/dbt/source-structure parity, personal import, authenticated remote service,
+OAuth, backup, quota, dashboard, source governance, or usable team mode.
+
+Implemented PostgreSQL schema version 8 and the existing `EpisodicMemoryRetentionRepository`
+contract on `PostgreSQLEpisodicMemoryRepository`. Immutable expiration and purge tombstone tables
+repeat complete task scope, force RLS, and expose read/insert-only runtime privileges. Fixed-search-
+path triggers bind expiration to the exact candidate source, policy, non-permanent canonical
+schedule, and scope, then bind purge to that expiration and its chronological boundary. Canonical
+ISO timestamp text is preserved exactly for deterministic identity provenance while PostgreSQL
+casts it only for time comparisons.
+
+One expiration immediately excludes candidate, review, active-memory, governance, and revision
+payload reads, including after restart. A later exact purge permits trigger-gated deletion of the
+matching governance, active, review, and candidate rows while retaining both tombstones and the
+permitted minimized source event. Candidate storage checks retained expiration tombstones before
+insertion, preventing extraction retry from resurrecting purged content. Complete batches validate
+before mutation; exact expiration/purge replay is idempotent, and non-due, changed, stale,
+cross-scope, or concurrently conflicting batches roll back atomically.
+
+ADR 0019, the product contract, and threat model document the two-phase lifecycle, deterministic
+timestamp, authorization, anti-resurrection, and recovery boundaries. Real PostgreSQL tests prove
+atomic v7-to-v8 rollback/retry, not-due selection, conflicting-batch rollback, exact expiration
+replay, immediate exclusion of every dependent read, direct pre-purge deletion denial, restart
+durability, different-task and private-project denial, physical dependent-payload purge, source
+survival, exact purge replay, immutable tombstone privileges, and anti-resurrection. The complete
+repository gate passes with 826 default tests plus 11 mandatory real-PostgreSQL tests, strict typing
+for 216 source files, dependency/provenance validation for 93 entries, architecture validation for
+116 product Python files, schema validation, and the isolated installed-package MCP workflow. No
+dependency was added. No task-event retention/purge, deletion/export, scheduler/worker,
+checkpoint/dbt/source-structure parity, personal import, remote service, OAuth, backup, quota,
+dashboard, source governance, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

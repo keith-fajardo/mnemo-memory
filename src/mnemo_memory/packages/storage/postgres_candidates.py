@@ -14,9 +14,12 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryPurge,
+    EpisodicMemoryRetentionTarget,
     EpisodicMemoryRevision,
     EpisodicMemoryRevisionStatus,
     EventId,
@@ -26,6 +29,7 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     MemoryStatus,
     OwnerId,
+    RetentionPolicyId,
     RetentionSchedule,
     ScopeLevel,
     Sensitivity,
@@ -51,12 +55,21 @@ from .contracts import (
     EpisodicMemoryCandidateRepositoryError,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryExpirationConflict,
+    EpisodicMemoryExpirationNotFound,
+    EpisodicMemoryExpirationResult,
     EpisodicMemoryGovernanceConflict,
     EpisodicMemoryGovernanceNotFound,
     EpisodicMemoryGovernanceRejected,
     EpisodicMemoryGovernanceRepositoryError,
     EpisodicMemoryGovernanceResult,
     EpisodicMemoryGovernanceStorageFailure,
+    EpisodicMemoryPurgeConflict,
+    EpisodicMemoryPurgeNotFound,
+    EpisodicMemoryPurgeResult,
+    EpisodicMemoryPurgeStorageFailure,
+    EpisodicMemoryRetentionRepositoryError,
+    EpisodicMemoryRetentionStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -82,6 +95,11 @@ _GOVERNANCE_COLUMNS = (
     "expected_revision_id::text, source_action_key, reason, corrected_claim, "
     "corrected_sensitivity, occurred_at, evidence_json::text"
 )
+_EXPIRATION_COLUMNS = (
+    "expiration_sequence, expiration_id::text, memory_id::text, source_event_id::text, "
+    "retention_policy_id::text, scheduled_expires_at, expired_at"
+)
+_PURGE_COLUMNS = "purge_sequence, purge_id::text, expiration_id::text, memory_id::text, purged_at"
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -158,6 +176,18 @@ class PostgreSQLEpisodicMemoryRepository:
                     "episodic candidate authority fields do not match the source event"
                 )
             cursor.execute(
+                "SELECT memory_id::text FROM mnemo_team.episodic_memory_expirations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[]))",
+                (
+                    str(self._workspace_id),
+                    "{" + ",".join(str(candidate.memory_id) for candidate in values) + "}",
+                ),
+            )
+            if cursor.fetchone() is not None:
+                raise EpisodicMemoryCandidateConflict(
+                    "episodic candidate retention tombstone prevents resurrection"
+                )
+            cursor.execute(
                 "SELECT " + _CANDIDATE_COLUMNS + " FROM "
                 "mnemo_team.episodic_memory_candidates WHERE "
                 "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
@@ -228,6 +258,10 @@ class PostgreSQLEpisodicMemoryRepository:
                 "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
                 "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid)"
                 + source_filter
+                + " AND NOT EXISTS (SELECT 1 FROM "
+                "mnemo_team.episodic_memory_expirations AS expiration WHERE "
+                "expiration.workspace_id = episodic_memory_candidates.workspace_id "
+                "AND expiration.memory_id = episodic_memory_candidates.memory_id)"
                 + " ORDER BY candidate_sequence DESC LIMIT %s OFFSET %s",
                 parameters,
             )
@@ -329,6 +363,9 @@ class PostgreSQLEpisodicMemoryRepository:
                 "AND active.project_id = CAST(%s AS uuid) "
                 "AND active.owner_id = CAST(%s AS uuid) AND active.visibility = %s "
                 "AND active.session_id = CAST(%s AS uuid) AND active.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_expirations "
+                "AS expiration WHERE expiration.workspace_id = active.workspace_id "
+                "AND expiration.memory_id = active.memory_id) "
                 "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_governance AS action "
                 "WHERE action.workspace_id = active.workspace_id "
                 "AND action.memory_id = active.memory_id AND action.action_kind = 'retracted') "
@@ -433,6 +470,225 @@ class PostgreSQLEpisodicMemoryRepository:
                 raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
             return self._revisions(cursor, base)
 
+    def list_due_episodic_memory_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[EpisodicMemoryRetentionTarget, ...]:
+        self._require_scope(scope)
+        self._require_aware(as_of, "as_of")
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT candidate.memory_id::text, candidate.source_event_id::text, "
+                "candidate.retention_json::text FROM "
+                "mnemo_team.episodic_memory_candidates AS candidate WHERE "
+                "candidate.workspace_id = CAST(%s AS uuid) "
+                "AND candidate.project_id = CAST(%s AS uuid) "
+                "AND candidate.owner_id = CAST(%s AS uuid) AND candidate.visibility = %s "
+                "AND candidate.session_id = CAST(%s AS uuid) "
+                "AND candidate.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_expirations "
+                "AS expiration WHERE expiration.workspace_id = candidate.workspace_id "
+                "AND expiration.memory_id = candidate.memory_id)",
+                _task_scope_values(scope),
+            )
+            targets = tuple(
+                EpisodicMemoryRetentionTarget(
+                    MemoryId.from_string(str(row[0])),
+                    EventId.from_string(str(row[1])),
+                    scope,
+                    self._retention_from_json(row[2]),
+                )
+                for row in cursor.fetchall()
+            )
+        due = tuple(
+            target
+            for target in targets
+            if not target.retention.permanent and target.retention.is_expired(as_of)
+        )
+        return tuple(
+            sorted(
+                due,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.memory_id),
+                ),
+            )
+        )
+
+    def apply_episodic_memory_expirations(
+        self, expirations: tuple[EpisodicMemoryExpiration, ...]
+    ) -> EpisodicMemoryExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return EpisodicMemoryExpirationResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory expiration batch is invalid")
+        for expiration in values:
+            if not isinstance(expiration, EpisodicMemoryExpiration):
+                raise TypeError("episodic memory expiration batch is invalid")
+            self._require_scope(expiration.scope)
+        with self._retention_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing_count = 0
+            pending: list[EpisodicMemoryExpiration] = []
+            for expiration in values:
+                target = self._retention_target(cursor, expiration.scope, expiration.memory_id)
+                if target is None:
+                    raise EpisodicMemoryExpirationNotFound(
+                        "episodic memory retention target was not found"
+                    )
+                schedule = target.retention
+                if (
+                    target.source_event_id != expiration.source_event_id
+                    or schedule.permanent
+                    or schedule.policy_id != expiration.retention_policy_id
+                    or schedule.expires_at != expiration.scheduled_expires_at
+                    or not schedule.is_expired(expiration.expired_at)
+                ):
+                    raise EpisodicMemoryExpirationConflict(
+                        "episodic memory expiration does not match canonical retention"
+                    )
+                existing = self._scoped_expiration(cursor, expiration.scope, expiration.memory_id)
+                if existing is not None:
+                    if existing != expiration:
+                        raise EpisodicMemoryExpirationConflict(
+                            "episodic memory already has a different expiration"
+                        )
+                    existing_count += 1
+                else:
+                    pending.append(expiration)
+            for expiration in pending:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.episodic_memory_expirations("
+                    "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                    "expiration_id, memory_id, source_event_id, retention_policy_id, "
+                    "scheduled_expires_at, expired_at) VALUES (CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), %s, %s)",
+                    (
+                        *_task_scope_values(expiration.scope),
+                        str(expiration.expiration_id),
+                        str(expiration.memory_id),
+                        str(expiration.source_event_id),
+                        str(expiration.retention_policy_id),
+                        expiration.scheduled_expires_at.isoformat(),
+                        expiration.expired_at.isoformat(),
+                    ),
+                )
+            return EpisodicMemoryExpirationResult(values, existing_count == len(values))
+
+    def get_episodic_memory_expiration(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryExpiration:
+        self._require_scope(scope)
+        if not isinstance(memory_id, MemoryId):
+            raise TypeError("memory_id must be a MemoryId")
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            expiration = self._scoped_expiration(cursor, scope, memory_id)
+            if expiration is None:
+                raise EpisodicMemoryExpirationNotFound("episodic memory expiration was not found")
+            return expiration
+
+    def list_unpurged_episodic_memory_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[EpisodicMemoryExpiration, ...]:
+        self._require_scope(scope)
+        with self._purge_transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT " + _EXPIRATION_COLUMNS + " FROM "
+                "mnemo_team.episodic_memory_expirations AS expiration WHERE "
+                "expiration.workspace_id = CAST(%s AS uuid) "
+                "AND expiration.project_id = CAST(%s AS uuid) "
+                "AND expiration.owner_id = CAST(%s AS uuid) AND expiration.visibility = %s "
+                "AND expiration.session_id = CAST(%s AS uuid) "
+                "AND expiration.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_purges AS purge "
+                "WHERE purge.workspace_id = expiration.workspace_id "
+                "AND purge.memory_id = expiration.memory_id) "
+                "ORDER BY expiration.expired_at ASC, expiration.memory_id ASC",
+                _task_scope_values(scope),
+            )
+            expirations = tuple(self._expiration_from_row(row, scope) for row in cursor.fetchall())
+            return tuple(
+                sorted(
+                    expirations,
+                    key=lambda item: (item.expired_at.isoformat(), str(item.memory_id)),
+                )
+            )
+
+    def apply_episodic_memory_purges(
+        self, purges: tuple[EpisodicMemoryPurge, ...]
+    ) -> EpisodicMemoryPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return EpisodicMemoryPurgeResult((), True)
+        if len(values) > 256 or len({item.memory_id for item in values}) != len(values):
+            raise ValueError("episodic memory purge batch is invalid")
+        for purge in values:
+            if not isinstance(purge, EpisodicMemoryPurge):
+                raise TypeError("episodic memory purge batch is invalid")
+            self._require_scope(purge.scope)
+        with self._purge_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing_count = 0
+            pending: list[EpisodicMemoryPurge] = []
+            for purge in values:
+                expiration = self._scoped_expiration(cursor, purge.scope, purge.memory_id)
+                if expiration is None:
+                    raise EpisodicMemoryPurgeNotFound(
+                        "episodic memory expiration was not found for purge"
+                    )
+                if (
+                    purge.expiration_id != expiration.expiration_id
+                    or purge.purged_at < expiration.expired_at
+                ):
+                    raise EpisodicMemoryPurgeConflict(
+                        "episodic memory purge does not match canonical expiration"
+                    )
+                existing = self._scoped_purge(cursor, purge.scope, purge.memory_id)
+                if existing is not None:
+                    if existing != purge:
+                        raise EpisodicMemoryPurgeConflict(
+                            "episodic memory already has a different purge"
+                        )
+                    existing_count += 1
+                elif self._retention_target(cursor, purge.scope, purge.memory_id) is None:
+                    raise EpisodicMemoryPurgeNotFound(
+                        "episodic memory payload was not found for purge"
+                    )
+                else:
+                    pending.append(purge)
+            for purge in pending:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.episodic_memory_purges("
+                    "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                    "purge_id, expiration_id, memory_id, purged_at) VALUES ("
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), %s)",
+                    (
+                        *_task_scope_values(purge.scope),
+                        str(purge.purge_id),
+                        str(purge.expiration_id),
+                        str(purge.memory_id),
+                        purge.purged_at.isoformat(),
+                    ),
+                )
+                self._delete_expired_payload(cursor, purge)
+            return EpisodicMemoryPurgeResult(values, existing_count == len(values))
+
+    def get_episodic_memory_purge(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryPurge:
+        self._require_scope(scope)
+        if not isinstance(memory_id, MemoryId):
+            raise TypeError("memory_id must be a MemoryId")
+        with self._purge_transaction(TeamOperation.READ) as cursor:
+            purge = self._scoped_purge(cursor, scope, memory_id)
+            if purge is None:
+                raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
+            return purge
+
     def _insert_candidate(
         self, cursor: PostgreSQLCursor, candidate: EpisodicMemoryCandidate
     ) -> None:
@@ -527,7 +783,10 @@ class PostgreSQLEpisodicMemoryRepository:
             "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
             "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
-            "AND memory_id = CAST(%s AS uuid)",
+            "AND memory_id = CAST(%s AS uuid) AND NOT EXISTS (SELECT 1 FROM "
+            "mnemo_team.episodic_memory_expirations AS expiration WHERE "
+            "expiration.workspace_id = episodic_memory_candidates.workspace_id "
+            "AND expiration.memory_id = episodic_memory_candidates.memory_id)",
             (*_task_scope_values(scope), str(memory_id)),
         )
         row = cursor.fetchone()
@@ -541,7 +800,10 @@ class PostgreSQLEpisodicMemoryRepository:
             "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
             "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
-            "AND candidate_id = CAST(%s AS uuid)",
+            "AND candidate_id = CAST(%s AS uuid) AND NOT EXISTS (SELECT 1 FROM "
+            "mnemo_team.episodic_memory_expirations AS expiration WHERE "
+            "expiration.workspace_id = episodic_candidate_reviews.workspace_id "
+            "AND expiration.memory_id = episodic_candidate_reviews.candidate_id)",
             (*_task_scope_values(scope), str(candidate_id)),
         )
         row = cursor.fetchone()
@@ -566,7 +828,10 @@ class PostgreSQLEpisodicMemoryRepository:
             "mnemo_team.active_episodic_memories WHERE workspace_id = CAST(%s AS uuid) "
             "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
             "AND visibility = %s AND session_id = CAST(%s AS uuid) "
-            "AND task_id = CAST(%s AS uuid) AND memory_id = CAST(%s AS uuid)",
+            "AND task_id = CAST(%s AS uuid) AND memory_id = CAST(%s AS uuid) "
+            "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_expirations "
+            "AS expiration WHERE expiration.workspace_id = active_episodic_memories.workspace_id "
+            "AND expiration.memory_id = active_episodic_memories.memory_id)",
             (*_task_scope_values(scope), str(memory_id)),
         )
         row = cursor.fetchone()
@@ -615,11 +880,91 @@ class PostgreSQLEpisodicMemoryRepository:
             "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
             "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
-            "AND action_id = CAST(%s AS uuid)",
+            "AND action_id = CAST(%s AS uuid) AND NOT EXISTS (SELECT 1 FROM "
+            "mnemo_team.episodic_memory_expirations AS expiration WHERE "
+            "expiration.workspace_id = episodic_memory_governance.workspace_id "
+            "AND expiration.memory_id = episodic_memory_governance.memory_id)",
             (*_task_scope_values(scope), str(action_id)),
         )
         row = cursor.fetchone()
         return None if row is None else self._governance_from_row(row, scope)
+
+    def _retention_target(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryRetentionTarget | None:
+        cursor.execute(
+            "SELECT memory_id::text, source_event_id::text, retention_json::text FROM "
+            "mnemo_team.episodic_memory_candidates WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(memory_id)),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return EpisodicMemoryRetentionTarget(
+            MemoryId.from_string(str(row[0])),
+            EventId.from_string(str(row[1])),
+            scope,
+            self._retention_from_json(row[2]),
+        )
+
+    def _scoped_expiration(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryExpiration | None:
+        cursor.execute(
+            "SELECT " + _EXPIRATION_COLUMNS + " FROM "
+            "mnemo_team.episodic_memory_expirations WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(memory_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._expiration_from_row(row, scope)
+
+    def _scoped_purge(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryPurge | None:
+        cursor.execute(
+            "SELECT " + _PURGE_COLUMNS + " FROM mnemo_team.episodic_memory_purges WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(memory_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._purge_from_row(row, scope)
+
+    @staticmethod
+    def _delete_expired_payload(cursor: PostgreSQLCursor, purge: EpisodicMemoryPurge) -> None:
+        scope_values = _task_scope_values(purge.scope)
+        for table, target_column in (
+            ("episodic_memory_governance", "memory_id"),
+            ("active_episodic_memories", "memory_id"),
+            ("episodic_candidate_reviews", "candidate_id"),
+        ):
+            cursor.execute(
+                "DELETE FROM mnemo_team." + table + " WHERE workspace_id = CAST(%s AS uuid) "
+                "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+                "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+                "AND task_id = CAST(%s AS uuid) AND " + target_column + " = CAST(%s AS uuid)",
+                (*scope_values, str(purge.memory_id)),
+            )
+        cursor.execute(
+            "DELETE FROM mnemo_team.episodic_memory_candidates WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid)",
+            (*scope_values, str(purge.memory_id)),
+        )
+        if cursor.rowcount != 1:
+            raise EpisodicMemoryPurgeConflict("episodic memory purge state changed concurrently")
 
     def _required_active(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
@@ -691,6 +1036,28 @@ class PostgreSQLEpisodicMemoryRepository:
             PostgreSQLEpisodicMemoryRepository._evidence_from_json(row[11]),
         )
 
+    @staticmethod
+    def _expiration_from_row(row: Sequence[object], scope: MemoryScope) -> EpisodicMemoryExpiration:
+        return EpisodicMemoryExpiration(
+            EventId.from_string(str(row[1])),
+            MemoryId.from_string(str(row[2])),
+            EventId.from_string(str(row[3])),
+            scope,
+            RetentionPolicyId.from_string(str(row[4])),
+            datetime.fromisoformat(str(row[5])),
+            datetime.fromisoformat(str(row[6])),
+        )
+
+    @staticmethod
+    def _purge_from_row(row: Sequence[object], scope: MemoryScope) -> EpisodicMemoryPurge:
+        return EpisodicMemoryPurge(
+            EventId.from_string(str(row[1])),
+            EventId.from_string(str(row[2])),
+            MemoryId.from_string(str(row[3])),
+            scope,
+            datetime.fromisoformat(str(row[4])),
+        )
+
     @classmethod
     def _validate_batch(
         cls, candidates: tuple[EpisodicMemoryCandidate, ...]
@@ -745,6 +1112,11 @@ class PostgreSQLEpisodicMemoryRepository:
     def _validate_page(offset: int, limit: int, label: str) -> None:
         if offset < 0 or limit < 1:
             raise ValueError(f"{label} offset must be non-negative and limit must be positive")
+
+    @staticmethod
+    def _require_aware(value: datetime, label: str) -> None:
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{label} must be timezone-aware")
 
     @staticmethod
     def _canonical_json(value: object) -> str:
@@ -856,6 +1228,68 @@ class PostgreSQLEpisodicMemoryRepository:
                 ) from error
             raise EpisodicMemoryGovernanceStorageFailure(
                 "episodic governance database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _retention_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicMemoryRetentionStorageFailure(
+                "episodic retention database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            self._configure(cursor, operation)
+            yield cursor
+            connection.commit()
+        except EpisodicMemoryRetentionRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise EpisodicMemoryExpirationConflict(
+                    "episodic retention database rejected conflicting state"
+                ) from error
+            raise EpisodicMemoryRetentionStorageFailure(
+                "episodic retention database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _purge_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicMemoryPurgeStorageFailure(
+                "episodic purge database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            self._configure(cursor, operation)
+            yield cursor
+            connection.commit()
+        except EpisodicMemoryRetentionRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise EpisodicMemoryPurgeConflict(
+                    "episodic purge database rejected conflicting state"
+                ) from error
+            raise EpisodicMemoryPurgeStorageFailure(
+                "episodic purge database operation failed"
             ) from error
         finally:
             cursor.close()

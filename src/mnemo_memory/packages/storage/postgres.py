@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 7
+POSTGRES_TEAM_SCHEMA_VERSION = 8
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -49,6 +49,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (5, "0005_team_approved_episodic_events.sql"),
     (6, "0006_team_episodic_candidates.sql"),
     (7, "0007_team_episodic_governance.sql"),
+    (8, "0008_team_episodic_retention.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -225,10 +226,12 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT SELECT, INSERT, DELETE ON mnemo_team.approved_episodic_events TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.approved_episodic_event_governance TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.approved_episodic_event_pin_actions TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_candidates TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.episodic_candidate_reviews TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.active_episodic_memories TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_governance TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.episodic_memory_candidates TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.episodic_candidate_reviews TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.active_episodic_memories TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.episodic_memory_governance TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_expirations TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_purges TO {role}",
             )
             for statement in statements:
                 cursor.execute(statement)

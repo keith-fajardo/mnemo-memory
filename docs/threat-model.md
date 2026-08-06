@@ -303,6 +303,31 @@ governance table.
 candidate payload. Retention, explicit deletion/export, backup propagation, authenticated actor
 identity, shared-source correction authority, and a remote team service remain release blockers.
 
+### Cross-tenant episodic expiry, purge, and resurrection
+
+**Scenario:** A sweep expires another task's memory, a stale candidate remains retrievable after
+expiration, a direct delete bypasses lifecycle evidence, a conflicting batch partially commits,
+or extraction restores a purged identity. Database time-zone normalization could also change the
+timestamp text used by a deterministic expiration identity.
+
+**Required controls:** Due selection starts from one authorized exact task scope and the immutable
+source-bound non-permanent schedule. Expiration and purge rows repeat complete scope, force RLS,
+and are read/insert-only. Fixed-search-path triggers bind expiration to canonical candidate source,
+policy, and exact ISO schedule text, and bind purge to its expiration with chronological checks.
+Every candidate/review/active/governance/revision read excludes expiration first. Payload-table
+delete triggers require a matching exact-scope purge, and candidate insertion rejects any retained
+expiration tombstone. Complete batches validate before mutation and commit atomically.
+
+**Verification:** Real PostgreSQL tests cover not-due selection, conflicting expiration rollback,
+exact replay, immediate exclusion of all payload reads, direct-delete denial, restart durability,
+cross-task and private-project denial, physical dependent-payload purge, source survival,
+tombstone retention, and anti-resurrection. An injected v7-to-v8 failure retains v7 without either
+retention table.
+
+**Residual risk:** This slice does not expire or purge the minimized source event, propagate
+cleanup to backups/exports/external handlers, schedule sweeps, or implement explicit user deletion.
+The runtime credential remains infrastructure-only and team mode remains unavailable.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

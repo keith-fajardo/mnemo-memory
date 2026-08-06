@@ -31,6 +31,7 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewDecision,
     EpisodicExtractionProposal,
     EpisodicMemoryCandidate,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryKind,
     EpisodicMemoryRevisionStatus,
@@ -76,6 +77,7 @@ from mnemo_memory.packages.domain import (
     WorkspaceRole,
     knowledge_section_digest,
 )
+from mnemo_memory.packages.episodic import EpisodicRetentionService
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 from mnemo_memory.packages.policy import (
     TeamAuthorizationPolicy,
@@ -119,9 +121,12 @@ from mnemo_memory.packages.storage.contracts import (
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidateRejected,
+    EpisodicMemoryExpirationConflict,
+    EpisodicMemoryExpirationNotFound,
     EpisodicMemoryGovernanceConflict,
     EpisodicMemoryGovernanceNotFound,
     EpisodicMemoryGovernanceRejected,
+    EpisodicMemoryPurgeNotFound,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -348,6 +353,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert governance_sql.count("FORCE ROW LEVEL SECURITY") == 1
     assert "UNIQUE (workspace_id, memory_id, expected_revision_id)" in governance_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in governance_sql
+    retention_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0008_team_episodic_retention.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert retention_sql.count("FORCE ROW LEVEL SECURITY") == 2
+    assert retention_sql.count("episodic payload deletion requires purge") == 1
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in retention_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -550,6 +563,39 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0007_team_episodic_governance.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=8).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+            )
+            cursor.execute("SELECT to_regclass('mnemo_team.episodic_memory_expirations')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
@@ -563,6 +609,7 @@ def test_team_data_migrations_upgrade_atomically(
                 5,
                 6,
                 7,
+                8,
             )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
@@ -1074,7 +1121,11 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
 
 
 def _task_event(
-    scope: MemoryScope, suffix: str, *, summary: str | None = None
+    scope: MemoryScope,
+    suffix: str,
+    *,
+    summary: str | None = None,
+    retention: RetentionSchedule | None = None,
 ) -> TaskActivityEvent:
     return TaskActivityEvent.create(
         scope=scope,
@@ -1083,15 +1134,8 @@ def _task_event(
         summary=summary or f"reviewed bounded event {suffix}",
         source_event_key=f"team-task-event-{suffix}",
         sensitivity=Sensitivity.NORMAL,
-        retention=RetentionSchedule(
-            RetentionPolicyId.new(),
-            True,
-            NOW,
-            NOW,
-            NOW,
-            None,
-            None,
-        ),
+        retention=retention
+        or RetentionSchedule(RetentionPolicyId.new(), True, NOW, NOW, NOW, None, None),
         occurred_at=NOW + timedelta(seconds=10),
         evidence_references=(_checkpoint_evidence(suffix),),
     )
@@ -1768,7 +1812,7 @@ def test_postgres_episodic_candidates_require_source_and_explicit_review(
             "has_table_privilege(current_user, "
             "'mnemo_team.active_episodic_memories', 'DELETE')"
         )
-        assert tuple(cursor.fetchone() or ()) == (False, False, False, False, False, False)
+        assert tuple(cursor.fetchone() or ()) == (False, True, False, True, False, True)
         cursor.execute(
             "SELECT set_config('mnemo.principal_id', %s, true), "
             "set_config('mnemo.workspace_id', %s, true), "
@@ -1985,7 +2029,185 @@ def test_postgres_active_episodic_governance_is_optimistic_terminal_and_scoped(
             "has_table_privilege(current_user, "
             "'mnemo_team.episodic_memory_governance', 'DELETE')"
         )
-        assert tuple(cursor.fetchone() or ()) == (False, False)
+        assert tuple(cursor.fetchone() or ()) == (False, True)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+
+def test_postgres_episodic_retention_hides_then_purges_payloads_and_is_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    scheduled = NOW + timedelta(minutes=2)
+    source = _task_event(
+        scope,
+        "8",
+        retention=RetentionSchedule(RetentionPolicyId.new(), False, NOW, NOW, NOW, None, scheduled),
+    )
+    events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    events.append_task_activity_event(source)
+    repository = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    candidates = _episodic_candidates(
+        source,
+        extractor_version="team-retention-extractor",
+        claims=("expire the approved claim", "expire the inactive claim"),
+    )
+    repository.store_episodic_memory_candidates(candidates)
+    approval = _episodic_review(
+        scope, candidates[0], "retention-approve", EpisodicCandidateReviewDecision.APPROVED
+    )
+    assert repository.review_episodic_memory_candidate(approval).active_memory is not None
+    correction = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=candidates[0].memory_id,
+        expected_revision_id=approval.action_id,
+        source_action_key="team-retention-correct",
+        reason="retain one governed payload until its canonical schedule expires",
+        corrected_claim="expire the corrected approved claim",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(minutes=1),
+        evidence_references=(_approved_evidence("retention-correct", user=True),),
+    )
+    repository.govern_episodic_memory(correction)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (str(workspace.owner_id), str(workspace.workspace_id), TeamOperation.CONTRIBUTE.value),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "DELETE FROM mnemo_team.episodic_memory_candidates "
+                "WHERE workspace_id = CAST(%s AS uuid) AND memory_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(candidates[1].memory_id)),
+            )
+        connection.rollback()
+    finally:
+        cursor.close()
+        connection.close()
+
+    service = EpisodicRetentionService(repository)
+    assert service.expire_due(scope, as_of=scheduled - timedelta(seconds=1)).expirations == ()
+    targets = repository.list_due_episodic_memory_retention(scope, as_of=scheduled)
+    expirations = tuple(EpisodicMemoryExpiration.create(target, scheduled) for target in targets)
+    assert len(expirations) == 2
+    with pytest.raises(EpisodicMemoryExpirationConflict):
+        repository.apply_episodic_memory_expirations(
+            (expirations[0], replace(expirations[1], source_event_id=EventId.new()))
+        )
+    with pytest.raises(EpisodicMemoryExpirationNotFound):
+        repository.get_episodic_memory_expiration(scope, candidates[0].memory_id)
+
+    expired = service.expire_due(scope, as_of=scheduled)
+    assert expired.expirations == expirations and not expired.idempotent
+    assert repository.apply_episodic_memory_expirations(expirations).idempotent
+    assert repository.list_due_episodic_memory_retention(scope, as_of=scheduled) == ()
+    for candidate in candidates:
+        assert repository.get_episodic_memory_expiration(scope, candidate.memory_id) in expirations
+        with pytest.raises(EpisodicMemoryCandidateNotFound):
+            repository.get_episodic_memory_candidate(scope, candidate.memory_id)
+    with pytest.raises(EpisodicMemoryReviewNotFound):
+        repository.get_episodic_memory_review(scope, candidates[0].memory_id)
+    with pytest.raises(ActiveEpisodicMemoryNotFound):
+        repository.get_active_episodic_memory(scope, candidates[0].memory_id)
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        repository.get_episodic_memory_governance(scope, correction.action_id)
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        repository.list_episodic_memory_revisions(scope, candidates[0].memory_id)
+    assert repository.list_episodic_memory_candidates(scope).items == ()
+    assert repository.list_active_episodic_memories(scope).items == ()
+    assert events.get_task_activity_event(scope, source.event_id) == source
+
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    expected_first = next(item for item in expirations if item.memory_id == candidates[0].memory_id)
+    assert (
+        restarted.get_episodic_memory_expiration(scope, candidates[0].memory_id) == expected_first
+    )
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(EpisodicMemoryExpirationNotFound):
+        restarted.get_episodic_memory_expiration(foreign_task, candidates[0].memory_id)
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(EpisodicMemoryExpirationNotFound):
+        viewer.get_episodic_memory_expiration(scope, candidates[0].memory_id)
+
+    purged = service.purge_expired(scope, purged_at=scheduled + timedelta(minutes=1))
+    assert len(purged.purges) == 2 and not purged.idempotent
+    assert repository.list_unpurged_episodic_memory_expirations(scope) == ()
+    assert repository.apply_episodic_memory_purges(purged.purges).idempotent
+    with pytest.raises(EpisodicMemoryPurgeNotFound):
+        repository.get_episodic_memory_purge(foreign_task, candidates[0].memory_id)
+    with pytest.raises(EpisodicMemoryCandidateConflict):
+        repository.store_episodic_memory_candidates(candidates)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_expirations', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_expirations', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_purges', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_purges', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False, False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (str(workspace.owner_id), str(workspace.workspace_id), TeamOperation.READ.value),
+        )
+        cursor.execute(
+            "SELECT (SELECT COUNT(*) FROM mnemo_team.episodic_memory_candidates), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_candidate_reviews), "
+            "(SELECT COUNT(*) FROM mnemo_team.active_episodic_memories), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_governance), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_expirations), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_purges)"
+        )
+        assert tuple(int(str(value)) for value in (cursor.fetchone() or ())) == (0, 0, 0, 0, 2, 2)
     finally:
         connection.rollback()
         cursor.close()

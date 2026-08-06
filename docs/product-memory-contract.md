@@ -83,6 +83,13 @@ or sensitivity and removes the memory from active reads. Exact retries are idemp
 writers, changed key reuse, unsafe content, revision forks, and post-retraction mutation fail
 closed. Retention and deletion remain separate lifecycle boundaries.
 
+Team extracted-memory retention uses immutable forced-RLS expiration and purge tombstones. The
+source-bound non-permanent schedule is the only expiration authority. Expiration immediately hides
+candidate, review, active, governance, and revision payloads; purge later removes those dependent
+rows while retaining the tombstones and permitted source event. Exact replay is idempotent, direct
+pre-purge deletion is database-denied, and an expiration tombstone prevents candidate resurrection.
+Task-event retention and explicit user deletion remain separate operations.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:
