@@ -27,6 +27,7 @@ from mnemo_memory.packages.domain import (
     Checkpoint,
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointDeletion,
     CheckpointEventKind,
     CheckpointExportBundle,
     CheckpointId,
@@ -153,6 +154,10 @@ from .contracts import (
     ApprovedEpisodicEventStorageFailure,
     ApprovedEpisodicEventStoreResult,
     ApprovedEventExportRepositoryError,
+    CheckpointDeletionConflict,
+    CheckpointDeletionNotFound,
+    CheckpointDeletionResult,
+    CheckpointDeletionStorageFailure,
     CheckpointExportStorageFailure,
     CheckpointNotFound,
     CheckpointPage,
@@ -244,7 +249,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 29
+LATEST_SCHEMA_VERSION = 30
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -738,6 +743,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 29:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 29
+            if version < 30:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0030_checkpoint_deletions.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (30, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 30:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 30
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1097,6 +1114,158 @@ class SQLiteCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def delete_checkpoint(self, deletion: CheckpointDeletion) -> CheckpointDeletionResult:
+        if not isinstance(deletion, CheckpointDeletion):
+            raise TypeError("checkpoint deletion is invalid")
+        self._require_checkpoint_scope(deletion.scope)
+        try:
+            with self._transaction() as connection:
+                existing_row = connection.execute(
+                    "SELECT * FROM checkpoint_deletions WHERE checkpoint_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(deletion.checkpoint_id), *self._scope_values(deletion.scope)),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._checkpoint_deletion_from_row(existing_row, deletion.scope)
+                    if existing != deletion:
+                        raise CheckpointDeletionConflict("checkpoint already has another deletion")
+                    return CheckpointDeletionResult(existing, 0, 0, 0, 0, True)
+                aggregate = self._scoped_aggregate_row(
+                    connection, deletion.scope, deletion.checkpoint_id
+                )
+                if aggregate is None:
+                    raise CheckpointDeletionNotFound("checkpoint deletion target was not found")
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM checkpoint_deletions WHERE owner_id = ? "
+                        "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                        "AND session_id = ? AND task_id = ? AND source_action_key = ?",
+                        (*self._scope_values(deletion.scope), deletion.source_action_key),
+                    ).fetchone()
+                    is not None
+                ):
+                    raise CheckpointDeletionConflict("checkpoint deletion action key conflicts")
+                revision_rows = connection.execute(
+                    "SELECT checkpoint_revision_id FROM checkpoint_revision_records "
+                    "WHERE checkpoint_id = ? ORDER BY revision_number DESC",
+                    (str(deletion.checkpoint_id),),
+                ).fetchall()
+                event_rows = connection.execute(
+                    "SELECT event_id FROM checkpoint_lifecycle_events "
+                    "WHERE checkpoint_id = ? AND owner_id = ? AND visibility = ? "
+                    "AND workspace_id IS ? AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(deletion.checkpoint_id), *self._scope_values(deletion.scope)),
+                ).fetchall()
+                evidence_rows = connection.execute(
+                    "SELECT evidence_id FROM checkpoint_revision_evidence WHERE "
+                    "checkpoint_revision_id IN (SELECT checkpoint_revision_id "
+                    "FROM checkpoint_revision_records WHERE checkpoint_id = ?)",
+                    (str(deletion.checkpoint_id),),
+                ).fetchall()
+                observation_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM checkpoint_source_observations "
+                        "WHERE checkpoint_id = ? AND owner_id = ? AND visibility = ? "
+                        "AND workspace_id IS ? AND project_id = ? AND session_id = ? "
+                        "AND task_id = ?",
+                        (str(deletion.checkpoint_id), *self._scope_values(deletion.scope)),
+                    ).fetchone()[0]
+                )
+                event_ids = tuple(str(row["event_id"]) for row in event_rows)
+                outbox_count = 0
+                if event_ids:
+                    placeholders = ",".join("?" for _ in event_ids)
+                    outbox_count = int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM event_outbox WHERE topic = ? "
+                            f"AND source_event_id IN ({placeholders})",
+                            (EventOutboxTopic.CHECKPOINT_LIFECYCLE.value, *event_ids),
+                        ).fetchone()[0]
+                    )
+                connection.execute(
+                    "INSERT INTO checkpoint_deletions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(deletion.deletion_id),
+                        str(deletion.checkpoint_id),
+                        deletion.actor.value,
+                        deletion.source_action_key,
+                        deletion.deleted_at.isoformat(),
+                        *self._scope_values(deletion.scope),
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM checkpoint_source_observations WHERE checkpoint_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(deletion.checkpoint_id), *self._scope_values(deletion.scope)),
+                )
+                if event_ids:
+                    placeholders = ",".join("?" for _ in event_ids)
+                    connection.execute(
+                        "DELETE FROM event_outbox WHERE topic = ? "
+                        f"AND source_event_id IN ({placeholders})",
+                        (EventOutboxTopic.CHECKPOINT_LIFECYCLE.value, *event_ids),
+                    )
+                connection.execute(
+                    "DELETE FROM checkpoint_lifecycle_events WHERE checkpoint_id = ?",
+                    (str(deletion.checkpoint_id),),
+                )
+                connection.execute(
+                    "DELETE FROM checkpoint_revision_evidence WHERE checkpoint_revision_id IN ("
+                    "SELECT checkpoint_revision_id FROM checkpoint_revision_records "
+                    "WHERE checkpoint_id = ?)",
+                    (str(deletion.checkpoint_id),),
+                )
+                for row in revision_rows:
+                    connection.execute(
+                        "DELETE FROM checkpoint_revision_records WHERE checkpoint_revision_id = ?",
+                        (row["checkpoint_revision_id"],),
+                    )
+                connection.execute(
+                    "DELETE FROM checkpoint_aggregates WHERE checkpoint_id = ?",
+                    (str(deletion.checkpoint_id),),
+                )
+                self._delete_legacy_checkpoint_payload(connection, deletion.checkpoint_id)
+                for row in evidence_rows:
+                    self._delete_orphaned_evidence(connection, row["evidence_id"])
+                return CheckpointDeletionResult(
+                    deletion,
+                    len(revision_rows),
+                    len(event_rows),
+                    observation_count,
+                    outbox_count,
+                    False,
+                )
+        except (CheckpointDeletionConflict, CheckpointDeletionNotFound):
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise CheckpointDeletionStorageFailure(
+                "checkpoint deletion storage operation failed"
+            ) from error
+
+    def get_checkpoint_deletion(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> CheckpointDeletion:
+        self._require_checkpoint_scope(scope)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM checkpoint_deletions WHERE checkpoint_id = ? "
+                    "AND owner_id = ? AND visibility = ? AND workspace_id IS ? "
+                    "AND project_id = ? AND session_id = ? AND task_id = ?",
+                    (str(checkpoint_id), *self._scope_values(scope)),
+                ).fetchone()
+                if row is None:
+                    raise CheckpointDeletionNotFound("checkpoint deletion was not found")
+                return self._checkpoint_deletion_from_row(row, scope)
+        except CheckpointDeletionNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise CheckpointDeletionStorageFailure(
+                "checkpoint deletion storage operation failed"
+            ) from error
 
     def export_checkpoint_history(
         self, scope: MemoryScope, *, exported_at: datetime
@@ -6149,6 +6318,44 @@ class SQLiteCheckpointRepository:
             "AND NOT EXISTS (SELECT 1 FROM episodic_memory_governance_evidence "
             "WHERE evidence_id = ?)",
             (evidence_id,) * 9,
+        )
+
+    @staticmethod
+    def _delete_legacy_checkpoint_payload(
+        connection: sqlite3.Connection, checkpoint_id: CheckpointId
+    ) -> None:
+        identifier = str(checkpoint_id)
+        recursive = (
+            "WITH RECURSIVE legacy_ids(checkpoint_id) AS ("
+            "SELECT checkpoint_id FROM checkpoints WHERE checkpoint_id = ? UNION ALL "
+            "SELECT revision.checkpoint_id FROM checkpoint_revisions AS revision "
+            "JOIN legacy_ids ON revision.supersedes_checkpoint_id = legacy_ids.checkpoint_id) "
+        )
+        connection.execute(
+            recursive + "DELETE FROM checkpoint_evidence WHERE checkpoint_id IN "
+            "(SELECT checkpoint_id FROM legacy_ids)",
+            (identifier,),
+        )
+        connection.execute(
+            recursive + "DELETE FROM checkpoint_revisions WHERE checkpoint_id IN "
+            "(SELECT checkpoint_id FROM legacy_ids)",
+            (identifier,),
+        )
+        connection.execute(
+            recursive + "DELETE FROM checkpoints WHERE checkpoint_id IN "
+            "(SELECT checkpoint_id FROM legacy_ids)",
+            (identifier,),
+        )
+
+    @staticmethod
+    def _checkpoint_deletion_from_row(row: sqlite3.Row, scope: MemoryScope) -> CheckpointDeletion:
+        return CheckpointDeletion(
+            EventId.from_string(row["deletion_id"]),
+            CheckpointId.from_string(row["checkpoint_id"]),
+            scope,
+            TaskActivityActor(row["actor"]),
+            row["source_action_key"],
+            datetime.fromisoformat(row["deleted_at"]),
         )
 
     @staticmethod

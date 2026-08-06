@@ -15,6 +15,7 @@ from .bootstrap import (
     build_checkpoint_runtime,
     build_lifecycle_service,
 )
+from .checkpoint_deletion import CheckpointDeletionService
 from .checkpoint_transfer import (
     CheckpointExportService,
     CheckpointImportService,
@@ -168,6 +169,7 @@ __all__ = [
     "CheckpointApplicationRevisionConflict",
     "CheckpointApplicationService",
     "CheckpointApplicationStorageFailure",
+    "CheckpointDeletionService",
     "CheckpointExportService",
     "CheckpointImportService",
     "CheckpointRuntime",

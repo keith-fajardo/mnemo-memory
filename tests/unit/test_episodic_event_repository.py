@@ -43,6 +43,9 @@ from mnemo_memory.packages.storage.contracts import (
     EpisodicEventNotFound,
     RepositoryStorageFailure,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
 
@@ -328,6 +331,7 @@ def test_event_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 6")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):

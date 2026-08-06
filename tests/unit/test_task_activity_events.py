@@ -50,6 +50,9 @@ from mnemo_memory.packages.storage import (
     TaskActivityEventRepository,
     TaskActivityEventStorageFailure,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 10, tzinfo=UTC)
 
@@ -332,6 +335,7 @@ def test_task_activity_migration_rolls_back_and_preserves_existing_outbox_jobs(
         connection.execute("DROP TABLE episodic_memory_candidates")
         connection.execute("DROP TABLE task_activity_event_evidence")
         connection.execute("DROP TABLE task_activity_events")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 19")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -347,7 +351,7 @@ def test_task_activity_migration_rolls_back_and_preserves_existing_outbox_jobs(
         )
 
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30
     assert repository.get_event_job(scope, approved_job_id).source_event_id == approved.event_id
     with sqlite3.connect(repository.path) as connection:
         columns = {

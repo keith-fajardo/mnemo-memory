@@ -27,6 +27,7 @@ from mnemo_memory.packages.application import (
     ApprovedEventExportService,
     ApprovedEventImportService,
     ApprovedEventTransferStorageFailure,
+    CheckpointDeletionService,
     CheckpointExportService,
     CheckpointImportService,
     CheckpointTransferStorageFailure,
@@ -132,6 +133,7 @@ from mnemo_memory.packages.policy import (
 )
 from mnemo_memory.packages.storage import (
     POSTGRES_TEAM_SCHEMA_VERSION,
+    CheckpointDeletionNotFound,
     CheckpointNotFound,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
@@ -517,6 +519,19 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert "imported knowledge deletion prevents resurrection" in imported_knowledge_sql
     assert "import_source_document_id uuid" in imported_knowledge_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in imported_knowledge_sql
+    checkpoint_deletion_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0019_team_checkpoint_deletions.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert checkpoint_deletion_sql.count("FORCE ROW LEVEL SECURITY") == 1
+    assert "checkpoint payload deletion requires tombstone" in checkpoint_deletion_sql
+    assert "checkpoint deletion prevents resurrection" in checkpoint_deletion_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in checkpoint_deletion_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -1043,12 +1058,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=19).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.checkpoint_deletions')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 19))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 20))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1420,7 +1448,19 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
             "has_table_privilege(current_user, "
             "'mnemo_team.checkpoint_lifecycle_events', 'DELETE')"
         )
-        assert tuple(cursor.fetchone() or ()) == (False, False)
+        assert tuple(cursor.fetchone() or ()) == (False, True)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'contribute', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "DELETE FROM mnemo_team.checkpoint_lifecycle_events "
+                "WHERE workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(created_event.event_id)),
+            )
     finally:
         connection.rollback()
         cursor.close()
@@ -1584,6 +1624,39 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
         == abandoned
     )
     assert repository.select_current_checkpoint(scope) is None
+
+    with pytest.raises(CheckpointDeletionNotFound):
+        CheckpointDeletionService(viewer).delete(
+            scope=scope,
+            checkpoint_id=active_aggregate.checkpoint_id,
+            source_action_key="viewer:delete:checkpoint",
+            deleted_at=NOW + timedelta(minutes=4),
+        )
+    deletion = CheckpointDeletionService(repository).delete(
+        scope=scope,
+        checkpoint_id=active_aggregate.checkpoint_id,
+        source_action_key="user:delete:checkpoint",
+        deleted_at=NOW + timedelta(minutes=4),
+    )
+    assert (deletion.revision_count, deletion.event_count, deletion.outbox_count) == (2, 2, 2)
+    assert (
+        repository.get_checkpoint_deletion(scope, active_aggregate.checkpoint_id)
+        == deletion.deletion
+    )
+    assert (
+        CheckpointDeletionService(repository)
+        .delete(
+            scope=scope,
+            checkpoint_id=active_aggregate.checkpoint_id,
+            source_action_key="user:delete:checkpoint",
+            deleted_at=NOW + timedelta(minutes=4),
+        )
+        .idempotent
+    )
+    with pytest.raises(CheckpointNotFound):
+        repository.get_aggregate(scope, active_aggregate.checkpoint_id)
+    with pytest.raises(RevisionConflict):
+        repository.create_checkpoint_aggregate(active_aggregate, active_revision)
 
 
 def _task_event(
@@ -4570,7 +4643,7 @@ def test_postgres_checkpoint_source_observation_is_immutable_and_scoped(
             "has_table_privilege(current_user, "
             "'mnemo_team.checkpoint_source_observations', 'DELETE')"
         )
-        assert tuple(cursor.fetchone() or ()) == (False, False)
+        assert tuple(cursor.fetchone() or ()) == (False, True)
         cursor.execute(
             "SELECT set_config('mnemo.principal_id', %s, true), "
             "set_config('mnemo.workspace_id', %s, true), "
@@ -4588,6 +4661,18 @@ def test_postgres_checkpoint_source_observation_is_immutable_and_scoped(
         connection.rollback()
         cursor.close()
         connection.close()
+
+    deletion = CheckpointDeletionService(checkpoints).delete(
+        scope=task_scope,
+        checkpoint_id=aggregate.checkpoint_id,
+        source_action_key="user:delete:observed-checkpoint",
+        deleted_at=NOW + timedelta(minutes=2),
+    )
+    assert deletion.observation_count == 1
+    with pytest.raises(CheckpointSourceObservationNotFound):
+        checkpoints.get_checkpoint_source_observation(
+            task_scope, aggregate.checkpoint_id, revision.revision_id
+        )
 
 
 def _database_authorized(

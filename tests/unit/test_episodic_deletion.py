@@ -62,6 +62,9 @@ from mnemo_memory.packages.storage import (
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 17, 0, tzinfo=UTC)
 DUE = NOW + timedelta(days=1)
@@ -460,6 +463,7 @@ def test_deletion_migration_is_atomic_forward_only_and_payload_free(tmp_path: Pa
         connection.execute("DROP TRIGGER task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 26")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -477,7 +481,7 @@ def test_deletion_migration_is_atomic_forward_only_and_payload_free(tmp_path: Pa
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 29
+    assert sqlite.schema_version() == 30
     with sqlite3.connect(sqlite.path) as connection:
         source_columns = {
             row[1]

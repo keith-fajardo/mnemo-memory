@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 18
+POSTGRES_TEAM_SCHEMA_VERSION = 19
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -60,6 +60,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (16, "0016_team_imported_approved_events.sql"),
     (17, "0017_team_imported_knowledge.sql"),
     (18, "0018_team_checkpoint_expiry.sql"),
+    (19, "0019_team_checkpoint_deletions.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -229,8 +230,10 @@ class PostgreSQLTeamMigrationRunner:
                 "GRANT SELECT, INSERT, UPDATE, DELETE ON "
                 f"mnemo_team.knowledge_section_embeddings TO {role}",
                 f"GRANT SELECT, INSERT, UPDATE ON mnemo_team.checkpoint_aggregates TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.checkpoint_revisions TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.checkpoint_lifecycle_events TO {role}",
+                f"GRANT DELETE ON mnemo_team.checkpoint_aggregates TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.checkpoint_revisions TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.checkpoint_lifecycle_events TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.checkpoint_deletions TO {role}",
                 f"GRANT SELECT, INSERT, DELETE ON mnemo_team.task_activity_events TO {role}",
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON mnemo_team.event_outbox TO {role}",
                 f"GRANT SELECT, INSERT, DELETE ON mnemo_team.approved_episodic_events TO {role}",
@@ -255,7 +258,8 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT SELECT, INSERT ON mnemo_team.source_structure_sync_status TO {role}",
                 f"GRANT UPDATE (last_synced_at) ON "
                 f"mnemo_team.source_structure_sync_status TO {role}",
-                f"GRANT SELECT, INSERT ON mnemo_team.checkpoint_source_observations TO {role}",
+                "GRANT SELECT, INSERT, DELETE ON "
+                f"mnemo_team.checkpoint_source_observations TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_snapshots TO {role}",
                 f"GRANT UPDATE (is_active) ON mnemo_team.dbt_manifest_snapshots TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.dbt_manifest_nodes TO {role}",

@@ -18,6 +18,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointDeletion,
     CheckpointEventKind,
     CheckpointExportBundle,
     CheckpointId,
@@ -107,6 +108,9 @@ from .contracts import (
     ApprovedEpisodicEventStoreResult,
     ApprovedEventImportConflict,
     ApprovedEventImportResult,
+    CheckpointDeletionConflict,
+    CheckpointDeletionNotFound,
+    CheckpointDeletionResult,
     CheckpointImportConflict,
     CheckpointImportResult,
     CheckpointNotFound,
@@ -2555,6 +2559,7 @@ class ReferenceCheckpointRepository:
     def __init__(self) -> None:
         self._aggregates: dict[CheckpointId, CheckpointAggregate] = {}
         self._revisions: dict[CheckpointId, tuple[CheckpointRevision, ...]] = {}
+        self._deletions: dict[CheckpointId, CheckpointDeletion] = {}
         self.outbox = ReferenceEventOutboxRepository()
         self.events = ReferenceCheckpointLifecycleEventRepository(self, self.outbox)
         self.approved_events = ReferenceApprovedEpisodicEventRepository(self.outbox)
@@ -2565,6 +2570,8 @@ class ReferenceCheckpointRepository:
         self, aggregate: CheckpointAggregate, initial_revision: CheckpointRevision
     ) -> None:
         self._require_scope(aggregate.scope)
+        if aggregate.checkpoint_id in self._deletions:
+            raise DuplicateCheckpoint("checkpoint deletion prevents resurrection")
         if aggregate.checkpoint_id in self._aggregates:
             raise DuplicateCheckpoint()
         if (
@@ -2754,6 +2761,61 @@ class ReferenceCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def delete_checkpoint(self, deletion: CheckpointDeletion) -> CheckpointDeletionResult:
+        if not isinstance(deletion, CheckpointDeletion):
+            raise TypeError("checkpoint deletion is invalid")
+        self._require_scope(deletion.scope)
+        existing = self._deletions.get(deletion.checkpoint_id)
+        if existing is not None:
+            if existing != deletion:
+                raise CheckpointDeletionConflict("checkpoint already has another deletion")
+            return CheckpointDeletionResult(existing, 0, 0, 0, 0, True)
+        aggregate = self._aggregates.get(deletion.checkpoint_id)
+        if aggregate is None or aggregate.scope != deletion.scope:
+            raise CheckpointDeletionNotFound("checkpoint deletion target was not found")
+        if any(
+            item.scope == deletion.scope and item.source_action_key == deletion.source_action_key
+            for item in self._deletions.values()
+        ):
+            raise CheckpointDeletionConflict("checkpoint deletion action key conflicts")
+        revisions = self._revisions[deletion.checkpoint_id]
+        events = tuple(
+            event
+            for event in self.events._events.values()
+            if event.scope == deletion.scope and event.checkpoint_id == deletion.checkpoint_id
+        )
+        outbox_count = sum(
+            job.topic is EventOutboxTopic.CHECKPOINT_LIFECYCLE
+            and job.source_event_id in {event.event_id for event in events}
+            for job in self.outbox._jobs.values()
+        )
+        self._deletions[deletion.checkpoint_id] = deletion
+        self.events._events = {
+            key: value for key, value in self.events._events.items() if value not in events
+        }
+        self.events._keys = {
+            key: value for key, value in self.events._keys.items() if value in self.events._events
+        }
+        self.events._ordered = [key for key in self.events._ordered if key in self.events._events]
+        self.outbox._cancel_source_jobs(
+            EventOutboxTopic.CHECKPOINT_LIFECYCLE,
+            tuple(event.event_id for event in events),
+        )
+        del self._revisions[deletion.checkpoint_id]
+        del self._aggregates[deletion.checkpoint_id]
+        return CheckpointDeletionResult(
+            deletion, len(revisions), len(events), 0, outbox_count, False
+        )
+
+    def get_checkpoint_deletion(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> CheckpointDeletion:
+        self._require_scope(scope)
+        deletion = self._deletions.get(checkpoint_id)
+        if deletion is None or deletion.scope != scope:
+            raise CheckpointDeletionNotFound("checkpoint deletion was not found")
+        return deletion
 
     def export_checkpoint_history(
         self, scope: MemoryScope, *, exported_at: datetime

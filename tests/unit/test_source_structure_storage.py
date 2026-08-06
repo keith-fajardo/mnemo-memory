@@ -28,6 +28,9 @@ from mnemo_memory.packages.storage import (
     SQLiteSourceStructureRepository,
 )
 from mnemo_memory.packages.storage.contracts import SourceSnapshotNotFound
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 
 def scope(project: str = "33333333-3333-4333-8333-333333333333") -> MemoryScope:
@@ -135,6 +138,7 @@ def test_source_activation_migration_seeds_only_known_active_snapshot_and_rolls_
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -189,6 +193,7 @@ def test_file_fingerprint_migration_is_atomic_and_legacy_snapshots_make_no_false
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 8")
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
         repository.migrate(fail_after_version=8)

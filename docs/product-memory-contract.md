@@ -51,6 +51,13 @@ current selection. This storage boundary does not authenticate the principal or 
 checkpoint retention, physical deletion propagation, or a remote team service. Complete
 aggregate, revision, and lifecycle-event history is portable through a strict exact-task bundle;
 source observations are excluded because their source snapshots are rebuildable projections.
+An explicit user deletion is distinct from expiry: it writes one deterministic payload-free
+exact-task tombstone before atomically erasing the aggregate, revisions and evidence payload,
+lifecycle events, source observations, and checkpoint-lifecycle jobs under Mnemo's control. Exact
+retry is idempotent, competing or cross-scope actions fail closed, and the tombstone prevents
+canonical resurrection. New live-history exports omit the deleted checkpoint. Portable tombstone
+transfer, prior user-controlled exports, backups, scheduled retention, and remote deletion remain
+separate lifecycle boundaries.
 
 Team dbt manifests use the same minimized authoritative project-index contract as personal mode.
 PostgreSQL stores immutable exact-project snapshots, typed nodes and lineage edges, explicit
@@ -492,8 +499,11 @@ contains identity, scope, actor, action key, cause/dependency identity, and time
 no event summary, claim, reason, or evidence payload. The operation atomically removes every
 content-bearing canonical row and task-activity job controlled by this slice, deletes only newly
 orphaned evidence, preserves unrelated sources and memories, and rejects competing actions,
-action-key reuse, cross-scope targets, and target/source mismatches. This does not yet claim the
-same operation for checkpoints, knowledge documents, exports, backups, or external copies.
+action-key reuse, cross-scope targets, and target/source mismatches. Checkpoint deletion follows
+the same explicit pattern for one exact task-scoped aggregate. It removes all canonical revision
+and evidence content, lifecycle events, source observations, and checkpoint outbox jobs after
+storing a payload-free anti-resurrection tombstone. Knowledge documents, portable tombstone
+transfer, prior exports, backups, and external copies remain separate boundaries.
 
 ## Structural projections versus durable memories
 

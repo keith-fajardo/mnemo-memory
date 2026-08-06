@@ -14,6 +14,7 @@ from .approved_event_export import (
     ApprovedEventPinHistoryEntry,
     approved_event_import_identity,
 )
+from .checkpoint_deletion import CheckpointDeletion
 from .checkpoint_export import CHECKPOINT_EXPORT_FORMAT, CheckpointExportBundle
 from .checkpoint_source_observation import CheckpointSourceObservation
 from .code_structure import (
@@ -239,6 +240,7 @@ __all__ = [
     "Checkpoint",
     "CheckpointAggregate",
     "CheckpointContent",
+    "CheckpointDeletion",
     "CheckpointEventKind",
     "CheckpointExportBundle",
     "CheckpointId",

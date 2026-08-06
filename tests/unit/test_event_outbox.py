@@ -58,6 +58,9 @@ from mnemo_memory.packages.storage.contracts import (
     CheckpointRepository,
     EventOutboxRepository,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 8, tzinfo=UTC)
 
@@ -459,6 +462,7 @@ def test_event_outbox_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 18")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -472,7 +476,7 @@ def test_event_outbox_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30
     with sqlite3.connect(repository.path) as connection:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(event_outbox)").fetchall()

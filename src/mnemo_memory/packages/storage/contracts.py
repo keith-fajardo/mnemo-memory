@@ -15,6 +15,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointDeletion,
     CheckpointEventKind,
     CheckpointExportBundle,
     CheckpointId,
@@ -107,6 +108,40 @@ class InvalidCheckpointScope(CheckpointRepositoryError):
 
 class RepositoryStorageFailure(CheckpointRepositoryError):
     pass
+
+
+class CheckpointDeletionRepositoryError(Exception):
+    """Safe storage-neutral outcome for physical checkpoint deletion."""
+
+
+class CheckpointDeletionNotFound(CheckpointDeletionRepositoryError):
+    pass
+
+
+class CheckpointDeletionConflict(CheckpointDeletionRepositoryError):
+    pass
+
+
+class CheckpointDeletionStorageFailure(CheckpointDeletionRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointDeletionResult:
+    deletion: CheckpointDeletion
+    revision_count: int
+    event_count: int
+    observation_count: int
+    outbox_count: int
+    idempotent: bool
+
+
+class CheckpointDeletionRepository(Protocol):
+    def delete_checkpoint(self, deletion: CheckpointDeletion) -> CheckpointDeletionResult: ...
+
+    def get_checkpoint_deletion(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> CheckpointDeletion: ...
 
 
 class EpisodicEventRepositoryError(Exception):

@@ -41,6 +41,9 @@ from mnemo_memory.packages.storage.contracts import (
     SupplementalArtifactConflict,
 )
 from mnemo_memory.packages.storage.sqlite import SQLiteMigrationError
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "dbt"
 
@@ -245,6 +248,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 14")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -259,7 +263,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30
 
 
 def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
@@ -274,6 +278,7 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 16")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -288,4 +293,4 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30

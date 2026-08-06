@@ -35,6 +35,9 @@ from mnemo_memory.packages.storage import (
     SQLiteKnowledgeDocumentRepository,
     SQLiteMigrationError,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
 
@@ -285,6 +288,7 @@ def test_sqlite_fts_projection_contains_only_current_scoped_revisions_and_migrat
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 11")
     repository.migrate()
     with sqlite3.connect(path) as connection:
@@ -315,6 +319,7 @@ def test_knowledge_fts_migration_is_atomic(tmp_path: Path) -> None:
         connection.execute("DROP TRIGGER IF EXISTS task_activity_purge_guard")
         connection.execute("DROP TABLE episodic_memory_deletions")
         connection.execute("DROP TABLE task_activity_event_deletions")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 11")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):

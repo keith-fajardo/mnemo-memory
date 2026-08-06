@@ -58,6 +58,16 @@ identity and sequence, then recreates the scoped indexes and revision/scope guar
 is forward-only and transactional; an injected failure leaves the prior schema unchanged. Restore
 the verified pre-upgrade schema-28 backup to reverse a committed migration 0029.
 
+Migration `0030_checkpoint_deletions.sql` additively stores one deterministic payload-free
+anti-resurrection tombstone for an explicitly deleted checkpoint. Scoped triggers require the
+tombstone before aggregate, revision, lifecycle-event, or source-observation payload can be
+deleted and reject later aggregate recreation. Runtime deletion removes all canonical checkpoint
+payload, related lifecycle jobs, legacy checkpoint rows, and newly orphaned evidence in one
+transaction. The migration is forward-only and transactional; an injected failure leaves the
+prior schema unchanged. Restore the verified pre-upgrade schema-29 backup to reverse a committed
+migration 0030, recognizing that payload erased after migration cannot be reconstructed from the
+live database.
+
 Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
 projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
 result, and timing row to both its digest-addressed supplemental artifact and an existing manifest

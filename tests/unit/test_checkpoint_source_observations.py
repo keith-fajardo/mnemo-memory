@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from mnemo_memory.packages.application.checkpoint_deletion import CheckpointDeletionService
 from mnemo_memory.packages.application.checkpoints import (
     CheckpointApplicationService,
     CreateCheckpoint,
@@ -181,6 +182,19 @@ def test_checkpoint_source_observation_is_scoped_immutable_and_idempotent(
                 NOW,
             )
         )
+
+    if isinstance(checkpoints, SQLiteCheckpointRepository):
+        deletion = CheckpointDeletionService(checkpoints).delete(
+            scope=task,
+            checkpoint_id=revision.checkpoint_id,
+            source_action_key="user:delete:observed-checkpoint",
+            deleted_at=NOW,
+        )
+        assert deletion.observation_count == 1
+        with pytest.raises(CheckpointSourceObservationNotFound):
+            observations.get_checkpoint_source_observation(
+                task, revision.checkpoint_id, revision.revision_id
+            )
 
 
 def test_checkpoint_source_observation_rejects_a_second_snapshot_for_one_revision(

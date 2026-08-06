@@ -12,6 +12,7 @@ from typing import cast
 from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
+    CheckpointDeletion,
     CheckpointEventKind,
     CheckpointExportBundle,
     CheckpointId,
@@ -28,11 +29,16 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ScopeLevel,
+    TaskActivityActor,
     WorkspaceId,
 )
 from mnemo_memory.packages.policy import TeamOperation
 
 from .contracts import (
+    CheckpointDeletionConflict,
+    CheckpointDeletionNotFound,
+    CheckpointDeletionResult,
+    CheckpointDeletionStorageFailure,
     CheckpointExportStorageFailure,
     CheckpointImportConflict,
     CheckpointImportResult,
@@ -77,6 +83,7 @@ _EVENT_COLUMNS = (
     "event.idempotency_key, revision.evidence_json::text"
 )
 _OBSERVATION_COLUMNS = "source_snapshot_id::text, observed_at"
+_DELETION_COLUMNS = "deletion_id::text, checkpoint_id::text, actor, source_action_key, deleted_at"
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -387,6 +394,152 @@ class PostgreSQLCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def delete_checkpoint(self, deletion: CheckpointDeletion) -> CheckpointDeletionResult:
+        if not isinstance(deletion, CheckpointDeletion):
+            raise TypeError("checkpoint deletion is invalid")
+        self._require_scope(deletion.scope)
+        with self._deletion_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            cursor.execute(
+                "SELECT " + _DELETION_COLUMNS + " FROM mnemo_team.checkpoint_deletions "
+                "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND checkpoint_id = CAST(%s AS uuid)",
+                (*self._scope_values(deletion.scope), str(deletion.checkpoint_id)),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                existing = self._deletion_from_row(row, deletion.scope)
+                if existing != deletion:
+                    raise CheckpointDeletionConflict("checkpoint already has another deletion")
+                return CheckpointDeletionResult(existing, 0, 0, 0, 0, True)
+            aggregate = self._select_aggregate(
+                cursor, deletion.scope, deletion.checkpoint_id, for_update=True
+            )
+            if aggregate is None:
+                raise CheckpointDeletionNotFound("checkpoint deletion target was not found")
+            cursor.execute(
+                "SELECT 1 FROM mnemo_team.checkpoint_deletions WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND source_action_key = %s",
+                (*self._scope_values(deletion.scope), deletion.source_action_key),
+            )
+            if cursor.fetchone() is not None:
+                raise CheckpointDeletionConflict("checkpoint deletion action key conflicts")
+            cursor.execute(
+                "SELECT event_id::text FROM mnemo_team.checkpoint_lifecycle_events WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND checkpoint_id = CAST(%s AS uuid)",
+                (*self._scope_values(deletion.scope), str(deletion.checkpoint_id)),
+            )
+            event_ids = tuple(str(item[0]) for item in cursor.fetchall())
+            cursor.execute(
+                "SELECT revision_id::text FROM mnemo_team.checkpoint_revisions WHERE "
+                "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid) "
+                "ORDER BY revision_number DESC",
+                (str(self._workspace_id), str(deletion.checkpoint_id)),
+            )
+            revision_ids = tuple(str(item[0]) for item in cursor.fetchall())
+            cursor.execute(
+                "SELECT count(*) FROM mnemo_team.checkpoint_source_observations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND checkpoint_id = CAST(%s AS uuid)",
+                (*self._scope_values(deletion.scope), str(deletion.checkpoint_id)),
+            )
+            observation_count = int(str((cursor.fetchone() or (0,))[0]))
+            outbox_count = 0
+            if event_ids:
+                cursor.execute(
+                    "SELECT count(*) FROM mnemo_team.event_outbox WHERE workspace_id = "
+                    "CAST(%s AS uuid) AND topic = %s AND source_event_id = ANY(CAST(%s AS uuid[]))",
+                    (
+                        str(self._workspace_id),
+                        EventOutboxTopic.CHECKPOINT_LIFECYCLE.value,
+                        list(event_ids),
+                    ),
+                )
+                outbox_count = int(str((cursor.fetchone() or (0,))[0]))
+            cursor.execute(
+                "INSERT INTO mnemo_team.checkpoint_deletions("
+                "workspace_id,project_id,owner_id,visibility,session_id,task_id,deletion_id,"
+                "checkpoint_id,actor,source_action_key,deleted_at) VALUES ("
+                "CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),%s,"
+                "CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),%s,%s,%s)",
+                (
+                    *self._scope_values(deletion.scope),
+                    str(deletion.deletion_id),
+                    str(deletion.checkpoint_id),
+                    deletion.actor.value,
+                    deletion.source_action_key,
+                    deletion.deleted_at,
+                ),
+            )
+            cursor.execute(
+                "DELETE FROM mnemo_team.checkpoint_source_observations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(deletion.checkpoint_id)),
+            )
+            if event_ids:
+                cursor.execute(
+                    "DELETE FROM mnemo_team.event_outbox WHERE workspace_id = CAST(%s AS uuid) "
+                    "AND topic = %s AND source_event_id = ANY(CAST(%s AS uuid[]))",
+                    (
+                        str(self._workspace_id),
+                        EventOutboxTopic.CHECKPOINT_LIFECYCLE.value,
+                        list(event_ids),
+                    ),
+                )
+            cursor.execute(
+                "DELETE FROM mnemo_team.checkpoint_lifecycle_events WHERE "
+                "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(deletion.checkpoint_id)),
+            )
+            for revision_id in revision_ids:
+                cursor.execute(
+                    "DELETE FROM mnemo_team.checkpoint_revisions WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND revision_id = CAST(%s AS uuid)",
+                    (str(self._workspace_id), revision_id),
+                )
+            cursor.execute(
+                "DELETE FROM mnemo_team.checkpoint_aggregates WHERE "
+                "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(deletion.checkpoint_id)),
+            )
+            if cursor.rowcount != 1:
+                raise CheckpointDeletionConflict("checkpoint deletion target changed")
+            return CheckpointDeletionResult(
+                deletion,
+                len(revision_ids),
+                len(event_ids),
+                observation_count,
+                outbox_count,
+                False,
+            )
+
+    def get_checkpoint_deletion(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> CheckpointDeletion:
+        self._require_scope(scope)
+        with self._deletion_transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT " + _DELETION_COLUMNS + " FROM mnemo_team.checkpoint_deletions "
+                "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND checkpoint_id = CAST(%s AS uuid)",
+                (*self._scope_values(scope), str(checkpoint_id)),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise CheckpointDeletionNotFound("checkpoint deletion was not found")
+            return self._deletion_from_row(row, scope)
 
     def export_checkpoint_history(
         self, scope: MemoryScope, *, exported_at: datetime
@@ -787,6 +940,48 @@ class PostgreSQLCheckpointRepository:
             cursor.close()
             connection.close()
 
+    @contextmanager
+    def _deletion_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise CheckpointDeletionStorageFailure(
+                "checkpoint deletion database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "SELECT set_config('mnemo.principal_id', %s, true), "
+                "set_config('mnemo.workspace_id', %s, true), "
+                "set_config('mnemo.operation', %s, true), "
+                "set_config('statement_timeout', %s, true)",
+                (
+                    str(self._principal_id),
+                    str(self._workspace_id),
+                    operation.value,
+                    str(self._statement_timeout_ms),
+                ),
+            )
+            yield cursor
+            connection.commit()
+        except (CheckpointDeletionConflict, CheckpointDeletionNotFound):
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise CheckpointDeletionConflict(
+                    "checkpoint deletion conflicts with stored state"
+                ) from error
+            raise CheckpointDeletionStorageFailure(
+                "checkpoint deletion database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
     def _select_aggregate(
         self,
         cursor: PostgreSQLCursor,
@@ -1096,6 +1291,17 @@ class PostgreSQLCheckpointRepository:
             cast(datetime, row[5]),
             str(row[6]),
             tuple(EvidenceReference.from_dict(item) for item in evidence),
+        )
+
+    @staticmethod
+    def _deletion_from_row(row: Sequence[object], scope: MemoryScope) -> CheckpointDeletion:
+        return CheckpointDeletion(
+            EventId.from_string(str(row[0])),
+            CheckpointId.from_string(str(row[1])),
+            scope,
+            TaskActivityActor(str(row[2])),
+            str(row[3]),
+            cast(datetime, row[4]),
         )
 
     @staticmethod

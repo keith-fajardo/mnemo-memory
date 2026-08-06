@@ -63,6 +63,9 @@ from mnemo_memory.packages.storage import (
     SQLiteMigrationError,
     TaskActivityEventRepository,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 11, 0, tzinfo=UTC)
 
@@ -368,6 +371,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         connection.execute("DROP TABLE active_episodic_memories")
         connection.execute("DROP TABLE episodic_candidate_review_evidence")
         connection.execute("DROP TABLE episodic_candidate_reviews")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 21")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -387,7 +391,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 29
+    assert sqlite.schema_version() == 30
     with sqlite3.connect(sqlite.path) as connection:
         review_columns = {
             row[1]
@@ -682,6 +686,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
         connection.execute("DROP TABLE episodic_memory_expirations")
         connection.execute("DROP TABLE episodic_memory_governance_evidence")
         connection.execute("DROP TABLE episodic_memory_governance")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 22")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -701,7 +706,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
         )
 
     governance.migrate()
-    assert governance.schema_version() == 29
+    assert governance.schema_version() == 30
     with sqlite3.connect(governance.path) as connection:
         columns = {
             row[1]

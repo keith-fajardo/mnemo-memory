@@ -2356,6 +2356,38 @@ mandatory real-PostgreSQL tests, strict typing for 228 source files, dependency/
 validation for 93 entries, architecture validation for 125 product Python files, schema validation,
 and the isolated installed-package MCP workflow. No dependency was added.
 
+#### Issue 21X — Physical checkpoint erasure — Complete
+
+The current bounded issue adds one explicit user-authored exact-task deletion action across the
+Reference, SQLite, and PostgreSQL checkpoint repositories. It writes a deterministic payload-free
+tombstone before atomically erasing the aggregate, every revision and retained evidence payload,
+lifecycle events, source observations, and checkpoint-lifecycle outbox jobs under Mnemo's control.
+Exact retry must be idempotent; competing actions, reused action keys, missing or cross-scope
+targets, direct deletion without a tombstone, and resurrection must fail closed.
+
+This issue adds no portable tombstone transfer, scheduled retention, remote service, OAuth,
+backup propagation, quota, dashboard, team knowledge governance, source approval, or dependency.
+
+Implemented the strict `CheckpointDeletion` domain action and application service with one
+deterministic identity derived from exact task scope, checkpoint identity, and caller action key.
+Reference, SQLite, and PostgreSQL repositories insert its payload-free user tombstone before
+deleting the aggregate, every immutable revision and evidence payload, lifecycle events, source
+observations, and checkpoint-lifecycle outbox jobs atomically. SQLite additionally removes legacy
+checkpoint rows and newly orphaned normalized evidence. Exact retry is idempotent; different or
+reused actions, missing and cross-scope targets, and resurrection fail closed.
+
+SQLite migration 0030 adds scoped tombstones plus direct-delete and resurrection guards.
+PostgreSQL migration 0019 adds the forced-RLS tombstone, fixed-search-path guards, and narrowly
+controlled delete privileges; the checkpoint outbox guard permits deletion only after a matching
+tombstone. ADR 0032, the product contract, SQLite profile, and threat model distinguish physical
+erasure from expiry, scheduled retention, portable deletion transfer, backups, and external
+copies. Focused tests cover serialization tampering, payload/job/evidence/observation removal,
+scope and action conflicts, exact replay, direct-delete rejection, anti-resurrection, and injected
+migration rollback/retry. The complete repository gate passes with 846 default tests plus 21
+mandatory real-PostgreSQL tests, strict typing for 232 source files, dependency/provenance
+validation for 93 entries, architecture validation for 127 product Python files, schema
+validation, and the isolated installed-package MCP workflow. No dependency was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

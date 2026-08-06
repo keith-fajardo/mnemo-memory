@@ -460,9 +460,10 @@ rejection, restart-stable export, and idempotent retry. A real SQLite-to-Postgre
 all checkpoint/revision/event identities, counts, source/target hashes, restart durability, normal
 outbox creation, exact replay, and private-project viewer denial.
 
-**Residual risk:** Checkpoint expiry/deletion and backup/export deletion propagation are still
-required. The bundle is an in-memory application contract and is not yet an authenticated remote
-transfer endpoint or encrypted delivery format.
+**Residual risk:** Physical checkpoint deletion exists in each canonical store, but portable
+tombstone and backup/export deletion propagation are still required. The bundle is an in-memory
+application contract and is not yet an authenticated remote transfer endpoint or encrypted
+delivery format.
 
 ### Restored payload or cross-tenant approved-event transfer
 
@@ -559,8 +560,9 @@ restart durability, cross-task/private-project denial, read/insert-only runtime 
 atomic v11-to-v12 rollback/retry.
 
 **Residual risk:** Automatic source refresh composition, dbt observation, scheduled checkpoint
-retention, physical deletion, remote authentication, and backup propagation remain separate
-issues. Portable checkpoint history and terminal expiry are implemented separately.
+retention, remote authentication, portable deletion transfer, and backup propagation remain
+separate issues. Portable checkpoint history, terminal expiry, and physical canonical deletion
+are implemented separately.
 
 ### Cross-tenant dbt manifest projection
 
@@ -816,10 +818,23 @@ orphaned evidence, and task-activity outbox job in the same transaction. Existin
 tombstones survive. Reads and re-ingestion reject deleted identities; exact replay is idempotent;
 competing actions, reused action keys, cross-scope targets, and source mismatches fail closed.
 Reference/SQLite parity, restart, schema inspection, and injected transaction failure are tested.
-No checkpoint, knowledge, embedding, export, backup, or external-copy deletion is implied.
+No knowledge, embedding, portable-transfer, backup, or external-copy deletion is implied.
 
-**Verification:** Failure-injected deletion tests across every materialized copy, retries, export,
-reindex, restore, and source rename/recreation. Counts and digests must reconcile.
+For checkpoints, one user-authored exact-task-scope action inserts a deterministic payload-free
+tombstone before removing the aggregate, every revision and retained evidence payload, lifecycle
+events, source observations, checkpoint-lifecycle outbox jobs, and newly orphaned normalized
+evidence under Mnemo's control. Exact retry is idempotent; a competing action, reused action key,
+missing or cross-scope target, and resurrection attempt fail closed. SQLite direct-delete triggers
+and PostgreSQL fixed-search-path guards require the tombstone. PostgreSQL forces RLS on tombstones
+and permits controlled payload deletes only through an authorized contribution context. New live
+checkpoint exports omit erased history; the existing portable bundle does not yet propagate its
+tombstone.
+
+**Verification:** Checkpoint tests cover Reference/SQLite/PostgreSQL parity, canonical payload and
+job removal, source-observation removal, orphaned evidence cleanup, exact retry, conflicts,
+cross-scope denial, direct-delete guards, anti-resurrection, and injected migration rollback.
+Remaining deletion-propagation tests must cover portable transfer, backups, restore, and any later
+cache or export persistence. Counts and digests must reconcile.
 
 **Residual risk:** User-controlled exports cannot be recalled; warn and document their boundary.
 

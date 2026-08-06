@@ -61,6 +61,9 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteMigrationError,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 13, 0, tzinfo=UTC)
 DUE = NOW + timedelta(days=1)
@@ -614,6 +617,7 @@ def test_expiration_migration_is_atomic_payload_free_and_preserves_candidates(
         connection.execute("DROP TABLE task_activity_event_deletions")
         connection.execute("DROP TABLE task_activity_event_expirations")
         connection.execute("DROP TABLE episodic_memory_expirations")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 23")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -633,7 +637,7 @@ def test_expiration_migration_is_atomic_payload_free_and_preserves_candidates(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 29
+    assert sqlite.schema_version() == 30
     assert sqlite.get_episodic_memory_candidate(candidate.scope, candidate.memory_id) == candidate
     with sqlite3.connect(sqlite.path) as connection:
         columns = {
@@ -706,6 +710,7 @@ def test_purge_migration_rolls_back_and_preserves_candidate_and_expiration(
                 str(candidate.scope.task_id),
             ),
         )
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 24")
 
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -729,7 +734,7 @@ def test_purge_migration_rolls_back_and_preserves_candidate_and_expiration(
         ).fetchone() == (str(expiration.expiration_id),)
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 29
+    assert sqlite.schema_version() == 30
     assert sqlite.get_episodic_memory_expiration(candidate.scope, candidate.memory_id) == expiration
     with sqlite3.connect(sqlite.path) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

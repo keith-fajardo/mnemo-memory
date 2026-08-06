@@ -41,6 +41,9 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteMigrationError,
 )
+from scripts.sqlite_migration_test_support import (
+    drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
+)
 
 NOW = datetime(2026, 8, 5, 11, 0, tzinfo=UTC)
 
@@ -222,7 +225,7 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
     path = tmp_path / "pin-migration.sqlite3"
     repository = SQLiteCheckpointRepository(path, base_directory=tmp_path)
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER approved_episodic_event_pin_target_scope_match")
         connection.execute("DROP TABLE approved_episodic_event_pin_evidence")
@@ -230,6 +233,7 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
         connection.execute("DROP TRIGGER project_index_sync_scope_match_update")
         connection.execute("DROP TRIGGER project_index_sync_scope_match_insert")
         connection.execute("DROP TABLE project_index_sync_status")
+        _drop_checkpoint_deletion_schema(connection)
         connection.execute("DELETE FROM schema_migrations WHERE version >= 27")
     assert repository.schema_version() == 26
 
@@ -245,4 +249,4 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
         )
 
     repository.migrate()
-    assert repository.schema_version() == 29
+    assert repository.schema_version() == 30
