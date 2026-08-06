@@ -406,6 +406,33 @@ Personal-to-team import, backup/export deletion propagation, checkpoint/approved
 structural export parity, authenticated remote transport, and user-visible export audit remain
 separate issues.
 
+### Tampered, conflicting, or interrupted personal-to-team episodic import
+
+**Scenario:** A modified personal bundle is treated as authority, personal scope identities are
+copied into a team project, unrelated target records are overwritten, a viewer imports into a
+private project, an interrupted replay is reported as complete, or lifecycle tombstones are
+discarded and later content is resurrected.
+
+**Required controls:** Accept only the strict digest-verified export domain object and one exact
+target task scope. Reconstruct every live object through canonical factories so scope-derived
+identities are rebased rather than trusted from input. Export the authorized target before any
+write and require its current live state to be an exact subset of the expected projection. Replay
+only through existing policy-validating repositories and forced PostgreSQL RLS. Re-export after
+replay and require semantic object equality, exact counts, and an independently computed target
+digest. Translate adapter errors without payload or identifier detail. Reject every bundle with an
+expiration, purge, or deletion tombstone before target access until a storage-level path can retain
+those records without bypassing anti-resurrection controls.
+
+**Verification:** Reference tests cover scope-derived identity changes, content/evidence parity,
+source and target digests, exact retry, conflicting target state, lifecycle rejection, injected
+mid-replay failure, and sanitized recovery. A real PostgreSQL test transfers a SQLite bundle,
+verifies restart-stable counts and hash, retries idempotently, and proves a private-project viewer
+cannot import.
+
+**Residual risk:** Live replay is resumable but not one cross-repository transaction. Lifecycle
+tombstones, other personal export categories, authenticated remote request/audit composition, and
+backup/deletion propagation remain release blockers; this service is not yet exposed as team mode.
+
 ### Cross-tenant source projection and repository-content retention
 
 **Scenario:** A source snapshot is written into another project, child rows substitute a different

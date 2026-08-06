@@ -424,7 +424,18 @@ identity ordering, canonical UTF-8 JSON, and a SHA-256 content digest make ident
 one export time byte-identical and tampering detectable. Authorization is applied before payload
 reconstruction; excluded content never enters the bundle, while tombstones remain so a future
 importer can prevent resurrection. This service returns the bundle but does not persist an export
-file or claim checkpoint, approved-fact, knowledge, structural, backup, or team-import support.
+file or claim checkpoint, approved-fact, knowledge, structural, or backup support.
+
+The live episodic import path accepts that validated bundle and one exact target task scope. It
+reconstructs task events, candidates, reviews, governance actions, and derived revisions through
+their canonical factories so every scope-derived identity is deterministically rebased while
+content, evidence, retention, timestamps, review decisions, and correction semantics remain
+unchanged. The target may be empty or an exact resumable subset; unrelated state fails before a
+write. Completion requires exact typed target state, category counts, the validated source digest,
+and the target repository's canonical digest. A partial failure is not success and an exact retry
+must converge. Any bundle containing an expiration, purge, or deletion tombstone is rejected before
+mutation until the storage-level anti-resurrection import path exists. Therefore this live slice
+does not yet satisfy the complete personal-to-team import or other-category export requirement.
 
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical

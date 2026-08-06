@@ -7,6 +7,14 @@ from .extraction import (
     EpisodicCandidateExtractionResult,
     EpisodicCandidateExtractionService,
 )
+from .importer import (
+    EpisodicImportConflict,
+    EpisodicImportError,
+    EpisodicImportResult,
+    EpisodicImportService,
+    EpisodicImportStorageFailure,
+    EpisodicImportUnsupportedLifecycle,
+)
 from .retention import (
     EpisodicPurgeSweepResult,
     EpisodicRetentionService,
@@ -22,6 +30,12 @@ __all__ = [
     "EpisodicCandidateExtractionService",
     "EpisodicDeletionService",
     "EpisodicExportService",
+    "EpisodicImportConflict",
+    "EpisodicImportError",
+    "EpisodicImportResult",
+    "EpisodicImportService",
+    "EpisodicImportStorageFailure",
+    "EpisodicImportUnsupportedLifecycle",
     "EpisodicPurgeSweepResult",
     "EpisodicRetentionService",
     "EpisodicRetentionSweepResult",

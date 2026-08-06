@@ -2120,6 +2120,46 @@ strict typing for 218 source files, dependency/provenance validation for 93 entr
 validation for 118 product Python files, schema validation, and the isolated installed-package MCP
 workflow. No dependency was added. PostgreSQL dbt project-index parity is complete.
 
+#### Issue 21R — Verified live episodic personal-to-team import — Complete
+
+The current bounded issue imports the live portion of one canonical personal episodic export into
+one exact authorized team task scope. Scope-derived identities must be deterministically rebased,
+all minimized payload and evidence fields must remain semantically identical, existing target
+state must be either an exact resumable subset or rejected before mutation, and completion must be
+proved by target counts and the canonical target digest. Retrying an interrupted import must
+converge without duplicates.
+
+This issue does not claim the Milestone 9 import exit gate: payload-free expiry, purge, and deletion
+tombstones require a subsequent storage-level import path that preserves anti-resurrection
+controls. A bundle containing any such tombstone must fail explicitly rather than silently omit
+lifecycle state. This issue adds no remote service, OAuth, backup, quota, dashboard, source
+governance, or new dependency.
+
+Implemented a storage-neutral live episodic import service over the existing canonical export and
+repository contracts. It rebuilds task events, candidate batches, reviews, governance actions, and
+derived revisions through their domain factories in dependency order. Scope-derived identities
+are deterministically rebased into the target task while minimized claims, evidence, retention,
+timestamps, decisions, extraction provenance, and correction semantics remain intact.
+
+The service exports the authorized target before mutation and accepts only an empty target or an
+exact typed subset of the expected projection. Existing unrelated state fails before a write.
+Repository idempotency makes an interrupted replay resumable; a second export must match every
+typed object and exact category count before success. The result returns the validated source
+digest and target repository's canonical digest. Equivalent instants with backend-normalized time
+zone offsets compare as typed datetimes rather than weakening either bundle's own canonical hash.
+All adapter failures become one payload-free outcome. Lifecycle-bearing bundles fail before target
+access and remain the next bounded issue.
+
+ADR 0026, the product contract, and threat model document identity rebasing, resumable subset
+preconditions, digest verification, and the tombstone boundary. Unit tests prove count/hash parity,
+idempotency, conflicting-target rejection, lifecycle rejection, sanitized interruption, and retry
+convergence. A real PostgreSQL test imports live SQLite state, verifies restart-stable target
+counts/hash and exact retry, and denies a private-project viewer. The complete repository gate
+passes with 829 default tests plus 18 mandatory real-PostgreSQL tests, strict typing for 219 source
+files, dependency/provenance validation for 93 entries, architecture validation for 119 product
+Python files, schema validation, and the isolated installed-package MCP workflow. No dependency or
+schema migration was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

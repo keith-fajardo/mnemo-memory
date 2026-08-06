@@ -108,6 +108,8 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.episodic import (
     EpisodicDeletionService,
     EpisodicExportService,
+    EpisodicImportService,
+    EpisodicImportStorageFailure,
     EpisodicRetentionService,
     TaskActivityRetentionService,
 )
@@ -144,6 +146,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLTeamMigrationError,
     PostgreSQLTeamMigrationRunner,
     RevisionConflict,
+    SQLiteCheckpointRepository,
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
     TaskActivityEventRejected,
@@ -3052,6 +3055,144 @@ def test_postgres_episodic_export_is_complete_stable_and_scoped(
     )
     with pytest.raises(EpisodicExportStorageFailure):
         EpisodicExportService(unavailable).export(scope, exported_at=exported_at)
+
+
+def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
+    postgres_harness: PostgreSQLHarness, tmp_path: Path
+) -> None:
+    personal_scope = MemoryScope(
+        OwnerId.new(),
+        ScopeLevel.TASK,
+        Visibility.PROJECT,
+        WorkspaceId.new(),
+        ProjectId.new(),
+        SessionId.new(),
+        TaskId.new(),
+    )
+    personal = SQLiteCheckpointRepository(
+        tmp_path / "personal-import.sqlite3", base_directory=tmp_path
+    )
+    personal.migrate()
+    source = _task_event(personal_scope, "a-personal-import")
+    personal.append_task_activity_event(source)
+    candidates = _episodic_candidates(
+        source,
+        extractor_version="personal-import-v1",
+        claims=("retain the imported team decision", "reject the imported candidate"),
+    )
+    personal.store_episodic_memory_candidates(candidates)
+    approval = _episodic_review(
+        personal_scope,
+        candidates[0],
+        "b-personal-import-approve",
+        EpisodicCandidateReviewDecision.APPROVED,
+    )
+    personal.review_episodic_memory_candidate(approval)
+    personal.review_episodic_memory_candidate(
+        _episodic_review(
+            personal_scope,
+            candidates[1],
+            "c-personal-import-reject",
+            EpisodicCandidateReviewDecision.REJECTED,
+        )
+    )
+    personal.govern_episodic_memory(
+        EpisodicMemoryGovernanceAction.correct(
+            scope=personal_scope,
+            memory_id=candidates[0].memory_id,
+            expected_revision_id=approval.action_id,
+            source_action_key="personal-import-correction",
+            reason="the imported decision needs verified final wording",
+            corrected_claim="retain the verified imported team decision",
+            corrected_sensitivity=Sensitivity.NORMAL,
+            occurred_at=NOW + timedelta(minutes=1),
+            evidence_references=(_approved_evidence("d-personal-import-correction", user=True),),
+        )
+    )
+    exported_at = NOW + timedelta(minutes=2)
+    bundle = EpisodicExportService(personal).export(personal_scope, exported_at=exported_at)
+
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    target_scope = _checkpoint_scope(workspace, project)
+    target_events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    target_memories = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    importer = EpisodicImportService(
+        target_events,
+        target_memories,
+        target_memories,
+        target_memories,
+        target_memories,
+    )
+    result = importer.import_bundle(bundle, target_scope=target_scope)
+
+    assert not result.idempotent
+    assert result.source_content_digest == bundle.content_digest
+    assert result.source_content_digest != result.target_content_digest
+    assert dict(result.counts) == {
+        "task_events": 1,
+        "candidates": 2,
+        "reviews": 2,
+        "governance_actions": 1,
+        "revisions": 2,
+        "memory_expirations": 0,
+        "memory_purges": 0,
+        "task_expirations": 0,
+        "task_purges": 0,
+        "memory_deletions": 0,
+        "task_deletions": 0,
+    }
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    imported = EpisodicExportService(restarted).export(target_scope, exported_at=exported_at)
+    assert imported.content_digest == result.target_content_digest
+    assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer_events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    viewer_memories = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(EpisodicImportStorageFailure):
+        EpisodicImportService(
+            viewer_events,
+            viewer_memories,
+            viewer_memories,
+            viewer_memories,
+            viewer_memories,
+        ).import_bundle(bundle, target_scope=replace(target_scope, task_id=TaskId.new()))
 
 
 def _source_structure_artifact(scope: MemoryScope, seed: int) -> CodeStructureArtifact:

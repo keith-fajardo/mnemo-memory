@@ -19,6 +19,7 @@ from mnemo_memory.packages.domain import (
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryKind,
     EpisodicMemoryRevision,
+    EventId,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -44,6 +45,10 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.episodic import (
     EpisodicDeletionService,
     EpisodicExportService,
+    EpisodicImportConflict,
+    EpisodicImportService,
+    EpisodicImportStorageFailure,
+    EpisodicImportUnsupportedLifecycle,
     EpisodicRetentionService,
     TaskActivityRetentionService,
 )
@@ -52,6 +57,10 @@ from mnemo_memory.packages.storage import (
     ReferenceEpisodicMemoryCandidateRepository,
     ReferenceTaskActivityEventRepository,
     SQLiteCheckpointRepository,
+    TaskActivityEventPage,
+    TaskActivityEventRepository,
+    TaskActivityEventStorageFailure,
+    TaskActivityEventStoreResult,
 )
 
 NOW = datetime(2026, 8, 5, 19, 0, tzinfo=UTC)
@@ -213,6 +222,43 @@ def _populate(events: EventRepository, memories: Repository, scope: MemoryScope)
     )
 
 
+def _populate_live(events: EventRepository, memories: Repository, scope: MemoryScope) -> None:
+    _, live = _store(events, memories, scope, seed=1)
+    _approve_and_correct(memories, live, seed=1)
+    _, rejected = _store(events, memories, scope, seed=2)
+    memories.review_episodic_memory_candidate(
+        EpisodicCandidateReviewAction.create(
+            scope=scope,
+            candidate_id=rejected.memory_id,
+            decision=EpisodicCandidateReviewDecision.REJECTED,
+            source_action_key="export-reject:2",
+            reason="I verified that this candidate should remain inactive.",
+            reviewed_at=NOW + timedelta(minutes=1),
+            evidence_references=(_evidence(302, user=True),),
+        )
+    )
+
+
+class _FailSecondEventWrite:
+    def __init__(self, delegate: TaskActivityEventRepository) -> None:
+        self._delegate = delegate
+        self._writes = 0
+
+    def append_task_activity_event(self, event: TaskActivityEvent) -> TaskActivityEventStoreResult:
+        self._writes += 1
+        if self._writes == 2:
+            raise TaskActivityEventStorageFailure("injected private adapter detail")
+        return self._delegate.append_task_activity_event(event)
+
+    def get_task_activity_event(self, scope: MemoryScope, event_id: EventId) -> TaskActivityEvent:
+        return self._delegate.get_task_activity_event(scope, event_id)
+
+    def list_task_activity_events(
+        self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
+    ) -> TaskActivityEventPage:
+        return self._delegate.list_task_activity_events(scope, offset=offset, limit=limit)
+
+
 def _reference() -> tuple[EventRepository, Repository]:
     events = ReferenceTaskActivityEventRepository()
     return events, ReferenceEpisodicMemoryCandidateRepository(events)
@@ -350,3 +396,89 @@ def test_export_is_stable_and_rejects_tampering_duplicates_and_cross_scope(
     )
     with pytest.raises(InvalidEpisodicExportScope):
         service.export(project_scope, exported_at=EXPORTED)
+
+
+def test_live_export_import_rebases_scope_and_verifies_counts_hash_and_idempotency() -> None:
+    source_events, source = _reference()
+    source_scope = _scope()
+    target_scope = _scope(2)
+    _populate_live(source_events, source, source_scope)
+    bundle = EpisodicExportService(source).export(source_scope, exported_at=EXPORTED)
+
+    target_events, target = _reference()
+    service = EpisodicImportService(target_events, target, target, target, target)
+    result = service.import_bundle(bundle, target_scope=target_scope)
+    imported = EpisodicExportService(target).export(target_scope, exported_at=EXPORTED)
+
+    assert result.source_content_digest == bundle.content_digest
+    assert result.target_content_digest == imported.content_digest
+    assert result.source_content_digest != result.target_content_digest
+    assert dict(result.counts) == {
+        "task_events": 2,
+        "candidates": 2,
+        "reviews": 2,
+        "governance_actions": 1,
+        "revisions": 2,
+        "memory_expirations": 0,
+        "memory_purges": 0,
+        "task_expirations": 0,
+        "task_purges": 0,
+        "memory_deletions": 0,
+        "task_deletions": 0,
+    }
+    assert not result.idempotent
+    assert all(item.scope == target_scope for item in imported.task_events)
+    assert {item.summary for item in imported.task_events} == {
+        item.summary for item in bundle.task_events
+    }
+    assert {item.event_id for item in imported.task_events}.isdisjoint(
+        item.event_id for item in bundle.task_events
+    )
+
+    repeated = service.import_bundle(bundle, target_scope=target_scope)
+    assert repeated.idempotent
+    assert repeated.target_content_digest == result.target_content_digest
+
+
+def test_live_import_rejects_lifecycle_or_unrelated_target_without_mutating() -> None:
+    source_events, source = _reference()
+    _populate(source_events, source, _scope())
+    lifecycle_bundle = EpisodicExportService(source).export(_scope(), exported_at=EXPORTED)
+    target_events, target = _reference()
+    service = EpisodicImportService(target_events, target, target, target, target)
+
+    with pytest.raises(EpisodicImportUnsupportedLifecycle, match="lifecycle tombstones"):
+        service.import_bundle(lifecycle_bundle, target_scope=_scope(2))
+    assert EpisodicExportService(target).export(_scope(2), exported_at=EXPORTED).task_events == ()
+
+    clean_source_events, clean_source = _reference()
+    _populate_live(clean_source_events, clean_source, _scope())
+    live_bundle = EpisodicExportService(clean_source).export(_scope(), exported_at=EXPORTED)
+    unrelated, _ = _store(target_events, target, _scope(2), seed=99)
+    before = EpisodicExportService(target).export(_scope(2), exported_at=EXPORTED)
+    with pytest.raises(EpisodicImportConflict, match="conflicting state"):
+        service.import_bundle(live_bundle, target_scope=_scope(2))
+    after = EpisodicExportService(target).export(_scope(2), exported_at=EXPORTED)
+    assert after == before
+    assert unrelated.event_id in {item.event_id for item in after.task_events}
+
+
+def test_interrupted_live_import_is_sanitized_and_retry_converges() -> None:
+    source_events, source = _reference()
+    _populate_live(source_events, source, _scope())
+    bundle = EpisodicExportService(source).export(_scope(), exported_at=EXPORTED)
+    target_events, target = _reference()
+    failing = EpisodicImportService(
+        _FailSecondEventWrite(target_events), target, target, target, target
+    )
+
+    with pytest.raises(EpisodicImportStorageFailure) as raised:
+        failing.import_bundle(bundle, target_scope=_scope(2))
+    assert "private adapter detail" not in str(raised.value)
+
+    resumed = EpisodicImportService(target_events, target, target, target, target).import_bundle(
+        bundle, target_scope=_scope(2)
+    )
+    assert not resumed.idempotent
+    final = EpisodicExportService(target).export(_scope(2), exported_at=EXPORTED)
+    assert final.content_digest == resumed.target_content_digest
