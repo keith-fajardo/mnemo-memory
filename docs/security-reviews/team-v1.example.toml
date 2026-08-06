@@ -1,0 +1,19 @@
+schema_version = "1.0"
+review_scope = "mnemo-team-v1"
+reviewed_revision = "0000000000000000000000000000000000000000"
+reviewed_at = "1970-01-01T00:00:00Z"
+reviewer_name = "REPLACE WITH REVIEWER NAME"
+reviewer_organization = "REPLACE WITH REVIEWER ORGANIZATION"
+independence_attested = false
+methodology = [
+  "REPLACE WITH SOURCE AND DESIGN REVIEW METHODS",
+  "REPLACE WITH ADVERSARIAL VERIFICATION METHODS",
+]
+findings = []
+
+# Add one table per finding. Critical/high findings must be resolved.
+# [[findings]]
+# finding_id = "MNEMO-SEC-001"
+# severity = "high"
+# status = "resolved"
+# summary = "Bounded non-sensitive finding and verified resolution summary."

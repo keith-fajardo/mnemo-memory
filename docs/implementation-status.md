@@ -625,7 +625,7 @@ checkpoint lifecycle save clears it, while incremental fact/lesson recording doe
 is a hashed local scope plus a boolean, not a transcript, source copy, terminal log, command
 payload, or inferred explanation.
 
-### Source-structure memory — In progress
+### Source-structure memory — Complete
 
 The current local slice makes Mnemo useful for ordinary Python, JavaScript/JSX, TypeScript/TSX, Go,
 Rust, C, C++, C#, Java, and PHP repositories as well as dbt projects. It has deterministic,
@@ -2840,12 +2840,27 @@ cache, background queue, retry, autoscaling, multi-process profile, or endpoint.
 The explicit `npm run team-load:check` gate provisions an isolated PostgreSQL 17.10 server and runs
 160 authenticated production-composition context requests after eight warm-ups at concurrency
 eight. It requires zero errors, nearest-rank p95 no greater than 250 ms, and throughput of at least
-30 requests per second. Three consecutive accepted runs had zero errors; the worst p95 was 23.245
-ms and the lowest throughput was 290.239 requests per second. ADR 0044, the product contract,
+30 requests per second. Four consecutive accepted runs had zero errors; the worst p95 was 23.322
+ms and the lowest throughput was 266.097 requests per second. ADR 0044, the product contract,
 deployment runbook, threat model, and load-objective document record the measured decision,
 capacity rule, exclusions, and deployment-specific HTTPS/OAuth rerun requirement. Pool and config
 unit/security coverage passes with 24 tests; the complete 26-test real PostgreSQL suite reuses one
 physical connection across owner, viewer, and foreign-workspace requests without scope leakage.
+
+#### Issue 21AL — Independent team security review readiness — In progress
+
+The current bounded issue prepares one reproducible, revision-pinned review package for an
+independent reviewer and a deterministic acceptance check for the resulting attestation. The review
+must cover the complete team threat model, OAuth/HTTP boundary, forced RLS and pooled-connection
+scope, authority mutations, retention/deletion/export/import, backup/restore, quotas, model budgets,
+operations metadata, dependencies, and deployment runbook. The accepted artifact must identify an
+independent reviewer and exact candidate revision and must contain no unresolved critical or high
+finding.
+
+Repository-owned security tests and an internal audit are supporting evidence, not independence.
+This issue must not mark the Milestone 9 gate complete, manufacture a reviewer identity, weaken
+severity, auto-accept risk, publish a release, add a scanner dependency, or treat a model-generated
+self-review as the required independent review.
 
 ### Personal checkpoint inspection — Complete
 
@@ -2892,7 +2907,7 @@ complete verification gate passed with 541 tests, schema validation, dependency/
 for 86 registered entries, and architecture validation for 70 product Python files. No dependency or
 MCP tool was added.
 
-### Issue 15 — dbt artifact completeness — In progress
+### Issue 15 — dbt artifact completeness — Complete
 
 #### Issue 15A — Complete
 

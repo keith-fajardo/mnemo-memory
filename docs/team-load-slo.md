@@ -31,8 +31,8 @@ The accepted 2026-08-06 run used PostgreSQL 17.10 on local loopback with the poo
 {"concurrency":8,"duration_seconds":0.551269,"errors":0,"operation":"authenticated_team_get_context","operations":160,"p95_latency_ms":22.598,"schema_version":"1.0","slo":{"maximum_p95_latency_ms":250.0,"minimum_throughput_per_second":30.0},"throughput_per_second":290.239,"warmup_operations":8}
 ```
 
-Three consecutive accepted runs produced zero errors; the worst observed p95 was 23.245 ms and the
-lowest observed throughput was 290.239 requests per second.
+Four consecutive accepted runs produced zero errors; the worst observed p95 was 23.322 ms and the
+lowest observed throughput was 266.097 requests per second.
 
 This reference proves the checked-in server-side path meets its declared gate on that environment.
 It is not a capacity promise for a different CPU, database, network, TLS terminator, tenant data
