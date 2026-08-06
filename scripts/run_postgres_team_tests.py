@@ -13,7 +13,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
-TEST_PATH = "tests/integration/test_postgres_team_control_plane.py"
+TEST_PATHS = (
+    "tests/integration/test_postgres_team_control_plane.py",
+    "tests/integration/test_postgres_team_backup.py",
+)
 REQUIRED_SETTINGS = (
     "MNEMO_TEST_POSTGRES_HOST",
     "MNEMO_TEST_POSTGRES_PORT",
@@ -75,7 +78,7 @@ def _available_port() -> int:
 
 def _run_pytest(environment: Mapping[str, str]) -> None:
     _run(
-        (sys.executable, "-m", "pytest", "-q", TEST_PATH),
+        (sys.executable, "-m", "pytest", "-q", *TEST_PATHS),
         environment=environment,
     )
 

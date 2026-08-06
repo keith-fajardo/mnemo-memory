@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import ssl
-import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +14,10 @@ from typing import cast
 from mcp.server.fastmcp import FastMCP
 
 from mnemo_memory.apps.mcp.team import PostgreSQLTeamMcpPortFactory, create_team_server
+from mnemo_memory.connectors.filesystem.secure_file import (
+    OwnedFileReadError,
+    read_bounded_owned_file,
+)
 from mnemo_memory.connectors.oauth import JwtVerifierConfig, MnemoJwtTokenVerifier
 from mnemo_memory.packages.storage import PostgreSQLConnection, PostgreSQLConnectionFactory
 
@@ -83,20 +86,20 @@ class TeamServiceConfig:
 
 def build_team_service(config: TeamServiceConfig) -> FastMCP:
     """Read bounded files once, require PostgreSQL TLS, and create the inert HTTP server."""
-    password = _read_bounded_file(
-        config.database_password_file,
-        maximum_bytes=4_096,
-        owner_only=True,
-        failure_code="MNEMO_TEAM_SECRET_UNAVAILABLE",
-    ).strip()
+    try:
+        password = read_bounded_owned_file(
+            config.database_password_file, maximum_bytes=4_096, owner_only=True
+        ).strip()
+    except OwnedFileReadError as error:
+        raise TeamServiceConfigurationError("MNEMO_TEAM_SECRET_UNAVAILABLE") from error
     if not password or "\n" in password or "\r" in password:
         raise TeamServiceConfigurationError("MNEMO_TEAM_SECRET_UNAVAILABLE")
-    public_key = _read_bounded_file(
-        config.oauth_public_key_file,
-        maximum_bytes=16_384,
-        owner_only=False,
-        failure_code="MNEMO_TEAM_PUBLIC_KEY_UNAVAILABLE",
-    )
+    try:
+        public_key = read_bounded_owned_file(
+            config.oauth_public_key_file, maximum_bytes=16_384, owner_only=False
+        )
+    except OwnedFileReadError as error:
+        raise TeamServiceConfigurationError("MNEMO_TEAM_PUBLIC_KEY_UNAVAILABLE") from error
     try:
         verifier = MnemoJwtTokenVerifier(
             JwtVerifierConfig(
@@ -157,34 +160,6 @@ def main() -> None:
     except TeamServiceConfigurationError as error:
         logging.error("%s", error)
         raise SystemExit(2) from error
-
-
-def _read_bounded_file(
-    path: Path,
-    *,
-    maximum_bytes: int,
-    owner_only: bool,
-    failure_code: str,
-) -> str:
-    descriptor: int | None = None
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
-        metadata = os.fstat(descriptor)
-        mode = stat.S_IMODE(metadata.st_mode)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
-            raise OSError("unsafe file identity")
-        if (owner_only and mode & 0o077) or (not owner_only and mode & 0o022):
-            raise OSError("unsafe file permissions")
-        content = os.read(descriptor, maximum_bytes + 1)
-        if len(content) > maximum_bytes:
-            raise OSError("file exceeds bound")
-        return content.decode("utf-8")
-    except (OSError, UnicodeError) as error:
-        raise TeamServiceConfigurationError(failure_code) from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
 
 
 def _port(value: str) -> int:

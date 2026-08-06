@@ -1,7 +1,7 @@
 # Team MCP deployment boundary
 
 The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: backup/restore deletion propagation, quotas,
+is not yet a general-availability team release: backup deletion propagation, quotas,
 operational dashboards, load objectives, and the independent security review remain release gates.
 
 ## Install and prerequisites
@@ -15,6 +15,12 @@ uv tool install 'mnemo-unified-context[team]'
 Provision the PostgreSQL schema and non-owner runtime role using the existing team migration
 process. The runtime PostgreSQL endpoint must present a certificate trusted by the host; Mnemo
 always enables hostname verification and never offers a plaintext database option.
+
+Verified team backups additionally require PostgreSQL 17.10 client tools (`pg_dump` and
+`pg_restore`) on the operator host. Provision a dedicated login role that is a non-superuser with
+`BYPASSRLS` and `pg_read_all_data`; never reuse the MCP runtime role. This infrastructure role is
+required so one exported snapshot contains every tenant while the online runtime remains subject
+to forced RLS. Keep its password in a separate owner-only mode-`0600` file.
 
 Write the database password to a regular file owned by the service user with mode `0600`. Do not
 put it in the environment, command line, repository, service definition, or proxy configuration.
@@ -35,6 +41,12 @@ no secret value.
 - `MNEMO_TEAM_OAUTH_ALGORITHM` — `RS256` by default; `PS256` and `ES256` are also approved
 - `MNEMO_TEAM_REQUIRED_SCOPES` — whitespace-separated, default `mnemo:context`
 - `MNEMO_TEAM_HTTP_PORT` — loopback upstream port, default `8766`
+
+Backup administration uses the same host, port, and database variables plus:
+
+- `MNEMO_TEAM_BACKUP_DB_USER` — the dedicated non-superuser `BYPASSRLS` role
+- `MNEMO_TEAM_BACKUP_DB_PASSWORD_FILE` — absolute owner-only password-file path
+- `MNEMO_TEAM_BACKUP_SSL_ROOT_CERT_FILE` — optional absolute PEM CA path; system trust otherwise
 
 Start the installed entry point under a process supervisor:
 
@@ -74,6 +86,39 @@ After start:
 
 Stop the supervisor process to stop the service. The service retains no bearer or refresh token;
 stopping it does not modify team data.
+
+## Verified backup and restore drill
+
+Choose an absolute mode-`0700` directory on an encrypted volume and create a non-overwriting
+backup:
+
+```bash
+mnemo-memory-team-admin backup --output-dir /srv/mnemo/backups
+```
+
+The command uses a repeatable-read exported snapshot and publishes one mode-`0600` PostgreSQL
+custom archive plus one mode-`0600` canonical manifest. The manifest binds the archive SHA-256,
+size, schema-ledger version, and sorted row count for every table in `mnemo_team`. It contains no
+memory payload. Mnemo does not provide at-rest encryption or remote object storage in this issue;
+volume encryption, access control, copying, retention, and off-host custody remain operator
+responsibilities. Command failures return only stable codes and remove partial local artifacts.
+
+For a drill, explicitly provision a separate database owned by the backup role and install the
+exact required `vector` extension version before restore. It may contain the extension but must not
+contain the `mnemo_team` schema. Never name the live database. Then run:
+
+```bash
+mnemo-memory-team-admin restore-drill \
+  --manifest /srv/mnemo/backups/mnemo-team-v21-<timestamp>-<digest>.dump.json \
+  --target-database mnemo_restore_drill
+```
+
+Mnemo verifies file ownership/modes, manifest identity, archive digest and structure, rejects the
+live or a nonempty target, restores with `--single-transaction`, and succeeds only when the target
+migration ledger and every table count match. The JSON result contains only backup identity,
+target database, schema/table/row counts, and bounded duration. Drop the isolated drill database
+after recording the result. A successful drill proves database recovery, not deletion propagation
+into retained backups; that remains a release gate.
 
 ## Team knowledge source governance
 

@@ -218,6 +218,7 @@ from .team import (
     WorkspaceMembership,
     WorkspaceRole,
 )
+from .team_backup import TEAM_BACKUP_FORMAT, TeamBackupManifest, TeamBackupTableCount
 from .team_knowledge import TeamKnowledgeSourceApproval, TeamKnowledgeSourceStatus
 
 __all__ = [
@@ -226,6 +227,7 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET",
     "EPISODIC_EXPORT_FORMAT",
     "KNOWLEDGE_EXPORT_FORMAT",
+    "TEAM_BACKUP_FORMAT",
     "ActiveEpisodicMemory",
     "AgentId",
     "ApprovedEpisodicEvent",
@@ -384,6 +386,8 @@ __all__ = [
     "TaskId",
     "TeamAuditAction",
     "TeamAuditEvent",
+    "TeamBackupManifest",
+    "TeamBackupTableCount",
     "TeamKnowledgeSourceApproval",
     "TeamKnowledgeSourceStatus",
     "TeamProject",

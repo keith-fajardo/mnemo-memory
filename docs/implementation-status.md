@@ -2590,6 +2590,45 @@ mandatory real-PostgreSQL tests, strict typing for 243 source files, dependency/
 validation for 93 entries, architecture validation for 134 product Python files, schema validation,
 and installed-package workflow verification. No dependency was added.
 
+#### Issue 21AD — Verified team database backup and restore drill — Complete
+
+The current bounded issue adds an operator-invoked, non-overwriting PostgreSQL custom-format backup
+and restore-drill workflow for the optional team profile. Backup creation must use the existing
+owner-only password-file boundary, certificate-verified database transport, a private operator-
+selected directory, one atomic mode-0600 artifact, and a digest-bound content-free manifest. The
+native backup must include all current `mnemo_team` canonical, projection, governance, audit,
+outbox, tombstone, and migration state without logging credentials or payloads.
+
+A restore drill must accept only a verified Mnemo backup, reject the live database and a nonempty
+target, restore into one explicitly provisioned target database in a single transaction, then
+compare the schema ledger and per-table row counts with the digest-bound manifest before reporting a
+bounded recovery duration. Partial backup/restore artifacts, command output, and target contents
+must not be returned on failure. This issue adds no scheduled backups, remote object storage,
+encryption-key manager, deletion-triggered backup rotation, retention pruning, quota, dashboard,
+or dependency.
+
+Implemented the installed `mnemo-memory-team-admin` entry point over an original versioned manifest,
+storage-neutral backup service, and native PostgreSQL adapter. Backup uses a dedicated
+non-superuser `BYPASSRLS` role, one exported repeatable-read snapshot, PostgreSQL 17.10 custom
+format, private passfiles, certificate-verified application connections, an owner mode-`0700`
+directory, and atomic non-overwriting mode-`0600` archive and manifest publication. The canonical
+manifest binds archive identity, SHA-256, size, schema version, and a sorted count for every table
+in `mnemo_team`; command vectors, results, errors, and logs disclose no credential or payload.
+
+Restore requires an explicitly provisioned non-live database with the approved `vector` extension
+and no `mnemo_team` schema. It verifies file ownership and permissions, archive digest and native
+structure, restores in one transaction, and succeeds only after exact migration-ledger and
+per-table count parity. ADR 0038, the product contract, deployment runbook, dependency register,
+release-package verifier, and threat model record the dedicated authority, extension, encrypted-
+storage, deletion-propagation, and recovery boundaries.
+
+The complete repository gate passes with 906 default tests plus 23 mandatory real-PostgreSQL tests,
+including a native dump/restore drill, strict typing for 253 source files, dependency/provenance
+validation for 94 entries, architecture validation for 140 product Python files, schema validation,
+and installed-package workflow verification. No Python dependency, schedule, remote storage,
+encryption-key manager, retention pruning, deletion-triggered backup rotation, quota, or dashboard
+was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

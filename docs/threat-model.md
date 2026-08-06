@@ -8,9 +8,9 @@ required controls before those features exist; it does not claim they are implem
 
 The pure team authorization contract, PostgreSQL authority control plane and data parity, plus the
 OAuth-authenticated loopback Streamable HTTP MCP request boundary are now included. Non-loopback
-exposure, TLS proxy deployment, hosted sync, key rotation operations, team knowledge governance,
+exposure, TLS proxy deployment, hosted sync, key rotation operations, backup deletion propagation,
 and remaining production operations remain deferred and require threat-model revisions before
-exposure.
+exposure. Verified team backup and isolated restore drills are included.
 
 ## Security objectives
 
@@ -904,6 +904,34 @@ Remaining deletion-propagation tests must cover portable transfer, backups, rest
 cache or export persistence. Counts and digests must reconcile.
 
 **Residual risk:** User-controlled exports cannot be recalled; warn and document their boundary.
+
+### Tampered or overprivileged team backup and restore
+
+**Scenario:** A partial or substituted archive is accepted, an online MCP credential bypasses RLS,
+a restore overwrites the live database, a failed restore leaves partial schema, or credentials and
+payloads appear in command arguments, logs, manifests, or errors.
+
+**Required controls:** Whole-team backup uses a separate non-superuser `BYPASSRLS` role rather than
+the non-`BYPASSRLS` MCP runtime role. A repeatable-read exported snapshot binds the native dump and
+the schema ledger/per-table inventory. Database transport verifies certificate and hostname; the
+password is read from an owner-only file and passed to native tools only through a temporary
+mode-`0600` passfile. Backup output is an atomic, non-overwriting mode-`0600` custom archive in an
+owner mode-`0700` absolute directory plus a canonical manifest binding SHA-256, size, version, and
+counts. Restore rejects the source database and a target containing `mnemo_team`, requires the
+approved vector extension to be pre-provisioned, uses one transaction, and reports success only
+after exact inventory parity. Tool output, exception details, credentials, and database contents
+are not logged or returned.
+
+**Verification:** Unit and security tests cover manifest tampering, unsafe file modes and symlinks,
+partial cleanup, credential-free command vectors, certificate-verifying settings, backup-role
+authority, live/nonempty target rejection, and inventory mismatch. The mandatory isolated
+PostgreSQL test executes real version-17.10 `pg_dump`/`pg_restore`, restores every `mnemo_team`
+table, and compares the full schema ledger and row counts.
+
+**Residual risk:** The archive contains sensitive team payload and relies on operator-provided
+encrypted storage, access control, retention, and off-host custody. Scheduled backups, key
+management, and deletion-triggered rotation or expiry are not implemented; a retained backup can
+therefore contain data deleted later from the live database.
 
 Personal SQLite backups are likewise user-controlled sensitive copies. Backup creation rejects an
 absent/corrupt source, unsafe backup-directory symlinks, validation failures, and destination

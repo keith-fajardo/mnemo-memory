@@ -29,7 +29,8 @@ def write_wheel(path: Path, *, extra: dict[str, bytes] | None = None) -> None:
             "mnemo_unified_context-0.1.0a2.dist-info/entry_points.txt",
             "[console_scripts]\n"
             "mnemo-memory = mnemo_memory.cli:main\n"
-            "mnemo-memory-team = mnemo_memory.apps.mcp.team_runtime:main\n",
+            "mnemo-memory-team = mnemo_memory.apps.mcp.team_runtime:main\n"
+            "mnemo-memory-team-admin = mnemo_memory.apps.cli.team_admin:main\n",
         )
         for entry, content in (extra or {}).items():
             archive.writestr(entry, content)

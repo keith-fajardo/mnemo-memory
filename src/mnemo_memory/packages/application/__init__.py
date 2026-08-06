@@ -138,6 +138,14 @@ from .knowledge_transfer import (
 )
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
+from .team_backups import (
+    TeamBackupError,
+    TeamBackupResult,
+    TeamBackupService,
+    TeamDatabaseBackupPort,
+    TeamDatabaseInventory,
+    TeamRestoreDrillResult,
+)
 from .team_knowledge import (
     ApproveTeamKnowledgeSource,
     TeamKnowledgeGovernanceApplicationError,
@@ -282,11 +290,17 @@ __all__ = [
     "SetApprovedEpisodicEventPin",
     "SourceFreshnessQueryResult",
     "SynchronizeKnowledgeDocuments",
+    "TeamBackupError",
+    "TeamBackupResult",
+    "TeamBackupService",
+    "TeamDatabaseBackupPort",
+    "TeamDatabaseInventory",
     "TeamKnowledgeGovernanceApplicationError",
     "TeamKnowledgeGovernanceApplicationService",
     "TeamKnowledgeGovernanceConflict",
     "TeamKnowledgeGovernanceInvalidScope",
     "TeamKnowledgeGovernanceStorageFailure",
+    "TeamRestoreDrillResult",
     "TestCoverageQueryResult",
     "build_checkpoint_runtime",
     "build_lifecycle_service",

@@ -35,6 +35,7 @@ dependencies = [
 [project.scripts]
 mnemo-memory = "mnemo_memory.cli:main"
 mnemo-memory-team = "mnemo_memory.apps.mcp.team_runtime:main"
+mnemo-memory-team-admin = "mnemo_memory.apps.cli.team_admin:main"
 
 [project.urls]
 Homepage = "https://github.com/keith-fajardo/mnemo-memory"

@@ -46,9 +46,12 @@ REQUIRED_MIGRATIONS = (
 )
 WHEEL_REQUIRED = (
     "mnemo_memory/py.typed",
+    "mnemo_memory/apps/cli/team_admin.py",
     "mnemo_memory/apps/mcp/team.py",
     "mnemo_memory/apps/mcp/team_runtime.py",
+    "mnemo_memory/connectors/filesystem/secure_file.py",
     "mnemo_memory/connectors/oauth/jwt_verifier.py",
+    "mnemo_memory/connectors/postgresql/backup.py",
     *(f"mnemo_memory/resources/migrations/{migration}" for migration in REQUIRED_MIGRATIONS),
     "mnemo_memory/resources/schemas/context-packet-v1.json",
 )
@@ -59,10 +62,13 @@ SDIST_REQUIRED = (
     "src/mnemo_memory/__init__.py",
     "src/mnemo_memory/cli.py",
     "src/mnemo_memory/apps/cli/main.py",
+    "src/mnemo_memory/apps/cli/team_admin.py",
     "src/mnemo_memory/apps/mcp/server.py",
     "src/mnemo_memory/apps/mcp/team.py",
     "src/mnemo_memory/apps/mcp/team_runtime.py",
+    "src/mnemo_memory/connectors/filesystem/secure_file.py",
     "src/mnemo_memory/connectors/oauth/jwt_verifier.py",
+    "src/mnemo_memory/connectors/postgresql/backup.py",
     "deploy/team/README.md",
     "deploy/team/mnemo-team.env.example",
     "src/mnemo_memory/connectors/dbt/manifest.py",
@@ -167,6 +173,12 @@ def verify_wheel(path: Path) -> None:
         if team_command != "mnemo_memory.apps.mcp.team_runtime:main":
             raise ArtifactVerificationError(
                 "wheel console entry point mnemo-memory-team must target the team runtime"
+            )
+        admin_command = parser.get("console_scripts", "mnemo-memory-team-admin", fallback=None)
+        if admin_command != "mnemo_memory.apps.cli.team_admin:main":
+            raise ArtifactVerificationError(
+                "wheel console entry point mnemo-memory-team-admin must target "
+                "the team admin runtime"
             )
 
         for entry in entries:

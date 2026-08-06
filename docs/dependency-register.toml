@@ -48,6 +48,19 @@ direct = true
 approved = true
 
 [[dependencies]]
+ecosystem = "toolchain"
+name = "PostgreSQL client tools"
+version = "17.10"
+license = "PostgreSQL"
+source_url = "https://www.postgresql.org/ftp/source/v17.10/"
+author = "PostgreSQL Global Development Group"
+owner = "Mnemo maintainers"
+purpose = "Operator-invoked custom-format team backup validation and transactional restore drills"
+replacement_boundary = "Native team backup adapter; another reviewed PostgreSQL 17 client patch may replace it after real restore verification"
+direct = true
+approved = true
+
+[[dependencies]]
 ecosystem = "pypi"
 name = "python-dateutil"
 version = "2.9.0.post0"

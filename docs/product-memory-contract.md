@@ -259,6 +259,16 @@ or newer and has no plaintext fallback. The MCP upstream remains fixed to `127.0
 HTTPS proxy, certificate, and network policy are a separate operator-controlled boundary. Rotation
 is atomic file replacement plus restart, and startup failures expose only stable content-free codes.
 
+The installed `mnemo-memory-team-admin` entry point creates operator-invoked PostgreSQL custom
+archives from one exported snapshot using a dedicated non-superuser `BYPASSRLS` backup role. The
+MCP runtime credential remains non-`BYPASSRLS` and cannot create a whole-team backup. Each private,
+non-overwriting archive has a canonical digest-bound manifest containing only schema version and
+per-table counts. Restore drills accept only a matching private archive, reject the live database
+and any target already containing `mnemo_team`, restore transactionally into an explicitly
+provisioned database, and require exact migration-ledger and table-count parity before success.
+The target must already contain the approved `vector` extension. Backup at-rest encryption,
+custody, retention, scheduling, and deletion propagation remain explicit operator/release gates.
+
 ## Evidence requirements
 
 Every durable memory includes:

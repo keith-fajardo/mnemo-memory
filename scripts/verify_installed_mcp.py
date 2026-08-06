@@ -388,6 +388,9 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
         team_launcher = tool_bin / "mnemo-memory-team"
         if not team_launcher.is_file():
             raise InstalledWorkflowError("uv tool install did not create mnemo-memory-team")
+        team_admin_launcher = tool_bin / "mnemo-memory-team-admin"
+        if not team_admin_launcher.is_file():
+            raise InstalledWorkflowError("uv tool install did not create mnemo-memory-team-admin")
 
         project = work / "sample-project"
         project.joinpath("src").mkdir(parents=True)
