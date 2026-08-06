@@ -103,6 +103,7 @@ def _same_checkpoint_history(left: CheckpointExportBundle, right: CheckpointExpo
         and left.aggregates == right.aggregates
         and left.revisions == right.revisions
         and left.lifecycle_events == right.lifecycle_events
+        and left.deletions == right.deletions
     )
 
 
@@ -117,6 +118,16 @@ def _is_exact_checkpoint_rebase(
         == target.revisions
         and tuple(replace(item, scope=target.scope) for item in source.lifecycle_events)
         == target.lifecycle_events
+        and tuple(
+            CheckpointDeletion.create(
+                scope=target.scope,
+                checkpoint_id=item.checkpoint_id,
+                source_action_key=item.source_action_key,
+                deleted_at=item.deleted_at,
+            )
+            for item in source.deletions
+        )
+        == target.deletions
     )
 
 
@@ -580,6 +591,7 @@ class PostgreSQLCheckpointRepository:
             len(source.aggregates) != len(target.aggregates)
             or len(source.revisions) != len(target.revisions)
             or len(source.lifecycle_events) != len(target.lifecycle_events)
+            or len(source.deletions) != len(target.deletions)
             or not _is_exact_checkpoint_rebase(source, target)
         ):
             raise CheckpointImportConflict("checkpoint import source and target state differ")
@@ -593,9 +605,15 @@ class PostgreSQLCheckpointRepository:
                         len(target.aggregates),
                         len(target.revisions),
                         len(target.lifecycle_events),
+                        len(target.deletions),
                         True,
                     )
-                if before.aggregates or before.revisions or before.lifecycle_events:
+                if (
+                    before.aggregates
+                    or before.revisions
+                    or before.lifecycle_events
+                    or before.deletions
+                ):
                     raise CheckpointImportConflict(
                         "checkpoint import target contains conflicting state"
                     )
@@ -622,6 +640,28 @@ class PostgreSQLCheckpointRepository:
                     self._insert_revision(cursor, revision)
                 for event in target.lifecycle_events:
                     self._insert_event(cursor, event)
+                for source_deletion, deletion in zip(
+                    source.deletions, target.deletions, strict=True
+                ):
+                    cursor.execute(
+                        "INSERT INTO mnemo_team.checkpoint_deletions("
+                        "workspace_id,project_id,owner_id,visibility,session_id,task_id,"
+                        "deletion_id,checkpoint_id,actor,source_action_key,deleted_at,"
+                        "import_source_deletion_id,import_source_content_digest,imported_at) "
+                        "VALUES (CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),%s,"
+                        "CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),CAST(%s AS uuid),"
+                        "%s,%s,%s,CAST(%s AS uuid),%s,CURRENT_TIMESTAMP)",
+                        (
+                            *self._scope_values(deletion.scope),
+                            str(deletion.deletion_id),
+                            str(deletion.checkpoint_id),
+                            deletion.actor.value,
+                            deletion.source_action_key,
+                            deletion.deleted_at,
+                            str(source_deletion.deletion_id),
+                            source.content_digest,
+                        ),
+                    )
                 after = self._checkpoint_history_from_cursor(
                     cursor, target.scope, target.exported_at
                 )
@@ -631,6 +671,7 @@ class PostgreSQLCheckpointRepository:
                     len(target.aggregates),
                     len(target.revisions),
                     len(target.lifecycle_events),
+                    len(target.deletions),
                     False,
                 )
         except CheckpointImportConflict:
@@ -1062,12 +1103,22 @@ class PostgreSQLCheckpointRepository:
             self._scope_values(scope),
         )
         events = tuple(self._event_from_row(row, scope) for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT " + _DELETION_COLUMNS + " FROM mnemo_team.checkpoint_deletions "
+            "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY checkpoint_id ASC",
+            self._scope_values(scope),
+        )
+        deletions = tuple(self._deletion_from_row(row, scope) for row in cursor.fetchall())
         return CheckpointExportBundle.create(
             scope=scope,
             exported_at=exported_at,
             aggregates=aggregates,
             revisions=revisions,
             lifecycle_events=events,
+            deletions=deletions,
         )
 
     def _select_event(

@@ -34,6 +34,9 @@ Checkpoint export enumerates live checkpoint history only, so a deleted checkpoi
 new exports. The tombstone itself is not added to the existing history bundle in this issue;
 portable deletion propagation remains a separate bounded requirement.
 
+ADR 0033 subsequently adds that tombstone to checkpoint export version 2 and verified
+personal-to-team import without changing this canonical erasure decision.
+
 ## Consequences
 
 - A deleted checkpoint can no longer be selected, inspected, exported as live history, or

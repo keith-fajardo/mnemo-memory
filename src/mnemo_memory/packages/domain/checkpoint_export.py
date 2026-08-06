@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Self, cast
 
+from .checkpoint_deletion import CheckpointDeletion
 from .episodic_events import CheckpointEventKind, CheckpointLifecycleEvent
 from .identifiers import CheckpointId, CheckpointRevisionId
 from .models import (
@@ -21,7 +22,8 @@ from .models import (
     _require_aware,
 )
 
-CHECKPOINT_EXPORT_FORMAT = "mnemo.checkpoint-export.v1"
+_CHECKPOINT_EXPORT_FORMAT_V1 = "mnemo.checkpoint-export.v1"
+CHECKPOINT_EXPORT_FORMAT = "mnemo.checkpoint-export.v2"
 
 
 def _canonical_json(value: Mapping[str, object]) -> str:
@@ -97,11 +99,14 @@ class CheckpointExportBundle:
     aggregates: tuple[CheckpointAggregate, ...]
     revisions: tuple[CheckpointRevision, ...]
     lifecycle_events: tuple[CheckpointLifecycleEvent, ...]
+    deletions: tuple[CheckpointDeletion, ...]
     content_digest: str
 
     def __post_init__(self) -> None:
-        if self.format_version != CHECKPOINT_EXPORT_FORMAT:
+        if self.format_version not in {_CHECKPOINT_EXPORT_FORMAT_V1, CHECKPOINT_EXPORT_FORMAT}:
             raise ValueError("checkpoint export format is unsupported")
+        if self.format_version == _CHECKPOINT_EXPORT_FORMAT_V1 and self.deletions:
+            raise ValueError("checkpoint export version 1 cannot contain deletions")
         if not isinstance(self.scope, MemoryScope) or self.scope.level is not ScopeLevel.TASK:
             raise ValueError("checkpoint export requires exact task scope")
         _require_aware(self.exported_at, "exported_at")
@@ -119,6 +124,7 @@ class CheckpointExportBundle:
         aggregates: tuple[CheckpointAggregate, ...] = (),
         revisions: tuple[CheckpointRevision, ...] = (),
         lifecycle_events: tuple[CheckpointLifecycleEvent, ...] = (),
+        deletions: tuple[CheckpointDeletion, ...] = (),
     ) -> Self:
         content: dict[str, object] = {
             "format_version": CHECKPOINT_EXPORT_FORMAT,
@@ -142,11 +148,15 @@ class CheckpointExportBundle:
                     key=lambda item: (str(item.checkpoint_id), item.revision_number),
                 )
             ],
+            "deletions": [
+                item.to_dict()
+                for item in sorted(deletions, key=lambda item: str(item.checkpoint_id))
+            ],
         }
         return cls._from_content(content, _digest(content))
 
     def _content_dict(self) -> dict[str, object]:
-        return {
+        content: dict[str, object] = {
             "format_version": self.format_version,
             "scope": self.scope.to_dict(),
             "exported_at": self.exported_at.isoformat(),
@@ -154,6 +164,9 @@ class CheckpointExportBundle:
             "revisions": [item.to_dict() for item in self.revisions],
             "lifecycle_events": [item.to_dict() for item in self.lifecycle_events],
         }
+        if self.format_version == CHECKPOINT_EXPORT_FORMAT:
+            content["deletions"] = [item.to_dict() for item in self.deletions]
+        return content
 
     def to_dict(self) -> dict[str, object]:
         return {**self._content_dict(), "content_digest": self.content_digest}
@@ -176,15 +189,30 @@ class CheckpointExportBundle:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
-        expected = {
-            "format_version",
-            "scope",
-            "exported_at",
-            "aggregates",
-            "revisions",
-            "lifecycle_events",
-            "content_digest",
-        }
+        format_version = value.get("format_version")
+        if format_version == _CHECKPOINT_EXPORT_FORMAT_V1:
+            expected = {
+                "format_version",
+                "scope",
+                "exported_at",
+                "aggregates",
+                "revisions",
+                "lifecycle_events",
+                "content_digest",
+            }
+        elif format_version == CHECKPOINT_EXPORT_FORMAT:
+            expected = {
+                "format_version",
+                "scope",
+                "exported_at",
+                "aggregates",
+                "revisions",
+                "lifecycle_events",
+                "deletions",
+                "content_digest",
+            }
+        else:
+            raise ValueError("checkpoint export format is unsupported")
         if set(value) != expected:
             raise ValueError("checkpoint export fields are invalid")
         content = {name: value[name] for name in expected if name != "content_digest"}
@@ -205,7 +233,10 @@ class CheckpointExportBundle:
         ):
             raise TypeError("checkpoint export serialization is invalid")
         lists: dict[str, list[Mapping[str, object]]] = {}
-        for name in ("aggregates", "revisions", "lifecycle_events"):
+        names = ["aggregates", "revisions", "lifecycle_events"]
+        if format_version == CHECKPOINT_EXPORT_FORMAT:
+            names.append("deletions")
+        for name in names:
             raw = value[name]
             if not isinstance(raw, list) or not all(isinstance(item, Mapping) for item in raw):
                 raise TypeError("checkpoint export serialization is invalid")
@@ -217,6 +248,7 @@ class CheckpointExportBundle:
             tuple(_aggregate_from_dict(item) for item in lists["aggregates"]),
             tuple(CheckpointRevision.from_dict(item) for item in lists["revisions"]),
             tuple(CheckpointLifecycleEvent.from_dict(item) for item in lists["lifecycle_events"]),
+            tuple(CheckpointDeletion.from_dict(item) for item in lists.get("deletions", [])),
             digest,
         )
 
@@ -236,6 +268,11 @@ class CheckpointExportBundle:
             for item in self.lifecycle_events
         ):
             raise ValueError("checkpoint export contains invalid or cross-scope events")
+        if any(
+            not isinstance(item, CheckpointDeletion) or item.scope != self.scope
+            for item in self.deletions
+        ):
+            raise ValueError("checkpoint export contains invalid or cross-scope deletions")
         if self.aggregates != tuple(
             sorted(self.aggregates, key=lambda item: str(item.checkpoint_id))
         ):
@@ -254,6 +291,10 @@ class CheckpointExportBundle:
             )
         ):
             raise ValueError("checkpoint export events are not canonically ordered")
+        if self.deletions != tuple(
+            sorted(self.deletions, key=lambda item: str(item.checkpoint_id))
+        ):
+            raise ValueError("checkpoint export deletions are not canonically ordered")
 
     def _validate_history(self) -> None:
         aggregate_by_id = {item.checkpoint_id: item for item in self.aggregates}
@@ -268,6 +309,17 @@ class CheckpointExportBundle:
             self.lifecycle_events
         ):
             raise ValueError("checkpoint export contains duplicate lifecycle identities")
+        deletion_ids = {item.deletion_id for item in self.deletions}
+        deletion_checkpoints = {item.checkpoint_id for item in self.deletions}
+        deletion_keys = {item.source_action_key for item in self.deletions}
+        if (
+            len(deletion_ids) != len(self.deletions)
+            or len(deletion_checkpoints) != len(self.deletions)
+            or len(deletion_keys) != len(self.deletions)
+        ):
+            raise ValueError("checkpoint export contains duplicate deletion state")
+        if deletion_checkpoints.intersection(aggregate_by_id):
+            raise ValueError("checkpoint export retains deleted checkpoint payload")
         revisions_by_checkpoint: dict[CheckpointId, list[CheckpointRevision]] = {}
         events_by_checkpoint: dict[CheckpointId, list[CheckpointLifecycleEvent]] = {}
         for revision in self.revisions:

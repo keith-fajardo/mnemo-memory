@@ -2838,12 +2838,19 @@ class ReferenceCheckpointRepository:
                 key=lambda item: (str(item.checkpoint_id), item.revision_number),
             )
         )
+        deletions = tuple(
+            sorted(
+                (item for item in self._deletions.values() if item.scope == scope),
+                key=lambda item: str(item.checkpoint_id),
+            )
+        )
         return CheckpointExportBundle.create(
             scope=scope,
             exported_at=exported_at,
             aggregates=aggregates,
             revisions=revisions,
             lifecycle_events=events,
+            deletions=deletions,
         )
 
     def import_checkpoint_history(
@@ -2864,6 +2871,16 @@ class ReferenceCheckpointRepository:
             != target.revisions
             or tuple(replace(item, scope=target.scope) for item in source.lifecycle_events)
             != target.lifecycle_events
+            or tuple(
+                CheckpointDeletion.create(
+                    scope=target.scope,
+                    checkpoint_id=item.checkpoint_id,
+                    source_action_key=item.source_action_key,
+                    deleted_at=item.deleted_at,
+                )
+                for item in source.deletions
+            )
+            != target.deletions
         ):
             raise CheckpointImportConflict("checkpoint import source and target state differ")
         before = self.export_checkpoint_history(target.scope, exported_at=target.exported_at)
@@ -2871,21 +2888,30 @@ class ReferenceCheckpointRepository:
             before.aggregates == target.aggregates
             and before.revisions == target.revisions
             and before.lifecycle_events == target.lifecycle_events
+            and before.deletions == target.deletions
         ):
             return CheckpointImportResult(
                 len(target.aggregates),
                 len(target.revisions),
                 len(target.lifecycle_events),
+                len(target.deletions),
                 True,
             )
-        if before.aggregates or before.revisions or before.lifecycle_events:
+        if before.aggregates or before.revisions or before.lifecycle_events or before.deletions:
             raise CheckpointImportConflict("checkpoint import target contains conflicting state")
-        if any(item.checkpoint_id in self._aggregates for item in target.aggregates):
+        if any(
+            item.checkpoint_id in self._aggregates or item.checkpoint_id in self._deletions
+            for item in target.aggregates
+        ) or any(
+            item.checkpoint_id in self._aggregates or item.checkpoint_id in self._deletions
+            for item in target.deletions
+        ):
             raise CheckpointImportConflict("checkpoint import identity conflicts")
         aggregate_state = dict(self._aggregates)
         revision_state = dict(self._revisions)
         event_state = self.events._snapshot()
         outbox_state = dict(self.outbox._jobs)
+        deletion_state = dict(self._deletions)
         try:
             for aggregate in target.aggregates:
                 self._aggregates[aggregate.checkpoint_id] = aggregate
@@ -2896,11 +2922,14 @@ class ReferenceCheckpointRepository:
                 )
             for event in target.lifecycle_events:
                 self.events.append_event(event)
+            for deletion in target.deletions:
+                self._deletions[deletion.checkpoint_id] = deletion
             after = self.export_checkpoint_history(target.scope, exported_at=target.exported_at)
             if (
                 after.aggregates != target.aggregates
                 or after.revisions != target.revisions
                 or after.lifecycle_events != target.lifecycle_events
+                or after.deletions != target.deletions
             ):
                 raise CheckpointImportConflict("checkpoint import target verification failed")
         except BaseException:
@@ -2908,11 +2937,13 @@ class ReferenceCheckpointRepository:
             self._revisions = revision_state
             self.events._restore(event_state)
             self.outbox._jobs = outbox_state
+            self._deletions = deletion_state
             raise
         return CheckpointImportResult(
             len(target.aggregates),
             len(target.revisions),
             len(target.lifecycle_events),
+            len(target.deletions),
             False,
         )
 

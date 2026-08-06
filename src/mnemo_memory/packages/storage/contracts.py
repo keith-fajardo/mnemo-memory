@@ -1112,10 +1112,16 @@ class CheckpointImportResult:
     checkpoint_count: int
     revision_count: int
     event_count: int
+    deletion_count: int
     idempotent: bool
 
     def __post_init__(self) -> None:
-        for value in (self.checkpoint_count, self.revision_count, self.event_count):
+        for value in (
+            self.checkpoint_count,
+            self.revision_count,
+            self.event_count,
+            self.deletion_count,
+        ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError("checkpoint import counts must be non-negative integers")
 

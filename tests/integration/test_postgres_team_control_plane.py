@@ -532,6 +532,22 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert "checkpoint payload deletion requires tombstone" in checkpoint_deletion_sql
     assert "checkpoint deletion prevents resurrection" in checkpoint_deletion_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in checkpoint_deletion_sql
+    checkpoint_deletion_import_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0020_team_checkpoint_deletion_import.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert "checkpoint_deletion_import_provenance_complete" in checkpoint_deletion_import_sql
+    assert "import_source_deletion_id" in checkpoint_deletion_import_sql
+    assert "SECURITY DEFINER SET search_path = pg_catalog" in checkpoint_deletion_import_sql
+    assert (
+        "REVOKE ALL ON ALL FUNCTIONS IN SCHEMA mnemo_team FROM PUBLIC"
+        in checkpoint_deletion_import_sql
+    )
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -1071,12 +1087,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=20).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.checkpoint_deletions')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 20))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 21))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3577,6 +3606,18 @@ def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
     )
     active_aggregate, active_revision = _checkpoint_pair(personal_scope, "d-checkpoint-import")
     personal.create_checkpoint_aggregate(active_aggregate, active_revision)
+    deleted_aggregate, deleted_revision = _checkpoint_pair(personal_scope, "e-checkpoint-import")
+    personal.create_checkpoint_aggregate(deleted_aggregate, deleted_revision)
+    source_deletion = (
+        CheckpointDeletionService(personal)
+        .delete(
+            scope=personal_scope,
+            checkpoint_id=deleted_aggregate.checkpoint_id,
+            source_action_key="user:delete:portable-checkpoint",
+            deleted_at=NOW + timedelta(minutes=3),
+        )
+        .deletion
+    )
     exported_at = NOW + timedelta(minutes=3)
     bundle = CheckpointExportService(personal).export(personal_scope, exported_at=exported_at)
 
@@ -3608,6 +3649,7 @@ def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
     assert not result.idempotent
     assert result.checkpoint_count == 2
     assert result.revision_count == result.event_count == 4
+    assert result.deletion_count == 1
     assert result.source_content_digest == bundle.content_digest
     assert result.source_content_digest != result.target_content_digest
     restarted = PostgreSQLCheckpointRepository(
@@ -3626,7 +3668,22 @@ def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
     assert {item.event_id for item in imported.lifecycle_events} == {
         item.event_id for item in bundle.lifecycle_events
     }
+    assert len(imported.deletions) == 1
+    assert imported.deletions[0].checkpoint_id == source_deletion.checkpoint_id
+    assert imported.deletions[0].deletion_id != source_deletion.deletion_id
     assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+
+    resurrection_aggregate, resurrection_revision = _checkpoint_pair(target_scope, "f")
+    resurrection_revision = replace(
+        resurrection_revision, checkpoint_id=source_deletion.checkpoint_id
+    )
+    resurrection_aggregate = replace(
+        resurrection_aggregate,
+        checkpoint_id=source_deletion.checkpoint_id,
+        current_revision_id=resurrection_revision.revision_id,
+    )
+    with pytest.raises(RevisionConflict):
+        target.create_checkpoint_aggregate(resurrection_aggregate, resurrection_revision)
 
     connection = postgres_harness.runtime_factory()()
     cursor = connection.cursor()
@@ -3651,6 +3708,34 @@ def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
         )
         row = cursor.fetchone()
         assert row is not None and int(str(row[0])) == 4
+        cursor.execute(
+            "SELECT import_source_deletion_id::text, import_source_content_digest, "
+            "imported_at IS NOT NULL FROM mnemo_team.checkpoint_deletions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)",
+            (str(target_scope.workspace_id), str(source_deletion.checkpoint_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (
+            str(source_deletion.deletion_id),
+            bundle.content_digest,
+            True,
+        )
+        cursor.execute(
+            "SELECT (SELECT COUNT(*) FROM mnemo_team.checkpoint_aggregates WHERE "
+            "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)), "
+            "(SELECT COUNT(*) FROM mnemo_team.checkpoint_revisions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid)), "
+            "(SELECT COUNT(*) FROM mnemo_team.checkpoint_lifecycle_events WHERE "
+            "workspace_id = CAST(%s AS uuid) AND checkpoint_id = CAST(%s AS uuid))",
+            (
+                str(target_scope.workspace_id),
+                str(source_deletion.checkpoint_id),
+                str(target_scope.workspace_id),
+                str(source_deletion.checkpoint_id),
+                str(target_scope.workspace_id),
+                str(source_deletion.checkpoint_id),
+            ),
+        )
+        assert tuple(cursor.fetchone() or ()) == (0, 0, 0)
     finally:
         connection.rollback()
         cursor.close()

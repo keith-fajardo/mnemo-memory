@@ -444,15 +444,19 @@ checkpoint or revision identities change during migration, terminal history is r
 an unrelated target is overwritten, or a private-project viewer reads or writes checkpoint text.
 
 **Required controls:** Export only after an exact task-scope query and validate the strict
-`mnemo.checkpoint-export.v1` domain object. Require canonical aggregate/revision/event order,
-unique identities and action keys, contiguous predecessors, exactly one deterministic lifecycle
-event per revision, matching current pointers/status/timestamps, and the complete SHA-256 digest.
-Rebase only the explicit scope while preserving checkpoint, revision, event, content, evidence,
-status, and time identity. PostgreSQL must validate the source/target relation, require an empty or
-identical target, and insert and re-export all canonical rows inside one forced-RLS transaction.
-The application independently exports before and after, verifies typed state, exact counts, and
-the target digest, and sanitizes adapter failures. Source observations are not copied because they
-refer to rebuildable target-specific structural projections.
+`mnemo.checkpoint-export.v2` domain object. Require canonical aggregate/revision/event/deletion
+order, unique identities and action keys, live/deleted disjointness, contiguous predecessors,
+exactly one deterministic lifecycle event per live revision, matching current pointers/status/
+timestamps, and the complete SHA-256 digest. Continue to validate the exact original version-1
+field set without inventing deletion state. Rebase only the explicit scope while preserving live
+checkpoint, revision, event, content, evidence, status, and time identity; rebuild a target
+deletion identity from target scope while preserving its checkpoint, actor, action key, and time.
+PostgreSQL must validate the source/target relation, require an empty or identical target, retain
+source deletion/digest provenance, and insert and re-export all canonical rows and tombstones
+inside one forced-RLS transaction without manufacturing erased payload. The application
+independently exports before and after, verifies typed state, exact counts, and the target digest,
+and sanitizes adapter failures. Source observations are not copied because they refer to
+rebuildable target-specific structural projections.
 
 **Verification:** Domain tests reject tampering, duplicate state, non-canonical order, and broken
 history. Reference and SQLite tests prove identity preservation, scope-only rebasing, conflict
@@ -460,10 +464,9 @@ rejection, restart-stable export, and idempotent retry. A real SQLite-to-Postgre
 all checkpoint/revision/event identities, counts, source/target hashes, restart durability, normal
 outbox creation, exact replay, and private-project viewer denial.
 
-**Residual risk:** Physical checkpoint deletion exists in each canonical store, but portable
-tombstone and backup/export deletion propagation are still required. The bundle is an in-memory
-application contract and is not yet an authenticated remote transfer endpoint or encrypted
-delivery format.
+**Residual risk:** Canonical deletion and portable tombstone transfer are implemented, but
+backup/export-copy deletion propagation remains required. The bundle is an in-memory application
+contract and is not yet an authenticated remote transfer endpoint or encrypted delivery format.
 
 ### Restored payload or cross-tenant approved-event transfer
 
@@ -560,8 +563,8 @@ restart durability, cross-task/private-project denial, read/insert-only runtime 
 atomic v11-to-v12 rollback/retry.
 
 **Residual risk:** Automatic source refresh composition, dbt observation, scheduled checkpoint
-retention, remote authentication, portable deletion transfer, and backup propagation remain
-separate issues. Portable checkpoint history, terminal expiry, and physical canonical deletion
+retention, remote authentication, and backup propagation remain separate issues. Portable
+checkpoint history including deletion tombstones, terminal expiry, and physical canonical deletion
 are implemented separately.
 
 ### Cross-tenant dbt manifest projection
@@ -827,8 +830,7 @@ evidence under Mnemo's control. Exact retry is idempotent; a competing action, r
 missing or cross-scope target, and resurrection attempt fail closed. SQLite direct-delete triggers
 and PostgreSQL fixed-search-path guards require the tombstone. PostgreSQL forces RLS on tombstones
 and permits controlled payload deletes only through an authorized contribution context. New live
-checkpoint exports omit erased history; the existing portable bundle does not yet propagate its
-tombstone.
+checkpoint exports omit erased history and include its tombstone in the version-2 portable bundle.
 
 **Verification:** Checkpoint tests cover Reference/SQLite/PostgreSQL parity, canonical payload and
 job removal, source-observation removal, orphaned evidence cleanup, exact retry, conflicts,

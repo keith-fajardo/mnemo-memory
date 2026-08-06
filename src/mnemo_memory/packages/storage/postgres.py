@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 19
+POSTGRES_TEAM_SCHEMA_VERSION = 20
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -61,6 +61,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (17, "0017_team_imported_knowledge.sql"),
     (18, "0018_team_checkpoint_expiry.sql"),
     (19, "0019_team_checkpoint_deletions.sql"),
+    (20, "0020_team_checkpoint_deletion_import.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 

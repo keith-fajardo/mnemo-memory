@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from mnemo_memory.packages.domain import (
+    CheckpointDeletion,
     CheckpointExportBundle,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -39,6 +40,7 @@ class CheckpointTransferResult:
     checkpoint_count: int
     revision_count: int
     event_count: int
+    deletion_count: int
     idempotent: bool
 
     def to_dict(self) -> dict[str, object]:
@@ -48,6 +50,7 @@ class CheckpointTransferResult:
             "checkpoint_count": self.checkpoint_count,
             "revision_count": self.revision_count,
             "event_count": self.event_count,
+            "deletion_count": self.deletion_count,
             "idempotent": self.idempotent,
         }
 
@@ -92,7 +95,7 @@ class CheckpointImportService:
             )
             if _same_bundle(before, expected):
                 return _result(bundle, before, idempotent=True)
-            if before.aggregates or before.revisions or before.lifecycle_events:
+            if before.aggregates or before.revisions or before.lifecycle_events or before.deletions:
                 raise CheckpointTransferConflict(
                     "checkpoint import target contains conflicting state"
                 )
@@ -145,12 +148,22 @@ def _rebase_bundle(
         )
         for item in bundle.lifecycle_events
     )
+    deletions = tuple(
+        CheckpointDeletion.create(
+            scope=target_scope,
+            checkpoint_id=item.checkpoint_id,
+            source_action_key=item.source_action_key,
+            deleted_at=item.deleted_at,
+        )
+        for item in bundle.deletions
+    )
     return CheckpointExportBundle.create(
         scope=target_scope,
         exported_at=bundle.exported_at,
         aggregates=aggregates,
         revisions=revisions,
         lifecycle_events=events,
+        deletions=deletions,
     )
 
 
@@ -162,6 +175,7 @@ def _same_bundle(left: CheckpointExportBundle, right: CheckpointExportBundle) ->
         and left.aggregates == right.aggregates
         and left.revisions == right.revisions
         and left.lifecycle_events == right.lifecycle_events
+        and left.deletions == right.deletions
     )
 
 
@@ -177,5 +191,6 @@ def _result(
         len(target.aggregates),
         len(target.revisions),
         len(target.lifecycle_events),
+        len(target.deletions),
         idempotent,
     )

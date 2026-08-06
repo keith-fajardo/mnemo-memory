@@ -455,15 +455,19 @@ idempotent, competing source/target mapping fails closed, ordinary export includ
 tombstones, and ordinary event/candidate writes consult them before mutation. Complete episodic
 personal-to-team state now has verified counts and source/target hashes.
 
-Checkpoint history uses a separate `mnemo.checkpoint-export.v1` exact-task bundle containing every
-aggregate, immutable revision, and deterministic lifecycle event. It validates canonical order,
-contiguous predecessor chains, current pointers, lifecycle state, evidence, timestamps, and one
-SHA-256 digest. Personal-to-team import preserves every checkpoint, revision, and event identity
-and rebases only the explicit scope. PostgreSQL accepts only an empty or already-identical target,
-inserts the entire history and normal outbox jobs atomically behind forced RLS, and verifies the
-target bundle before commit. The application returns verified counts plus strict source and target
-digests; exact replay is idempotent. Source-structure observations remain excluded rebuildable
-projection links.
+Checkpoint history uses a separate `mnemo.checkpoint-export.v2` exact-task bundle containing every
+live aggregate, immutable revision, deterministic lifecycle event, and payload-free checkpoint
+deletion tombstone. It validates canonical order, contiguous predecessor chains, current pointers,
+lifecycle state, evidence, timestamps, live/deleted disjointness, deletion uniqueness, and one
+SHA-256 digest. The parser remains compatible with the exact version-1 live-history format, whose
+absent tombstone state is necessarily empty. Personal-to-team import preserves every checkpoint,
+revision, event, deletion action key, and timestamp while rebasing only scope-derived deletion
+identity into the explicit target. PostgreSQL accepts only an empty or already-identical target,
+inserts live history, normal outbox jobs, and deletion tombstones atomically behind forced RLS,
+records source deletion/digest provenance, and verifies the target bundle before commit. No erased
+payload is manufactured. The application returns verified live/deletion counts plus strict source
+and target digests; exact replay is idempotent. Source-structure observations remain excluded
+rebuildable projection links.
 
 Approved episodic facts use a separate `mnemo.approved-event-export.v1` exact-task bundle containing
 every retained event payload, immutable correction or retraction, and ordered pin action. Import
@@ -502,8 +506,9 @@ orphaned evidence, preserves unrelated sources and memories, and rejects competi
 action-key reuse, cross-scope targets, and target/source mismatches. Checkpoint deletion follows
 the same explicit pattern for one exact task-scoped aggregate. It removes all canonical revision
 and evidence content, lifecycle events, source observations, and checkpoint outbox jobs after
-storing a payload-free anti-resurrection tombstone. Knowledge documents, portable tombstone
-transfer, prior exports, backups, and external copies remain separate boundaries.
+storing a payload-free anti-resurrection tombstone. Knowledge-document governance, structural
+projections, prior exports, backups, and external copies remain separate boundaries. Checkpoint
+tombstones are included in new version-2 checkpoint transfers.
 
 ## Structural projections versus durable memories
 

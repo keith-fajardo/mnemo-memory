@@ -2388,6 +2388,44 @@ mandatory real-PostgreSQL tests, strict typing for 232 source files, dependency/
 validation for 93 entries, architecture validation for 127 product Python files, schema
 validation, and the isolated installed-package MCP workflow. No dependency was added.
 
+#### Issue 21Y — Verified checkpoint-deletion transfer — Complete
+
+The current bounded issue extends portable checkpoint history with payload-free deletion
+tombstones while preserving compatibility with existing version-1 bundles. A personal deletion
+must rebase deterministically into one authorized team task scope without reconstructing erased
+checkpoint content, and the target must export the same typed tombstone state with verified counts
+and canonical hashes. Exact retry must be idempotent; tampering, partial or conflicting target
+state, cross-scope access, and resurrection must fail closed.
+
+This issue adds no scheduled checkpoint retention, remote service, OAuth, backup propagation,
+quota, dashboard, team knowledge governance, source approval, or dependency.
+
+Implemented `mnemo.checkpoint-export.v2` with one canonical payload-free deletion collection beside
+live checkpoint history. The bundle requires live/deleted identity disjointness, unique deletion
+identities, checkpoint identities and action keys, canonical ordering, exact task scope, and one
+digest over all state. The parser still accepts the exact version-1 field set and digest, with no
+invented deletion history. New Reference, SQLite, and PostgreSQL exports include every scoped
+tombstone and no erased checkpoint payload.
+
+The transfer service preserves checkpoint identity, actor, action key, and deletion time while
+deterministically deriving the target deletion identity from the authorized target scope.
+Reference and PostgreSQL targets accept only empty or already-identical complete state. PostgreSQL
+schema version 20 adds complete source deletion/digest/import-time provenance to native forced-RLS
+tombstones and permits a validated payload-free import without manufacturing an aggregate,
+revision, evidence, event, observation, or job. Live rows, normal outbox jobs, and tombstones are
+written and re-exported in one transaction; ordinary anti-resurrection remains effective.
+
+ADR 0033, the product contract, and threat model record format compatibility, minimization,
+identity rebasing, RLS, provenance, and residual backup/remote boundaries. Domain/Reference/SQLite
+tests cover version-1 compatibility, version-2 round trips, tampering, duplicate and overlapping
+state, rebasing, conflict rejection, restart durability, and exact replay. Real PostgreSQL tests
+cover atomic v16-to-v20 rollback/retry, verified SQLite transfer, exact counts and hashes,
+source/target provenance, absent deleted payload, anti-resurrection, replay, and private-project
+viewer denial. The complete repository gate passes with 847 default tests plus 21 mandatory real-
+PostgreSQL tests, strict typing for 232 source files, dependency/provenance validation for 93
+entries, architecture validation for 127 product Python files, schema validation, and the isolated
+installed-package MCP workflow. No dependency was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

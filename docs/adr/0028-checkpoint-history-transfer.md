@@ -39,6 +39,9 @@ when typed target state, category counts, and the target canonical digest match 
 projection. PostgreSQL timestamp offset normalization is compared as typed instants; each backend's
 own canonical digest remains strict.
 
+ADR 0033 subsequently defines version 2 for payload-free checkpoint deletion tombstones while
+retaining exact version-1 read compatibility.
+
 ## Alternatives considered
 
 - **Replay ordinary checkpoint mutations.** Rejected because later revision identities would

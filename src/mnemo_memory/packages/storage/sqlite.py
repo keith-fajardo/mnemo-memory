@@ -1301,6 +1301,12 @@ class SQLiteCheckpointRepository:
                     "ORDER BY event.checkpoint_id ASC, event.revision_number ASC",
                     self._scope_values(scope),
                 ).fetchall()
+                deletion_rows = connection.execute(
+                    "SELECT * FROM checkpoint_deletions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY checkpoint_id ASC",
+                    self._scope_values(scope),
+                ).fetchall()
                 return CheckpointExportBundle.create(
                     scope=scope,
                     exported_at=exported_at,
@@ -1310,6 +1316,9 @@ class SQLiteCheckpointRepository:
                     ),
                     lifecycle_events=tuple(
                         self._event_from_row(connection, row, scope) for row in event_rows
+                    ),
+                    deletions=tuple(
+                        self._checkpoint_deletion_from_row(row, scope) for row in deletion_rows
                     ),
                 )
         except (ValueError, TypeError):
