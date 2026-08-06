@@ -352,6 +352,33 @@ tables.
 cleanup, or authenticated remote service is composed. The runtime credential remains
 infrastructure-only and team mode remains unavailable.
 
+### Cross-tenant explicit episodic deletion and partial cleanup
+
+**Scenario:** A principal deletes another task's memory, a source is removed before its dependent
+payloads, an action key is replayed against a different target, direct table deletion bypasses a
+tombstone, or extraction resurrects erased content. A user deletion after retention purge could
+also fail because its original payload no longer exists.
+
+**Required controls:** Target discovery starts inside one authorized exact task scope. Individual
+and source tombstones repeat complete scope, force RLS, are immutable to the runtime role, and
+contain no content payload. Fixed-search-path triggers bind each tombstone to its exact live target
+or retained expiration tombstone and bind source-caused memory deletion to its exact source action.
+The lifecycle record precedes trigger-gated physical deletion. Source deletion creates all missing
+dependent tombstones and removes candidate, review, active, governance, event, and task-activity
+outbox payloads in one transaction while preserving existing deletion and retention tombstones.
+Candidate and event insertion reject deletion tombstones. Exact replay is idempotent; changed key,
+target, identity, or scope rolls back atomically.
+
+**Verification:** Real PostgreSQL tests cover individual and source deletion, prior-dependent
+ordering, exact and conflicting replay, restart durability, different-task and private-project
+denial, physical payload/outbox removal, immutable tombstone privileges, and anti-resurrection.
+Deletion after completed memory and source retention purge succeeds while preserving all retention
+tombstones. An injected v9-to-v10 migration failure retains v9 without deletion tables.
+
+**Residual risk:** Export, backup and external-handler propagation, deletion scheduling/monitoring,
+and deletion parity for checkpoints, knowledge, dbt, and source-structure data remain unimplemented.
+The runtime credential remains infrastructure-only and team mode remains unavailable.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

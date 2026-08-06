@@ -97,6 +97,15 @@ task-activity outbox job while retaining source and candidate tombstones. Direct
 non-task outbox deletion, and source resurrection fail closed. Scheduling and explicit deletion
 remain separate operations.
 
+Team explicit episodic deletion uses the same verified-user exact-task contract as personal mode.
+An individual deletion atomically writes one payload-free deterministic tombstone and removes its
+candidate, review, active, and governance payloads. A source deletion writes its source tombstone,
+retains any earlier individual tombstones, creates tombstones for every remaining dependent memory,
+then removes all dependent payloads plus the minimized source event and task-activity outbox job in
+one transaction. Existing expiration and purge tombstones survive. Exact replay is idempotent,
+changed action or target reuse fails closed, and retained tombstones prevent event or candidate
+resurrection. Export, backup propagation, and external-consumer cleanup remain separate operations.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

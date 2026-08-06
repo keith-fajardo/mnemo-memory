@@ -162,8 +162,15 @@ class PostgreSQLTaskActivityEventRepository:
         with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
             cursor.execute(
                 "SELECT 1 FROM mnemo_team.task_activity_event_expirations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid) "
+                "UNION ALL SELECT 1 FROM mnemo_team.task_activity_event_deletions WHERE "
                 "workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
-                (str(self._workspace_id), str(event.event_id)),
+                (
+                    str(self._workspace_id),
+                    str(event.event_id),
+                    str(self._workspace_id),
+                    str(event.event_id),
+                ),
             )
             if cursor.fetchone() is not None:
                 raise TaskActivityEventConflict(

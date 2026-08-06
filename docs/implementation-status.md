@@ -1884,6 +1884,48 @@ installed-package MCP workflow. No dependency was added. No explicit deletion/ex
 scheduler/worker, checkpoint/dbt/source-structure parity, personal import, remote service, OAuth,
 backup, quota, dashboard, source governance, or usable team mode was added.
 
+#### Issue 21L — PostgreSQL team explicit episodic deletion — Complete
+
+The current bounded issue implements the existing `EpisodicDeletionRepository` contract for
+PostgreSQL. One explicit verified-user exact-task action must create immutable deterministic,
+payload-free tombstones and atomically erase either one memory's candidate/review/active/governance
+payloads or one source event plus every dependent memory payload and task-activity outbox job.
+Existing retention tombstones must survive, exact replay must be idempotent, changed action keys or
+targets must fail closed, and every deletion must use forced RLS, guarded runtime privileges, and
+atomic rollback. Real-database tests must cover restart durability, source/dependent ordering,
+post-purge deletion, anti-resurrection, cross-tenant/cross-task denial, and migration rollback.
+
+This issue does not add export, backup propagation, scheduler/worker behavior, checkpoint/dbt/
+source-structure parity, personal import, authenticated remote service, OAuth, quota, dashboard,
+source governance, or usable team mode.
+
+Implemented PostgreSQL schema version 10 and the existing `EpisodicDeletionRepository` contract on
+`PostgreSQLEpisodicMemoryRepository`. Immutable payload-free source and memory deletion tombstones
+repeat complete task scope, force RLS, and expose read/insert-only runtime privileges. Fixed-search-
+path triggers bind each tombstone to an exact live target or retained expiration tombstone, bind
+source-caused memory deletion to its source action, and permit physical payload deletion only after
+a matching purge or explicit deletion lifecycle record exists.
+
+Individual deletion atomically writes its verified-user deterministic tombstone and erases
+candidate, review, active, and governance payload rows. Source deletion first writes its source
+tombstone, retains any earlier individual tombstones, creates missing tombstones for every dependent
+memory, removes every dependent payload, and then removes the minimized source event and its task-
+activity outbox job in one transaction. Existing expiration and purge tombstones survive. Event and
+candidate insertion reject retained deletion tombstones. Exact replay is idempotent; changed target,
+action-key, identity, scope, or source linkage fails closed and rolls back atomically.
+
+ADR 0021, the product contract, and threat model document erasure ordering, payload-free lifecycle
+state, authorization, anti-resurrection, and forward-only recovery. Real PostgreSQL tests prove
+atomic v9-to-v10 rollback/retry, individual and source deletion, earlier-dependent ordering, exact
+and conflicting replay, restart durability, post-retention-purge deletion, retention-tombstone
+survival, different-task/private-project denial, physical payload/outbox removal, immutable
+tombstone privileges, and anti-resurrection. The complete repository gate passes with 826 default
+tests plus 13 mandatory real-PostgreSQL tests, strict typing for 216 source files, dependency/
+provenance validation for 93 entries, architecture validation for 116 product Python files, schema
+validation, and the isolated installed-package MCP workflow. No dependency was added. No export,
+backup propagation, scheduler/worker, checkpoint/dbt/source-structure parity, personal import,
+remote service, OAuth, quota, dashboard, source governance, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

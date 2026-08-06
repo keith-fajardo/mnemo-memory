@@ -93,6 +93,9 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/postgres_migrations/0009_team_task_activity_retention.sql"
     ).is_file()
+    assert package_files.joinpath(
+        "resources/postgres_migrations/0010_team_episodic_deletions.sql"
+    ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()
     assert package_files.joinpath("resources/web/index.html").is_file()
     assert package_files.joinpath("resources/web/app.js").is_file()

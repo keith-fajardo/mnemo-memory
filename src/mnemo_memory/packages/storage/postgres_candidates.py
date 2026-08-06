@@ -13,7 +13,9 @@ from mnemo_memory.packages.domain import (
     DurableClaim,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
+    EpisodicDeletionCause,
     EpisodicMemoryCandidate,
+    EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
@@ -34,6 +36,7 @@ from mnemo_memory.packages.domain import (
     ScopeLevel,
     Sensitivity,
     TaskActivityActor,
+    TaskActivityEventDeletion,
     WorkspaceId,
     active_episodic_memory_at_revision,
     replay_episodic_memory_revisions,
@@ -48,6 +51,10 @@ from mnemo_memory.packages.policy import (
 from .contracts import (
     ActiveEpisodicMemoryNotFound,
     ActiveEpisodicMemoryPage,
+    EpisodicDeletionConflict,
+    EpisodicDeletionNotFound,
+    EpisodicDeletionRepositoryError,
+    EpisodicDeletionStorageFailure,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidatePage,
@@ -55,6 +62,7 @@ from .contracts import (
     EpisodicMemoryCandidateRepositoryError,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryDeletionResult,
     EpisodicMemoryExpirationConflict,
     EpisodicMemoryExpirationNotFound,
     EpisodicMemoryExpirationResult,
@@ -77,6 +85,7 @@ from .contracts import (
     EpisodicMemoryReviewResult,
     EpisodicMemoryReviewStorageFailure,
     InvalidEpisodicMemoryCandidateScope,
+    TaskActivityDeletionResult,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
 from .postgres_events import _task_scope_values
@@ -100,6 +109,13 @@ _EXPIRATION_COLUMNS = (
     "retention_policy_id::text, scheduled_expires_at, expired_at"
 )
 _PURGE_COLUMNS = "purge_sequence, purge_id::text, expiration_id::text, memory_id::text, purged_at"
+_MEMORY_DELETION_COLUMNS = (
+    "deletion_sequence, deletion_id::text, memory_id::text, source_event_id::text, cause, "
+    "source_deletion_id::text, actor, source_action_key, deleted_at"
+)
+_SOURCE_DELETION_COLUMNS = (
+    "deletion_sequence, deletion_id::text, event_id::text, actor, source_action_key, deleted_at"
+)
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -177,8 +193,12 @@ class PostgreSQLEpisodicMemoryRepository:
                 )
             cursor.execute(
                 "SELECT memory_id::text FROM mnemo_team.episodic_memory_expirations WHERE "
-                "workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[]))",
+                "workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[])) "
+                "UNION ALL SELECT memory_id::text FROM mnemo_team.episodic_memory_deletions "
+                "WHERE workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[]))",
                 (
+                    str(self._workspace_id),
+                    "{" + ",".join(str(candidate.memory_id) for candidate in values) + "}",
                     str(self._workspace_id),
                     "{" + ",".join(str(candidate.memory_id) for candidate in values) + "}",
                 ),
@@ -674,7 +694,7 @@ class PostgreSQLEpisodicMemoryRepository:
                         purge.purged_at.isoformat(),
                     ),
                 )
-                self._delete_expired_payload(cursor, purge)
+                self._delete_memory_payload(cursor, purge.scope, purge.memory_id)
             return EpisodicMemoryPurgeResult(values, existing_count == len(values))
 
     def get_episodic_memory_purge(
@@ -688,6 +708,110 @@ class PostgreSQLEpisodicMemoryRepository:
             if purge is None:
                 raise EpisodicMemoryPurgeNotFound("episodic memory purge was not found")
             return purge
+
+    def delete_episodic_memory(
+        self, deletion: EpisodicMemoryDeletion
+    ) -> EpisodicMemoryDeletionResult:
+        if not isinstance(deletion, EpisodicMemoryDeletion):
+            raise TypeError("episodic memory deletion is invalid")
+        self._require_scope(deletion.scope)
+        if deletion.cause is not EpisodicDeletionCause.USER:
+            raise EpisodicDeletionConflict("individual memory deletion must be user initiated")
+        with self._deletion_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing = self._scoped_memory_deletion(cursor, deletion.scope, deletion.memory_id)
+            if existing is not None:
+                if existing != deletion:
+                    raise EpisodicDeletionConflict("episodic memory already has another deletion")
+                return EpisodicMemoryDeletionResult(existing, True)
+            source_event_id = self._memory_deletion_target(
+                cursor, deletion.scope, deletion.memory_id
+            )
+            if source_event_id is None:
+                raise EpisodicDeletionNotFound("episodic memory deletion target was not found")
+            if source_event_id != deletion.source_event_id:
+                raise EpisodicDeletionConflict("episodic memory deletion source conflicts")
+            self._ensure_memory_deletion_key_available(cursor, deletion)
+            self._insert_memory_deletion(cursor, deletion)
+            if self._retention_target(cursor, deletion.scope, deletion.memory_id) is not None:
+                self._delete_memory_payload(cursor, deletion.scope, deletion.memory_id)
+            return EpisodicMemoryDeletionResult(deletion, False)
+
+    def delete_task_activity_event(
+        self, deletion: TaskActivityEventDeletion
+    ) -> TaskActivityDeletionResult:
+        if not isinstance(deletion, TaskActivityEventDeletion):
+            raise TypeError("task activity deletion is invalid")
+        self._require_scope(deletion.scope)
+        with self._deletion_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing = self._scoped_source_deletion(cursor, deletion.scope, deletion.event_id)
+            if existing is not None:
+                if existing != deletion:
+                    raise EpisodicDeletionConflict("task activity event has another deletion")
+                dependents = self._source_dependent_deletions(
+                    cursor, deletion.scope, deletion.event_id
+                )
+                return TaskActivityDeletionResult(existing, dependents, True)
+            if not self._source_deletion_target(cursor, deletion.scope, deletion.event_id):
+                raise EpisodicDeletionNotFound("task activity deletion target was not found")
+            cursor.execute(
+                "SELECT 1 FROM mnemo_team.task_activity_event_deletions WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND source_action_key = %s",
+                (*_task_scope_values(deletion.scope), deletion.source_action_key),
+            )
+            if cursor.fetchone() is not None:
+                raise EpisodicDeletionConflict("task activity deletion action key conflicts")
+            memory_ids = self._source_memory_ids(cursor, deletion.scope, deletion.event_id)
+            self._insert_source_deletion(cursor, deletion)
+            dependent_deletions: list[EpisodicMemoryDeletion] = []
+            for memory_id in memory_ids:
+                dependent = EpisodicMemoryDeletion.from_source(
+                    deletion, memory_id=memory_id, source_event_id=deletion.event_id
+                )
+                current = self._scoped_memory_deletion(cursor, dependent.scope, dependent.memory_id)
+                if current is not None:
+                    dependent_deletions.append(current)
+                else:
+                    self._ensure_memory_deletion_key_available(cursor, dependent)
+                    self._insert_memory_deletion(cursor, dependent)
+                    dependent_deletions.append(dependent)
+                if self._retention_target(cursor, dependent.scope, dependent.memory_id) is not None:
+                    self._delete_memory_payload(cursor, dependent.scope, dependent.memory_id)
+            cursor.execute(
+                "DELETE FROM mnemo_team.event_outbox WHERE workspace_id = CAST(%s AS uuid) "
+                "AND topic = 'task_activity' AND source_event_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(deletion.event_id)),
+            )
+            cursor.execute(
+                "DELETE FROM mnemo_team.task_activity_events WHERE workspace_id = CAST(%s AS uuid) "
+                "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+                "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+                "AND task_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+                (*_task_scope_values(deletion.scope), str(deletion.event_id)),
+            )
+            return TaskActivityDeletionResult(deletion, tuple(dependent_deletions), False)
+
+    def get_episodic_memory_deletion(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryDeletion:
+        self._require_scope(scope)
+        with self._deletion_transaction(TeamOperation.READ) as cursor:
+            deletion = self._scoped_memory_deletion(cursor, scope, memory_id)
+            if deletion is None:
+                raise EpisodicDeletionNotFound("episodic memory deletion was not found")
+            return deletion
+
+    def get_task_activity_deletion(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion:
+        self._require_scope(scope)
+        with self._deletion_transaction(TeamOperation.READ) as cursor:
+            deletion = self._scoped_source_deletion(cursor, scope, event_id)
+            if deletion is None:
+                raise EpisodicDeletionNotFound("task activity deletion was not found")
+            return deletion
 
     def _insert_candidate(
         self, cursor: PostgreSQLCursor, candidate: EpisodicMemoryCandidate
@@ -771,6 +895,63 @@ class PostgreSQLEpisodicMemoryRepository:
                 else action.corrected_sensitivity.value,
                 action.occurred_at,
                 self._evidence_json(action.evidence_references),
+            ),
+        )
+
+    @staticmethod
+    def _ensure_memory_deletion_key_available(
+        cursor: PostgreSQLCursor, deletion: EpisodicMemoryDeletion
+    ) -> None:
+        cursor.execute(
+            "SELECT 1 FROM mnemo_team.episodic_memory_deletions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND source_action_key = %s",
+            (*_task_scope_values(deletion.scope), deletion.source_action_key),
+        )
+        if cursor.fetchone() is not None:
+            raise EpisodicDeletionConflict("episodic deletion action key conflicts")
+
+    @staticmethod
+    def _insert_memory_deletion(cursor: PostgreSQLCursor, deletion: EpisodicMemoryDeletion) -> None:
+        cursor.execute(
+            "INSERT INTO mnemo_team.episodic_memory_deletions("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, deletion_id, "
+            "memory_id, source_event_id, cause, source_deletion_id, actor, source_action_key, "
+            "deleted_at) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), %s, CAST(%s AS uuid), %s, %s, %s)",
+            (
+                *_task_scope_values(deletion.scope),
+                str(deletion.deletion_id),
+                str(deletion.memory_id),
+                str(deletion.source_event_id),
+                deletion.cause.value,
+                None if deletion.source_deletion_id is None else str(deletion.source_deletion_id),
+                deletion.actor.value,
+                deletion.source_action_key,
+                deletion.deleted_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    def _insert_source_deletion(
+        cursor: PostgreSQLCursor, deletion: TaskActivityEventDeletion
+    ) -> None:
+        cursor.execute(
+            "INSERT INTO mnemo_team.task_activity_event_deletions("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, deletion_id, "
+            "event_id, actor, source_action_key, deleted_at) VALUES (CAST(%s AS uuid), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, %s)",
+            (
+                *_task_scope_values(deletion.scope),
+                str(deletion.deletion_id),
+                str(deletion.event_id),
+                deletion.actor.value,
+                deletion.source_action_key,
+                deletion.deleted_at.isoformat(),
             ),
         )
 
@@ -889,6 +1070,122 @@ class PostgreSQLEpisodicMemoryRepository:
         row = cursor.fetchone()
         return None if row is None else self._governance_from_row(row, scope)
 
+    def _memory_deletion_target(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> EventId | None:
+        cursor.execute(
+            "SELECT source_event_id::text FROM mnemo_team.episodic_memory_candidates WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid) UNION ALL SELECT source_event_id::text FROM "
+            "mnemo_team.episodic_memory_expirations WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND memory_id = CAST(%s AS uuid) LIMIT 1",
+            (
+                *_task_scope_values(scope),
+                str(memory_id),
+                *_task_scope_values(scope),
+                str(memory_id),
+            ),
+        )
+        row = cursor.fetchone()
+        return None if row is None else EventId.from_string(str(row[0]))
+
+    def _source_deletion_target(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> bool:
+        cursor.execute(
+            "SELECT 1 FROM mnemo_team.task_activity_events WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND event_id = CAST(%s AS uuid) UNION ALL SELECT 1 FROM "
+            "mnemo_team.task_activity_event_expirations WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid) LIMIT 1",
+            (
+                *_task_scope_values(scope),
+                str(event_id),
+                *_task_scope_values(scope),
+                str(event_id),
+            ),
+        )
+        return cursor.fetchone() is not None
+
+    def _source_memory_ids(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> tuple[MemoryId, ...]:
+        cursor.execute(
+            "SELECT memory_id::text FROM mnemo_team.episodic_memory_candidates WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND source_event_id = CAST(%s AS uuid) UNION SELECT memory_id::text FROM "
+            "mnemo_team.episodic_memory_expirations WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND source_event_id = CAST(%s AS uuid) "
+            "UNION SELECT memory_id::text FROM mnemo_team.episodic_memory_deletions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND source_event_id = CAST(%s AS uuid) ORDER BY 1 ASC",
+            (
+                *_task_scope_values(scope),
+                str(event_id),
+                *_task_scope_values(scope),
+                str(event_id),
+                *_task_scope_values(scope),
+                str(event_id),
+            ),
+        )
+        return tuple(MemoryId.from_string(str(row[0])) for row in cursor.fetchall())
+
+    def _scoped_memory_deletion(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> EpisodicMemoryDeletion | None:
+        cursor.execute(
+            "SELECT " + _MEMORY_DELETION_COLUMNS + " FROM "
+            "mnemo_team.episodic_memory_deletions WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND memory_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(memory_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._memory_deletion_from_row(row, scope)
+
+    def _scoped_source_deletion(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventDeletion | None:
+        cursor.execute(
+            "SELECT " + _SOURCE_DELETION_COLUMNS + " FROM "
+            "mnemo_team.task_activity_event_deletions WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(event_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._source_deletion_from_row(row, scope)
+
+    def _source_dependent_deletions(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> tuple[EpisodicMemoryDeletion, ...]:
+        cursor.execute(
+            "SELECT " + _MEMORY_DELETION_COLUMNS + " FROM "
+            "mnemo_team.episodic_memory_deletions WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND source_event_id = CAST(%s AS uuid) "
+            "ORDER BY memory_id ASC",
+            (*_task_scope_values(scope), str(event_id)),
+        )
+        return tuple(self._memory_deletion_from_row(row, scope) for row in cursor.fetchall())
+
     def _retention_target(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
     ) -> EpisodicMemoryRetentionTarget | None:
@@ -941,8 +1238,10 @@ class PostgreSQLEpisodicMemoryRepository:
         return None if row is None else self._purge_from_row(row, scope)
 
     @staticmethod
-    def _delete_expired_payload(cursor: PostgreSQLCursor, purge: EpisodicMemoryPurge) -> None:
-        scope_values = _task_scope_values(purge.scope)
+    def _delete_memory_payload(
+        cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> None:
+        scope_values = _task_scope_values(scope)
         for table, target_column in (
             ("episodic_memory_governance", "memory_id"),
             ("active_episodic_memories", "memory_id"),
@@ -953,7 +1252,7 @@ class PostgreSQLEpisodicMemoryRepository:
                 "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
                 "AND visibility = %s AND session_id = CAST(%s AS uuid) "
                 "AND task_id = CAST(%s AS uuid) AND " + target_column + " = CAST(%s AS uuid)",
-                (*scope_values, str(purge.memory_id)),
+                (*scope_values, str(memory_id)),
             )
         cursor.execute(
             "DELETE FROM mnemo_team.episodic_memory_candidates WHERE "
@@ -961,7 +1260,7 @@ class PostgreSQLEpisodicMemoryRepository:
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
             "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
             "AND memory_id = CAST(%s AS uuid)",
-            (*scope_values, str(purge.memory_id)),
+            (*scope_values, str(memory_id)),
         )
         if cursor.rowcount != 1:
             raise EpisodicMemoryPurgeConflict("episodic memory purge state changed concurrently")
@@ -1056,6 +1355,35 @@ class PostgreSQLEpisodicMemoryRepository:
             MemoryId.from_string(str(row[3])),
             scope,
             datetime.fromisoformat(str(row[4])),
+        )
+
+    @staticmethod
+    def _memory_deletion_from_row(
+        row: Sequence[object], scope: MemoryScope
+    ) -> EpisodicMemoryDeletion:
+        return EpisodicMemoryDeletion(
+            EventId.from_string(str(row[1])),
+            MemoryId.from_string(str(row[2])),
+            EventId.from_string(str(row[3])),
+            scope,
+            EpisodicDeletionCause(str(row[4])),
+            TaskActivityActor(str(row[6])),
+            str(row[7]),
+            datetime.fromisoformat(str(row[8])),
+            None if row[5] is None else EventId.from_string(str(row[5])),
+        )
+
+    @staticmethod
+    def _source_deletion_from_row(
+        row: Sequence[object], scope: MemoryScope
+    ) -> TaskActivityEventDeletion:
+        return TaskActivityEventDeletion(
+            EventId.from_string(str(row[1])),
+            EventId.from_string(str(row[2])),
+            scope,
+            TaskActivityActor(str(row[3])),
+            str(row[4]),
+            datetime.fromisoformat(str(row[5])),
         )
 
     @classmethod
@@ -1290,6 +1618,37 @@ class PostgreSQLEpisodicMemoryRepository:
                 ) from error
             raise EpisodicMemoryPurgeStorageFailure(
                 "episodic purge database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _deletion_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicDeletionStorageFailure(
+                "episodic deletion database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            self._configure(cursor, operation)
+            yield cursor
+            connection.commit()
+        except EpisodicDeletionRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise EpisodicDeletionConflict(
+                    "episodic deletion database rejected conflicting state"
+                ) from error
+            raise EpisodicDeletionStorageFailure(
+                "episodic deletion database operation failed"
             ) from error
         finally:
             cursor.close()

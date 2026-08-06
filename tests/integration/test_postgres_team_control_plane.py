@@ -79,6 +79,7 @@ from mnemo_memory.packages.domain import (
     knowledge_section_digest,
 )
 from mnemo_memory.packages.episodic import (
+    EpisodicDeletionService,
     EpisodicRetentionService,
     TaskActivityRetentionService,
 )
@@ -124,6 +125,8 @@ from mnemo_memory.packages.storage.contracts import (
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventSecretRejected,
+    EpisodicDeletionConflict,
+    EpisodicDeletionNotFound,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidateRejected,
@@ -375,6 +378,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert activity_retention_sql.count("FORCE ROW LEVEL SECURITY") == 2
     assert activity_retention_sql.count("task activity payload deletion requires purge") == 1
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in activity_retention_sql
+    deletion_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0010_team_episodic_deletions.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert deletion_sql.count("FORCE ROW LEVEL SECURITY") == 2
+    assert "CREATE OR REPLACE FUNCTION mnemo_team.ensure_episodic_payload_purge()" in deletion_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in deletion_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -644,6 +655,43 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath(
+                    "resources", "postgres_migrations", "0009_team_task_activity_retention.sql"
+                )
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=10).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+            )
+            cursor.execute("SELECT to_regclass('mnemo_team.episodic_memory_deletions')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
@@ -659,6 +707,7 @@ def test_team_data_migrations_upgrade_atomically(
                 7,
                 8,
                 9,
+                10,
             )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
@@ -2425,6 +2474,187 @@ def test_postgres_task_activity_retention_waits_for_dependents_then_purges_sourc
             "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_purges)"
         )
         assert tuple(int(str(value)) for value in (cursor.fetchone() or ())) == (0, 0, 2, 2, 1, 1)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+
+def test_postgres_explicit_episodic_deletion_erases_source_dependents_and_is_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    source = _task_event(scope, "10")
+    events.append_task_activity_event(source)
+    repository = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    candidates = _episodic_candidates(
+        source,
+        extractor_version="team-deletion-extractor",
+        claims=("delete this memory first", "delete this memory with its source"),
+    )
+    repository.store_episodic_memory_candidates(candidates)
+    service = EpisodicDeletionService(repository)
+    first = service.delete_memory(
+        scope=scope,
+        memory_id=candidates[0].memory_id,
+        source_event_id=source.event_id,
+        source_action_key="team-delete-memory",
+        deleted_at=NOW + timedelta(minutes=1),
+    )
+    assert not first.idempotent
+    assert repository.get_episodic_memory_deletion(scope, candidates[0].memory_id) == first.deletion
+    assert service.delete_memory(
+        scope=scope,
+        memory_id=candidates[0].memory_id,
+        source_event_id=source.event_id,
+        source_action_key="team-delete-memory",
+        deleted_at=NOW + timedelta(minutes=1),
+    ).idempotent
+    with pytest.raises(EpisodicDeletionConflict):
+        service.delete_memory(
+            scope=scope,
+            memory_id=candidates[0].memory_id,
+            source_event_id=source.event_id,
+            source_action_key="changed-delete-memory",
+            deleted_at=NOW + timedelta(minutes=1),
+        )
+    with pytest.raises(EpisodicMemoryCandidateNotFound):
+        repository.get_episodic_memory_candidate(scope, candidates[0].memory_id)
+
+    result = service.delete_task_event(
+        scope=scope,
+        event_id=source.event_id,
+        source_action_key="team-delete-source",
+        deleted_at=NOW + timedelta(minutes=2),
+    )
+    assert not result.idempotent and len(result.dependent_deletions) == 2
+    assert first.deletion in result.dependent_deletions
+    assert repository.get_task_activity_deletion(scope, source.event_id) == result.deletion
+    replay = service.delete_task_event(
+        scope=scope,
+        event_id=source.event_id,
+        source_action_key="team-delete-source",
+        deleted_at=NOW + timedelta(minutes=2),
+    )
+    assert replay.idempotent and replay.dependent_deletions == result.dependent_deletions
+    with pytest.raises(TaskActivityEventNotFound):
+        events.get_task_activity_event(scope, source.event_id)
+    with pytest.raises(TaskActivityEventConflict):
+        events.append_task_activity_event(source)
+    with pytest.raises(EpisodicMemoryCandidateConflict):
+        repository.store_episodic_memory_candidates(candidates)
+
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_task_activity_deletion(scope, source.event_id) == result.deletion
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(EpisodicDeletionNotFound):
+        restarted.get_task_activity_deletion(foreign_task, source.event_id)
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(EpisodicDeletionNotFound):
+        viewer.get_task_activity_deletion(scope, source.event_id)
+
+    retained_at = NOW + timedelta(minutes=3)
+    retained_source = _task_event(
+        scope,
+        "11",
+        retention=RetentionSchedule(
+            RetentionPolicyId.new(), False, NOW, NOW, NOW, None, retained_at
+        ),
+    )
+    events.append_task_activity_event(retained_source)
+    retained_candidate = _episodic_candidates(
+        retained_source,
+        extractor_version="team-deletion-after-purge",
+        claims=("retain tombstones through explicit deletion",),
+    )[0]
+    repository.store_episodic_memory_candidates((retained_candidate,))
+    EpisodicRetentionService(repository).expire_due(scope, as_of=retained_at)
+    EpisodicRetentionService(repository).purge_expired(
+        scope, purged_at=retained_at + timedelta(seconds=30)
+    )
+    TaskActivityRetentionService(events).expire_due(scope, as_of=retained_at)
+    TaskActivityRetentionService(events).purge_expired(
+        scope, purged_at=retained_at + timedelta(minutes=1)
+    )
+    retained_deletion = service.delete_task_event(
+        scope=scope,
+        event_id=retained_source.event_id,
+        source_action_key="team-delete-retained-source",
+        deleted_at=retained_at + timedelta(minutes=2),
+    )
+    assert len(retained_deletion.dependent_deletions) == 1
+    assert (
+        repository.get_episodic_memory_expiration(scope, retained_candidate.memory_id).memory_id
+        == retained_candidate.memory_id
+    )
+    assert (
+        events.get_task_activity_expiration(scope, retained_source.event_id).event_id
+        == retained_source.event_id
+    )
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_deletions', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_deletions', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_deletions', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_deletions', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False, False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (str(workspace.owner_id), str(workspace.workspace_id), TeamOperation.READ.value),
+        )
+        cursor.execute(
+            "SELECT (SELECT COUNT(*) FROM mnemo_team.task_activity_events), "
+            "(SELECT COUNT(*) FROM mnemo_team.event_outbox WHERE topic = 'task_activity'), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_candidates), "
+            "(SELECT COUNT(*) FROM mnemo_team.task_activity_event_deletions), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_deletions)"
+        )
+        assert tuple(int(str(value)) for value in (cursor.fetchone() or ())) == (0, 0, 0, 2, 3)
     finally:
         connection.rollback()
         cursor.close()
