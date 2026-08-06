@@ -27,6 +27,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
+    CheckpointExportBundle,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -148,6 +149,7 @@ from .contracts import (
     ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStorageFailure,
     ApprovedEpisodicEventStoreResult,
+    CheckpointExportStorageFailure,
     CheckpointNotFound,
     CheckpointPage,
     CheckpointSourceObservationConflict,
@@ -194,6 +196,7 @@ from .contracts import (
     EventOutboxStorageFailure,
     InvalidAbandonmentReason,
     InvalidApprovedEpisodicEventScope,
+    InvalidCheckpointExportScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
     InvalidEpisodicExportScope,
@@ -1056,6 +1059,58 @@ class SQLiteCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def export_checkpoint_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> CheckpointExportBundle:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidCheckpointExportScope("checkpoint export requires exact task scope")
+        _require_aware_datetime(exported_at, "exported_at")
+        try:
+            with self._connect() as connection:
+                aggregate_rows = connection.execute(
+                    "SELECT * FROM checkpoint_aggregates WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY checkpoint_id ASC",
+                    self._scope_values(scope),
+                ).fetchall()
+                revision_rows = connection.execute(
+                    "SELECT revision.* FROM checkpoint_revision_records AS revision "
+                    "JOIN checkpoint_aggregates AS aggregate "
+                    "ON aggregate.checkpoint_id = revision.checkpoint_id "
+                    "WHERE aggregate.owner_id = ? AND aggregate.visibility = ? "
+                    "AND aggregate.workspace_id IS ? AND aggregate.project_id = ? "
+                    "AND aggregate.session_id = ? AND aggregate.task_id = ? "
+                    "ORDER BY revision.checkpoint_id ASC, revision.revision_number ASC",
+                    self._scope_values(scope),
+                ).fetchall()
+                event_rows = connection.execute(
+                    "SELECT event.* FROM checkpoint_lifecycle_events AS event "
+                    "JOIN checkpoint_aggregates AS aggregate "
+                    "ON aggregate.checkpoint_id = event.checkpoint_id "
+                    "WHERE aggregate.owner_id = ? AND aggregate.visibility = ? "
+                    "AND aggregate.workspace_id IS ? AND aggregate.project_id = ? "
+                    "AND aggregate.session_id = ? AND aggregate.task_id = ? "
+                    "ORDER BY event.checkpoint_id ASC, event.revision_number ASC",
+                    self._scope_values(scope),
+                ).fetchall()
+                return CheckpointExportBundle.create(
+                    scope=scope,
+                    exported_at=exported_at,
+                    aggregates=tuple(self._aggregate_from_row(row) for row in aggregate_rows),
+                    revisions=tuple(
+                        self._revision_from_row(connection, row, scope) for row in revision_rows
+                    ),
+                    lifecycle_events=tuple(
+                        self._event_from_row(connection, row, scope) for row in event_rows
+                    ),
+                )
+        except (ValueError, TypeError):
+            raise
+        except sqlite3.Error as error:
+            raise CheckpointExportStorageFailure(
+                "checkpoint export storage operation failed"
+            ) from error
 
     def append_checkpoint_source_observation(
         self, observation: CheckpointSourceObservation

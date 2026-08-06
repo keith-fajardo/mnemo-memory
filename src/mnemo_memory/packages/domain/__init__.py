@@ -8,6 +8,7 @@ from .approved_episodic_events import (
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
 )
+from .checkpoint_export import CHECKPOINT_EXPORT_FORMAT, CheckpointExportBundle
 from .checkpoint_source_observation import CheckpointSourceObservation
 from .code_structure import (
     CodeEdge,
@@ -206,6 +207,7 @@ from .team import (
 )
 
 __all__ = [
+    "CHECKPOINT_EXPORT_FORMAT",
     "DEFAULT_CONTEXT_BUDGET",
     "EPISODIC_EXPORT_FORMAT",
     "ActiveEpisodicMemory",
@@ -222,6 +224,7 @@ __all__ = [
     "CheckpointAggregate",
     "CheckpointContent",
     "CheckpointEventKind",
+    "CheckpointExportBundle",
     "CheckpointId",
     "CheckpointLesson",
     "CheckpointLifecycleEvent",

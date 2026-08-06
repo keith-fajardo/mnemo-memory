@@ -13,6 +13,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
+    CheckpointExportBundle,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -32,6 +33,10 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.policy import TeamOperation
 
 from .contracts import (
+    CheckpointExportStorageFailure,
+    CheckpointImportConflict,
+    CheckpointImportResult,
+    CheckpointImportStorageFailure,
     CheckpointNotFound,
     CheckpointPage,
     CheckpointRepositoryError,
@@ -46,6 +51,7 @@ from .contracts import (
     EpisodicEventStorageFailure,
     EpisodicEventStoreResult,
     InvalidAbandonmentReason,
+    InvalidCheckpointExportScope,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
     InvalidLifecycleTransition,
@@ -80,6 +86,31 @@ def _sqlstate(error: Exception) -> str | None:
             if isinstance(state, str):
                 return state
     return None
+
+
+def _same_checkpoint_history(left: CheckpointExportBundle, right: CheckpointExportBundle) -> bool:
+    return (
+        left.format_version == right.format_version
+        and left.scope == right.scope
+        and left.exported_at == right.exported_at
+        and left.aggregates == right.aggregates
+        and left.revisions == right.revisions
+        and left.lifecycle_events == right.lifecycle_events
+    )
+
+
+def _is_exact_checkpoint_rebase(
+    source: CheckpointExportBundle, target: CheckpointExportBundle
+) -> bool:
+    return (
+        source.exported_at == target.exported_at
+        and tuple(replace(item, scope=target.scope) for item in source.aggregates)
+        == target.aggregates
+        and tuple(replace(item, scope=target.scope) for item in source.revisions)
+        == target.revisions
+        and tuple(replace(item, scope=target.scope) for item in source.lifecycle_events)
+        == target.lifecycle_events
+    )
 
 
 class PostgreSQLCheckpointRepository:
@@ -335,6 +366,109 @@ class PostgreSQLCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def export_checkpoint_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> CheckpointExportBundle:
+        if not isinstance(scope, MemoryScope) or scope.level is not ScopeLevel.TASK:
+            raise InvalidCheckpointExportScope("checkpoint export requires exact task scope")
+        if exported_at.tzinfo is None or exported_at.utcoffset() is None:
+            raise ValueError("exported_at must be timezone-aware")
+        try:
+            self._require_scope(scope)
+            with self._transaction(TeamOperation.READ) as cursor:
+                return self._checkpoint_history_from_cursor(cursor, scope, exported_at)
+        except InvalidCheckpointScope as error:
+            raise InvalidCheckpointExportScope(
+                "checkpoint export requires authorized exact task scope"
+            ) from error
+        except RepositoryStorageFailure as error:
+            raise CheckpointExportStorageFailure(
+                "checkpoint export database operation failed"
+            ) from error
+
+    def import_checkpoint_history(
+        self,
+        source: CheckpointExportBundle,
+        target: CheckpointExportBundle,
+    ) -> CheckpointImportResult:
+        if not isinstance(source, CheckpointExportBundle) or not isinstance(
+            target, CheckpointExportBundle
+        ):
+            raise TypeError("checkpoint import requires validated bundles")
+        try:
+            self._require_scope(target.scope)
+        except InvalidCheckpointScope as error:
+            raise CheckpointImportConflict(
+                "checkpoint import requires authorized exact target scope"
+            ) from error
+        if (
+            len(source.aggregates) != len(target.aggregates)
+            or len(source.revisions) != len(target.revisions)
+            or len(source.lifecycle_events) != len(target.lifecycle_events)
+            or not _is_exact_checkpoint_rebase(source, target)
+        ):
+            raise CheckpointImportConflict("checkpoint import source and target state differ")
+        try:
+            with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
+                before = self._checkpoint_history_from_cursor(
+                    cursor, target.scope, target.exported_at
+                )
+                if _same_checkpoint_history(before, target):
+                    return CheckpointImportResult(
+                        len(target.aggregates),
+                        len(target.revisions),
+                        len(target.lifecycle_events),
+                        True,
+                    )
+                if before.aggregates or before.revisions or before.lifecycle_events:
+                    raise CheckpointImportConflict(
+                        "checkpoint import target contains conflicting state"
+                    )
+                for aggregate in target.aggregates:
+                    cursor.execute(
+                        "INSERT INTO mnemo_team.checkpoint_aggregates("
+                        "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                        "checkpoint_id, current_revision_id, current_revision_number, "
+                        "lifecycle_status, created_at, updated_at) VALUES ("
+                        "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                        "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                        "CAST(%s AS uuid), %s, %s, %s, %s)",
+                        (
+                            *self._scope_values(aggregate.scope),
+                            str(aggregate.checkpoint_id),
+                            str(aggregate.current_revision_id),
+                            aggregate.current_revision_number,
+                            aggregate.lifecycle_status.value,
+                            aggregate.created_at,
+                            aggregate.updated_at,
+                        ),
+                    )
+                for revision in target.revisions:
+                    self._insert_revision(cursor, revision)
+                for event in target.lifecycle_events:
+                    self._insert_event(cursor, event)
+                after = self._checkpoint_history_from_cursor(
+                    cursor, target.scope, target.exported_at
+                )
+                if not _same_checkpoint_history(after, target):
+                    raise CheckpointImportConflict("checkpoint import target verification failed")
+                return CheckpointImportResult(
+                    len(target.aggregates),
+                    len(target.revisions),
+                    len(target.lifecycle_events),
+                    False,
+                )
+        except CheckpointImportConflict:
+            raise
+        except RepositoryStorageFailure as error:
+            raise CheckpointImportStorageFailure(
+                "checkpoint import database operation failed"
+            ) from error
+        except CheckpointRepositoryError as error:
+            raise CheckpointImportConflict(
+                "checkpoint import conflicts with stored state"
+            ) from error
 
     def append_checkpoint_source_observation(
         self, observation: CheckpointSourceObservation
@@ -611,7 +745,11 @@ class PostgreSQLCheckpointRepository:
             )
             yield cursor
             connection.commit()
-        except (CheckpointRepositoryError, EpisodicEventRepositoryError):
+        except (
+            CheckpointImportConflict,
+            CheckpointRepositoryError,
+            EpisodicEventRepositoryError,
+        ):
             connection.rollback()
             raise
         except Exception as error:
@@ -667,6 +805,54 @@ class PostgreSQLCheckpointRepository:
         )
         row = cursor.fetchone()
         return None if row is None else self._revision_from_row(row, scope)
+
+    def _checkpoint_history_from_cursor(
+        self,
+        cursor: PostgreSQLCursor,
+        scope: MemoryScope,
+        exported_at: datetime,
+    ) -> CheckpointExportBundle:
+        cursor.execute(
+            "SELECT " + _AGGREGATE_COLUMNS + " FROM mnemo_team.checkpoint_aggregates "
+            "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY checkpoint_id ASC",
+            self._scope_values(scope),
+        )
+        aggregates = tuple(self._aggregate_from_row(row, scope) for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT " + _REVISION_COLUMNS + " FROM mnemo_team.checkpoint_revisions AS revision "
+            "WHERE revision.workspace_id = CAST(%s AS uuid) "
+            "AND revision.project_id = CAST(%s AS uuid) "
+            "AND revision.owner_id = CAST(%s AS uuid) AND revision.visibility = %s "
+            "AND revision.session_id = CAST(%s AS uuid) "
+            "AND revision.task_id = CAST(%s AS uuid) "
+            "ORDER BY revision.checkpoint_id ASC, revision.revision_number ASC",
+            self._scope_values(scope),
+        )
+        revisions = tuple(self._revision_from_row(row, scope) for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT " + _EVENT_COLUMNS + " FROM mnemo_team.checkpoint_lifecycle_events AS event "
+            "JOIN mnemo_team.checkpoint_revisions AS revision "
+            "ON revision.workspace_id = event.workspace_id "
+            "AND revision.revision_id = event.revision_id "
+            "WHERE event.workspace_id = CAST(%s AS uuid) "
+            "AND event.project_id = CAST(%s AS uuid) "
+            "AND event.owner_id = CAST(%s AS uuid) AND event.visibility = %s "
+            "AND event.session_id = CAST(%s AS uuid) "
+            "AND event.task_id = CAST(%s AS uuid) "
+            "ORDER BY event.checkpoint_id ASC, event.revision_number ASC",
+            self._scope_values(scope),
+        )
+        events = tuple(self._event_from_row(row, scope) for row in cursor.fetchall())
+        return CheckpointExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            aggregates=aggregates,
+            revisions=revisions,
+            lifecycle_events=events,
+        )
 
     def _select_event(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId

@@ -2202,6 +2202,47 @@ validation for 119 product Python files, schema validation, and the isolated ins
 workflow. No dependency was added. Episodic personal-to-team import now preserves verified live
 and lifecycle counts and hashes; other export categories remain separate requirements.
 
+#### Issue 21T — Verified checkpoint-history personal-to-team import — Complete
+
+The current bounded issue adds one portable, integrity-verified bundle for every checkpoint
+aggregate, immutable revision, and lifecycle event in an exact personal task scope, then imports
+that state atomically into one authorized team task scope. Checkpoint, revision, lifecycle-event,
+content, evidence, status, and timestamp identity must be preserved while only the enclosing scope
+is rebased. Canonical ordering and one SHA-256 digest must make tampering and incomplete history
+fail closed. A target must be empty or exactly identical; conflicting state must be rejected before
+mutation, and exact retry must be idempotent. Completion requires verified SQLite-to-PostgreSQL
+counts and canonical target hash behind forced RLS.
+
+Checkpoint source observations remain links to rebuildable source-structure projections and are
+not portable durable checkpoint payload. This issue adds no approved-event or knowledge export,
+remote service, OAuth, backup propagation, quota, dashboard, source governance, or dependency.
+
+Implemented the strict `mnemo.checkpoint-export.v1` domain bundle for every aggregate, immutable
+revision, and deterministic lifecycle event in one exact task scope. Canonical identity ordering,
+contiguous predecessor validation, aggregate-current-state binding, exact event/revision matching,
+canonical UTF-8 JSON, and one SHA-256 digest reject incomplete, duplicate, cross-scope,
+non-canonical, or tampered history. SQLite and Reference exports are scope-first and restart stable.
+
+The transfer service preserves checkpoint, revision, event, content, evidence, lifecycle status,
+and timestamp identities while rebasing only the explicit target scope. Reference and PostgreSQL
+targets accept only an empty or already-identical target. PostgreSQL validates the exact
+source/target rebase, inserts all aggregates, revisions, lifecycle events, and normal deterministic
+outbox jobs in one forced-RLS transaction, reconstructs the target bundle before commit, and makes
+exact retry idempotent. The application independently exports before and after import and returns
+verified category counts plus strict source and target digests. Checkpoint source observations are
+excluded because their referenced source snapshots are rebuildable target-specific projections.
+
+ADR 0028, the product contract, and threat model record the portable-format, identity, RLS,
+conflict, and residual deletion boundaries. Domain/Reference tests cover tamper and duplicate
+rejection, scope-only rebasing, identity preservation, conflicting target rejection, and replay.
+SQLite tests prove full history, scope isolation, and restart durability. A real PostgreSQL test
+proves SQLite-to-team transfer, exact identities/counts/hashes after restart, idempotent replay,
+normal outbox insertion, and private-project viewer denial. The complete repository gate passes
+with 833 default tests plus 19 mandatory real-PostgreSQL tests, strict typing for 222 source files,
+dependency/provenance validation for 93 entries, architecture validation for 121 product Python
+files, schema validation, and the isolated installed-package MCP workflow. No schema migration or
+dependency was added. Approved-event and knowledge transfer remain separate requirements.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

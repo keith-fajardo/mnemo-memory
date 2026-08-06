@@ -402,9 +402,8 @@ foreign-task and private-project non-disclosure, invalid-scope rejection, and pa
 failure translation.
 
 **Residual risk:** The export is returned in memory and is not an encrypted file-delivery service.
-Personal-to-team import, backup/export deletion propagation, checkpoint/approved-fact/knowledge/
-structural export parity, authenticated remote transport, and user-visible export audit remain
-separate issues.
+Backup/export deletion propagation, approved-fact/knowledge/structural export parity,
+authenticated remote transport, and user-visible export audit remain separate issues.
 
 ### Tampered, conflicting, or interrupted personal-to-team episodic import
 
@@ -435,6 +434,33 @@ block resurrection through an imported deletion.
 **Residual risk:** Live replay is resumable but not one cross-repository transaction. Other
 personal export categories, authenticated remote request/audit composition, and backup/deletion
 propagation remain release blockers; this service is not yet exposed as team mode.
+
+### Tampered or cross-tenant checkpoint-history transfer
+
+**Scenario:** A modified checkpoint bundle is imported, an incomplete revision chain is accepted,
+checkpoint or revision identities change during migration, terminal history is replayed partially,
+an unrelated target is overwritten, or a private-project viewer reads or writes checkpoint text.
+
+**Required controls:** Export only after an exact task-scope query and validate the strict
+`mnemo.checkpoint-export.v1` domain object. Require canonical aggregate/revision/event order,
+unique identities and action keys, contiguous predecessors, exactly one deterministic lifecycle
+event per revision, matching current pointers/status/timestamps, and the complete SHA-256 digest.
+Rebase only the explicit scope while preserving checkpoint, revision, event, content, evidence,
+status, and time identity. PostgreSQL must validate the source/target relation, require an empty or
+identical target, and insert and re-export all canonical rows inside one forced-RLS transaction.
+The application independently exports before and after, verifies typed state, exact counts, and
+the target digest, and sanitizes adapter failures. Source observations are not copied because they
+refer to rebuildable target-specific structural projections.
+
+**Verification:** Domain tests reject tampering, duplicate state, non-canonical order, and broken
+history. Reference and SQLite tests prove identity preservation, scope-only rebasing, conflict
+rejection, restart-stable export, and idempotent retry. A real SQLite-to-PostgreSQL test verifies
+all checkpoint/revision/event identities, counts, source/target hashes, restart durability, normal
+outbox creation, exact replay, and private-project viewer denial.
+
+**Residual risk:** Checkpoint expiry/deletion and backup/export deletion propagation are still
+required. The bundle is an in-memory application contract and is not yet an authenticated remote
+transfer endpoint or encrypted delivery format.
 
 ### Cross-tenant source projection and repository-content retention
 

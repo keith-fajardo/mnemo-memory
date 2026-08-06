@@ -7,6 +7,14 @@ from .bootstrap import (
     build_checkpoint_runtime,
     build_lifecycle_service,
 )
+from .checkpoint_transfer import (
+    CheckpointExportService,
+    CheckpointImportService,
+    CheckpointTransferConflict,
+    CheckpointTransferError,
+    CheckpointTransferResult,
+    CheckpointTransferStorageFailure,
+)
 from .checkpoints import (
     AbandonCheckpoint,
     ApprovedEpisodicEventGovernanceView,
@@ -137,7 +145,13 @@ __all__ = [
     "CheckpointApplicationRevisionConflict",
     "CheckpointApplicationService",
     "CheckpointApplicationStorageFailure",
+    "CheckpointExportService",
+    "CheckpointImportService",
     "CheckpointRuntime",
+    "CheckpointTransferConflict",
+    "CheckpointTransferError",
+    "CheckpointTransferResult",
+    "CheckpointTransferStorageFailure",
     "CheckpointView",
     "CompleteCheckpoint",
     "CorrectApprovedEpisodicEvent",

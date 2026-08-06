@@ -15,6 +15,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
+    CheckpointExportBundle,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -967,6 +968,57 @@ class CheckpointSourceObservationStorageFailure(ProjectIndexRepositoryError):
 class CheckpointPage:
     items: tuple[CheckpointAggregate, ...]
     next_offset: int | None
+
+
+class CheckpointExportRepositoryError(Exception):
+    """Expected outcome while reading one exact task's complete checkpoint history."""
+
+
+class InvalidCheckpointExportScope(CheckpointExportRepositoryError):
+    pass
+
+
+class CheckpointExportStorageFailure(CheckpointExportRepositoryError):
+    pass
+
+
+class CheckpointImportRepositoryError(Exception):
+    """Expected outcome while atomically importing checkpoint history."""
+
+
+class CheckpointImportConflict(CheckpointImportRepositoryError):
+    pass
+
+
+class CheckpointImportStorageFailure(CheckpointImportRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointImportResult:
+    checkpoint_count: int
+    revision_count: int
+    event_count: int
+    idempotent: bool
+
+    def __post_init__(self) -> None:
+        for value in (self.checkpoint_count, self.revision_count, self.event_count):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("checkpoint import counts must be non-negative integers")
+
+
+class CheckpointExportRepository(Protocol):
+    def export_checkpoint_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> CheckpointExportBundle: ...
+
+
+class CheckpointImportRepository(Protocol):
+    def import_checkpoint_history(
+        self,
+        source: CheckpointExportBundle,
+        target: CheckpointExportBundle,
+    ) -> CheckpointImportResult: ...
 
 
 class CheckpointRepository(Protocol):

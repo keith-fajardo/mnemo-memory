@@ -23,6 +23,11 @@ from mnemo_memory.connectors.dbt import (
     DbtSupplementalParseRequest,
     ManifestParseRequest,
 )
+from mnemo_memory.packages.application import (
+    CheckpointExportService,
+    CheckpointImportService,
+    CheckpointTransferStorageFailure,
+)
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
@@ -3320,6 +3325,134 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
             viewer_memories,
             viewer_memories,
         ).import_bundle(bundle, target_scope=replace(target_scope, task_id=TaskId.new()))
+
+
+def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
+    postgres_harness: PostgreSQLHarness, tmp_path: Path
+) -> None:
+    personal_scope = MemoryScope(
+        OwnerId.new(),
+        ScopeLevel.TASK,
+        Visibility.PROJECT,
+        WorkspaceId.new(),
+        ProjectId.new(),
+        SessionId.new(),
+        TaskId.new(),
+    )
+    personal = SQLiteCheckpointRepository(
+        tmp_path / "personal-checkpoint-import.sqlite3", base_directory=tmp_path
+    )
+    personal.migrate()
+    aggregate, first = _checkpoint_pair(personal_scope, "a-checkpoint-import")
+    personal.create_checkpoint_aggregate(aggregate, first)
+    second = personal.append_revision(
+        personal_scope,
+        aggregate.checkpoint_id,
+        first.revision_id,
+        _checkpoint_content("b-checkpoint-import"),
+        (_checkpoint_evidence("b-checkpoint-import"),),
+        NOW + timedelta(minutes=1),
+    )
+    personal.complete_checkpoint(
+        personal_scope,
+        aggregate.checkpoint_id,
+        second.revision_id,
+        _checkpoint_content("c-checkpoint-import", complete=True),
+        (_checkpoint_evidence("c-checkpoint-import"),),
+        NOW + timedelta(minutes=2),
+    )
+    active_aggregate, active_revision = _checkpoint_pair(personal_scope, "d-checkpoint-import")
+    personal.create_checkpoint_aggregate(active_aggregate, active_revision)
+    exported_at = NOW + timedelta(minutes=3)
+    bundle = CheckpointExportService(personal).export(personal_scope, exported_at=exported_at)
+
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    target_scope = _checkpoint_scope(workspace, project)
+    target = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    importer = CheckpointImportService(target, target)
+    result = importer.import_bundle(bundle, target_scope=target_scope)
+
+    assert not result.idempotent
+    assert result.checkpoint_count == 2
+    assert result.revision_count == result.event_count == 4
+    assert result.source_content_digest == bundle.content_digest
+    assert result.source_content_digest != result.target_content_digest
+    restarted = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    imported = CheckpointExportService(restarted).export(target_scope, exported_at=exported_at)
+    assert imported.content_digest == result.target_content_digest
+    assert {item.checkpoint_id for item in imported.aggregates} == {
+        item.checkpoint_id for item in bundle.aggregates
+    }
+    assert {item.revision_id for item in imported.revisions} == {
+        item.revision_id for item in bundle.revisions
+    }
+    assert {item.event_id for item in imported.lifecycle_events} == {
+        item.event_id for item in bundle.lifecycle_events
+    }
+    assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'read', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        cursor.execute(
+            "SELECT COUNT(*) FROM mnemo_team.event_outbox WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND topic = 'checkpoint_lifecycle'",
+            (
+                str(target_scope.workspace_id),
+                str(target_scope.project_id),
+                str(target_scope.session_id),
+                str(target_scope.task_id),
+            ),
+        )
+        row = cursor.fetchone()
+        assert row is not None and int(str(row[0])) == 4
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(CheckpointTransferStorageFailure):
+        CheckpointImportService(viewer, viewer).import_bundle(
+            bundle, target_scope=replace(target_scope, task_id=TaskId.new())
+        )
 
 
 def _source_structure_artifact(scope: MemoryScope, seed: int) -> CodeStructureArtifact:

@@ -46,7 +46,9 @@ without a partial revision or event. PostgreSQL may also attach one immutable ex
 observation to a revision only when the matching authorized project snapshot already exists. That
 identity-and-time record means co-observation, not causation, and stores no checkpoint or source
 payload. This storage boundary does not authenticate the principal or provide checkpoint retention,
-deletion propagation, export, or a remote team service.
+deletion propagation, or a remote team service. Complete aggregate, revision, and lifecycle-event
+history is portable through a strict exact-task bundle; source observations are excluded because
+their source snapshots are rebuildable projections.
 
 Team dbt manifests use the same minimized authoritative project-index contract as personal mode.
 PostgreSQL stores immutable exact-project snapshots, typed nodes and lineage edges, explicit
@@ -424,7 +426,7 @@ identity ordering, canonical UTF-8 JSON, and a SHA-256 content digest make ident
 one export time byte-identical and tampering detectable. Authorization is applied before payload
 reconstruction; excluded content never enters the bundle, while tombstones remain so a future
 importer can prevent resurrection. This service returns the bundle but does not persist an export
-file or claim checkpoint, approved-fact, knowledge, structural, or backup support.
+file or claim approved-fact, knowledge, structural, or backup support.
 
 The episodic import path accepts that validated bundle and one exact target task scope. It
 reconstructs task events, candidates, reviews, governance actions, and derived revisions through
@@ -442,8 +444,18 @@ identity, and source digest atomically in one forced-RLS canonical table; it nev
 deleted event or candidate payload and cannot retain a summary or claim. Exact replay is
 idempotent, competing source/target mapping fails closed, ordinary export includes the imported
 tombstones, and ordinary event/candidate writes consult them before mutation. Complete episodic
-personal-to-team state now has verified counts and source/target hashes. Checkpoint,
-approved-fact, knowledge, and structural export/import remain separate requirements.
+personal-to-team state now has verified counts and source/target hashes.
+
+Checkpoint history uses a separate `mnemo.checkpoint-export.v1` exact-task bundle containing every
+aggregate, immutable revision, and deterministic lifecycle event. It validates canonical order,
+contiguous predecessor chains, current pointers, lifecycle state, evidence, timestamps, and one
+SHA-256 digest. Personal-to-team import preserves every checkpoint, revision, and event identity
+and rebases only the explicit scope. PostgreSQL accepts only an empty or already-identical target,
+inserts the entire history and normal outbox jobs atomically behind forced RLS, and verifies the
+target bundle before commit. The application returns verified counts plus strict source and target
+digests; exact replay is idempotent. Source-structure observations remain excluded rebuildable
+projection links. Approved-fact, knowledge, and structural export/import remain separate
+requirements.
 
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical

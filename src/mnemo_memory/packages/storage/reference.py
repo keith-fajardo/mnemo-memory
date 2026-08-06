@@ -18,6 +18,7 @@ from mnemo_memory.packages.domain import (
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
+    CheckpointExportBundle,
     CheckpointId,
     CheckpointLifecycleEvent,
     CheckpointRevision,
@@ -101,6 +102,8 @@ from .contracts import (
     ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStoreResult,
+    CheckpointImportConflict,
+    CheckpointImportResult,
     CheckpointNotFound,
     CheckpointPage,
     CheckpointRepository,
@@ -2530,6 +2533,105 @@ class ReferenceCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def export_checkpoint_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> CheckpointExportBundle:
+        self._require_scope(scope)
+        aggregates = tuple(
+            sorted(
+                (item for item in self._aggregates.values() if item.scope == scope),
+                key=lambda item: str(item.checkpoint_id),
+            )
+        )
+        revisions = tuple(
+            revision
+            for aggregate in aggregates
+            for revision in self._revisions[aggregate.checkpoint_id]
+        )
+        events = tuple(
+            sorted(
+                (event for event in self.events._events.values() if event.scope == scope),
+                key=lambda item: (str(item.checkpoint_id), item.revision_number),
+            )
+        )
+        return CheckpointExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            aggregates=aggregates,
+            revisions=revisions,
+            lifecycle_events=events,
+        )
+
+    def import_checkpoint_history(
+        self,
+        source: CheckpointExportBundle,
+        target: CheckpointExportBundle,
+    ) -> CheckpointImportResult:
+        if not isinstance(source, CheckpointExportBundle) or not isinstance(
+            target, CheckpointExportBundle
+        ):
+            raise TypeError("checkpoint import requires validated bundles")
+        self._require_scope(target.scope)
+        if (
+            source.exported_at != target.exported_at
+            or tuple(replace(item, scope=target.scope) for item in source.aggregates)
+            != target.aggregates
+            or tuple(replace(item, scope=target.scope) for item in source.revisions)
+            != target.revisions
+            or tuple(replace(item, scope=target.scope) for item in source.lifecycle_events)
+            != target.lifecycle_events
+        ):
+            raise CheckpointImportConflict("checkpoint import source and target state differ")
+        before = self.export_checkpoint_history(target.scope, exported_at=target.exported_at)
+        if (
+            before.aggregates == target.aggregates
+            and before.revisions == target.revisions
+            and before.lifecycle_events == target.lifecycle_events
+        ):
+            return CheckpointImportResult(
+                len(target.aggregates),
+                len(target.revisions),
+                len(target.lifecycle_events),
+                True,
+            )
+        if before.aggregates or before.revisions or before.lifecycle_events:
+            raise CheckpointImportConflict("checkpoint import target contains conflicting state")
+        if any(item.checkpoint_id in self._aggregates for item in target.aggregates):
+            raise CheckpointImportConflict("checkpoint import identity conflicts")
+        aggregate_state = dict(self._aggregates)
+        revision_state = dict(self._revisions)
+        event_state = self.events._snapshot()
+        outbox_state = dict(self.outbox._jobs)
+        try:
+            for aggregate in target.aggregates:
+                self._aggregates[aggregate.checkpoint_id] = aggregate
+                self._revisions[aggregate.checkpoint_id] = tuple(
+                    item
+                    for item in target.revisions
+                    if item.checkpoint_id == aggregate.checkpoint_id
+                )
+            for event in target.lifecycle_events:
+                self.events.append_event(event)
+            after = self.export_checkpoint_history(target.scope, exported_at=target.exported_at)
+            if (
+                after.aggregates != target.aggregates
+                or after.revisions != target.revisions
+                or after.lifecycle_events != target.lifecycle_events
+            ):
+                raise CheckpointImportConflict("checkpoint import target verification failed")
+        except BaseException:
+            self._aggregates = aggregate_state
+            self._revisions = revision_state
+            self.events._restore(event_state)
+            self.outbox._jobs = outbox_state
+            raise
+        return CheckpointImportResult(
+            len(target.aggregates),
+            len(target.revisions),
+            len(target.lifecycle_events),
+            False,
+        )
 
     def _transition(
         self,
