@@ -74,6 +74,15 @@ merges review evidence. Exact retries are idempotent, while changed extraction o
 review, action-key reuse, or cross-task linkage fails. No model confidence value authorizes
 activation, and this storage boundary invokes no extractor.
 
+Team active episodic memories use the same optimistic immutable governance contract as personal
+memory. The approval action roots revision one; every correction or terminal retraction must name
+the current expected revision. PostgreSQL stores only immutable exact-task actions and replays the
+chain rather than maintaining a duplicate mutable claim. A correction carries verified-user
+evidence, bounded replacement content, and sensitivity. A retraction carries no replacement claim
+or sensitivity and removes the memory from active reads. Exact retries are idempotent; stale
+writers, changed key reuse, unsafe content, revision forks, and post-retraction mutation fail
+closed. Retention and deletion remain separate lifecycle boundaries.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

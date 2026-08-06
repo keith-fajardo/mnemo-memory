@@ -31,7 +31,9 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewDecision,
     EpisodicExtractionProposal,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
     EpisodicMemoryKind,
+    EpisodicMemoryRevisionStatus,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -117,6 +119,9 @@ from mnemo_memory.packages.storage.contracts import (
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidateRejected,
+    EpisodicMemoryGovernanceConflict,
+    EpisodicMemoryGovernanceNotFound,
+    EpisodicMemoryGovernanceRejected,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -335,6 +340,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert candidate_sql.count("FORCE ROW LEVEL SECURITY") == 3
     assert "source.retention_json = NEW.retention_json" in candidate_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in candidate_sql
+    governance_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0007_team_episodic_governance.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert governance_sql.count("FORCE ROW LEVEL SECURITY") == 1
+    assert "UNIQUE (workspace_id, memory_id, expected_revision_id)" in governance_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in governance_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -512,12 +525,45 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0006_team_episodic_candidates.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=7).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4, 5, 6)
+            cursor.execute("SELECT to_regclass('mnemo_team.episodic_memory_governance')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+            )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1756,6 +1802,194 @@ def test_postgres_episodic_candidates_require_source_and_explicit_review(
     assert repository.get_active_episodic_memory(scope, candidates[0].memory_id) == (
         approved.active_memory
     )
+
+
+def test_postgres_active_episodic_governance_is_optimistic_terminal_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    task_events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    source = _task_event(scope, "7")
+    task_events.append_task_activity_event(source)
+    repository = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    candidate = _episodic_candidates(
+        source,
+        extractor_version="team-governance-extractor",
+        claims=("retain the initial approved claim",),
+    )[0]
+    repository.store_episodic_memory_candidates((candidate,))
+    approval = _episodic_review(
+        scope, candidate, "governance-approve", EpisodicCandidateReviewDecision.APPROVED
+    )
+    approved = repository.review_episodic_memory_candidate(approval).active_memory
+    assert approved is not None
+    initial = repository.list_episodic_memory_revisions(scope, candidate.memory_id)
+    assert len(initial) == 1 and initial[0].revision_id == approval.action_id
+    assert initial[0].status is EpisodicMemoryRevisionStatus.ACTIVE
+
+    correction = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=initial[0].revision_id,
+        source_action_key="team-governance-correct-1",
+        reason="the verified user corrected the active claim",
+        corrected_claim="retain the corrected approved claim",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(seconds=60),
+        evidence_references=(_approved_evidence("govern-correct-1", user=True),),
+    )
+    corrected = repository.govern_episodic_memory(correction)
+    assert not corrected.idempotent
+    assert corrected.current_revision.revision_number == 2
+    assert corrected.current_revision.status is EpisodicMemoryRevisionStatus.ACTIVE
+    assert corrected.active_memory is not None
+    assert corrected.active_memory.memory.claim == "retain the corrected approved claim"
+    assert repository.govern_episodic_memory(correction).idempotent
+    assert repository.get_episodic_memory_governance(scope, correction.action_id) == correction
+    revisions = repository.list_episodic_memory_revisions(scope, candidate.memory_id)
+    assert tuple(item.status for item in revisions) == (
+        EpisodicMemoryRevisionStatus.SUPERSEDED,
+        EpisodicMemoryRevisionStatus.ACTIVE,
+    )
+
+    stale = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=initial[0].revision_id,
+        source_action_key="team-governance-stale",
+        reason="this stale writer must not fork the chain",
+        corrected_claim="stale correction",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(seconds=61),
+        evidence_references=(_approved_evidence("govern-stale", user=True),),
+    )
+    with pytest.raises(EpisodicMemoryGovernanceConflict):
+        repository.govern_episodic_memory(stale)
+    secret = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=correction.action_id,
+        source_action_key="team-governance-secret",
+        reason="reject secret correction",
+        corrected_claim="access_token=ABCDEFGHIJKLMNOPQRSTUVWX",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(seconds=62),
+        evidence_references=(_approved_evidence("govern-secret", user=True),),
+    )
+    with pytest.raises(EpisodicMemoryGovernanceRejected):
+        repository.govern_episodic_memory(secret)
+
+    second = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=correction.action_id,
+        source_action_key="team-governance-correct-2",
+        reason="the second verified correction extends the chain",
+        corrected_claim="retain the final corrected claim",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(seconds=63),
+        evidence_references=(_approved_evidence("govern-correct-2", user=True),),
+    )
+    second_result = repository.govern_episodic_memory(second)
+    assert second_result.current_revision.revision_number == 3
+    conflicting_identity = replace(second, corrected_claim="changed retry payload")
+    with pytest.raises(EpisodicMemoryGovernanceConflict):
+        repository.govern_episodic_memory(conflicting_identity)
+
+    retraction = EpisodicMemoryGovernanceAction.retract(
+        scope=scope,
+        memory_id=candidate.memory_id,
+        expected_revision_id=second.action_id,
+        source_action_key="team-governance-retract",
+        reason="the user withdrew the active episodic memory",
+        occurred_at=NOW + timedelta(seconds=64),
+        evidence_references=(_approved_evidence("govern-retract", user=True),),
+    )
+    retracted = repository.govern_episodic_memory(retraction)
+    assert not retracted.idempotent and retracted.active_memory is None
+    assert retracted.current_revision.status is EpisodicMemoryRevisionStatus.RETRACTED
+    assert retracted.current_revision.claim is None
+    assert repository.govern_episodic_memory(retraction).idempotent
+    with pytest.raises(ActiveEpisodicMemoryNotFound):
+        repository.get_active_episodic_memory(scope, candidate.memory_id)
+    assert repository.list_active_episodic_memories(scope).items == ()
+    with pytest.raises(EpisodicMemoryGovernanceConflict):
+        repository.govern_episodic_memory(
+            EpisodicMemoryGovernanceAction.correct(
+                scope=scope,
+                memory_id=candidate.memory_id,
+                expected_revision_id=retraction.action_id,
+                source_action_key="team-governance-after-retraction",
+                reason="terminal memory cannot be corrected",
+                corrected_claim="must not reactivate",
+                corrected_sensitivity=Sensitivity.NORMAL,
+                occurred_at=NOW + timedelta(seconds=65),
+                evidence_references=(_approved_evidence("govern-terminal", user=True),),
+            )
+        )
+
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    restarted_revisions = restarted.list_episodic_memory_revisions(scope, candidate.memory_id)
+    assert len(restarted_revisions) == 4
+    assert restarted_revisions[-1] == retracted.current_revision
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        repository.list_episodic_memory_revisions(foreign_task, candidate.memory_id)
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        repository.get_episodic_memory_governance(foreign_task, correction.action_id)
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(EpisodicMemoryGovernanceNotFound):
+        viewer.list_episodic_memory_revisions(scope, candidate.memory_id)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_governance', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_governance', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
 
 
 def _database_authorized(

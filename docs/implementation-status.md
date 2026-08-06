@@ -1755,6 +1755,48 @@ No extractor/model call, worker/scheduler, episodic correction/retraction, reten
 deletion/export, source approval workflow, dbt/source-structure parity, personal import, remote
 service, OAuth, backup, quota, dashboard, or usable team mode was added.
 
+#### Issue 21I — PostgreSQL team active episodic-memory governance — Complete
+
+The current bounded issue implements the existing `EpisodicMemoryGovernanceRepository` contract
+for PostgreSQL active memories. A forward-only migration and adapter extension must preserve exact
+task scope, deterministic governance safety, one optimistic immutable revision chain rooted at the
+approval action, expected-revision compare-and-set, correction evidence and sensitivity, terminal
+payload-free retraction, stable replay, action identity/source-key idempotency, and atomic rollback.
+Every table and operation must use forced RLS and the existing authenticated principal/workspace/
+operation boundary, with real-database tests for migration rollback, restart durability, runtime
+privilege limits, stale writers, and cross-tenant/cross-task denial.
+
+This issue adds no retention expiry/purge, deletion/export, extractor/model call, worker/scheduler,
+team source approval workflow, dbt/source-structure parity, personal import, remote service, OAuth,
+backup, quota, dashboard, or usable team mode.
+
+Implemented PostgreSQL schema version 7 and extended `PostgreSQLEpisodicMemoryRepository` with the
+existing active-memory governance contract. One immutable exact-task action table uses forced RLS,
+a fixed-search-path active-memory scope guard, and select/insert-only runtime privileges. Approval
+is revision one; corrections and retraction extend that chain through expected-revision
+compare-and-set. A database uniqueness constraint prevents two successors from forking one
+revision, and the adapter replays approval plus ordered actions instead of storing duplicate
+mutable current-claim state.
+
+Corrections preserve bounded verified-user evidence, replacement claim, sensitivity, reason, and
+source action identity. Retraction is terminal, stores no replacement claim or sensitivity, and
+removes the memory from active reads. Deterministic governance safety, exact task scope, action
+identity, and source-key checks precede mutation. Exact retries are idempotent; stale writers,
+changed retry payloads, unsafe corrections, revision forks, and post-retraction actions fail
+closed. Restart replay reconstructs the same complete revision chain.
+
+ADR 0018, the product contract, and threat model document the optimistic lifecycle, payload and
+authorization boundaries, and forward-only recovery. Real PostgreSQL tests prove atomic v6-to-v7
+rollback/retry, two corrections, exact retries, stale-writer rejection, secret rejection, changed
+identity conflict, terminal payload-free retraction, active-read exclusion, post-retraction denial,
+restart replay, different-task and private-project denial, and immutable runtime privileges. The
+complete repository gate passes with 826 default tests plus 10 mandatory real-PostgreSQL tests,
+strict typing for 216 source files, dependency/provenance validation for 93 entries, architecture
+validation for 116 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No dependency was added. No retention expiry/purge, deletion/export, extractor/model
+call, worker/scheduler, source approval workflow, dbt/source-structure parity, personal import,
+remote service, OAuth, backup, quota, dashboard, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

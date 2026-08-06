@@ -279,6 +279,30 @@ injected v5-to-v6 migration failure retains v5 without the candidate tables.
 service, active-memory correction/retention/deletion/export, or backup propagation is composed.
 The database credential remains infrastructure-only and team mode remains unavailable.
 
+### Cross-tenant active-memory correction and revision forks
+
+**Scenario:** A principal corrects another task's active memory, two stale writers fork one
+revision, an action key is reused with changed content, a correction restores a retracted memory,
+or a retraction continues to expose its replacement payload through active reads.
+
+**Required controls:** Governance actions repeat complete task scope, use forced RLS, and are
+immutable to the runtime role. A fixed-search-path trigger binds every action to its exact active
+memory. Approval roots the revision chain; each action names its expected predecessor, and a
+database uniqueness constraint permits only one successor per memory/revision pair. Deterministic
+safety runs before insertion. Retraction has no replacement claim or sensitivity, is terminal, and
+is excluded from active reads. Exact action and source-key retries are idempotent; changed reuse,
+stale predecessors, and post-retraction actions fail closed.
+
+**Verification:** Real PostgreSQL tests cover two corrections, exact retries, stale writers,
+secret rejection, changed identity reuse, terminal payload-free retraction, post-retraction
+denial, active-read exclusion, restart replay, different-task and private-project denial, and
+immutable runtime privileges. An injected v6-to-v7 migration failure retains v6 without the
+governance table.
+
+**Residual risk:** Retraction hides the active revision but does not erase the original approved
+candidate payload. Retention, explicit deletion/export, backup propagation, authenticated actor
+identity, shared-source correction authority, and a remote team service remain release blockers.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

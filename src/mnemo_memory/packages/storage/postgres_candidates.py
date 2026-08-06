@@ -14,7 +14,11 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicMemoryCandidate,
+    EpisodicMemoryGovernanceAction,
+    EpisodicMemoryGovernanceKind,
     EpisodicMemoryKind,
+    EpisodicMemoryRevision,
+    EpisodicMemoryRevisionStatus,
     EventId,
     EvidenceReference,
     MemoryClassification,
@@ -27,10 +31,13 @@ from mnemo_memory.packages.domain import (
     Sensitivity,
     TaskActivityActor,
     WorkspaceId,
+    active_episodic_memory_at_revision,
+    replay_episodic_memory_revisions,
 )
 from mnemo_memory.packages.policy import (
     EpisodicCandidateReviewSafetyPolicy,
     EpisodicMemoryCandidateSafetyPolicy,
+    EpisodicMemoryGovernanceSafetyPolicy,
     TeamOperation,
 )
 
@@ -44,6 +51,12 @@ from .contracts import (
     EpisodicMemoryCandidateRepositoryError,
     EpisodicMemoryCandidateStorageFailure,
     EpisodicMemoryCandidateStoreResult,
+    EpisodicMemoryGovernanceConflict,
+    EpisodicMemoryGovernanceNotFound,
+    EpisodicMemoryGovernanceRejected,
+    EpisodicMemoryGovernanceRepositoryError,
+    EpisodicMemoryGovernanceResult,
+    EpisodicMemoryGovernanceStorageFailure,
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
@@ -63,6 +76,11 @@ _CANDIDATE_COLUMNS = (
 _REVIEW_COLUMNS = (
     "action_sequence, action_id::text, candidate_id::text, decision, actor, source_action_key, "
     "reason, reviewed_at, evidence_json::text"
+)
+_GOVERNANCE_COLUMNS = (
+    "action_sequence, action_id::text, memory_id::text, action_kind, actor, "
+    "expected_revision_id::text, source_action_key, reason, corrected_claim, "
+    "corrected_sensitivity, occurred_at, evidence_json::text"
 )
 
 
@@ -86,6 +104,7 @@ class PostgreSQLEpisodicMemoryRepository:
         workspace_id: WorkspaceId,
         candidate_policy: EpisodicMemoryCandidateSafetyPolicy | None = None,
         review_policy: EpisodicCandidateReviewSafetyPolicy | None = None,
+        governance_policy: EpisodicMemoryGovernanceSafetyPolicy | None = None,
         statement_timeout_ms: int = 5000,
     ) -> None:
         if not isinstance(principal_id, OwnerId):
@@ -103,6 +122,7 @@ class PostgreSQLEpisodicMemoryRepository:
         self._workspace_id = workspace_id
         self._candidate_policy = candidate_policy or EpisodicMemoryCandidateSafetyPolicy()
         self._review_policy = review_policy or EpisodicCandidateReviewSafetyPolicy()
+        self._governance_policy = governance_policy or EpisodicMemoryGovernanceSafetyPolicy()
         self._statement_timeout_ms = statement_timeout_ms
 
     def store_episodic_memory_candidates(
@@ -309,6 +329,9 @@ class PostgreSQLEpisodicMemoryRepository:
                 "AND active.project_id = CAST(%s AS uuid) "
                 "AND active.owner_id = CAST(%s AS uuid) AND active.visibility = %s "
                 "AND active.session_id = CAST(%s AS uuid) AND active.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_governance AS action "
+                "WHERE action.workspace_id = active.workspace_id "
+                "AND action.memory_id = active.memory_id AND action.action_kind = 'retracted') "
                 "ORDER BY review.action_sequence DESC LIMIT %s OFFSET %s",
                 (*_task_scope_values(scope), limit + 1, offset),
             )
@@ -318,6 +341,97 @@ class PostgreSQLEpisodicMemoryRepository:
                 for row in rows[:limit]
             )
             return ActiveEpisodicMemoryPage(items, offset + limit if len(rows) > limit else None)
+
+    def govern_episodic_memory(
+        self, action: EpisodicMemoryGovernanceAction
+    ) -> EpisodicMemoryGovernanceResult:
+        self._require_scope(action.scope)
+        with self._governance_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            base = self._base_active(cursor, action.scope, action.memory_id)
+            if base is None:
+                raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+            existing = self._scoped_governance_by_action(cursor, action.scope, action.action_id)
+            if existing is not None:
+                if existing != action:
+                    raise EpisodicMemoryGovernanceConflict(
+                        "episodic memory governance identity conflicts"
+                    )
+                revisions = self._revisions(cursor, base)
+                current = revisions[-1]
+                active = (
+                    active_episodic_memory_at_revision(base, current)
+                    if current.status is EpisodicMemoryRevisionStatus.ACTIVE
+                    else None
+                )
+                return EpisodicMemoryGovernanceResult(existing, current, active, True)
+            cursor.execute(
+                "SELECT 1 FROM mnemo_team.episodic_memory_governance WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND source_action_key = %s",
+                (*_task_scope_values(action.scope), action.source_action_key),
+            )
+            if cursor.fetchone() is not None:
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic memory governance action key conflicts"
+                )
+            revisions = self._revisions(cursor, base)
+            current = revisions[-1]
+            if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+                raise EpisodicMemoryGovernanceConflict("retracted episodic memory is terminal")
+            if action.expected_revision_id != current.revision_id:
+                raise EpisodicMemoryGovernanceConflict("episodic memory expected revision is stale")
+            if action.occurred_at < current.created_at:
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic memory governance time precedes the current revision"
+                )
+            current_active = active_episodic_memory_at_revision(base, current)
+            if not self._governance_policy.assess(current_active, action).accepted:
+                raise EpisodicMemoryGovernanceRejected(
+                    "episodic memory governance was rejected by safety policy"
+                )
+            actions = (*self._governance_actions(cursor, base.scope, base.memory_id), action)
+            try:
+                proposed = replay_episodic_memory_revisions(base, actions)
+            except ValueError as error:
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic memory governance does not form a valid revision"
+                ) from error
+            self._insert_governance(cursor, action)
+            latest = proposed[-1]
+            active = (
+                active_episodic_memory_at_revision(base, latest)
+                if latest.status is EpisodicMemoryRevisionStatus.ACTIVE
+                else None
+            )
+            return EpisodicMemoryGovernanceResult(action, latest, active, False)
+
+    def get_episodic_memory_governance(
+        self, scope: MemoryScope, action_id: EventId
+    ) -> EpisodicMemoryGovernanceAction:
+        self._require_scope(scope)
+        if not isinstance(action_id, EventId):
+            raise TypeError("action_id must be an EventId")
+        with self._governance_transaction(TeamOperation.READ) as cursor:
+            action = self._scoped_governance_by_action(cursor, scope, action_id)
+            if action is None:
+                raise EpisodicMemoryGovernanceNotFound(
+                    "episodic memory governance action was not found"
+                )
+            return action
+
+    def list_episodic_memory_revisions(
+        self, scope: MemoryScope, memory_id: MemoryId
+    ) -> tuple[EpisodicMemoryRevision, ...]:
+        self._require_scope(scope)
+        if not isinstance(memory_id, MemoryId):
+            raise TypeError("memory_id must be a MemoryId")
+        with self._governance_transaction(TeamOperation.READ) as cursor:
+            base = self._base_active(cursor, scope, memory_id)
+            if base is None:
+                raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
+            return self._revisions(cursor, base)
 
     def _insert_candidate(
         self, cursor: PostgreSQLCursor, candidate: EpisodicMemoryCandidate
@@ -375,6 +489,35 @@ class PostgreSQLEpisodicMemoryRepository:
             ),
         )
 
+    def _insert_governance(
+        self, cursor: PostgreSQLCursor, action: EpisodicMemoryGovernanceAction
+    ) -> None:
+        cursor.execute(
+            "INSERT INTO mnemo_team.episodic_memory_governance("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, action_id, "
+            "memory_id, action_kind, actor, expected_revision_id, source_action_key, reason, "
+            "corrected_claim, corrected_sensitivity, occurred_at, evidence_json) VALUES ("
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, CAST(%s AS uuid), "
+            "%s, %s, %s, %s, %s, CAST(%s AS jsonb))",
+            (
+                *_task_scope_values(action.scope),
+                str(action.action_id),
+                str(action.memory_id),
+                action.kind.value,
+                action.actor.value,
+                str(action.expected_revision_id),
+                action.source_action_key,
+                action.reason,
+                action.corrected_claim,
+                None
+                if action.corrected_sensitivity is None
+                else action.corrected_sensitivity.value,
+                action.occurred_at,
+                self._evidence_json(action.evidence_references),
+            ),
+        )
+
     def _scoped_candidate(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
     ) -> EpisodicMemoryCandidate | None:
@@ -407,6 +550,17 @@ class PostgreSQLEpisodicMemoryRepository:
     def _optional_active(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
     ) -> ActiveEpisodicMemory | None:
+        base = self._base_active(cursor, scope, memory_id)
+        if base is None:
+            return None
+        current = self._revisions(cursor, base)[-1]
+        if current.status is not EpisodicMemoryRevisionStatus.ACTIVE:
+            return None
+        return active_episodic_memory_at_revision(base, current)
+
+    def _base_active(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> ActiveEpisodicMemory | None:
         cursor.execute(
             "SELECT approval_action_id::text, activated_at FROM "
             "mnemo_team.active_episodic_memories WHERE workspace_id = CAST(%s AS uuid) "
@@ -430,6 +584,42 @@ class PostgreSQLEpisodicMemoryRepository:
         ):
             raise EpisodicMemoryReviewStorageFailure("active episodic memory provenance conflicts")
         return active
+
+    def _revisions(
+        self, cursor: PostgreSQLCursor, base: ActiveEpisodicMemory
+    ) -> tuple[EpisodicMemoryRevision, ...]:
+        return replay_episodic_memory_revisions(
+            base, self._governance_actions(cursor, base.scope, base.memory_id)
+        )
+
+    def _governance_actions(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
+    ) -> tuple[EpisodicMemoryGovernanceAction, ...]:
+        cursor.execute(
+            "SELECT " + _GOVERNANCE_COLUMNS + " FROM "
+            "mnemo_team.episodic_memory_governance WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND memory_id = CAST(%s AS uuid) ORDER BY action_sequence ASC",
+            (*_task_scope_values(scope), str(memory_id)),
+        )
+        return tuple(self._governance_from_row(row, scope) for row in cursor.fetchall())
+
+    def _scoped_governance_by_action(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, action_id: EventId
+    ) -> EpisodicMemoryGovernanceAction | None:
+        cursor.execute(
+            "SELECT " + _GOVERNANCE_COLUMNS + " FROM "
+            "mnemo_team.episodic_memory_governance WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND action_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(action_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._governance_from_row(row, scope)
 
     def _required_active(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, memory_id: MemoryId
@@ -480,6 +670,25 @@ class PostgreSQLEpisodicMemoryRepository:
             str(row[6]),
             cast(datetime, row[7]),
             PostgreSQLEpisodicMemoryRepository._evidence_from_json(row[8]),
+        )
+
+    @staticmethod
+    def _governance_from_row(
+        row: Sequence[object], scope: MemoryScope
+    ) -> EpisodicMemoryGovernanceAction:
+        return EpisodicMemoryGovernanceAction(
+            EventId.from_string(str(row[1])),
+            scope,
+            MemoryId.from_string(str(row[2])),
+            EpisodicMemoryGovernanceKind(str(row[3])),
+            TaskActivityActor(str(row[4])),
+            EventId.from_string(str(row[5])),
+            str(row[6]),
+            str(row[7]),
+            None if row[8] is None else str(row[8]),
+            None if row[9] is None else Sensitivity(str(row[9])),
+            cast(datetime, row[10]),
+            PostgreSQLEpisodicMemoryRepository._evidence_from_json(row[11]),
         )
 
     @classmethod
@@ -616,6 +825,37 @@ class PostgreSQLEpisodicMemoryRepository:
                 ) from error
             raise EpisodicMemoryReviewStorageFailure(
                 "episodic review database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _governance_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicMemoryGovernanceStorageFailure(
+                "episodic governance database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            self._configure(cursor, operation)
+            yield cursor
+            connection.commit()
+        except EpisodicMemoryGovernanceRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise EpisodicMemoryGovernanceConflict(
+                    "episodic governance database rejected conflicting state"
+                ) from error
+            raise EpisodicMemoryGovernanceStorageFailure(
+                "episodic governance database operation failed"
             ) from error
         finally:
             cursor.close()
