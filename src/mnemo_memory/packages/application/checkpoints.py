@@ -55,6 +55,7 @@ from mnemo_memory.packages.storage.contracts import (
     ApprovedEpisodicEventSecretRejected,
     CheckpointLifecycleEventRepository,
     CheckpointNotFound,
+    CheckpointQuotaExceeded,
     CheckpointRepository,
     DuplicateCheckpoint,
     EpisodicEventRepositoryError,
@@ -104,6 +105,10 @@ class CheckpointApplicationInvalidContent(CheckpointApplicationError):
 
 
 class CheckpointApplicationBudgetExceeded(CheckpointApplicationError):
+    pass
+
+
+class CheckpointApplicationQuotaExceeded(CheckpointApplicationError):
     pass
 
 
@@ -1245,6 +1250,8 @@ class CheckpointApplicationService:
             return CheckpointApplicationInvalidScope("checkpoint scope is invalid")
         if isinstance(error, InvalidAbandonmentReason):
             return CheckpointApplicationInvalidContent("abandonment reason is invalid")
+        if isinstance(error, CheckpointQuotaExceeded):
+            return CheckpointApplicationQuotaExceeded("checkpoint workspace quota was exceeded")
         if isinstance(error, RepositoryStorageFailure):
             return CheckpointApplicationStorageFailure("checkpoint storage is unavailable")
         return CheckpointApplicationStorageFailure("checkpoint storage operation failed")

@@ -184,6 +184,29 @@ Mnemo process behind the TLS proxy. A multi-process or horizontally scaled servi
 shared-counter design and failure analysis. Infrastructure connection and byte-rate limits remain
 the proxy's responsibility.
 
+### Authorized workspace exhausts canonical checkpoint storage
+
+**Scenario:** A valid workspace principal creates many checkpoint aggregates or revisions, submits
+large allowed payloads, races concurrent writes past an application-only counter, or exploits a
+partially committed denial to consume storage without a complete checkpoint lifecycle.
+
+**Required controls:** Every workspace has an explicit administrator-owned aggregate, revision, and
+canonical-payload-byte limit. PostgreSQL checks the exact transaction workspace, locks that quota
+row, counts only the same workspace, and admits or rejects in the canonical mutation transaction.
+An absent quota fails closed. The runtime role and `PUBLIC` cannot read or modify quota rows;
+fixed-search-path security-definer guards return one private SQLSTATE that becomes a content-free
+service error. Existing rows are never deleted automatically when an administrator lowers a limit.
+
+**Verification:** The mandatory real-PostgreSQL suite proves unprovisioned denial, zero partial
+checkpoint/lifecycle/outbox rows, runtime privilege denial, one winner under two simultaneous
+aggregate admissions, revision and payload limits, recovery after administrator adjustment, and
+idempotent replay without additional quota consumption.
+
+**Residual risk:** Revision admission currently aggregates retained workspace revision payload
+sizes and adds lock contention for writes within one workspace. The later production load gate must
+measure this cost. Database-wide storage alarms, model budgets, and quotas for future ingestion
+surfaces remain separate controls.
+
 ### Team authority races and audit gaps
 
 **Scenario:** Two administrators overwrite the same membership, a delayed request restores a

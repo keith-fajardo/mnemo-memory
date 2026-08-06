@@ -1,8 +1,8 @@
 # Team MCP deployment boundary
 
 The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: backup deletion propagation, quotas,
-operational dashboards, load objectives, and the independent security review remain release gates.
+is not yet a general-availability team release: per-tenant model budgets, operational dashboards,
+load objectives, and the independent security review remain release gates.
 
 ## Install and prerequisites
 
@@ -67,6 +67,60 @@ the configured identity cap. Denial returns `MNEMO_RATE_LIMITED` without touchin
 This limiter is intentionally process-local: use exactly one Mnemo service process for this
 guarantee. A later declared multi-process profile requires a shared Mnemo-owned counter; do not
 assume a reverse proxy makes these application buckets global.
+
+## Provision checkpoint storage quotas
+
+Migration 0022 intentionally leaves every workspace fail-closed for new checkpoint writes. Before
+enabling agents, connect as the trusted schema owner or migration administrator and provision
+positive limits for the exact workspace. Do not grant the runtime role access to the quota table.
+
+```sql
+INSERT INTO mnemo_team.workspace_checkpoint_quotas (
+    workspace_id,
+    max_aggregate_count,
+    max_revision_count,
+    max_payload_bytes,
+    updated_at
+) VALUES (
+    '00000000-0000-0000-0000-000000000000'::uuid,
+    1000,
+    10000,
+    268435456,
+    CURRENT_TIMESTAMP
+)
+ON CONFLICT (workspace_id) DO UPDATE SET
+    max_aggregate_count = EXCLUDED.max_aggregate_count,
+    max_revision_count = EXCLUDED.max_revision_count,
+    max_payload_bytes = EXCLUDED.max_payload_bytes,
+    updated_at = CURRENT_TIMESTAMP;
+```
+
+Replace the example UUID and choose limits from measured workspace demand and database capacity;
+the values above are examples, not defaults. `max_payload_bytes` measures retained canonical JSONB
+text for revision content plus evidence. Lowering a limit below current usage never deletes data;
+it blocks further affected writes. Verify the configured limit and current usage as the same trusted
+administrator before start:
+
+```sql
+SELECT quota.workspace_id,
+       quota.max_aggregate_count,
+       quota.max_revision_count,
+       quota.max_payload_bytes,
+       (SELECT count(*) FROM mnemo_team.checkpoint_aggregates AS aggregate
+         WHERE aggregate.workspace_id = quota.workspace_id) AS aggregate_count,
+       (SELECT count(*) FROM mnemo_team.checkpoint_revisions AS revision
+         WHERE revision.workspace_id = quota.workspace_id) AS revision_count,
+       (SELECT coalesce(sum(octet_length(revision.content_json::text)
+                         + octet_length(revision.evidence_json::text)), 0)
+          FROM mnemo_team.checkpoint_revisions AS revision
+         WHERE revision.workspace_id = quota.workspace_id) AS payload_bytes
+  FROM mnemo_team.workspace_checkpoint_quotas AS quota
+ WHERE quota.workspace_id = '00000000-0000-0000-0000-000000000000'::uuid;
+```
+
+An absent or exceeded quota returns `MNEMO_QUOTA_EXCEEDED` without partial checkpoint, evidence,
+lifecycle, or outbox state. Reads remain available so an operator can diagnose and recover by
+raising the exact workspace limit or applying an authorized data lifecycle action.
 
 ## HTTPS reverse proxy
 

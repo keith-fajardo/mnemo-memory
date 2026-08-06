@@ -2699,6 +2699,64 @@ dependency/provenance validation for 94 entries, architecture validation for 141
 files, schema validation, and installed-package workflow verification. No dependency, distributed
 counter, storage quota, model budget, dashboard, or alert was added.
 
+#### Issue 21AG — Durable team checkpoint quotas — Complete
+
+The current bounded issue adds a PostgreSQL-enforced workspace quota for the only agent-facing
+content mutation, `save_checkpoint`. Each workspace must have an explicit administrator-provisioned
+maximum checkpoint aggregate count, revision count, and retained canonical payload bytes. The
+database must serialize competing admissions, count only that exact workspace before inserting a
+new aggregate or revision, preserve idempotent retries that add no row, and fail before checkpoint,
+evidence, lifecycle, or outbox partial state commits.
+
+The authenticated service must translate quota denial to one payload-free stable code without
+weakening forced RLS. Existing workspaces without a quota fail closed for remote checkpoint writes;
+reads remain available. This issue adds no quota for an unexposed content-ingestion surface,
+billing, model budget, dashboard, alert, dependency, or general quota framework.
+
+Implemented PostgreSQL schema version 22 with administrator-owned per-workspace aggregate-count,
+retained-revision-count, and canonical-payload-byte limits. Fixed-search-path security-definer
+triggers verify the transaction workspace, serialize admissions on the exact quota row, and reject
+an absent or exceeded quota before mutation with private SQLSTATE `MZQ01`. The runtime role and
+`PUBLIC` have no quota-table access. Storage and application boundaries translate denial into the
+payload-free `MNEMO_QUOTA_EXCEEDED` service code, while reads remain available.
+
+The migration runner exposes strict positive-bigint administrative provisioning, and the team
+deployment runbook documents schema-administrator setup, usage inspection, limit reduction, and
+recovery. ADR 0041 and the product and threat contracts define the atomicity, concurrency, byte
+accounting, privilege, and residual load-risk boundaries. The mandatory real-PostgreSQL test covers
+unprovisioned fail-closed behavior with zero partial aggregate/revision/lifecycle/outbox state,
+runtime privilege denial, two simultaneous aggregate admissions with one winner, aggregate,
+revision, and byte limits, recovery after quota adjustment, and idempotent terminal replay.
+
+#### Issue 21AH — Fresh registered-project structure on MCP startup — Complete
+
+The current bounded issue fixes a demonstrated automatic-memory workflow failure: a freshly
+started MCP process can resolve the registered project scope but may serve an old active source
+snapshot when the client lifecycle hook did not run. The MCP composition root must perform one
+fail-open syntax-only refresh for its exact registered project before serving requests, without
+making MCP availability depend on parsing success. A fresh process must then retrieve a file and
+symbol added after the previously active snapshot without UUID arguments.
+
+This issue changes no source parser, ranking rule, stored source contract, dependency, background
+watcher, team quota, or general indexing schedule. Issue 21AG remained paused until this
+prerequisite passed the full repository gate.
+
+Implemented one fail-open registered-project source refresh in the local MCP composition root by
+reusing the existing bounded offline parser and scoped projection repository. Checkpoint
+co-observation now reuses the same refresh boundary. Parser, filesystem, or projection failure
+returns no snapshot and never prevents MCP startup.
+
+A real stdio regression starts from a deliberately stale snapshot, adds a new source class, launches
+a fresh MCP process, and retrieves its exact current path and symbol without UUID arguments. Focused
+failure-isolation coverage rejects an oversized file without a snapshot or raised startup error. The
+complete repository gate passes with 919 default tests plus 24 mandatory real-PostgreSQL tests,
+strict typing for 255 source files, dependency/provenance validation for 94 entries, architecture
+validation for 141 product Python files, schema validation, and installed-package workflow
+verification. The verified checkout was reinstalled and reconnected; explicit refresh produced
+snapshot `23efbcbf-110f-5568-83c4-1fffe0528eba` with 326 files, 4,787 symbols, and 28,793 edges, and
+Mnemo then retrieved the previously missing `PostgreSQLCheckpointRepository` with exact path, line,
+methods, and source provenance.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

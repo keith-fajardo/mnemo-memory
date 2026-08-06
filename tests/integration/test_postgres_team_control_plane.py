@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from importlib import resources
@@ -138,6 +139,7 @@ from mnemo_memory.packages.storage import (
     POSTGRES_TEAM_SCHEMA_VERSION,
     CheckpointDeletionNotFound,
     CheckpointNotFound,
+    CheckpointQuotaExceeded,
     EventOutboxLeaseConflict,
     EventOutboxNotFound,
     InvalidCheckpointScope,
@@ -339,6 +341,12 @@ def _create_workspace(
     first = repository.create_workspace(workspace, owner, event)
     assert not first.idempotent
     assert repository.create_workspace(workspace, owner, event).idempotent
+    PostgreSQLTeamMigrationRunner(harness.admin_factory()).provision_workspace_checkpoint_quota(
+        workspace_id,
+        max_aggregate_count=10_000,
+        max_revision_count=100_000,
+        max_payload_bytes=1_000_000_000,
+    )
     return repository, workspace, owner
 
 
@@ -550,6 +558,23 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert (
         "REVOKE ALL ON ALL FUNCTIONS IN SCHEMA mnemo_team FROM PUBLIC"
         in checkpoint_deletion_import_sql
+    )
+    checkpoint_quota_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0022_team_checkpoint_quotas.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert checkpoint_quota_sql.count("FOR UPDATE") == 2
+    assert checkpoint_quota_sql.count("ERRCODE = 'MZQ01'") == 4
+    assert "NEW.workspace_id IS DISTINCT FROM mnemo_team.current_workspace()" in (
+        checkpoint_quota_sql
+    )
+    assert "REVOKE ALL ON mnemo_team.workspace_checkpoint_quotas FROM PUBLIC" in (
+        checkpoint_quota_sql
     )
 
     suffix = uuid4().hex[:12]
@@ -1116,12 +1141,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=22).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.workspace_checkpoint_quotas')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 22))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 23))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1865,6 +1903,199 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
         repository.get_aggregate(scope, active_aggregate.checkpoint_id)
     with pytest.raises(RevisionConflict):
         repository.create_checkpoint_aggregate(active_aggregate, active_revision)
+
+
+def test_team_checkpoint_quota_is_fail_closed_atomic_and_race_safe(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    first_scope = _checkpoint_scope(workspace, project)
+    quota_admin = PostgreSQLTeamMigrationRunner(postgres_harness.admin_factory())
+    _execute_admin(
+        postgres_harness.host,
+        postgres_harness.port,
+        postgres_harness.admin_user,
+        "DELETE FROM mnemo_team.workspace_checkpoint_quotas WHERE workspace_id = "
+        f"'{workspace.workspace_id}'::uuid",
+        database=postgres_harness.database,
+    )
+
+    token = AccessToken(
+        token="verified-quota-test",
+        client_id="codex-team-client",
+        scopes=["mnemo:context"],
+        subject=str(workspace.owner_id),
+    )
+    port = AuthenticatedTeamMcpPort(
+        PostgreSQLTeamMcpPortFactory(postgres_harness.runtime_factory(), clock=lambda: NOW),
+        access_token_loader=lambda: token,
+    )
+    request: dict[str, object] = {
+        "operation": "create",
+        "owner_id": str(first_scope.owner_id),
+        "workspace_id": str(first_scope.workspace_id),
+        "project_id": str(first_scope.project_id),
+        "session_id": str(first_scope.session_id),
+        "task_id": str(first_scope.task_id),
+        "visibility": first_scope.visibility.value,
+        "task_objective": "verify the workspace checkpoint quota",
+        "current_state": "active",
+        "completed_work": [],
+        "remaining_work": ["provision quota"],
+        "decisions": [],
+        "failures": [],
+        "blockers": [],
+        "relevant_files": [],
+        "relevant_artifacts": [],
+        "verification_performed": [],
+        "token_estimate": 12,
+        "evidence_references": [_checkpoint_evidence("a").to_dict()],
+    }
+    with pytest.raises(ValueError, match=r"^MNEMO_QUOTA_EXCEEDED:"):
+        port.save_checkpoint(request)
+
+    admin_connection = postgres_harness.admin_factory()()
+    admin_cursor = admin_connection.cursor()
+    try:
+        admin_cursor.execute(
+            "SELECT (SELECT count(*) FROM mnemo_team.checkpoint_aggregates WHERE "
+            "workspace_id = CAST(%s AS uuid)), "
+            "(SELECT count(*) FROM mnemo_team.checkpoint_revisions WHERE "
+            "workspace_id = CAST(%s AS uuid)), "
+            "(SELECT count(*) FROM mnemo_team.checkpoint_lifecycle_events WHERE "
+            "workspace_id = CAST(%s AS uuid)), "
+            "(SELECT count(*) FROM mnemo_team.event_outbox WHERE "
+            "workspace_id = CAST(%s AS uuid))",
+            (str(workspace.workspace_id),) * 4,
+        )
+        assert tuple(admin_cursor.fetchone() or ()) == (0, 0, 0, 0)
+    finally:
+        admin_connection.rollback()
+        admin_cursor.close()
+        admin_connection.close()
+
+    quota_admin.provision_workspace_checkpoint_quota(
+        workspace.workspace_id,
+        max_aggregate_count=1,
+        max_revision_count=1,
+        max_payload_bytes=1_000_000,
+    )
+    runtime_connection = postgres_harness.runtime_factory()()
+    runtime_cursor = runtime_connection.cursor()
+    try:
+        runtime_cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.workspace_checkpoint_quotas', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.workspace_checkpoint_quotas', 'INSERT,UPDATE')"
+        )
+        assert tuple(runtime_cursor.fetchone() or ()) == (False, False)
+    finally:
+        runtime_connection.rollback()
+        runtime_cursor.close()
+        runtime_connection.close()
+
+    pairs = (
+        _checkpoint_pair(first_scope, "b"),
+        _checkpoint_pair(replace(first_scope, task_id=TaskId.new()), "c"),
+    )
+
+    def create_under_quota(
+        pair: tuple[CheckpointAggregate, CheckpointRevision],
+    ) -> tuple[CheckpointAggregate, CheckpointRevision] | None:
+        repository = PostgreSQLCheckpointRepository(
+            postgres_harness.runtime_factory(),
+            principal_id=workspace.owner_id,
+            workspace_id=workspace.workspace_id,
+        )
+        try:
+            repository.create_checkpoint_aggregate(*pair)
+            return pair
+        except CheckpointQuotaExceeded:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(create_under_quota, pairs))
+    winners = tuple(item for item in results if item is not None)
+    assert len(winners) == 1
+    aggregate, first_revision = winners[0]
+    repository = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+
+    with pytest.raises(CheckpointQuotaExceeded):
+        repository.append_revision(
+            aggregate.scope,
+            aggregate.checkpoint_id,
+            first_revision.revision_id,
+            _checkpoint_content("d"),
+            (_checkpoint_evidence("d"),),
+            NOW + timedelta(seconds=1),
+        )
+    assert len(repository.list_events(aggregate.scope).items) == 1
+
+    quota_admin.provision_workspace_checkpoint_quota(
+        workspace.workspace_id,
+        max_aggregate_count=1,
+        max_revision_count=10,
+        max_payload_bytes=1,
+    )
+    with pytest.raises(CheckpointQuotaExceeded):
+        repository.append_revision(
+            aggregate.scope,
+            aggregate.checkpoint_id,
+            first_revision.revision_id,
+            _checkpoint_content("e"),
+            (_checkpoint_evidence("e"),),
+            NOW + timedelta(seconds=2),
+        )
+    assert len(repository.list_events(aggregate.scope).items) == 1
+
+    quota_admin.provision_workspace_checkpoint_quota(
+        workspace.workspace_id,
+        max_aggregate_count=1,
+        max_revision_count=2,
+        max_payload_bytes=1_000_000,
+    )
+    completed_content = _checkpoint_content("f", complete=True)
+    completed_evidence = (_checkpoint_evidence("f"),)
+    completed = repository.complete_checkpoint(
+        aggregate.scope,
+        aggregate.checkpoint_id,
+        first_revision.revision_id,
+        completed_content,
+        completed_evidence,
+        NOW + timedelta(seconds=3),
+    )
+    assert (
+        repository.complete_checkpoint(
+            aggregate.scope,
+            aggregate.checkpoint_id,
+            first_revision.revision_id,
+            completed_content,
+            completed_evidence,
+            NOW + timedelta(minutes=1),
+        )
+        == completed
+    )
+    assert len(repository.list_events(aggregate.scope).items) == 2
 
 
 def test_authenticated_team_mcp_binds_subject_before_forced_rls(

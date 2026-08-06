@@ -45,6 +45,7 @@ from .contracts import (
     CheckpointImportStorageFailure,
     CheckpointNotFound,
     CheckpointPage,
+    CheckpointQuotaExceeded,
     CheckpointRepositoryError,
     CheckpointSourceObservationConflict,
     CheckpointSourceObservationNotFound,
@@ -1001,6 +1002,10 @@ class PostgreSQLCheckpointRepository:
             if event_storage:
                 raise EpisodicEventStorageFailure(
                     "episodic event database operation failed"
+                ) from error
+            if state == "MZQ01":
+                raise CheckpointQuotaExceeded(
+                    "checkpoint workspace quota denied the write"
                 ) from error
             if state == "42501" or (state is not None and state.startswith("23")):
                 raise RevisionConflict("checkpoint database rejected conflicting state") from error

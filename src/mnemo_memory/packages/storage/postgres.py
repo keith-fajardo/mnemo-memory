@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 21
+POSTGRES_TEAM_SCHEMA_VERSION = 22
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -63,6 +63,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (19, "0019_team_checkpoint_deletions.sql"),
     (20, "0020_team_checkpoint_deletion_import.sql"),
     (21, "0021_team_knowledge_governance.sql"),
+    (22, "0022_team_checkpoint_quotas.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -288,6 +289,54 @@ class PostgreSQLTeamMigrationRunner:
             connection.rollback()
             raise PostgreSQLTeamMigrationError(
                 "PostgreSQL runtime role provisioning failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    def provision_workspace_checkpoint_quota(
+        self,
+        workspace_id: WorkspaceId,
+        *,
+        max_aggregate_count: int,
+        max_revision_count: int,
+        max_payload_bytes: int,
+    ) -> None:
+        """Set one explicit workspace quota through the trusted schema-admin connection."""
+        if not isinstance(workspace_id, WorkspaceId):
+            raise TypeError("workspace_id must be a WorkspaceId")
+        limits = (max_aggregate_count, max_revision_count, max_payload_bytes)
+        if any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= 9_223_372_036_854_775_807
+            for value in limits
+        ):
+            raise ValueError("checkpoint quota limits must be positive bigint values")
+        connection = self._connect()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO mnemo_team.workspace_checkpoint_quotas("
+                "workspace_id, max_aggregate_count, max_revision_count, "
+                "max_payload_bytes, updated_at) VALUES (CAST(%s AS uuid), %s, %s, %s, "
+                "CURRENT_TIMESTAMP) ON CONFLICT (workspace_id) DO UPDATE SET "
+                "max_aggregate_count = EXCLUDED.max_aggregate_count, "
+                "max_revision_count = EXCLUDED.max_revision_count, "
+                "max_payload_bytes = EXCLUDED.max_payload_bytes, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    str(workspace_id),
+                    max_aggregate_count,
+                    max_revision_count,
+                    max_payload_bytes,
+                ),
+            )
+            connection.commit()
+        except Exception as error:
+            connection.rollback()
+            raise PostgreSQLTeamMigrationError(
+                "PostgreSQL workspace checkpoint quota provisioning failed"
             ) from error
         finally:
             cursor.close()

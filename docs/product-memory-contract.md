@@ -286,6 +286,15 @@ composition. Invalid authentication does not consume a bucket. Denied calls expo
 bounded and reclaims expired identities. This guarantee covers a single service process; a future
 multi-process deployment requires an explicitly reviewed shared counter.
 
+Every team workspace must also have an explicit schema-administrator checkpoint quota before its
+agents can create or revise checkpoints. PostgreSQL serializes aggregate and revision admission on
+that exact workspace's quota row and enforces positive maxima for aggregate count, retained revision
+count, and UTF-8 bytes in canonical revision content and evidence JSONB text. An unprovisioned or
+over-limit write rolls back atomically and returns only `MNEMO_QUOTA_EXCEEDED`; scoped reads remain
+available. The runtime role cannot inspect or change quota records. Lowering a limit below existing
+usage preserves canonical data and denies further affected writes until an administrator changes
+the limit or usage is removed through an authorized lifecycle operation.
+
 ## Evidence requirements
 
 Every durable memory includes:

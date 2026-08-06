@@ -96,6 +96,10 @@ class RevisionConflict(CheckpointRepositoryError):
     pass
 
 
+class CheckpointQuotaExceeded(CheckpointRepositoryError):
+    pass
+
+
 class InvalidLifecycleTransition(CheckpointRepositoryError):
     pass
 
