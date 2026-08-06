@@ -135,6 +135,12 @@ from .postgres_checkpoints import PostgreSQLCheckpointRepository
 from .postgres_dbt import PostgreSQLProjectIndexRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
+from .postgres_operations import (
+    PostgreSQLTeamOperationsRepository,
+    TeamOperationsSnapshot,
+    TeamOperationsStorageFailure,
+    TeamOperationsThresholds,
+)
 from .postgres_source_structure import PostgreSQLSourceStructureRepository
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
@@ -275,6 +281,7 @@ __all__ = [
     "PostgreSQLTeamControlPlaneRepository",
     "PostgreSQLTeamMigrationError",
     "PostgreSQLTeamMigrationRunner",
+    "PostgreSQLTeamOperationsRepository",
     "PostgreSQLTeamSchemaTooNewError",
     "ProjectIndexRepository",
     "ProjectProcedureRegistry",
@@ -323,4 +330,7 @@ __all__ = [
     "TeamKnowledgeGovernanceRepository",
     "TeamKnowledgeSourceApprovalResult",
     "TeamMutationResult",
+    "TeamOperationsSnapshot",
+    "TeamOperationsStorageFailure",
+    "TeamOperationsThresholds",
 ]

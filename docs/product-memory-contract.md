@@ -295,6 +295,15 @@ available. The runtime role cannot inspect or change quota records. Lowering a l
 usage preserves canonical data and denies further affected writes until an administrator changes
 the limit or usage is removed through an authorized lifecycle operation.
 
+Team operations inspection uses the dedicated backup/operations credential, never the MCP runtime
+credential. The installed administrator command returns one whole-team point-in-time snapshot with
+only schema version, aggregate workspace/project/active-membership counts, aggregate checkpoint
+quota coverage and utilization, and durable outbox backlog/lease/failure counters. It returns no
+tenant identity, memory or job payload, source path, credential, or exception. Strict operator
+thresholds produce closed `MNEMO_TEAM_*` alert codes; the machine check exits 0 for healthy, 1 for
+active alerts, and 2 for an unavailable or invalid check. Alert notification and historical metric
+storage remain external operator responsibilities.
+
 ## Evidence requirements
 
 Every durable memory includes:

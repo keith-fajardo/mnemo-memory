@@ -163,6 +163,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLTeamControlPlaneRepository,
     PostgreSQLTeamMigrationError,
     PostgreSQLTeamMigrationRunner,
+    PostgreSQLTeamOperationsRepository,
     RevisionConflict,
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
@@ -172,6 +173,8 @@ from mnemo_memory.packages.storage import (
     TaskActivityRetentionConflict,
     TaskActivityRetentionNotFound,
     TeamControlPlaneNotFound,
+    TeamOperationsStorageFailure,
+    TeamOperationsThresholds,
 )
 from mnemo_memory.packages.storage.contracts import (
     ActiveEpisodicMemoryNotFound,
@@ -2096,6 +2099,69 @@ def test_team_checkpoint_quota_is_fail_closed_atomic_and_race_safe(
         == completed
     )
     assert len(repository.list_events(aggregate.scope).items) == 2
+
+
+def test_team_operations_snapshot_reports_only_aggregate_alert_state(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    checkpoint_repository = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    checkpoint_repository.create_checkpoint_aggregate(*_checkpoint_pair(scope, "9"))
+    PostgreSQLTeamMigrationRunner(
+        postgres_harness.admin_factory()
+    ).provision_workspace_checkpoint_quota(
+        workspace.workspace_id,
+        max_aggregate_count=1,
+        max_revision_count=1,
+        max_payload_bytes=1_000_000,
+    )
+
+    snapshot = PostgreSQLTeamOperationsRepository(postgres_harness.admin_factory()).snapshot(
+        TeamOperationsThresholds(
+            quota_warning_percent=90,
+            pending_jobs=0,
+            pending_job_age_seconds=1_000_000_000,
+            failed_jobs=0,
+        )
+    )
+
+    assert snapshot.schema_version == POSTGRES_TEAM_SCHEMA_VERSION
+    assert snapshot.workspace_count >= 1
+    assert snapshot.project_count >= 1
+    assert snapshot.checkpoint_aggregate_count >= 1
+    assert snapshot.checkpoint_revision_count >= 1
+    assert snapshot.quota_configured_workspace_count >= 1
+    assert snapshot.maximum_quota_utilization_percent >= 100
+    assert "MNEMO_TEAM_CHECKPOINT_QUOTA_HIGH" in snapshot.alerts
+    assert "MNEMO_TEAM_OUTBOX_BACKLOG_HIGH" in snapshot.alerts
+    rendered = json.dumps(snapshot.to_dict(), sort_keys=True)
+    assert str(workspace.workspace_id) not in rendered
+    assert str(project.project_id) not in rendered
+    assert "content_json" not in rendered
+    with pytest.raises(TeamOperationsStorageFailure):
+        PostgreSQLTeamOperationsRepository(postgres_harness.runtime_factory()).snapshot(
+            TeamOperationsThresholds()
+        )
 
 
 def test_authenticated_team_mcp_binds_subject_before_forced_rls(

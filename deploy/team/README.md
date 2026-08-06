@@ -1,8 +1,8 @@
 # Team MCP deployment boundary
 
 The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: per-tenant model budgets, operational dashboards,
-load objectives, and the independent security review remain release gates.
+is not yet a general-availability team release: per-tenant model budgets, declared load objectives,
+and the independent security review remain release gates.
 
 ## Install and prerequisites
 
@@ -121,6 +121,42 @@ SELECT quota.workspace_id,
 An absent or exceeded quota returns `MNEMO_QUOTA_EXCEEDED` without partial checkpoint, evidence,
 lifecycle, or outbox state. Reads remain available so an operator can diagnose and recover by
 raising the exact workspace limit or applying an authorized data lifecycle action.
+
+## Operations status and alert checks
+
+Use the same tightly controlled backup/operations environment to render the content-free aggregate
+dashboard:
+
+```bash
+mnemo-memory-team-admin status \
+  --quota-warning-percent 90 \
+  --pending-jobs 1000 \
+  --pending-job-age-seconds 300 \
+  --failed-jobs 0
+```
+
+The canonical JSON contains schema support, whole-team workspace/project/active-membership totals,
+checkpoint and quota totals, maximum quota utilization, and durable outbox backlog, active/expired
+lease, failure, and oldest-pending-age counters. It contains no tenant identity, path, job body,
+memory payload, credential, or exception. `status` exits 0 after any valid snapshot and includes all
+active stable `MNEMO_TEAM_*` alert codes.
+
+For a scheduler, service supervisor, or monitoring agent, run the same thresholds with `check`:
+
+```bash
+mnemo-memory-team-admin check \
+  --quota-warning-percent 90 \
+  --pending-jobs 1000 \
+  --pending-job-age-seconds 300 \
+  --failed-jobs 0
+```
+
+Exit 0 means no threshold is active, exit 1 means the emitted JSON contains an alert, and exit 2
+means configuration, secret loading, or PostgreSQL was unavailable. Capture the JSON as sensitive
+operations metadata even though it is content-free. Schedule the check at an interval shorter than
+the oldest-job threshold and route only its exit status and closed alert codes to the operator's
+notification system. Do not expose either command through the HTTPS proxy, and do not replace the
+backup/operations credential with the forced-RLS MCP runtime credential.
 
 ## HTTPS reverse proxy
 

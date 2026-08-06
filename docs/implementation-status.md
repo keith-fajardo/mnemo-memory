@@ -2757,6 +2757,39 @@ snapshot `23efbcbf-110f-5568-83c4-1fffe0528eba` with 326 files, 4,787 symbols, a
 Mnemo then retrieved the previously missing `PostgreSQLCheckpointRepository` with exact path, line,
 methods, and source provenance.
 
+#### Issue 21AI — Content-free team operations dashboard and alerts — Complete
+
+The current bounded issue adds one operator-invoked, whole-team operational snapshot through the
+installed administration entry point. It must report only aggregate service state needed to operate
+the existing team runtime: schema version, workspace/project/membership counts, checkpoint quota
+coverage and utilization, and durable outbox backlog/lease age. Strict operator thresholds must
+produce stable content-free alert codes and a nonzero check result suitable for a supervisor.
+
+The snapshot must use the existing dedicated backup/operations credential, never the forced-RLS MCP
+runtime credential, and must not return tenant identities, memory payloads, paths, job bodies,
+credentials, exception details, or request data. This issue adds no public route, metrics server,
+background scheduler, notification transport, model budget, distributed counter, dependency, or
+general analytics framework.
+
+Implemented `mnemo-memory-team-admin status` and `check` over one read-only whole-team PostgreSQL
+snapshot using the existing dedicated backup/operations credential. Output is bounded canonical
+JSON containing only schema support, aggregate workspace/project/active-membership totals,
+checkpoint quota coverage and maximum utilization, and durable outbox backlog, lease, failure, and
+oldest-age counters. No tenant identity, path, job body, canonical payload, credential, request, or
+database exception is returned.
+
+Strict invocation thresholds generate an ordered closed alert set for schema mismatch, missing,
+high, or exceeded quota, high backlog or age, expired leases, and excessive failures. `status`
+returns every valid snapshot; `check` exits 0 when healthy, 1 for active alerts, and 2 for invalid or
+unavailable checks. ADR 0042, the product contract, deployment runbook, and threat model define the
+credential, scheduling, notification, privacy, and residual-risk boundaries. Focused unit/security
+tests cover validation, serialization, alert ordering, CLI exit behavior, TLS/secret reuse, and
+content-free failure. The mandatory real-PostgreSQL suite passes 25 tests, including actual quota
+and outbox alerts, identity-free output, and denial through the MCP runtime credential. The complete
+repository gate passes with 927 default tests plus those 25 mandatory real-PostgreSQL tests, strict
+typing for 257 source files, dependency/provenance validation for 94 entries, architecture
+validation for 142 product Python files, schema validation, and installed-package verification.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

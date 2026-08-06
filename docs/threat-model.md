@@ -207,6 +207,29 @@ sizes and adds lock contention for writes within one workspace. The later produc
 measure this cost. Database-wide storage alarms, model budgets, and quotas for future ingestion
 surfaces remain separate controls.
 
+### Operations dashboard leaks tenant or payload data
+
+**Scenario:** A health check returns workspace identities, paths, job bodies, memory content,
+credentials, database errors, or per-tenant values that allow an observer to infer private
+activity. The public MCP proxy could accidentally expose an unauthenticated operations endpoint, or
+the ordinary runtime role could bypass forced RLS through a whole-team query.
+
+**Required controls:** Operations remain an explicit local administrator command with no HTTP
+route. It uses the separately controlled backup/operations credential and one fixed read-only query.
+Only whole-team non-negative counters, schema versions, UTC observation time, and closed alert codes
+leave PostgreSQL. Payloads are measured only by byte length inside PostgreSQL. Storage failure is
+content-free, and the MCP runtime credential must fail the snapshot.
+
+**Verification:** Unit tests assert the exact bounded JSON field set, deterministic threshold alert
+ordering, exit 0/1/2 behavior, rollback, and payload-free failure. The mandatory real-PostgreSQL
+test creates checkpoint, quota, and outbox state, asserts aggregate alerts without workspace or
+project identifiers, and proves the runtime connection cannot execute the administrator query.
+
+**Residual risk:** The backup/operations credential has intentional whole-team read authority and
+can expose payload if compromised or used outside Mnemo; its owner-only secret, TLS, host access,
+and rotation controls remain critical. The snapshot has no durable history or notification
+transport, so the operator must schedule `check` and route its exit status.
+
 ### Team authority races and audit gaps
 
 **Scenario:** Two administrators overwrite the same membership, a delayed request restores a

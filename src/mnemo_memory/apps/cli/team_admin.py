@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import ssl
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -22,7 +22,12 @@ from mnemo_memory.connectors.postgresql.backup import (
     PostgreSQLNativeBackupAdapter,
 )
 from mnemo_memory.packages.application import TeamBackupError, TeamBackupService
-from mnemo_memory.packages.storage import PostgreSQLConnection
+from mnemo_memory.packages.storage import (
+    PostgreSQLConnection,
+    PostgreSQLTeamOperationsRepository,
+    TeamOperationsStorageFailure,
+    TeamOperationsThresholds,
+)
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
@@ -67,6 +72,31 @@ class TeamBackupRuntimeConfig:
 
 
 def build_team_backup_service(config: TeamBackupRuntimeConfig) -> TeamBackupService:
+    password, root_value, connect = _team_admin_connection(config)
+    adapter = PostgreSQLNativeBackupAdapter(
+        PostgreSQLBackupToolConfig(
+            config.database_host,
+            config.database_port,
+            config.source_database,
+            config.backup_user,
+            password,
+            root_value,
+        ),
+        connect,
+    )
+    return TeamBackupService(adapter)
+
+
+def build_team_operations_repository(
+    config: TeamBackupRuntimeConfig,
+) -> PostgreSQLTeamOperationsRepository:
+    _password, _root_value, connect = _team_admin_connection(config)
+    return PostgreSQLTeamOperationsRepository(lambda: connect(config.source_database))
+
+
+def _team_admin_connection(
+    config: TeamBackupRuntimeConfig,
+) -> tuple[str, str, Callable[[str], PostgreSQLConnection]]:
     try:
         password = read_bounded_owned_file(
             config.backup_password_file, maximum_bytes=4_096, owner_only=True
@@ -106,18 +136,7 @@ def build_team_backup_service(config: TeamBackupRuntimeConfig) -> TeamBackupServ
         except Exception as error:
             raise TeamAdminConfigurationError("MNEMO_TEAM_POSTGRES_UNAVAILABLE") from error
 
-    adapter = PostgreSQLNativeBackupAdapter(
-        PostgreSQLBackupToolConfig(
-            config.database_host,
-            config.database_port,
-            config.source_database,
-            config.backup_user,
-            password,
-            root_value,
-        ),
-        connect,
-    )
-    return TeamBackupService(adapter)
+    return password, root_value, connect
 
 
 def main(arguments: Sequence[str] | None = None) -> None:
@@ -130,10 +149,30 @@ def main(arguments: Sequence[str] | None = None) -> None:
     restore.add_argument("--target-database", required=True)
     prune = subcommands.add_parser("prune-deleted")
     prune.add_argument("--backup-dir", type=Path, required=True)
+    status = subcommands.add_parser("status")
+    _add_operations_thresholds(status)
+    check = subcommands.add_parser("check")
+    _add_operations_thresholds(check)
     parsed = parser.parse_args(arguments)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
-        service = build_team_backup_service(TeamBackupRuntimeConfig.from_environment(os.environ))
+        config = TeamBackupRuntimeConfig.from_environment(os.environ)
+        if parsed.command in {"status", "check"}:
+            try:
+                thresholds = TeamOperationsThresholds(
+                    parsed.quota_warning_percent,
+                    parsed.pending_jobs,
+                    parsed.pending_job_age_seconds,
+                    parsed.failed_jobs,
+                )
+            except ValueError as error:
+                raise TeamAdminConfigurationError("MNEMO_TEAM_OPERATIONS_CONFIG_INVALID") from error
+            snapshot = build_team_operations_repository(config).snapshot(thresholds)
+            print(json.dumps(snapshot.to_dict(), sort_keys=True, separators=(",", ":")))
+            if parsed.command == "check" and not snapshot.healthy:
+                raise SystemExit(1)
+            return
+        service = build_team_backup_service(config)
         if parsed.command == "backup":
             payload = service.create(parsed.output_dir).to_dict()
         elif parsed.command == "restore-drill":
@@ -143,9 +182,16 @@ def main(arguments: Sequence[str] | None = None) -> None:
         else:
             payload = service.prune_deleted(parsed.backup_dir).to_dict()
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    except (TeamAdminConfigurationError, TeamBackupError) as error:
+    except (TeamAdminConfigurationError, TeamBackupError, TeamOperationsStorageFailure) as error:
         logging.error("%s", error)
         raise SystemExit(2) from error
+
+
+def _add_operations_thresholds(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--quota-warning-percent", type=int, default=90)
+    parser.add_argument("--pending-jobs", type=int, default=1_000)
+    parser.add_argument("--pending-job-age-seconds", type=int, default=300)
+    parser.add_argument("--failed-jobs", type=int, default=0)
 
 
 def _port(value: str) -> int:
