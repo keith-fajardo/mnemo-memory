@@ -16,12 +16,16 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OutboxJobId,
     OwnerId,
+    RetentionPolicyId,
     RetentionSchedule,
     ScopeLevel,
     Sensitivity,
     TaskActivityActor,
     TaskActivityEvent,
+    TaskActivityEventExpiration,
     TaskActivityEventKind,
+    TaskActivityEventPurge,
+    TaskActivityEventRetentionTarget,
     WorkspaceId,
 )
 from mnemo_memory.packages.policy import TaskActivityEventSafetyPolicy, TeamOperation
@@ -40,6 +44,11 @@ from .contracts import (
     TaskActivityEventRepositoryError,
     TaskActivityEventStorageFailure,
     TaskActivityEventStoreResult,
+    TaskActivityExpirationResult,
+    TaskActivityPurgeResult,
+    TaskActivityRetentionConflict,
+    TaskActivityRetentionNotFound,
+    TaskActivityRetentionStorageFailure,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
 
@@ -52,6 +61,11 @@ _OUTBOX_COLUMNS = (
     "available_at, attempt_count, lease_owner, lease_expires_at, completed_at, "
     "last_failure_code"
 )
+_EXPIRATION_COLUMNS = (
+    "expiration_sequence, expiration_id::text, event_id::text, retention_policy_id::text, "
+    "scheduled_expires_at, expired_at"
+)
+_PURGE_COLUMNS = "purge_sequence, purge_id::text, expiration_id::text, event_id::text, purged_at"
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -147,6 +161,15 @@ class PostgreSQLTaskActivityEventRepository:
             raise TaskActivityEventRejected("task activity event was rejected by safety policy")
         with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
             cursor.execute(
+                "SELECT 1 FROM mnemo_team.task_activity_event_expirations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(event.event_id)),
+            )
+            if cursor.fetchone() is not None:
+                raise TaskActivityEventConflict(
+                    "task activity retention tombstone prevents resurrection"
+                )
+            cursor.execute(
                 "SELECT " + _TASK_EVENT_COLUMNS + " FROM mnemo_team.task_activity_events WHERE "
                 "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
                 "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
@@ -227,12 +250,303 @@ class PostgreSQLTaskActivityEventRepository:
                 "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
                 "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
                 "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM "
+                "mnemo_team.task_activity_event_expirations AS expiration WHERE "
+                "expiration.workspace_id = task_activity_events.workspace_id "
+                "AND expiration.event_id = task_activity_events.event_id) "
                 "ORDER BY event_sequence DESC LIMIT %s OFFSET %s",
                 (*_task_scope_values(scope), limit + 1, offset),
             )
             rows = tuple(cursor.fetchall())
             items = tuple(self._event_from_row(row, scope) for row in rows[:limit])
             return TaskActivityEventPage(items, offset + limit if len(rows) > limit else None)
+
+    def list_due_task_activity_retention(
+        self, scope: MemoryScope, *, as_of: datetime
+    ) -> tuple[TaskActivityEventRetentionTarget, ...]:
+        self._require_scope(scope)
+        _require_aware(as_of, "as_of")
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT event_id::text, retention_json::text FROM "
+                "mnemo_team.task_activity_events AS event WHERE "
+                "event.workspace_id = CAST(%s AS uuid) "
+                "AND event.project_id = CAST(%s AS uuid) "
+                "AND event.owner_id = CAST(%s AS uuid) AND event.visibility = %s "
+                "AND event.session_id = CAST(%s AS uuid) AND event.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM "
+                "mnemo_team.task_activity_event_expirations AS expiration WHERE "
+                "expiration.workspace_id = event.workspace_id "
+                "AND expiration.event_id = event.event_id)",
+                _task_scope_values(scope),
+            )
+            targets = tuple(
+                TaskActivityEventRetentionTarget(
+                    EventId.from_string(str(row[0])),
+                    scope,
+                    self._retention_from_json(row[1]),
+                )
+                for row in cursor.fetchall()
+            )
+        due = tuple(
+            target
+            for target in targets
+            if not target.retention.permanent and target.retention.is_expired(as_of)
+        )
+        return tuple(
+            sorted(
+                due,
+                key=lambda item: (
+                    item.retention.expires_at.isoformat()
+                    if item.retention.expires_at is not None
+                    else "",
+                    str(item.event_id),
+                ),
+            )
+        )
+
+    def apply_task_activity_expirations(
+        self, expirations: tuple[TaskActivityEventExpiration, ...]
+    ) -> TaskActivityExpirationResult:
+        values = tuple(expirations)
+        if not values:
+            return TaskActivityExpirationResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity expiration batch is invalid")
+        for expiration in values:
+            if not isinstance(expiration, TaskActivityEventExpiration):
+                raise TypeError("task activity expiration batch is invalid")
+            self._require_scope(expiration.scope)
+        with self._retention_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing_count = 0
+            pending: list[TaskActivityEventExpiration] = []
+            for expiration in values:
+                target = self._retention_target(cursor, expiration.scope, expiration.event_id)
+                if target is None:
+                    raise TaskActivityRetentionNotFound(
+                        "task activity retention target was not found"
+                    )
+                schedule = target.retention
+                if (
+                    schedule.permanent
+                    or schedule.policy_id != expiration.retention_policy_id
+                    or schedule.expires_at != expiration.scheduled_expires_at
+                    or not schedule.is_expired(expiration.expired_at)
+                ):
+                    raise TaskActivityRetentionConflict(
+                        "task activity expiration does not match canonical retention"
+                    )
+                existing = self._scoped_expiration(cursor, expiration.scope, expiration.event_id)
+                if existing is not None:
+                    if existing != expiration:
+                        raise TaskActivityRetentionConflict(
+                            "task activity event already has a different expiration"
+                        )
+                    existing_count += 1
+                else:
+                    pending.append(expiration)
+            for expiration in pending:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.task_activity_event_expirations("
+                    "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                    "expiration_id, event_id, retention_policy_id, scheduled_expires_at, "
+                    "expired_at) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), %s, CAST(%s AS uuid), CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s)",
+                    (
+                        *_task_scope_values(expiration.scope),
+                        str(expiration.expiration_id),
+                        str(expiration.event_id),
+                        str(expiration.retention_policy_id),
+                        expiration.scheduled_expires_at.isoformat(),
+                        expiration.expired_at.isoformat(),
+                    ),
+                )
+            return TaskActivityExpirationResult(values, existing_count == len(values))
+
+    def get_task_activity_expiration(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration:
+        self._require_scope(scope)
+        if not isinstance(event_id, EventId):
+            raise TypeError("event_id must be an EventId")
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            expiration = self._scoped_expiration(cursor, scope, event_id)
+            if expiration is None:
+                raise TaskActivityRetentionNotFound("task activity expiration was not found")
+            return expiration
+
+    def list_unpurged_task_activity_expirations(
+        self, scope: MemoryScope
+    ) -> tuple[TaskActivityEventExpiration, ...]:
+        self._require_scope(scope)
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT " + _EXPIRATION_COLUMNS + " FROM "
+                "mnemo_team.task_activity_event_expirations AS expiration WHERE "
+                "expiration.workspace_id = CAST(%s AS uuid) "
+                "AND expiration.project_id = CAST(%s AS uuid) "
+                "AND expiration.owner_id = CAST(%s AS uuid) AND expiration.visibility = %s "
+                "AND expiration.session_id = CAST(%s AS uuid) "
+                "AND expiration.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.task_activity_event_purges AS purge "
+                "WHERE purge.workspace_id = expiration.workspace_id "
+                "AND purge.event_id = expiration.event_id)",
+                _task_scope_values(scope),
+            )
+            values = tuple(self._expiration_from_row(row, scope) for row in cursor.fetchall())
+        return tuple(
+            sorted(
+                values,
+                key=lambda item: (item.expired_at.isoformat(), str(item.event_id)),
+            )
+        )
+
+    def apply_task_activity_purges(
+        self, purges: tuple[TaskActivityEventPurge, ...]
+    ) -> TaskActivityPurgeResult:
+        values = tuple(purges)
+        if not values:
+            return TaskActivityPurgeResult((), True)
+        if len(values) > 256 or len({item.event_id for item in values}) != len(values):
+            raise ValueError("task activity purge batch is invalid")
+        for purge in values:
+            if not isinstance(purge, TaskActivityEventPurge):
+                raise TypeError("task activity purge batch is invalid")
+            self._require_scope(purge.scope)
+        with self._retention_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            existing_count = 0
+            pending: list[TaskActivityEventPurge] = []
+            for purge in values:
+                expiration = self._scoped_expiration(cursor, purge.scope, purge.event_id)
+                if expiration is None:
+                    raise TaskActivityRetentionNotFound(
+                        "task activity expiration was not found for purge"
+                    )
+                if (
+                    purge.expiration_id != expiration.expiration_id
+                    or purge.purged_at < expiration.expired_at
+                ):
+                    raise TaskActivityRetentionConflict(
+                        "task activity purge does not match canonical expiration"
+                    )
+                existing = self._scoped_purge(cursor, purge.scope, purge.event_id)
+                if existing is not None:
+                    if existing != purge:
+                        raise TaskActivityRetentionConflict(
+                            "task activity event already has a different purge"
+                        )
+                    existing_count += 1
+                    continue
+                if self._retention_target(cursor, purge.scope, purge.event_id) is None:
+                    raise TaskActivityRetentionNotFound(
+                        "task activity event payload was not found for purge"
+                    )
+                cursor.execute(
+                    "SELECT 1 FROM mnemo_team.episodic_memory_candidates WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND source_event_id = CAST(%s AS uuid) "
+                    "LIMIT 1",
+                    (str(self._workspace_id), str(purge.event_id)),
+                )
+                if cursor.fetchone() is not None:
+                    raise TaskActivityRetentionConflict(
+                        "task activity event still has dependent episodic candidate payloads"
+                    )
+                pending.append(purge)
+            for purge in pending:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.task_activity_event_purges("
+                    "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                    "purge_id, expiration_id, event_id, purged_at) VALUES ("
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), %s)",
+                    (
+                        *_task_scope_values(purge.scope),
+                        str(purge.purge_id),
+                        str(purge.expiration_id),
+                        str(purge.event_id),
+                        purge.purged_at.isoformat(),
+                    ),
+                )
+                cursor.execute(
+                    "DELETE FROM mnemo_team.event_outbox WHERE workspace_id = CAST(%s AS uuid) "
+                    "AND topic = 'task_activity' AND source_event_id = CAST(%s AS uuid)",
+                    (str(self._workspace_id), str(purge.event_id)),
+                )
+                cursor.execute(
+                    "DELETE FROM mnemo_team.task_activity_events WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                    "AND event_id = CAST(%s AS uuid)",
+                    (*_task_scope_values(purge.scope), str(purge.event_id)),
+                )
+                if cursor.rowcount != 1:
+                    raise TaskActivityRetentionConflict(
+                        "task activity purge state changed concurrently"
+                    )
+            return TaskActivityPurgeResult(values, existing_count == len(values))
+
+    def get_task_activity_purge(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge:
+        self._require_scope(scope)
+        if not isinstance(event_id, EventId):
+            raise TypeError("event_id must be an EventId")
+        with self._retention_transaction(TeamOperation.READ) as cursor:
+            purge = self._scoped_purge(cursor, scope, event_id)
+            if purge is None:
+                raise TaskActivityRetentionNotFound("task activity purge was not found")
+            return purge
+
+    def _retention_target(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventRetentionTarget | None:
+        cursor.execute(
+            "SELECT event_id::text, retention_json::text FROM "
+            "mnemo_team.task_activity_events WHERE workspace_id = CAST(%s AS uuid) "
+            "AND project_id = CAST(%s AS uuid) AND owner_id = CAST(%s AS uuid) "
+            "AND visibility = %s AND session_id = CAST(%s AS uuid) "
+            "AND task_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(event_id)),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return TaskActivityEventRetentionTarget(
+            EventId.from_string(str(row[0])), scope, self._retention_from_json(row[1])
+        )
+
+    def _scoped_expiration(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventExpiration | None:
+        cursor.execute(
+            "SELECT " + _EXPIRATION_COLUMNS + " FROM "
+            "mnemo_team.task_activity_event_expirations WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND event_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(event_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._expiration_from_row(row, scope)
+
+    def _scoped_purge(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
+    ) -> TaskActivityEventPurge | None:
+        cursor.execute(
+            "SELECT " + _PURGE_COLUMNS + " FROM "
+            "mnemo_team.task_activity_event_purges WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND event_id = CAST(%s AS uuid)",
+            (*_task_scope_values(scope), str(event_id)),
+        )
+        row = cursor.fetchone()
+        return None if row is None else self._purge_from_row(row, scope)
 
     def _select_event(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, event_id: EventId
@@ -242,7 +556,10 @@ class PostgreSQLTaskActivityEventRepository:
             "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
             "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
-            "AND event_id = CAST(%s AS uuid)",
+            "AND event_id = CAST(%s AS uuid) AND NOT EXISTS (SELECT 1 FROM "
+            "mnemo_team.task_activity_event_expirations AS expiration WHERE "
+            "expiration.workspace_id = task_activity_events.workspace_id "
+            "AND expiration.event_id = task_activity_events.event_id)",
             (*_task_scope_values(scope), str(event_id)),
         )
         row = cursor.fetchone()
@@ -269,6 +586,36 @@ class PostgreSQLTaskActivityEventRepository:
             RetentionSchedule.from_dict(retention),
             cast(datetime, row[7]),
             tuple(EvidenceReference.from_dict(item) for item in evidence),
+        )
+
+    @staticmethod
+    def _retention_from_json(value: object) -> RetentionSchedule:
+        payload = json.loads(str(value))
+        if not isinstance(payload, Mapping):
+            raise ValueError("task activity retention payload is invalid")
+        return RetentionSchedule.from_dict(payload)
+
+    @staticmethod
+    def _expiration_from_row(
+        row: Sequence[object], scope: MemoryScope
+    ) -> TaskActivityEventExpiration:
+        return TaskActivityEventExpiration(
+            EventId.from_string(str(row[1])),
+            EventId.from_string(str(row[2])),
+            scope,
+            RetentionPolicyId.from_string(str(row[3])),
+            datetime.fromisoformat(str(row[4])),
+            datetime.fromisoformat(str(row[5])),
+        )
+
+    @staticmethod
+    def _purge_from_row(row: Sequence[object], scope: MemoryScope) -> TaskActivityEventPurge:
+        return TaskActivityEventPurge(
+            EventId.from_string(str(row[1])),
+            EventId.from_string(str(row[2])),
+            EventId.from_string(str(row[3])),
+            scope,
+            datetime.fromisoformat(str(row[4])),
         )
 
     @contextmanager
@@ -308,6 +655,48 @@ class PostgreSQLTaskActivityEventRepository:
                 ) from error
             raise TaskActivityEventStorageFailure(
                 "task activity database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _retention_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "SELECT set_config('mnemo.principal_id', %s, true), "
+                "set_config('mnemo.workspace_id', %s, true), "
+                "set_config('mnemo.operation', %s, true), "
+                "set_config('statement_timeout', %s, true)",
+                (
+                    str(self._principal_id),
+                    str(self._workspace_id),
+                    operation.value,
+                    str(self._statement_timeout_ms),
+                ),
+            )
+            yield cursor
+            connection.commit()
+        except (TaskActivityRetentionConflict, TaskActivityRetentionNotFound):
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise TaskActivityRetentionConflict(
+                    "task activity retention database rejected conflicting state"
+                ) from error
+            raise TaskActivityRetentionStorageFailure(
+                "task activity retention database operation failed"
             ) from error
         finally:
             cursor.close()

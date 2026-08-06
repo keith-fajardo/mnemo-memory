@@ -63,6 +63,7 @@ from mnemo_memory.packages.domain import (
     SourceTrustClass,
     TaskActivityActor,
     TaskActivityEvent,
+    TaskActivityEventExpiration,
     TaskActivityEventKind,
     TaskId,
     TeamAuditAction,
@@ -77,7 +78,10 @@ from mnemo_memory.packages.domain import (
     WorkspaceRole,
     knowledge_section_digest,
 )
-from mnemo_memory.packages.episodic import EpisodicRetentionService
+from mnemo_memory.packages.episodic import (
+    EpisodicRetentionService,
+    TaskActivityRetentionService,
+)
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 from mnemo_memory.packages.policy import (
     TeamAuthorizationPolicy,
@@ -111,6 +115,8 @@ from mnemo_memory.packages.storage import (
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
     TaskActivityEventRejected,
+    TaskActivityRetentionConflict,
+    TaskActivityRetentionNotFound,
     TeamControlPlaneNotFound,
 )
 from mnemo_memory.packages.storage.contracts import (
@@ -361,6 +367,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert retention_sql.count("FORCE ROW LEVEL SECURITY") == 2
     assert retention_sql.count("episodic payload deletion requires purge") == 1
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in retention_sql
+    activity_retention_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0009_team_task_activity_retention.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert activity_retention_sql.count("FORCE ROW LEVEL SECURITY") == 2
+    assert activity_retention_sql.count("task activity payload deletion requires purge") == 1
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in activity_retention_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -596,6 +610,40 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0008_team_episodic_retention.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=9).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+            )
+            cursor.execute("SELECT to_regclass('mnemo_team.task_activity_event_expirations')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
@@ -610,6 +658,7 @@ def test_team_data_migrations_upgrade_atomically(
                 6,
                 7,
                 8,
+                9,
             )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
@@ -1313,7 +1362,7 @@ def test_postgres_task_events_and_outbox_are_atomic_leased_and_scoped(
             "'mnemo_team.task_activity_events', 'UPDATE'), "
             "has_table_privilege(current_user, 'mnemo_team.event_outbox', 'DELETE')"
         )
-        assert tuple(cursor.fetchone() or ()) == (False, False)
+        assert tuple(cursor.fetchone() or ()) == (False, True)
     finally:
         connection.rollback()
         cursor.close()
@@ -2208,6 +2257,174 @@ def test_postgres_episodic_retention_hides_then_purges_payloads_and_is_scoped(
             "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_purges)"
         )
         assert tuple(int(str(value)) for value in (cursor.fetchone() or ())) == (0, 0, 0, 0, 2, 2)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+
+def test_postgres_task_activity_retention_waits_for_dependents_then_purges_source(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    scheduled = NOW + timedelta(minutes=3)
+    retention = RetentionSchedule(RetentionPolicyId.new(), False, NOW, NOW, NOW, None, scheduled)
+    events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    sources = (
+        _task_event(scope, "91", retention=retention),
+        _task_event(scope, "92", retention=retention),
+    )
+    for source in sources:
+        events.append_task_activity_event(source)
+    memories = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    candidate = _episodic_candidates(
+        sources[0],
+        extractor_version="team-source-retention-extractor",
+        claims=("purge this candidate before its source",),
+    )[0]
+    memories.store_episodic_memory_candidates((candidate,))
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (str(workspace.owner_id), str(workspace.workspace_id), TeamOperation.CONTRIBUTE.value),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "DELETE FROM mnemo_team.task_activity_events WHERE "
+                "workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(sources[1].event_id)),
+            )
+        connection.rollback()
+    finally:
+        cursor.close()
+        connection.close()
+
+    service = TaskActivityRetentionService(events)
+    assert service.expire_due(scope, as_of=scheduled - timedelta(seconds=1)).expirations == ()
+    targets = events.list_due_task_activity_retention(scope, as_of=scheduled)
+    expirations = tuple(TaskActivityEventExpiration.create(target, scheduled) for target in targets)
+    assert len(expirations) == 2
+    wrong_policy = RetentionPolicyId.new()
+    conflicting = TaskActivityEventExpiration(
+        TaskActivityEventExpiration.identity(
+            expirations[1].event_id, wrong_policy, expirations[1].scheduled_expires_at
+        ),
+        expirations[1].event_id,
+        expirations[1].scope,
+        wrong_policy,
+        expirations[1].scheduled_expires_at,
+        expirations[1].expired_at,
+    )
+    with pytest.raises(TaskActivityRetentionConflict):
+        events.apply_task_activity_expirations((expirations[0], conflicting))
+    for source in sources:
+        with pytest.raises(TaskActivityRetentionNotFound):
+            events.get_task_activity_expiration(scope, source.event_id)
+
+    expired = service.expire_due(scope, as_of=scheduled)
+    assert expired.expirations == expirations and not expired.idempotent
+    assert events.apply_task_activity_expirations(expirations).idempotent
+    assert events.list_task_activity_events(scope).items == ()
+    for source in sources:
+        with pytest.raises(TaskActivityEventNotFound):
+            events.get_task_activity_event(scope, source.event_id)
+
+    restarted = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_task_activity_expiration(scope, sources[0].event_id) in expirations
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(TaskActivityRetentionNotFound):
+        restarted.get_task_activity_expiration(foreign_task, sources[0].event_id)
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(TaskActivityRetentionNotFound):
+        viewer.get_task_activity_expiration(scope, sources[0].event_id)
+
+    with pytest.raises(TaskActivityRetentionConflict):
+        service.purge_expired(scope, purged_at=scheduled + timedelta(minutes=1))
+    for source in sources:
+        with pytest.raises(TaskActivityRetentionNotFound):
+            events.get_task_activity_purge(scope, source.event_id)
+
+    memory_service = EpisodicRetentionService(memories)
+    memory_service.expire_due(scope, as_of=scheduled)
+    memory_service.purge_expired(scope, purged_at=scheduled + timedelta(seconds=30))
+    purged = service.purge_expired(scope, purged_at=scheduled + timedelta(minutes=1))
+    assert len(purged.purges) == 2 and not purged.idempotent
+    assert events.apply_task_activity_purges(purged.purges).idempotent
+    assert events.list_unpurged_task_activity_expirations(scope) == ()
+    with pytest.raises(TaskActivityRetentionNotFound):
+        events.get_task_activity_purge(foreign_task, sources[0].event_id)
+    for source in sources:
+        with pytest.raises(TaskActivityEventConflict):
+            events.append_task_activity_event(source)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_expirations', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_expirations', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_purges', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_event_purges', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False, False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (str(workspace.owner_id), str(workspace.workspace_id), TeamOperation.READ.value),
+        )
+        cursor.execute(
+            "SELECT (SELECT COUNT(*) FROM mnemo_team.task_activity_events), "
+            "(SELECT COUNT(*) FROM mnemo_team.event_outbox WHERE topic = 'task_activity'), "
+            "(SELECT COUNT(*) FROM mnemo_team.task_activity_event_expirations), "
+            "(SELECT COUNT(*) FROM mnemo_team.task_activity_event_purges), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_expirations), "
+            "(SELECT COUNT(*) FROM mnemo_team.episodic_memory_purges)"
+        )
+        assert tuple(int(str(value)) for value in (cursor.fetchone() or ())) == (0, 0, 2, 2, 1, 1)
     finally:
         connection.rollback()
         cursor.close()

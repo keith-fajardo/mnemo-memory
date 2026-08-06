@@ -90,6 +90,13 @@ rows while retaining the tombstones and permitted source event. Exact replay is 
 pre-purge deletion is database-denied, and an expiration tombstone prevents candidate resurrection.
 Task-event retention and explicit user deletion remain separate operations.
 
+Team task-activity retention applies the same two-phase contract to the minimized source. Event
+expiration immediately hides its summary and evidence. Source purge is rejected while any
+dependent candidate payload remains; after candidate purge it atomically removes the event and its
+task-activity outbox job while retaining source and candidate tombstones. Direct pre-purge deletion,
+non-task outbox deletion, and source resurrection fail closed. Scheduling and explicit deletion
+remain separate operations.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

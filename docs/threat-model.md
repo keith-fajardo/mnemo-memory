@@ -328,6 +328,30 @@ retention table.
 cleanup to backups/exports/external handlers, schedule sweeps, or implement explicit user deletion.
 The runtime credential remains infrastructure-only and team mode remains unavailable.
 
+### Cross-tenant source purge and dependent-memory ordering
+
+**Scenario:** A source event is deleted before its extracted candidates, an expired source remains
+readable, an outbox job survives physical purge, a direct delete bypasses the tombstone, or append
+resurrects a purged event. A candidate tombstone foreign key could also prevent required source
+cleanup.
+
+**Required controls:** Source expiration/purge rows repeat complete task scope, force RLS, and are
+read/insert-only. Expiration binds to exact canonical event policy and schedule and immediately
+excludes event payload reads. Purge admission requires its exact expiration and absence of every
+dependent candidate payload. Trigger-gated event/outbox deletion requires that purge; non-task
+outbox deletion is denied. Candidate tombstones do not depend on the live event after migration,
+and append rejects source expiration tombstones. Complete batches commit atomically.
+
+**Verification:** Real PostgreSQL tests cover not-due selection, conflicting-batch rollback, exact
+replay, event exclusion, direct-delete denial, restart and scope isolation, dependent-candidate
+blocking, candidate-first purge ordering, event/outbox physical removal, retained source/candidate
+tombstones, and anti-resurrection. An injected v8-to-v9 failure retains v8 without source retention
+tables.
+
+**Residual risk:** No scheduler, explicit deletion/export, backup cleanup, external-handler
+cleanup, or authenticated remote service is composed. The runtime credential remains
+infrastructure-only and team mode remains unavailable.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

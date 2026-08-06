@@ -1841,6 +1841,49 @@ dependency was added. No task-event retention/purge, deletion/export, scheduler/
 checkpoint/dbt/source-structure parity, personal import, remote service, OAuth, backup, quota,
 dashboard, source governance, or usable team mode was added.
 
+#### Issue 21K — PostgreSQL team task-activity retention and purge — Complete
+
+The current bounded issue implements the existing `TaskActivityRetentionRepository` contract for
+PostgreSQL minimized task events. A forward-only migration and adapter extension must preserve
+exact task scope, canonical event retention, deterministic payload-free expiration, immediate
+event-payload exclusion, dependent-candidate purge ordering, atomic source/outbox physical purge,
+anti-resurrection tombstones, stable replay, and batch rollback/idempotency. Every row and
+operation must use forced RLS and the existing principal/workspace/operation boundary, with real-
+database tests for migration rollback, restart durability, guarded runtime deletion, dependency
+conflicts, and cross-tenant/cross-task denial.
+
+This issue does not add explicit user deletion/export, a scheduler or worker, checkpoint/dbt/source-
+structure parity, personal import, authenticated remote service, OAuth, backup, quota, dashboard,
+source governance, or usable team mode.
+
+Implemented PostgreSQL schema version 9 and the existing `TaskActivityRetentionRepository`
+contract on `PostgreSQLTaskActivityEventRepository`. Immutable exact-task expiration and purge
+tombstones force RLS and are read/insert-only. Fixed-search-path triggers bind expiration to the
+event's exact non-permanent policy and canonical ISO schedule text, bind purge to its expiration,
+and reject purge while any dependent candidate payload remains. Canonical timestamp text is
+preserved for deterministic identity and cast only for chronological comparison.
+
+Expiration immediately removes the minimized event from ordinary reads. Once all dependent
+candidate payloads are purged, source purge atomically deletes the matching task-activity outbox
+job and event behind trigger-gated DELETE privileges, while source and candidate expiration/purge
+tombstones remain. Migration 0009 removes the candidate-expiration foreign key to the live source
+row so anti-resurrection metadata can survive required source cleanup; its insertion trigger still
+requires the canonical source. Event append rejects the retained source tombstone. Complete
+batches validate before mutation; exact replay is idempotent and conflicts roll back atomically.
+
+ADR 0020, the product contract, and threat model document dependency ordering, authorization,
+timestamp, anti-resurrection, outbox cleanup, and recovery. Real PostgreSQL tests prove atomic
+v8-to-v9 rollback/retry, not-due selection, conflicting-batch rollback, exact expiration replay,
+immediate event exclusion, direct-delete denial, restart durability, different-task/private-
+project denial, dependent-candidate blocking, candidate-first purge, atomic event/outbox removal,
+retained tombstones, exact purge replay, immutable tombstone privileges, and anti-resurrection.
+The complete repository gate passes with 826 default tests plus 12 mandatory real-PostgreSQL
+tests, strict typing for 216 source files, dependency/provenance validation for 93 entries,
+architecture validation for 116 product Python files, schema validation, and the isolated
+installed-package MCP workflow. No dependency was added. No explicit deletion/export,
+scheduler/worker, checkpoint/dbt/source-structure parity, personal import, remote service, OAuth,
+backup, quota, dashboard, source governance, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable
