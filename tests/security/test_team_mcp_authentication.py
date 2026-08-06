@@ -14,6 +14,7 @@ from mcp.server.auth.provider import AccessToken
 
 from mnemo_memory.apps.mcp.team import AuthenticatedTeamMcpPort, create_team_server
 from mnemo_memory.connectors.oauth import JwtVerifierConfig, MnemoJwtTokenVerifier
+from mnemo_memory.packages.application import TeamRequestRateLimit, TeamRequestRateLimiter
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.domain import OwnerId, WorkspaceId
 
@@ -126,6 +127,35 @@ def test_missing_authentication_fails_before_repository_composition() -> None:
             {"workspace_id": str(WorkspaceId.new())}
         )
     assert factory.calls == []
+
+
+def test_rate_limit_runs_after_auth_scope_and_before_repository_composition() -> None:
+    principal, workspace = OwnerId.new(), WorkspaceId.new()
+    factory = _Factory()
+    token = AccessToken(
+        token="opaque",
+        client_id="client",
+        scopes=["mnemo:context"],
+        subject=str(principal),
+    )
+    limiter = TeamRequestRateLimiter(TeamRequestRateLimit(1, 60, 10), timer=lambda: 1.0)
+    port = AuthenticatedTeamMcpPort(
+        factory, access_token_loader=lambda: token, rate_limiter=limiter
+    )
+
+    port.get_context({"workspace_id": str(workspace)})
+    with pytest.raises(ValueError, match="MNEMO_RATE_LIMITED"):
+        port.get_context({"workspace_id": str(workspace)})
+
+    assert factory.calls == [(principal, workspace)]
+
+    invalid_factory = _Factory()
+    invalid = AuthenticatedTeamMcpPort(
+        invalid_factory, access_token_loader=lambda: None, rate_limiter=limiter
+    )
+    with pytest.raises(ValueError, match="MNEMO_AUTH_REQUIRED"):
+        invalid.get_context({"workspace_id": str(workspace)})
+    assert invalid_factory.calls == []
 
 
 def test_source_approval_requires_a_dedicated_oauth_scope_before_composition() -> None:

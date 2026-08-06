@@ -56,6 +56,9 @@ def test_valid_file_backed_configuration_builds_only_a_loopback_server(tmp_path:
     assert server.settings.port == 8766
     assert server.settings.stateless_http is True
     assert config.required_scopes == ("mnemo:context",)
+    assert config.rate_limit_requests == 120
+    assert config.rate_limit_window_seconds == 60
+    assert config.rate_limit_identities == 10_000
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o604])
@@ -97,6 +100,9 @@ def test_secret_and_public_key_symlinks_are_rejected(tmp_path: Path) -> None:
         ("MNEMO_TEAM_OAUTH_ISSUER", "http://identity.example.test"),
         ("MNEMO_TEAM_RESOURCE_URL", "https://user:pass@memory.example.test/mcp"),
         ("MNEMO_TEAM_REQUIRED_SCOPES", ""),
+        ("MNEMO_TEAM_RATE_LIMIT_REQUESTS", "0"),
+        ("MNEMO_TEAM_RATE_LIMIT_WINDOW_SECONDS", "not-an-integer"),
+        ("MNEMO_TEAM_RATE_LIMIT_IDENTITIES", "100001"),
     ],
 )
 def test_invalid_non_secret_configuration_fails_closed(

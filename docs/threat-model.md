@@ -159,8 +159,30 @@ an HTTPS-only reverse proxy, authorization-header forwarding, direct-port isolat
 logging, startup checks, and atomic-file/restart key and password rotation.
 
 **Residual risk:** The external TLS proxy and its certificate remain operator-controlled. Rate
-limits, service audit records, backup/restore, production monitoring, and independent security
-review remain required before remote availability.
+limits are now enforced inside one service process, and verified backup/restore exists. A
+multi-process shared limiter, service audit expansion, production monitoring, and independent
+security review remain required before remote availability.
+
+### Authenticated request flooding and limiter-state exhaustion
+
+**Scenario:** A valid token floods expensive MCP calls, one tenant consumes another tenant's
+allowance, concurrent requests exceed a nominal limit, invalid identities fill limiter memory, or
+a deployment assumes several process-local counters form one global limit.
+
+**Required controls:** OAuth and canonical workspace parsing precede rate accounting. One exact
+principal/workspace key owns each fixed-window bucket. A monotonic clock controls reset,
+concurrency is serialized, tracked identities have a hard cap, and expired state is reclaimed
+before admitting a new key. Limit denial occurs before repository construction and returns one
+content-free code. Deployment settings are strict positive bounded integers.
+
+**Verification:** Unit and security tests cover isolation, reset, clock anomaly, capacity reclaim,
+invalid configuration, concurrent contention with exactly the configured winners, missing auth,
+and factory non-invocation after denial.
+
+**Residual risk:** State is process-local and resets on restart. The supported profile runs one
+Mnemo process behind the TLS proxy. A multi-process or horizontally scaled service needs a separate
+shared-counter design and failure analysis. Infrastructure connection and byte-rate limits remain
+the proxy's responsibility.
 
 ### Team authority races and audit gaps
 

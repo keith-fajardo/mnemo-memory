@@ -2670,6 +2670,35 @@ dependency/provenance validation for 94 entries, architecture validation for 140
 files, schema validation, and installed-package workflow verification. No dependency, scheduler,
 age-based retention policy, remote store, key manager, quota, or dashboard was added.
 
+#### Issue 21AF — Authenticated team request rate limits — Complete
+
+The current bounded issue adds one process-local fixed-window request limiter after OAuth subject
+and explicit workspace validation but before repository composition. Limits must be strict positive
+deployment settings, isolate exact principal/workspace pairs, use a monotonic clock, reset after the
+window, remain safe under concurrent calls, and cap tracked identities to prevent limiter-state
+exhaustion. Missing/invalid authentication and scope must not consume a bucket; denied calls must
+not reach PostgreSQL and must return one payload-free stable code.
+
+This issue adds no distributed counter, proxy configuration, storage quota, model budget,
+dashboard, alert, dependency, or unauthenticated network surface.
+
+Implemented a concurrency-safe fixed-window limiter keyed by exact typed OAuth principal and
+workspace. Authentication, dedicated tool scope, and canonical workspace parsing run first; the
+limiter then denies before repository composition with only `MNEMO_RATE_LIMITED`. Strict deployment
+settings control requests, seconds, and tracked identities. A monotonic clock resets windows,
+expired keys are reclaimed before capacity admission, and the map cannot exceed its configured
+bound. The documented supported profile is exactly one Mnemo process; restart resets state and a
+multi-process service requires a later shared-counter design.
+
+ADR 0040, the product contract, deployment environment/runbook, and threat model record ordering,
+single-process scope, proxy responsibilities, and residual distributed-limit risk. Focused tests
+cover scope isolation, reset, capacity reclaim, invalid settings, concurrent contention, missing
+authentication, and factory non-invocation on denial. The complete repository gate passes with 918
+default tests plus 23 mandatory real-PostgreSQL tests, strict typing for 255 source files,
+dependency/provenance validation for 94 entries, architecture validation for 141 product Python
+files, schema validation, and installed-package workflow verification. No dependency, distributed
+counter, storage quota, model budget, dashboard, or alert was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

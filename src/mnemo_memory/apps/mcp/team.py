@@ -24,6 +24,7 @@ from mnemo_memory.packages.application.team_knowledge import (
     TeamKnowledgeGovernanceConflict,
     TeamKnowledgeGovernanceInvalidScope,
 )
+from mnemo_memory.packages.application.team_rate_limits import TeamRequestRateLimiter
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
 from mnemo_memory.packages.context_engine import UnifiedContextEngine
 from mnemo_memory.packages.domain import (
@@ -241,9 +242,11 @@ class AuthenticatedTeamMcpPort:
         factory: TeamMcpPortFactory,
         *,
         access_token_loader: Callable[[], AccessToken | None] = get_access_token,
+        rate_limiter: TeamRequestRateLimiter | None = None,
     ) -> None:
         self._factory = factory
         self._access_token_loader = access_token_loader
+        self._rate_limiter = rate_limiter
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).get_context(request)
@@ -281,6 +284,8 @@ class AuthenticatedTeamMcpPort:
             workspace_id = WorkspaceId.from_string(workspace)
         except (TypeError, ValueError) as error:
             raise ValueError("MNEMO_INVALID_SCOPE: authenticated scope is invalid") from error
+        if self._rate_limiter is not None:
+            self._rate_limiter.require(principal_id, workspace_id)
         return self._factory(principal_id, workspace_id)
 
 
@@ -292,6 +297,7 @@ def create_team_server(
     resource_server_url: str,
     required_scopes: tuple[str, ...] = ("mnemo:context",),
     http_port: int = 8766,
+    rate_limiter: TeamRequestRateLimiter | None = None,
 ) -> FastMCP:
     """Create an authenticated server that remains loopback-only until a TLS proxy is configured."""
     auth = AuthSettings(
@@ -299,7 +305,7 @@ def create_team_server(
         resource_server_url=AnyHttpUrl(resource_server_url),
         required_scopes=list(required_scopes),
     )
-    authenticated = AuthenticatedTeamMcpPort(factory)
+    authenticated = AuthenticatedTeamMcpPort(factory, rate_limiter=rate_limiter)
     return create_server(
         authenticated,
         team_knowledge_port=authenticated,

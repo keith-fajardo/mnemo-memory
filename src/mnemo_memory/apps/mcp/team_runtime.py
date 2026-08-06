@@ -19,6 +19,7 @@ from mnemo_memory.connectors.filesystem.secure_file import (
     read_bounded_owned_file,
 )
 from mnemo_memory.connectors.oauth import JwtVerifierConfig, MnemoJwtTokenVerifier
+from mnemo_memory.packages.application import TeamRequestRateLimit, TeamRequestRateLimiter
 from mnemo_memory.packages.storage import PostgreSQLConnection, PostgreSQLConnectionFactory
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -42,6 +43,9 @@ class TeamServiceConfig:
     oauth_algorithm: str = "RS256"
     required_scopes: tuple[str, ...] = ("mnemo:context",)
     http_port: int = 8766
+    rate_limit_requests: int = 120
+    rate_limit_window_seconds: int = 60
+    rate_limit_identities: int = 10_000
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> TeamServiceConfig:
@@ -61,6 +65,15 @@ class TeamServiceConfig:
                 oauth_algorithm=environment.get("MNEMO_TEAM_OAUTH_ALGORITHM", "RS256"),
                 required_scopes=scopes,
                 http_port=_port(environment.get("MNEMO_TEAM_HTTP_PORT", "8766")),
+                rate_limit_requests=_positive_int(
+                    environment.get("MNEMO_TEAM_RATE_LIMIT_REQUESTS", "120")
+                ),
+                rate_limit_window_seconds=_positive_int(
+                    environment.get("MNEMO_TEAM_RATE_LIMIT_WINDOW_SECONDS", "60")
+                ),
+                rate_limit_identities=_positive_int(
+                    environment.get("MNEMO_TEAM_RATE_LIMIT_IDENTITIES", "10000")
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise TeamServiceConfigurationError("MNEMO_TEAM_CONFIG_INVALID") from error
@@ -81,6 +94,14 @@ class TeamServiceConfig:
                 self.oauth_algorithm,
             )
         except (TypeError, ValueError) as error:
+            raise TeamServiceConfigurationError("MNEMO_TEAM_CONFIG_INVALID") from error
+        try:
+            TeamRequestRateLimit(
+                self.rate_limit_requests,
+                self.rate_limit_window_seconds,
+                self.rate_limit_identities,
+            )
+        except ValueError as error:
             raise TeamServiceConfigurationError("MNEMO_TEAM_CONFIG_INVALID") from error
 
 
@@ -120,6 +141,13 @@ def build_team_service(config: TeamServiceConfig) -> FastMCP:
         resource_server_url=config.resource_server_url,
         required_scopes=config.required_scopes,
         http_port=config.http_port,
+        rate_limiter=TeamRequestRateLimiter(
+            TeamRequestRateLimit(
+                config.rate_limit_requests,
+                config.rate_limit_window_seconds,
+                config.rate_limit_identities,
+            )
+        ),
     )
 
 
@@ -167,6 +195,13 @@ def _port(value: str) -> int:
     if not 1 <= port <= 65_535:
         raise ValueError("port is out of range")
     return port
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise ValueError("positive integer is required")
+    return parsed
 
 
 def _absolute_path(value: str) -> Path:

@@ -155,6 +155,7 @@ from .team_knowledge import (
     TeamKnowledgeGovernanceInvalidScope,
     TeamKnowledgeGovernanceStorageFailure,
 )
+from .team_rate_limits import TeamRequestRateLimit, TeamRequestRateLimiter
 from .uninstalls import (
     PersonalUninstallError,
     PersonalUninstallResult,
@@ -302,6 +303,8 @@ __all__ = [
     "TeamKnowledgeGovernanceConflict",
     "TeamKnowledgeGovernanceInvalidScope",
     "TeamKnowledgeGovernanceStorageFailure",
+    "TeamRequestRateLimit",
+    "TeamRequestRateLimiter",
     "TeamRestoreDrillResult",
     "TestCoverageQueryResult",
     "build_checkpoint_runtime",

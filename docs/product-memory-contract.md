@@ -279,6 +279,13 @@ valid deletion. Version-1 backups are conservatively obsolete after any erasure.
 applies only to directories explicitly submitted to Mnemo; external copies remain the operator's
 responsibility and must be disclosed by retention policy.
 
+The authenticated team MCP boundary applies a strict fixed-window request limit to each exact
+OAuth principal/workspace pair after identity and scope validation and before repository
+composition. Invalid authentication does not consume a bucket. Denied calls expose only
+`MNEMO_RATE_LIMITED` and cannot reach PostgreSQL. The monotonic, concurrency-safe in-memory state is
+bounded and reclaims expired identities. This guarantee covers a single service process; a future
+multi-process deployment requires an explicitly reviewed shared counter.
+
 ## Evidence requirements
 
 Every durable memory includes:

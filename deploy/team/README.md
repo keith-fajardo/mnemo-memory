@@ -41,6 +41,9 @@ no secret value.
 - `MNEMO_TEAM_OAUTH_ALGORITHM` — `RS256` by default; `PS256` and `ES256` are also approved
 - `MNEMO_TEAM_REQUIRED_SCOPES` — whitespace-separated, default `mnemo:context`
 - `MNEMO_TEAM_HTTP_PORT` — loopback upstream port, default `8766`
+- `MNEMO_TEAM_RATE_LIMIT_REQUESTS` — per-principal/workspace requests per window, default `120`
+- `MNEMO_TEAM_RATE_LIMIT_WINDOW_SECONDS` — fixed-window duration, default `60`
+- `MNEMO_TEAM_RATE_LIMIT_IDENTITIES` — in-process tracked identity cap, default `10000`
 
 Backup administration uses the same host, port, and database variables plus:
 
@@ -56,6 +59,14 @@ mnemo-memory-team
 
 Mnemo always listens on `127.0.0.1`; there is no environment override. A configuration or
 connection failure emits only a stable `MNEMO_TEAM_*` code.
+
+The service applies the fixed-window rate limit only after OAuth subject and explicit workspace
+validation and before constructing a repository. Buckets are isolated by exact principal and
+workspace, concurrent calls are atomic, expired identities are reclaimed, and state cannot exceed
+the configured identity cap. Denial returns `MNEMO_RATE_LIMITED` without touching PostgreSQL.
+This limiter is intentionally process-local: use exactly one Mnemo service process for this
+guarantee. A later declared multi-process profile requires a shared Mnemo-owned counter; do not
+assume a reverse proxy makes these application buckets global.
 
 ## HTTPS reverse proxy
 
