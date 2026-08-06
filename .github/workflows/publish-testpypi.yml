@@ -61,7 +61,7 @@ jobs:
 
       - name: Install pgvector build prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes postgresql-server-dev-all
+        run: sudo apt-get update && sudo apt-get install --yes build-essential postgresql-server-dev-16
 
       - name: Build pinned pgvector extension
         shell: bash
