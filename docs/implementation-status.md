@@ -1530,6 +1530,52 @@ typing without changing semantic runtime behavior. No pgvector data, personal-da
 authenticated application/API/MCP service, OAuth, listener, secret store, backup, deletion
 workflow, quotas, dashboards, shared knowledge, or usable team mode was added.
 
+#### Issue 21D — PostgreSQL team knowledge and pgvector parity — Complete
+
+The current bounded issue adds the first canonical team-memory data path on top of Issue 21C: one
+PostgreSQL implementation of the existing `KnowledgeDocumentRepository` contract. A forward-only
+migration must preserve immutable current revisions, exact team project scope, atomic incremental
+sync, destructive payload tombstones, deterministic literal retrieval, and rebuildable semantic
+vectors using the pgvector data type. Every knowledge table and query must remain protected by the
+same forced RLS principal/workspace/operation boundary, and real-database contract tests must prove
+current-only retrieval, cross-tenant denial, atomic rollback, secret rejection, vector round trips,
+and deletion of text/vector payloads. This issue adds no checkpoint, episodic, dbt/source-structure,
+personal import, source-approval, remote service, OAuth, backup, deletion orchestration, quota,
+dashboard, or usable team mode.
+
+Implemented PostgreSQL schema version 2 and `PostgreSQLKnowledgeDocumentRepository` against the
+existing storage-neutral knowledge contract. Exact workspace/project/owner/visibility scope is
+present on every source, immutable revision, section, link, tombstone, sync-status, and embedding
+row. Composite foreign keys plus fixed-search-path trigger checks prevent child-scope substitution;
+all seven tables enable and force RLS before reads, ranking, row locks, upserts, or deletion.
+Literal retrieval reuses the reference/SQLite deterministic ranking contract after a bounded
+database selection of authorized current documents.
+
+Semantic projections now use pgvector's native variable-dimension `vector` type without duplicating
+source text. The migration requires pgvector 0.8.5, recorded under its PostgreSQL License and pinned
+to upstream commit `159b79aaad5983fb7459c1e3df2897fbb2d11788`; CI verifies that immutable commit
+before compiling the extension. Vectors retain exact current revision/section/model/digest scope,
+and the existing semantic service continues deterministic cosine ranking without an unnecessary
+approximate index or new retrieval contract.
+
+Knowledge synchronization is atomic, applies deterministic secret policy before persistence,
+maintains current and historical immutable revision reads, and records even an empty successful
+sync. Tombstoning first commits minimal anti-resurrection metadata and clears the current pointer,
+then removes the revision chain newest-first; sections, links, and pgvector rows cascade in the same
+transaction. A private-project viewer can neither read nor tombstone the source, foreign scopes
+return no rows, and rejected secret/stale batches leave prior state unchanged. ADR 0013, the product
+contract, and threat model document source-governance, extension, recovery, and residual-risk
+boundaries.
+
+The real PostgreSQL gate now includes five tests: fresh migration/rollback, atomic v1-to-v2 upgrade,
+control-plane durability, knowledge/pgvector parity and deletion, and the complete authorization
+matrix. The complete repository gate passes with 826 default tests plus 5 mandatory real-PostgreSQL
+tests, strict typing for 212 source files, dependency/provenance validation for 93 entries,
+architecture validation for 112 product Python files, schema validation, and the isolated
+installed-package MCP workflow. No checkpoint, episodic, dbt/source-structure, personal import,
+source-approval, remote service, OAuth, backup, deletion orchestration, quota, dashboard, or usable
+team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

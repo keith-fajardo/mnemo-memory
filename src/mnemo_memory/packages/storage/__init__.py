@@ -99,6 +99,7 @@ from .postgres import (
     PostgreSQLTeamMigrationRunner,
     PostgreSQLTeamSchemaTooNewError,
 )
+from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
     ReferenceCheckpointLifecycleEventRepository,
@@ -201,6 +202,7 @@ __all__ = [
     "PostgreSQLConnection",
     "PostgreSQLConnectionFactory",
     "PostgreSQLCursor",
+    "PostgreSQLKnowledgeDocumentRepository",
     "PostgreSQLTeamControlPlaneRepository",
     "PostgreSQLTeamMigrationError",
     "PostgreSQLTeamMigrationRunner",

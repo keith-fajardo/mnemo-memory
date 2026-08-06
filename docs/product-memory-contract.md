@@ -28,6 +28,14 @@ Core invariants:
 | Procedural memory | Versioned skills, agents, policies, and workflows | Checked-in mandatory rules outrank remembered preferences |
 | Context packet | Budgeted selection across the other categories | Derived response, not a new durable memory; every included item retains provenance |
 
+Team knowledge uses the same source/revision contract rather than a second note format. Canonical
+text remains in immutable, exact-project PostgreSQL revisions under forced row-level security;
+literal selection considers only authorized current revisions. Semantic vectors are rebuildable
+pgvector projections keyed to exact revision/section digests and contain no second text copy.
+Tombstoning removes revision text, sections, links, and vectors atomically while retaining minimal
+anti-resurrection metadata. This storage boundary does not decide shared-source ownership,
+approval, or correction authority; those require the later authenticated team governance service.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

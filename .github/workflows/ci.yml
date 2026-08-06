@@ -53,5 +53,17 @@ jobs:
       - name: Install TypeScript dependencies
         run: npm ci --ignore-scripts
 
+      - name: Install pgvector build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-server-dev-all
+
+      - name: Build pinned pgvector extension
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v0.8.5 https://github.com/pgvector/pgvector.git "$RUNNER_TEMP/pgvector"
+          test "$(git -C "$RUNNER_TEMP/pgvector" rev-parse HEAD)" = "159b79aaad5983fb7459c1e3df2897fbb2d11788"
+          make -C "$RUNNER_TEMP/pgvector"
+          sudo make -C "$RUNNER_TEMP/pgvector" install
+
       - name: Run quality gate
         run: npm run check

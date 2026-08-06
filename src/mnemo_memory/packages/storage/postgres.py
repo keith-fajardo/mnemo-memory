@@ -40,7 +40,11 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 1
+POSTGRES_TEAM_SCHEMA_VERSION = 2
+_POSTGRES_TEAM_MIGRATIONS = (
+    (1, "0001_team_control_plane.sql"),
+    (2, "0002_team_knowledge.sql"),
+)
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
 
@@ -130,22 +134,25 @@ class PostgreSQLTeamMigrationRunner:
             cursor.execute("SELECT to_regclass('mnemo_team.schema_migrations')")
             row = cursor.fetchone()
             exists = row is not None and row[0] is not None
+            versions: tuple[int, ...] = ()
             if exists:
-                cursor.execute("SELECT COALESCE(MAX(version), 0) FROM mnemo_team.schema_migrations")
-                version_row = cursor.fetchone()
-                version = cast(int, version_row[0]) if version_row is not None else 0
-                if version > POSTGRES_TEAM_SCHEMA_VERSION:
+                cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+                versions = tuple(int(str(row[0])) for row in cursor.fetchall())
+                if versions and versions[-1] > POSTGRES_TEAM_SCHEMA_VERSION:
                     raise PostgreSQLTeamSchemaTooNewError(
                         "PostgreSQL team schema is newer than this application"
                     )
-                if version == POSTGRES_TEAM_SCHEMA_VERSION:
-                    connection.commit()
-                    return version
-                raise PostgreSQLTeamMigrationError("PostgreSQL team migration ledger is incomplete")
-
-            cursor.execute(_migration_text("0001_team_control_plane.sql"))
-            if self._fail_migration_at == 1:
-                raise PostgreSQLTeamMigrationError("injected PostgreSQL migration failure")
+                if versions != tuple(range(1, len(versions) + 1)):
+                    raise PostgreSQLTeamMigrationError(
+                        "PostgreSQL team migration ledger is incomplete"
+                    )
+            current_version = versions[-1] if versions else 0
+            for version, name in _POSTGRES_TEAM_MIGRATIONS:
+                if version <= current_version:
+                    continue
+                cursor.execute(_migration_text(name))
+                if self._fail_migration_at == version:
+                    raise PostgreSQLTeamMigrationError("injected PostgreSQL migration failure")
             connection.commit()
             return POSTGRES_TEAM_SCHEMA_VERSION
         except PostgreSQLTeamMigrationError:
@@ -194,6 +201,17 @@ class PostgreSQLTeamMigrationRunner:
                 f"mnemo_team.is_active_workspace_member(uuid, uuid) TO {role}",
                 "GRANT EXECUTE ON FUNCTION "
                 f"mnemo_team.authorized(uuid, uuid, uuid, text) TO {role}",
+                f"GRANT SELECT, INSERT, UPDATE ON mnemo_team.knowledge_sync_status TO {role}",
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON "
+                f"mnemo_team.knowledge_document_sources TO {role}",
+                "GRANT SELECT, INSERT, DELETE ON "
+                f"mnemo_team.knowledge_document_revisions TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.knowledge_document_sections TO {role}",
+                f"GRANT SELECT, INSERT, DELETE ON mnemo_team.knowledge_document_links TO {role}",
+                "GRANT SELECT, INSERT, UPDATE ON "
+                f"mnemo_team.knowledge_document_tombstones TO {role}",
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON "
+                f"mnemo_team.knowledge_section_embeddings TO {role}",
             )
             for statement in statements:
                 cursor.execute(statement)

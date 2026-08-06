@@ -153,6 +153,31 @@ and a failure-injected parity suite, but it does not authenticate its actor. Aut
 application composition, audit retention/deletion policy, and operational recovery remain required
 before team use.
 
+### Cross-tenant team knowledge and vector residue
+
+**Scenario:** A knowledge query ranks before authorization, a child row carries a different project
+than its source, a private-project viewer reads a note or embedding, or a deleted note remains in a
+revision, link, or vector projection.
+
+**Required controls:** Every team knowledge row carries exact workspace, project, owner, and
+visibility. PostgreSQL applies forced RLS before current/historical document selection and before
+any write or row lock. Composite foreign keys and fixed-search-path trigger functions reject
+cross-scope revisions, sections, links, tombstones, and embeddings. Only bounded authorized current
+revisions enter literal or vector ranking. Deletion writes its minimal scoped tombstone before
+removing the immutable chain; sections, links, and pgvector rows cascade in the same transaction.
+Secret policy runs before persistence, and note content remains untrusted evidence.
+
+**Verification:** A real non-owner/non-`BYPASSRLS` PostgreSQL suite covers private-project denial,
+foreign project/workspace scopes, unauthorized tombstone attempts, current-only retrieval,
+pgvector round trips, stale/secret batch rollback, and direct post-deletion counts for every
+content-bearing table. An injected v1-to-v2 migration failure must preserve the v1 ledger and
+authority state.
+
+**Residual risk:** The database enforces scope and role permissions but does not decide the full
+shared-source ownership and approval workflow. Until the authenticated service binds verified
+identity and implements source governance, the PostgreSQL knowledge adapter is not exposed as team
+mode. Backups and user-controlled exports can retain deleted data and remain later operations work.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an
