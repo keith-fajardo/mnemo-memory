@@ -73,6 +73,8 @@ jobs:
           sudo make -C "$RUNNER_TEMP/pgvector" install
 
       - name: Run repository verification and deterministic evaluations
+        env:
+          MNEMO_VERIFY_INSTALLED_ALLOW_NETWORK: "1"
         run: |
           npm run check
           npm run eval:resumption -- --json

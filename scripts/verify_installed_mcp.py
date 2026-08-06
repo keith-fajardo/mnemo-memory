@@ -373,12 +373,15 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
             "UV_PYTHON_DOWNLOADS": "never",
             "UV_NO_PROGRESS": "1",
         }
+        install_flags = (
+            () if os.environ.get("MNEMO_VERIFY_INSTALLED_ALLOW_NETWORK") == "1" else ("--offline",)
+        )
         _run(
             (
                 uv_executable,
                 "tool",
                 "install",
-                "--offline",
+                *install_flags,
                 "--reinstall",
                 "--python",
                 str(python_executable.resolve()),
