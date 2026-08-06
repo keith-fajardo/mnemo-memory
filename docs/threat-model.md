@@ -228,6 +228,33 @@ injected v3-to-v4 migration failure retains v3 without either new table.
 approved-memory governance, or backup cleanup is composed. Pre-v4 checkpoint events are not
 backfilled because replay safety and operator intent are undefined. Team exposure remains blocked.
 
+### Cross-tenant approved-fact governance and payload residue
+
+**Scenario:** A principal reads another task's approved fact, races a correction against a
+retraction, reuses an action key, pins a governed fact, deletes active content without a retraction,
+or leaves a withdrawn summary or evidence payload in PostgreSQL. A fact or governance action could
+also commit without downstream delivery intent.
+
+**Required controls:** Deterministic secret policy runs before persistence. Fact, governance, pin,
+and outbox rows repeat exact workspace, project, owner, visibility, session, and task scope and use
+forced RLS. Facts and actions are immutable; one target accepts at most one correction/retraction.
+Correction atomically inserts its same-kind replacement, action, optional pin transfer, and jobs.
+Retraction atomically inserts its action, releases an active pin, and deletes the target fact
+payload. A fixed-search-path trigger rejects fact deletion without the exact retraction and binds
+governance, pin, and outbox rows to their canonical sources. Exact retries are idempotent and
+competing identities or keys fail closed.
+
+**Verification:** Real PostgreSQL tests cover accepted/idempotent/conflicting/secret facts,
+pin priority and retry, correction and pin transfer, retraction and payload erasure, corrected and
+retracted retries, restart durability, exact-task and private-project denial, deterministic jobs,
+runtime privilege restrictions, and direct active-fact deletion denial. An injected v4-to-v5
+migration failure retains v4 without any approved-event table.
+
+**Residual risk:** The database adapter does not authenticate the actor, resolve shared-source
+ownership or conflicting team corrections, enforce approved-fact retention, or propagate erasure
+to backups and external handlers. The runtime credential remains infrastructure-only and team
+exposure remains blocked until the authenticated service and operational controls exist.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

@@ -14,6 +14,12 @@ import pg8000.dbapi  # type: ignore[import-untyped]
 import pytest
 
 from mnemo_memory.packages.domain import (
+    ApprovedEpisodicEvent,
+    ApprovedEpisodicEventGovernance,
+    ApprovedEpisodicEventPinAction,
+    ApprovedEventGovernanceKind,
+    ApprovedEventKind,
+    ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -81,6 +87,7 @@ from mnemo_memory.packages.storage import (
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentSecretRejected,
+    PostgreSQLApprovedEpisodicEventRepository,
     PostgreSQLCheckpointRepository,
     PostgreSQLConnection,
     PostgreSQLConnectionFactory,
@@ -95,6 +102,11 @@ from mnemo_memory.packages.storage import (
     TaskActivityEventNotFound,
     TaskActivityEventRejected,
     TeamControlPlaneNotFound,
+)
+from mnemo_memory.packages.storage.contracts import (
+    ApprovedEpisodicEventConflict,
+    ApprovedEpisodicEventNotFound,
+    ApprovedEpisodicEventSecretRejected,
 )
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -294,6 +306,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert event_sql.count("FORCE ROW LEVEL SECURITY") == 2
     assert "FOR UPDATE SKIP LOCKED" not in event_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in event_sql
+    approved_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0005_team_approved_episodic_events.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert approved_sql.count("FORCE ROW LEVEL SECURITY") == 3
+    assert "CREATE OR REPLACE FUNCTION mnemo_team.ensure_event_outbox_source()" in approved_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in approved_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -419,12 +439,37 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0004_team_task_events_outbox.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=5).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4)
+            cursor.execute("SELECT to_regclass('mnemo_team.approved_episodic_events')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4, 5)
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1135,6 +1180,269 @@ def test_postgres_task_events_and_outbox_are_atomic_leased_and_scoped(
         connection.rollback()
         cursor.close()
         connection.close()
+
+
+def _approved_evidence(suffix: str, *, user: bool = False) -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.USER_CORRECTION if user else EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_CORRECTION if user else SourceTrustClass.USER_AUTHORED,
+        f"synthetic://team-approved/{suffix}",
+        "sha256:" + "a" * 64,
+        EvidenceLocation(f"fixture://team-approved/{suffix}"),
+        NOW,
+        VerificationStatus.VERIFIED,
+    )
+
+
+def _approved_event(
+    scope: MemoryScope,
+    suffix: str,
+    *,
+    summary: str | None = None,
+    kind: ApprovedEventKind = ApprovedEventKind.DECISION,
+) -> ApprovedEpisodicEvent:
+    return ApprovedEpisodicEvent.create(
+        scope=scope,
+        kind=kind,
+        summary=summary or f"retain the verified team fact {suffix}",
+        source_event_key=f"team-approved-{suffix}",
+        occurred_at=NOW + timedelta(seconds=20),
+        evidence_references=(_approved_evidence(suffix),),
+    )
+
+
+def _approved_governance(
+    scope: MemoryScope,
+    target: ApprovedEpisodicEvent,
+    suffix: str,
+    *,
+    kind: ApprovedEventGovernanceKind,
+    replacement: ApprovedEpisodicEvent | None = None,
+) -> ApprovedEpisodicEventGovernance:
+    return ApprovedEpisodicEventGovernance.create(
+        scope=scope,
+        kind=kind,
+        target_event_id=target.event_id,
+        replacement_event_id=None if replacement is None else replacement.event_id,
+        reason=f"verified team governance action {suffix}",
+        source_action_key=f"team-governance-{suffix}",
+        occurred_at=NOW + timedelta(seconds=30),
+        evidence_references=(_approved_evidence(f"governance-{suffix}"),),
+    )
+
+
+def test_postgres_approved_events_are_governed_payload_erasing_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    repository = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    outbox = PostgreSQLEventOutboxRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+
+    original = _approved_event(scope, "a")
+    assert not repository.append_approved_event(original).idempotent
+    assert repository.append_approved_event(original).idempotent
+    assert repository.get_approved_event(scope, original.event_id) == original
+    with pytest.raises(ApprovedEpisodicEventConflict):
+        repository.append_approved_event(replace(original, summary="conflicting canonical fact"))
+    with pytest.raises(ApprovedEpisodicEventSecretRejected):
+        repository.append_approved_event(
+            _approved_event(scope, "secret", summary="api_key=ABCDEFGHIJKLMNOPQRSTUVWX")
+        )
+
+    pin = ApprovedEpisodicEventPinAction.create(
+        scope=scope,
+        event_id=original.event_id,
+        pinned=True,
+        source_action_key="team-pin-original",
+        occurred_at=NOW + timedelta(seconds=21),
+        evidence_references=(_approved_evidence("pin", user=True),),
+    )
+    assert not repository.set_approved_event_pin(pin).idempotent
+    assert repository.set_approved_event_pin(pin).idempotent
+    assert repository.get_approved_event_record(scope, original.event_id).pinned
+
+    newer = _approved_event(scope, "b", kind=ApprovedEventKind.FAILURE)
+    repository.append_approved_event(newer)
+    assert repository.list_approved_events(scope).items == (original, newer)
+
+    replacement = _approved_event(
+        scope,
+        "corrected",
+        summary="retain the corrected verified team fact",
+    )
+    correction = _approved_governance(
+        scope,
+        original,
+        "correct",
+        kind=ApprovedEventGovernanceKind.CORRECTED,
+        replacement=replacement,
+    )
+    corrected = repository.correct_approved_event(replacement, correction)
+    assert not corrected.idempotent
+    assert corrected.target.status is ApprovedEventLifecycleStatus.CORRECTED
+    assert not corrected.target.pinned
+    assert corrected.replacement is not None and corrected.replacement.pinned
+    assert repository.correct_approved_event(replacement, correction).idempotent
+    assert repository.list_approved_events(scope).items == (replacement, newer)
+
+    retraction = _approved_governance(
+        scope,
+        replacement,
+        "retract",
+        kind=ApprovedEventGovernanceKind.RETRACTED,
+    )
+    retracted = repository.retract_approved_event(retraction)
+    assert not retracted.idempotent
+    assert retracted.target.status is ApprovedEventLifecycleStatus.RETRACTED
+    assert retracted.target.event is None and not retracted.target.pinned
+    assert repository.retract_approved_event(retraction).idempotent
+    with pytest.raises(ApprovedEpisodicEventNotFound):
+        repository.get_approved_event(scope, replacement.event_id)
+    correction_retry = repository.correct_approved_event(replacement, correction)
+    assert correction_retry.idempotent
+    assert correction_retry.replacement is not None
+    assert correction_retry.replacement.status is ApprovedEventLifecycleStatus.RETRACTED
+    assert tuple(item.status for item in repository.list_approved_event_records(scope).items) == (
+        ApprovedEventLifecycleStatus.RETRACTED,
+        ApprovedEventLifecycleStatus.ACTIVE,
+        ApprovedEventLifecycleStatus.CORRECTED,
+    )
+
+    for topic, source_id, event_kind, occurred_at in (
+        (
+            EventOutboxTopic.APPROVED_EPISODIC,
+            original.event_id,
+            original.kind.value,
+            original.occurred_at,
+        ),
+        (
+            EventOutboxTopic.APPROVED_GOVERNANCE,
+            correction.action_id,
+            correction.kind.value,
+            correction.occurred_at,
+        ),
+        (
+            EventOutboxTopic.APPROVED_GOVERNANCE,
+            retraction.action_id,
+            retraction.kind.value,
+            retraction.occurred_at,
+        ),
+    ):
+        job = EventOutboxJob.create(
+            scope=scope,
+            topic=topic,
+            source_event_id=source_id,
+            event_kind=event_kind,
+            occurred_at=occurred_at,
+            created_at=occurred_at,
+        )
+        assert outbox.get_event_job(scope, job.job_id) == job
+
+    restarted = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert (
+        restarted.get_approved_event_record(scope, replacement.event_id).status
+        is ApprovedEventLifecycleStatus.RETRACTED
+    )
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(ApprovedEpisodicEventNotFound):
+        repository.get_approved_event_record(foreign_task, original.event_id)
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert viewer.list_approved_event_records(scope).items == ()
+    with pytest.raises(ApprovedEpisodicEventNotFound):
+        viewer.get_approved_event(scope, newer.event_id)
+    with pytest.raises(ApprovedEpisodicEventConflict):
+        viewer.append_approved_event(_approved_event(scope, "viewer"))
+
+    connection = postgres_harness.admin_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT count(*) FROM mnemo_team.approved_episodic_events "
+            "WHERE workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(replacement.event_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (0,)
+        cursor.execute(
+            "SELECT count(*) FROM mnemo_team.approved_episodic_event_governance "
+            "WHERE workspace_id = CAST(%s AS uuid) AND target_event_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(replacement.event_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (1,)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.approved_episodic_events', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.approved_episodic_event_governance', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.approved_episodic_event_governance', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.approved_episodic_event_pin_actions', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.approved_episodic_event_pin_actions', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False, False, False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'contribute', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "DELETE FROM mnemo_team.approved_episodic_events WHERE "
+                "workspace_id = CAST(%s AS uuid) AND event_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(newer.event_id)),
+            )
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+    assert repository.get_approved_event(scope, newer.event_id) == newer
 
 
 def _database_authorized(

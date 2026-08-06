@@ -108,6 +108,7 @@ from .postgres import (
     PostgreSQLTeamMigrationRunner,
     PostgreSQLTeamSchemaTooNewError,
 )
+from .postgres_approved import PostgreSQLApprovedEpisodicEventRepository
 from .postgres_checkpoints import PostgreSQLCheckpointRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
@@ -217,6 +218,7 @@ __all__ = [
     "KnowledgeDocumentSyncStoreResult",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
+    "PostgreSQLApprovedEpisodicEventRepository",
     "PostgreSQLCheckpointRepository",
     "PostgreSQLConnection",
     "PostgreSQLConnectionFactory",

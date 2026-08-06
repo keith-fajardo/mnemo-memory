@@ -1662,6 +1662,52 @@ workflow. No approved-fact governance, extraction candidates, retention expiry/p
 outbox backfill, dbt/source-structure parity, import, remote service, OAuth, backup, quota,
 dashboard, or usable team mode was added.
 
+#### Issue 21G — PostgreSQL team approved episodic-event governance — Complete
+
+The current bounded issue implements the existing `ApprovedEpisodicEventRepository` contract in
+PostgreSQL. A forward-only migration and adapter must preserve exact task scope, deterministic
+secret rejection before persistence, immutable event/evidence/action history, source-key and
+identity idempotency, active-only correction/retraction/pinning, payload erasure for retracted
+records, stable pagination, and atomic delivery-job creation for accepted mutations. Every table
+and operation must use forced RLS and the existing authenticated principal/workspace/operation
+boundary, with real-database tests for migration rollback, restart durability, runtime privilege
+limits, and cross-tenant/cross-task denial.
+
+This issue adds no extraction-candidate storage, retention expiry/purge, source approval workflow,
+conflicting team-correction resolution beyond the existing deterministic repository contract,
+dbt/source-structure parity, personal import, remote service, OAuth, backup, quota, dashboard, or
+usable team mode.
+
+Implemented PostgreSQL schema version 5 and
+`PostgreSQLApprovedEpisodicEventRepository` for the existing storage-neutral approved-fact
+contract. Exact-task fact, governance, and pin tables repeat workspace/project/owner/visibility/
+session/task identity and force RLS. Runtime facts are insert/read plus retraction-gated delete;
+governance and pin history are insert/read only. No table grants mutable payload updates.
+
+Deterministic event, governance, and pin safety runs before a connection is opened. Accepted facts
+commit with one deterministic delivery job; source-key and identity retries are exact and changed
+reuse fails. Corrections preserve fact kind and atomically insert the replacement, governance,
+delivery jobs, and immutable release/acquire pin transfer when needed. Retractions atomically
+append their governance/job, release an active pin, and delete the target summary, source key, and
+fact evidence. The payload-free record remains inspectable, exact retries are idempotent, and a
+fixed-search-path trigger rejects any fact deletion without its exact retraction.
+
+Migration 0005 extends the outbox source guard for approved fact, correction/retraction, and pin
+topics; every job must match canonical scope, kind, and occurrence time. Governance and pin scope
+triggers reject cross-task sources. ADR 0016, the product contract, and threat model document the
+authorization, payload-erasure, delivery, recovery, and residual authenticated-service boundaries.
+
+The real PostgreSQL suite proves atomic v4-to-v5 rollback/retry, accepted/idempotent/conflicting/
+secret facts, pin priority and retry, correction, pin transfer, retraction, payload erasure,
+corrected/retracted retry behavior, restart durability, different-task and private-project denial,
+deterministic outbox jobs, active-fact delete protection, and least-privilege runtime grants. The
+complete repository gate passes with 826 default tests plus 8 mandatory real-PostgreSQL tests,
+strict typing for 215 source files, dependency/provenance validation for 93 entries, architecture
+validation for 115 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No dependency was added. No extraction-candidate storage, retention expiry/purge, shared
+source approval or correction resolution, dbt/source-structure parity, personal import, remote
+service, OAuth, backup, quota, dashboard, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

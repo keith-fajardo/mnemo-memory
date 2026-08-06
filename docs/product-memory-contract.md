@@ -54,6 +54,16 @@ failed-job requeue is capped at 100, preserves attempt counts, and cannot record
 handling. Both canonical event rows and delivery metadata remain behind forced RLS; content-free
 project status returns counts only. Pre-v4 checkpoint history is not silently replayed or backfilled.
 
+Team approved episodic facts use the same explicit task-scoped event, correction, retraction, and
+pin contracts as the personal profile. Deterministic safety rejection happens before PostgreSQL
+persistence. Facts and immutable evidence-bearing actions remain behind forced RLS, and every
+accepted mutation commits with one deterministic delivery job. A correction preserves fact kind,
+supersedes the target, and transfers an active pin through immutable actions. A retraction records
+bounded governance provenance, releases the pin, and erases the target summary, source key, and
+fact evidence in the same transaction. Exact retries are idempotent; competing target, identity,
+source-key, or action-key reuse fails. This storage boundary does not authenticate actors or decide
+shared-source ownership, approval authority, or conflicting team corrections.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:
