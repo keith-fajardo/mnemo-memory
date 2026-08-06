@@ -303,20 +303,22 @@ class CheckpointExportBundle:
                     raise ValueError("checkpoint export revision predecessor does not match")
                 if index < len(revisions) - 1 and revision.status is not CheckpointStatus.ACTIVE:
                     raise ValueError("checkpoint export has a revision after terminal state")
-                valid_kind = (
-                    event.kind is CheckpointEventKind.CREATED
-                    if index == 0
-                    else (
-                        event.kind
-                        in (CheckpointEventKind.REVISED, CheckpointEventKind.LESSON_RECORDED)
-                        if revision.status is CheckpointStatus.ACTIVE
-                        else (
-                            event.kind is CheckpointEventKind.COMPLETED
-                            if revision.status is CheckpointStatus.COMPLETED
-                            else event.kind is CheckpointEventKind.ABANDONED
-                        )
+                if index == 0:
+                    valid_kind = event.kind is CheckpointEventKind.CREATED
+                elif revision.status is CheckpointStatus.ACTIVE:
+                    valid_kind = event.kind in (
+                        CheckpointEventKind.REVISED,
+                        CheckpointEventKind.LESSON_RECORDED,
                     )
-                )
+                elif revision.status is CheckpointStatus.COMPLETED:
+                    valid_kind = event.kind is CheckpointEventKind.COMPLETED
+                elif revision.status is CheckpointStatus.ABANDONED:
+                    valid_kind = event.kind is CheckpointEventKind.ABANDONED
+                else:
+                    valid_kind = (
+                        revision.status is CheckpointStatus.EXPIRED
+                        and event.kind is CheckpointEventKind.EXPIRED
+                    )
                 if not valid_kind:
                     raise ValueError("checkpoint export lifecycle kind does not match revision")
                 expected_event = CheckpointLifecycleEvent.for_revision(

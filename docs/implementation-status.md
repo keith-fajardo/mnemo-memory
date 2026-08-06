@@ -2326,6 +2326,36 @@ validation for 93 entries, architecture validation for 125 product Python files,
 and the isolated installed-package MCP workflow. No dependency was added. Structural projection
 transfer remains separate from durable personal state.
 
+#### Issue 21W — Checkpoint expiry parity — Complete
+
+The current bounded issue makes the existing canonical `expired` checkpoint status operational
+across the application service, Reference, SQLite, and PostgreSQL repositories, lifecycle events,
+and strict checkpoint transfer bundle. Expiry creates one immutable terminal revision that reuses
+the current bounded content and evidence, removes the checkpoint from current selection, remains
+idempotent for the same expected revision, and preserves complete portable audit provenance.
+
+This issue adds no physical checkpoint erasure, scheduled retention policy, remote service, OAuth,
+backup propagation, quota, dashboard, team correction governance, source approval, or dependency.
+
+Implemented `ExpireCheckpoint` as an application command that reuses the current immutable
+handoff content and evidence. Reference, SQLite, and PostgreSQL repositories append a terminal
+`expired` revision and deterministic `checkpoint_expired` lifecycle event atomically, compare the
+expected predecessor, return the committed result for an identical retry, reject competing or
+post-terminal writes, and exclude the expired aggregate from current selection. The strict
+checkpoint export/import contract now validates and preserves expired histories.
+
+SQLite migration 0029 transactionally rebuilds only the checkpoint lifecycle ledger constraint,
+preserves existing sequence identities, and recreates its scoped indexes and guards. PostgreSQL
+migration 0018 extends the three closed checkpoint constraints and fixed-search-path event guard
+while retaining forced RLS and immutable revision/event privileges. ADR 0031, the product contract,
+SQLite profile, and threat model distinguish logical expiry from scheduled retention and physical
+erasure. Backend-neutral, application, transfer, SQLite migration, and real PostgreSQL tests cover
+content/evidence preservation, idempotency, selection removal, exact portability, runtime scope,
+and injected rollback/retry. The complete repository gate passes with 843 default tests plus 21
+mandatory real-PostgreSQL tests, strict typing for 228 source files, dependency/provenance
+validation for 93 entries, architecture validation for 125 product Python files, schema validation,
+and the isolated installed-package MCP workflow. No dependency was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

@@ -343,6 +343,27 @@ class PostgreSQLCheckpointRepository:
             event_kind=CheckpointEventKind.ABANDONED,
         )
 
+    def expire_checkpoint(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision:
+        return self._mutate_revision(
+            scope,
+            checkpoint_id,
+            expected_revision_id,
+            CheckpointStatus.EXPIRED,
+            content,
+            evidence_references,
+            created_at,
+            reason=None,
+            event_kind=CheckpointEventKind.EXPIRED,
+        )
+
     def list_current_checkpoints(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> CheckpointPage:

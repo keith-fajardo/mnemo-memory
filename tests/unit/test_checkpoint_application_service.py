@@ -26,6 +26,7 @@ from mnemo_memory.packages.application import (
     CompleteCheckpoint,
     CorrectApprovedEpisodicEvent,
     CreateCheckpoint,
+    ExpireCheckpoint,
     GetApprovedEpisodicEventRecord,
     GetCheckpoint,
     GetCheckpointContext,
@@ -423,6 +424,27 @@ def test_terminal_lifecycle_and_idempotent_retry() -> None:
                 (evidence(),),
             )
         )
+
+
+def test_expiry_preserves_current_handoff_and_removes_it_from_selection() -> None:
+    repository = ReferenceCheckpointRepository()
+    target = service(repository)
+    scope_value = scope()
+    initial = create(target, scope_value)
+    command = ExpireCheckpoint(
+        scope_value,
+        initial.aggregate.checkpoint_id,
+        initial.revision.revision_id,
+    )
+
+    expired = target.expire(command)
+
+    assert expired.aggregate.lifecycle_status is CheckpointStatus.EXPIRED
+    assert expired.revision.status is CheckpointStatus.EXPIRED
+    assert expired.revision.content == initial.revision.content
+    assert expired.revision.evidence_references == initial.revision.evidence_references
+    assert repository.select_current_checkpoint(scope_value) is None
+    assert target.expire(command).revision == expired.revision
 
 
 def test_abandonment_requires_reason_and_blocks_future_revisions() -> None:

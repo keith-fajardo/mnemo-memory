@@ -52,6 +52,12 @@ write, including empty and idempotent syncs, so failed writes cannot advance sta
 is forward-only and transactional; restore the verified pre-upgrade schema-27 backup to reverse a
 committed migration 0028.
 
+Migration `0029_checkpoint_expiry.sql` rebuilds only the checkpoint lifecycle-event table so its
+closed event-kind constraint admits `checkpoint_expired`. It preserves every existing event
+identity and sequence, then recreates the scoped indexes and revision/scope guards. The migration
+is forward-only and transactional; an injected failure leaves the prior schema unchanged. Restore
+the verified pre-upgrade schema-28 backup to reverse a committed migration 0029.
+
 Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
 projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
 result, and timing row to both its digest-addressed supplemental artifact and an existing manifest

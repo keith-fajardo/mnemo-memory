@@ -218,7 +218,10 @@ def test_append_is_immutable_and_compare_and_swap_safe(
         )
 
 
-@pytest.mark.parametrize("terminal", [CheckpointStatus.COMPLETED, CheckpointStatus.ABANDONED])
+@pytest.mark.parametrize(
+    "terminal",
+    [CheckpointStatus.COMPLETED, CheckpointStatus.ABANDONED, CheckpointStatus.EXPIRED],
+)
 def test_terminal_transitions_are_immutable_and_idempotent(
     repository_factory: RepositoryFactory, terminal: CheckpointStatus
 ) -> None:
@@ -242,7 +245,7 @@ def test_terminal_transitions_are_immutable_and_idempotent(
             terminal_evidence,
             NOW + timedelta(minutes=2),
         )
-    else:
+    elif terminal is CheckpointStatus.ABANDONED:
         result = repository.abandon_checkpoint(
             scope_value,
             aggregate.checkpoint_id,
@@ -257,6 +260,23 @@ def test_terminal_transitions_are_immutable_and_idempotent(
             aggregate.checkpoint_id,
             initial.revision_id,
             "blocked by fixture",
+            terminal_content,
+            terminal_evidence,
+            NOW + timedelta(minutes=2),
+        )
+    else:
+        result = repository.expire_checkpoint(
+            scope_value,
+            aggregate.checkpoint_id,
+            initial.revision_id,
+            terminal_content,
+            terminal_evidence,
+            NOW + timedelta(minutes=1),
+        )
+        retry = repository.expire_checkpoint(
+            scope_value,
+            aggregate.checkpoint_id,
+            initial.revision_id,
             terminal_content,
             terminal_evidence,
             NOW + timedelta(minutes=2),

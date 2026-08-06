@@ -142,7 +142,7 @@ def test_migration_28_rolls_back_and_retries_from_schema_27(tmp_path: Path) -> N
         connection.execute("DROP TRIGGER project_index_sync_scope_match_update")
         connection.execute("DROP TRIGGER project_index_sync_scope_match_insert")
         connection.execute("DROP TABLE project_index_sync_status")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 28")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (28, 29)")
 
     assert repository.schema_version() == 27
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -157,7 +157,7 @@ def test_migration_28_rolls_back_and_retries_from_schema_27(tmp_path: Path) -> N
         )
 
     repository.migrate()
-    assert repository.schema_version() == 28
+    assert repository.schema_version() == 29
 
 
 def test_source_staleness_requires_content_free_git_proof() -> None:

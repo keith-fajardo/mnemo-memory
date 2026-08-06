@@ -40,15 +40,17 @@ Team checkpoints use the same canonical aggregate, revision, content, evidence, 
 contracts as personal checkpoints. PostgreSQL stores one exact workspace/project/session/task scope
 on every aggregate, immutable revision, and append-only lifecycle event behind forced row-level
 security. Creation and revision transitions append the matching deterministic event atomically;
-current-pointer changes compare the expected revision, and completion or abandonment is terminal.
+current-pointer changes compare the expected revision, and completion, abandonment, or expiry is
+terminal.
 An identical terminal retry returns the committed revision, while stale or competing writes fail
 without a partial revision or event. PostgreSQL may also attach one immutable exact-scope source
 observation to a revision only when the matching authorized project snapshot already exists. That
 identity-and-time record means co-observation, not causation, and stores no checkpoint or source
-payload. This storage boundary does not authenticate the principal or provide checkpoint retention,
-deletion propagation, or a remote team service. Complete aggregate, revision, and lifecycle-event
-history is portable through a strict exact-task bundle; source observations are excluded because
-their source snapshots are rebuildable projections.
+payload. Expiry appends an evidence-preserving terminal revision and removes that handoff from
+current selection. This storage boundary does not authenticate the principal or provide scheduled
+checkpoint retention, physical deletion propagation, or a remote team service. Complete
+aggregate, revision, and lifecycle-event history is portable through a strict exact-task bundle;
+source observations are excluded because their source snapshots are rebuildable projections.
 
 Team dbt manifests use the same minimized authoritative project-index contract as personal mode.
 PostgreSQL stores immutable exact-project snapshots, typed nodes and lineage edges, explicit

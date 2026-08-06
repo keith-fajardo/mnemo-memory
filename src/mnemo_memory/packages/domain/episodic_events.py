@@ -49,6 +49,7 @@ class CheckpointEventKind(StrEnum):
     REVISED = "checkpoint_revised"
     COMPLETED = "checkpoint_completed"
     ABANDONED = "checkpoint_abandoned"
+    EXPIRED = "checkpoint_expired"
     LESSON_RECORDED = "checkpoint_lesson_recorded"
 
 

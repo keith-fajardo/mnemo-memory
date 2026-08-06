@@ -68,6 +68,7 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     assert package_files.joinpath(
         "resources/migrations/0028_project_index_sync_status.sql"
     ).is_file()
+    assert package_files.joinpath("resources/migrations/0029_checkpoint_expiry.sql").is_file()
     assert package_files.joinpath(
         "resources/postgres_migrations/0001_team_control_plane.sql"
     ).is_file()
@@ -110,6 +111,9 @@ def test_runtime_resources_are_available_from_the_package() -> None:
     ).is_file()
     assert package_files.joinpath(
         "resources/postgres_migrations/0015_team_imported_episodic_lifecycle.sql"
+    ).is_file()
+    assert package_files.joinpath(
+        "resources/postgres_migrations/0018_team_checkpoint_expiry.sql"
     ).is_file()
     assert package_files.joinpath("resources/schemas/context-packet-v1.json").is_file()
     assert package_files.joinpath("resources/web/index.html").is_file()

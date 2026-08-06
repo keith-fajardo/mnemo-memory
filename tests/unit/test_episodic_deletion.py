@@ -477,7 +477,7 @@ def test_deletion_migration_is_atomic_forward_only_and_payload_free(tmp_path: Pa
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 28
+    assert sqlite.schema_version() == 29
     with sqlite3.connect(sqlite.path) as connection:
         source_columns = {
             row[1]

@@ -156,6 +156,15 @@ class AbandonCheckpoint:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpireCheckpoint:
+    """Expire the current handoff while preserving its immutable audit history."""
+
+    scope: MemoryScope
+    checkpoint_id: CheckpointId
+    expected_revision_id: CheckpointRevisionId
+
+
+@dataclass(frozen=True, slots=True)
 class RecordCheckpointLesson:
     """Append one correction lesson without making an agent resubmit the whole handoff."""
 
@@ -384,6 +393,28 @@ class CheckpointApplicationService:
                 command.reason,
                 command.content,
                 tuple(command.evidence_references),
+                self._now(),
+            )
+        )
+        return CheckpointView(
+            self._call(
+                lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
+            ),
+            revision,
+        )
+
+    def expire(self, command: ExpireCheckpoint) -> CheckpointView:
+        self._validate_scope(command.scope)
+        current = self._call(
+            lambda: self._repository.get_current_revision(command.scope, command.checkpoint_id)
+        )
+        revision = self._call(
+            lambda: self._repository.expire_checkpoint(
+                command.scope,
+                command.checkpoint_id,
+                command.expected_revision_id,
+                current.content,
+                current.evidence_references,
                 self._now(),
             )
         )

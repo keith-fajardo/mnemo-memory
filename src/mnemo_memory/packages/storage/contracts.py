@@ -1153,6 +1153,16 @@ class CheckpointRepository(Protocol):
         created_at: datetime,
     ) -> CheckpointRevision: ...
 
+    def expire_checkpoint(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision: ...
+
     def list_current_checkpoints(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> CheckpointPage: ...

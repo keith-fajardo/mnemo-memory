@@ -195,12 +195,14 @@ transaction. Immutable revision/event tables grant no runtime update or delete p
 
 **Verification:** A real non-owner/non-`BYPASSRLS` PostgreSQL suite covers private-project denial,
 different-task isolation, historical/current revision reads, stale-writer rollback, terminal-state
-enforcement, identical terminal retries, event idempotency/conflict, and direct lifecycle ordering.
+enforcement including expiry, identical terminal retries, event idempotency/conflict, and direct
+lifecycle ordering.
 An injected v2-to-v3 migration failure must retain ledger `(1, 2)` and no checkpoint table before
 an idempotent retry reaches v3.
 
-**Residual risk:** PostgreSQL does not authenticate the principal and does not yet implement the
-checkpoint outbox, source-observation, retention, deletion, backup, or remote-service boundary.
+**Residual risk:** PostgreSQL does not authenticate the principal and does not yet implement
+scheduled checkpoint retention, physical deletion, backup propagation, or the remote-service
+boundary. Checkpoint outbox and source-observation parity are implemented separately.
 The adapter remains unavailable to agents until the authenticated team composition and remaining
 production controls are complete.
 
@@ -556,8 +558,9 @@ fails closed. The record stores identities and time only and is explicitly non-c
 restart durability, cross-task/private-project denial, read/insert-only runtime privileges, and
 atomic v11-to-v12 rollback/retry.
 
-**Residual risk:** Automatic source refresh composition, dbt observation, checkpoint retention,
-deletion/export, remote authentication, and backup propagation remain separate issues.
+**Residual risk:** Automatic source refresh composition, dbt observation, scheduled checkpoint
+retention, physical deletion, remote authentication, and backup propagation remain separate
+issues. Portable checkpoint history and terminal expiry are implemented separately.
 
 ### Cross-tenant dbt manifest projection
 

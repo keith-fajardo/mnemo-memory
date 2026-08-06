@@ -133,7 +133,15 @@ def _populated_reference(scope: MemoryScope) -> ReferenceCheckpointRepository:
         (_evidence("c"),),
         NOW + timedelta(minutes=2),
     )
-    _create_initial(repository, scope, "d")
+    active_aggregate, active = _create_initial(repository, scope, "d")
+    repository.expire_checkpoint(
+        scope,
+        active_aggregate.checkpoint_id,
+        active.revision_id,
+        active.content,
+        active.evidence_references,
+        NOW + timedelta(minutes=2),
+    )
     return repository
 
 
@@ -144,8 +152,8 @@ def test_checkpoint_export_is_canonical_strict_and_tamper_evident() -> None:
     )
 
     assert len(bundle.aggregates) == 2
-    assert len(bundle.revisions) == 4
-    assert len(bundle.lifecycle_events) == 4
+    assert len(bundle.revisions) == 5
+    assert len(bundle.lifecycle_events) == 5
     assert CheckpointExportBundle.from_json(bundle.canonical_json()) == bundle
 
     tampered = json.loads(bundle.canonical_json())
@@ -173,7 +181,8 @@ def test_checkpoint_import_preserves_identities_rebases_scope_and_is_idempotent(
 
     assert not result.idempotent
     assert result.checkpoint_count == 2
-    assert result.revision_count == result.event_count == 4
+    assert result.revision_count == result.event_count == 5
+    assert any(item.lifecycle_status is CheckpointStatus.EXPIRED for item in imported.aggregates)
     assert result.source_content_digest == bundle.content_digest
     assert result.target_content_digest == imported.content_digest
     assert result.source_content_digest != result.target_content_digest

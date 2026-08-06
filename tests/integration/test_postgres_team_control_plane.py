@@ -1030,12 +1030,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=18).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.imported_knowledge_deletions')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 18))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 19))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1482,6 +1495,34 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
             (_checkpoint_evidence("d"),),
             NOW + timedelta(seconds=4),
         )
+    assert repository.select_current_checkpoint(scope) is None
+
+    expiring_aggregate, expiring_revision = _checkpoint_pair(scope, "f")
+    repository.create_checkpoint_aggregate(expiring_aggregate, expiring_revision)
+    expired = repository.expire_checkpoint(
+        scope,
+        expiring_aggregate.checkpoint_id,
+        expiring_revision.revision_id,
+        expiring_revision.content,
+        expiring_revision.evidence_references,
+        NOW + timedelta(seconds=6),
+    )
+    assert expired.status is CheckpointStatus.EXPIRED
+    assert (
+        repository.expire_checkpoint(
+            scope,
+            expiring_aggregate.checkpoint_id,
+            expiring_revision.revision_id,
+            expiring_revision.content,
+            expiring_revision.evidence_references,
+            NOW + timedelta(minutes=3),
+        )
+        == expired
+    )
+    assert (
+        repository.list_events(scope, checkpoint_id=expiring_aggregate.checkpoint_id).items[0].kind
+        is CheckpointEventKind.EXPIRED
+    )
     assert repository.select_current_checkpoint(scope) is None
     events = repository.list_events(scope, checkpoint_id=aggregate.checkpoint_id).items
     assert tuple(event.kind for event in events) == (

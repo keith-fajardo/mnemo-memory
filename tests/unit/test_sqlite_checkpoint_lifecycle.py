@@ -39,6 +39,7 @@ from mnemo_memory.packages.storage.contracts import (
     RepositoryStorageFailure,
     RevisionConflict,
 )
+from mnemo_memory.packages.storage.sqlite import SQLiteMigrationError
 
 NOW = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
 HASH = "sha256:" + "f" * 64
@@ -357,3 +358,14 @@ def test_two_independent_sqlite_writers_leave_one_contiguous_current_revision(
             ).fetchone()[0]
             == 2
         )
+
+
+def test_checkpoint_expiry_migration_rolls_back_and_retries(tmp_path: Path) -> None:
+    repository = SQLiteCheckpointRepository(tmp_path / "expiry.db", base_directory=tmp_path)
+
+    with pytest.raises(SQLiteMigrationError, match="injected"):
+        repository.migrate(fail_after_version=29)
+
+    assert repository.schema_version() == 0
+    repository.migrate()
+    assert repository.schema_version() == 29

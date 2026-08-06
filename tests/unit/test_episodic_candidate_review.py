@@ -387,7 +387,7 @@ def test_review_migration_is_additive_atomic_and_preserves_candidates(tmp_path: 
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 28
+    assert sqlite.schema_version() == 29
     with sqlite3.connect(sqlite.path) as connection:
         review_columns = {
             row[1]
@@ -701,7 +701,7 @@ def test_governance_migration_is_additive_atomic_and_preserves_active_memory(
         )
 
     governance.migrate()
-    assert governance.schema_version() == 28
+    assert governance.schema_version() == 29
     with sqlite3.connect(governance.path) as connection:
         columns = {
             row[1]

@@ -259,7 +259,7 @@ def test_supplemental_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 28
+    assert repository.schema_version() == 29
 
 
 def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
@@ -288,4 +288,4 @@ def test_source_freshness_migration_rolls_back_as_one_step(tmp_path: Path) -> No
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 28
+    assert repository.schema_version() == 29

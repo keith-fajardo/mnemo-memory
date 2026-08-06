@@ -244,7 +244,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 28
+LATEST_SCHEMA_VERSION = 29
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -726,6 +726,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 28:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 28
+            if version < 29:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0029_checkpoint_expiry.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (29, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 29:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 29
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
@@ -1035,6 +1047,27 @@ class SQLiteCheckpointRepository:
             created_at,
             reason=reason,
             event_kind=CheckpointEventKind.ABANDONED,
+        )
+
+    def expire_checkpoint(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        expected_revision_id: CheckpointRevisionId,
+        content: CheckpointContent,
+        evidence_references: tuple[EvidenceReference, ...],
+        created_at: datetime,
+    ) -> CheckpointRevision:
+        return self._mutate_revision(
+            scope,
+            checkpoint_id,
+            expected_revision_id,
+            CheckpointStatus.EXPIRED,
+            content,
+            evidence_references,
+            created_at,
+            reason=None,
+            event_kind=CheckpointEventKind.EXPIRED,
         )
 
     def list_current_checkpoints(
