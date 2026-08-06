@@ -381,6 +381,40 @@ class EpisodicExportRepository(Protocol):
     ) -> EpisodicExportBundle: ...
 
 
+class EpisodicLifecycleImportRepositoryError(Exception):
+    """Expected outcome for atomically retaining imported lifecycle tombstones."""
+
+
+class EpisodicLifecycleImportConflict(EpisodicLifecycleImportRepositoryError):
+    pass
+
+
+class EpisodicLifecycleImportStorageFailure(EpisodicLifecycleImportRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodicLifecycleImportResult:
+    imported_count: int
+    idempotent: bool
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.imported_count, bool)
+            or not isinstance(self.imported_count, int)
+            or self.imported_count < 1
+        ):
+            raise ValueError("episodic lifecycle import count must be positive")
+
+
+class EpisodicLifecycleImportRepository(Protocol):
+    def import_episodic_lifecycle(
+        self,
+        source: EpisodicExportBundle,
+        target: EpisodicExportBundle,
+    ) -> EpisodicLifecycleImportResult: ...
+
+
 class KnowledgeDocumentRepositoryError(Exception):
     """Expected storage-independent local-knowledge outcome."""
 

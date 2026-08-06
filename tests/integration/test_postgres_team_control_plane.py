@@ -467,6 +467,18 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert dbt_supplemental_sql.count("FORCE ROW LEVEL SECURITY") == 2
     assert "dbt supplemental immutable fields cannot change" in dbt_supplemental_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in dbt_supplemental_sql
+    imported_lifecycle_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0015_team_imported_episodic_lifecycle.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert imported_lifecycle_sql.count("FORCE ROW LEVEL SECURITY") == 1
+    assert "source_content_digest ~ '^sha256:[0-9a-f]{64}$'" in imported_lifecycle_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in (imported_lifecycle_sql)
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -888,12 +900,37 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0014_team_dbt_supplemental.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=15).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 15))
+            cursor.execute("SELECT to_regclass('mnemo_team.imported_episodic_lifecycle')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 16))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3109,7 +3146,62 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
             evidence_references=(_approved_evidence("d-personal-import-correction", user=True),),
         )
     )
-    exported_at = NOW + timedelta(minutes=2)
+    expires_at = NOW + timedelta(minutes=2)
+    retained_source = _task_event(
+        personal_scope,
+        "e-personal-import-retained",
+        retention=RetentionSchedule(
+            RetentionPolicyId.new(), False, NOW, NOW, NOW, None, expires_at
+        ),
+    )
+    personal.append_task_activity_event(retained_source)
+    retained_candidate = _episodic_candidates(
+        retained_source,
+        extractor_version="personal-import-retained-v1",
+        claims=("retain imported expiration state",),
+    )[0]
+    personal.store_episodic_memory_candidates((retained_candidate,))
+    EpisodicRetentionService(personal).expire_due(personal_scope, as_of=expires_at)
+    EpisodicRetentionService(personal).purge_expired(
+        personal_scope, purged_at=expires_at + timedelta(seconds=30)
+    )
+    TaskActivityRetentionService(personal).expire_due(personal_scope, as_of=expires_at)
+    TaskActivityRetentionService(personal).purge_expired(
+        personal_scope, purged_at=expires_at + timedelta(minutes=1)
+    )
+
+    deleted_source = _task_event(personal_scope, "f-personal-import-source-deletion")
+    personal.append_task_activity_event(deleted_source)
+    deleted_source_candidate = _episodic_candidates(
+        deleted_source,
+        extractor_version="personal-import-source-deletion-v1",
+        claims=("retain imported source deletion state",),
+    )[0]
+    personal.store_episodic_memory_candidates((deleted_source_candidate,))
+    EpisodicDeletionService(personal).delete_task_event(
+        scope=personal_scope,
+        event_id=deleted_source.event_id,
+        source_action_key="personal-import-delete-source",
+        deleted_at=NOW + timedelta(minutes=4),
+    )
+
+    individual_source = _task_event(personal_scope, "a-personal-import-memory-deletion")
+    personal.append_task_activity_event(individual_source)
+    individual_candidate = _episodic_candidates(
+        individual_source,
+        extractor_version="personal-import-memory-deletion-v1",
+        claims=("retain imported individual deletion state",),
+    )[0]
+    personal.store_episodic_memory_candidates((individual_candidate,))
+    EpisodicDeletionService(personal).delete_memory(
+        scope=personal_scope,
+        memory_id=individual_candidate.memory_id,
+        source_event_id=individual_source.event_id,
+        source_action_key="personal-import-delete-memory",
+        deleted_at=NOW + timedelta(minutes=5),
+    )
+
+    exported_at = NOW + timedelta(minutes=6)
     bundle = EpisodicExportService(personal).export(personal_scope, exported_at=exported_at)
 
     control, workspace, _ = _create_workspace(postgres_harness)
@@ -3145,6 +3237,7 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
         target_memories,
         target_memories,
         target_memories,
+        target_memories,
     )
     result = importer.import_bundle(bundle, target_scope=target_scope)
 
@@ -3152,17 +3245,17 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
     assert result.source_content_digest == bundle.content_digest
     assert result.source_content_digest != result.target_content_digest
     assert dict(result.counts) == {
-        "task_events": 1,
+        "task_events": 2,
         "candidates": 2,
         "reviews": 2,
         "governance_actions": 1,
         "revisions": 2,
-        "memory_expirations": 0,
-        "memory_purges": 0,
-        "task_expirations": 0,
-        "task_purges": 0,
-        "memory_deletions": 0,
-        "task_deletions": 0,
+        "memory_expirations": 1,
+        "memory_purges": 1,
+        "task_expirations": 1,
+        "task_purges": 1,
+        "memory_deletions": 2,
+        "task_deletions": 1,
     }
     restarted = PostgreSQLEpisodicMemoryRepository(
         postgres_harness.runtime_factory(),
@@ -3172,6 +3265,39 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
     imported = EpisodicExportService(restarted).export(target_scope, exported_at=exported_at)
     assert imported.content_digest == result.target_content_digest
     assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+    resurrected = replace(
+        _task_event(target_scope, "b-imported-resurrection"),
+        event_id=imported.task_deletions[0].event_id,
+    )
+    with pytest.raises(TaskActivityEventConflict, match="prevents resurrection"):
+        target_events.append_task_activity_event(resurrected)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'read', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        cursor.execute(
+            "SELECT COUNT(*), "
+            "bool_or(payload_json::text LIKE '%\"summary\"%'), "
+            "bool_or(payload_json::text LIKE '%\"claim\"%'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.imported_episodic_lifecycle', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.imported_episodic_lifecycle', 'DELETE') "
+            "FROM mnemo_team.imported_episodic_lifecycle"
+        )
+        row = tuple(cursor.fetchone() or ())
+        assert int(str(row[0])) == 7
+        assert row[1:] == (False, False, False, False)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
 
     viewer_id = OwnerId.new()
     _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
@@ -3188,6 +3314,7 @@ def test_personal_live_episodic_export_imports_to_team_with_verified_hashes(
     with pytest.raises(EpisodicImportStorageFailure):
         EpisodicImportService(
             viewer_events,
+            viewer_memories,
             viewer_memories,
             viewer_memories,
             viewer_memories,

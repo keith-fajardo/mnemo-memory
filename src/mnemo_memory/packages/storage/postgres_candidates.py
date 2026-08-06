@@ -38,6 +38,8 @@ from mnemo_memory.packages.domain import (
     Sensitivity,
     TaskActivityActor,
     TaskActivityEventDeletion,
+    TaskActivityEventExpiration,
+    TaskActivityEventPurge,
     WorkspaceId,
     active_episodic_memory_at_revision,
     replay_episodic_memory_revisions,
@@ -58,6 +60,10 @@ from .contracts import (
     EpisodicDeletionStorageFailure,
     EpisodicExportRepositoryError,
     EpisodicExportStorageFailure,
+    EpisodicLifecycleImportConflict,
+    EpisodicLifecycleImportRepositoryError,
+    EpisodicLifecycleImportResult,
+    EpisodicLifecycleImportStorageFailure,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidatePage,
@@ -138,6 +144,22 @@ _CANDIDATE_EXPORT_COLUMNS = (
     "candidate.prompt_version, candidate.retention_json::text, candidate.created_at, "
     "candidate.evidence_json::text"
 )
+_IMPORTED_LIFECYCLE_GROUPS = (
+    ("memory_expiration", "memory_expirations", "memory_id"),
+    ("memory_purge", "memory_purges", "memory_id"),
+    ("task_expiration", "task_expirations", "event_id"),
+    ("task_purge", "task_purges", "event_id"),
+    ("memory_deletion", "memory_deletions", "memory_id"),
+    ("task_deletion", "task_deletions", "event_id"),
+)
+_NATIVE_LIFECYCLE_TARGETS = {
+    "memory_expiration": ("episodic_memory_expirations", "memory_id"),
+    "memory_purge": ("episodic_memory_purges", "memory_id"),
+    "task_expiration": ("task_activity_event_expirations", "event_id"),
+    "task_purge": ("task_activity_event_purges", "event_id"),
+    "memory_deletion": ("episodic_memory_deletions", "memory_id"),
+    "task_deletion": ("task_activity_event_deletions", "event_id"),
+}
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -217,8 +239,15 @@ class PostgreSQLEpisodicMemoryRepository:
                 "SELECT memory_id::text FROM mnemo_team.episodic_memory_expirations WHERE "
                 "workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[])) "
                 "UNION ALL SELECT memory_id::text FROM mnemo_team.episodic_memory_deletions "
-                "WHERE workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[]))",
+                "WHERE workspace_id = CAST(%s AS uuid) AND memory_id = ANY(CAST(%s AS uuid[])) "
+                "UNION ALL SELECT target_id::text FROM "
+                "mnemo_team.imported_episodic_lifecycle WHERE "
+                "workspace_id = CAST(%s AS uuid) "
+                "AND lifecycle_kind IN ('memory_expiration', 'memory_deletion') "
+                "AND target_id = ANY(CAST(%s AS uuid[]))",
                 (
+                    str(self._workspace_id),
+                    "{" + ",".join(str(candidate.memory_id) for candidate in values) + "}",
                     str(self._workspace_id),
                     "{" + ",".join(str(candidate.memory_id) for candidate in values) + "}",
                     str(self._workspace_id),
@@ -711,6 +740,7 @@ class PostgreSQLEpisodicMemoryRepository:
             task_deletions = tuple(
                 self._source_deletion_from_row(row, scope) for row in cursor.fetchall()
             )
+            imported = self._imported_lifecycle(cursor, scope)
             return EpisodicExportBundle.create(
                 scope=scope,
                 exported_at=exported_at,
@@ -719,12 +749,108 @@ class PostgreSQLEpisodicMemoryRepository:
                 reviews=reviews,
                 governance_actions=governance_actions,
                 revisions=revisions,
-                memory_expirations=memory_expirations,
-                memory_purges=memory_purges,
-                task_expirations=task_expirations,
-                task_purges=task_purges,
-                memory_deletions=memory_deletions,
-                task_deletions=task_deletions,
+                memory_expirations=(*memory_expirations, *imported[0]),
+                memory_purges=(*memory_purges, *imported[1]),
+                task_expirations=(*task_expirations, *imported[2]),
+                task_purges=(*task_purges, *imported[3]),
+                memory_deletions=(*memory_deletions, *imported[4]),
+                task_deletions=(*task_deletions, *imported[5]),
+            )
+
+    def import_episodic_lifecycle(
+        self,
+        source: EpisodicExportBundle,
+        target: EpisodicExportBundle,
+    ) -> EpisodicLifecycleImportResult:
+        if not isinstance(source, EpisodicExportBundle) or not isinstance(
+            target, EpisodicExportBundle
+        ):
+            raise TypeError("episodic lifecycle import requires validated bundles")
+        self._require_scope(target.scope)
+        lifecycle_count = sum(
+            len(getattr(target, name)) for _, name, _ in _IMPORTED_LIFECYCLE_GROUPS
+        )
+        if lifecycle_count < 1:
+            raise ValueError("episodic lifecycle import requires tombstones")
+        if any(
+            len(getattr(source, name)) != len(getattr(target, name))
+            for _, name, _ in _IMPORTED_LIFECYCLE_GROUPS
+        ):
+            raise EpisodicLifecycleImportConflict(
+                "episodic lifecycle source and target counts differ"
+            )
+
+        with self._lifecycle_import_transaction() as cursor:
+            existing_count = 0
+            for kind, group_name, identity_name in _IMPORTED_LIFECYCLE_GROUPS:
+                source_items = getattr(source, group_name)
+                target_items = getattr(target, group_name)
+                for source_item, target_item in zip(source_items, target_items, strict=True):
+                    source_id = getattr(source_item, identity_name)
+                    target_id = getattr(target_item, identity_name)
+                    cursor.execute(
+                        "SELECT source_id::text, source_content_digest, payload_json::text "
+                        "FROM mnemo_team.imported_episodic_lifecycle WHERE "
+                        "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                        "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                        "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                        "AND lifecycle_kind = %s AND "
+                        "(target_id = CAST(%s AS uuid) OR source_id = CAST(%s AS uuid))",
+                        (
+                            *_task_scope_values(target.scope),
+                            kind,
+                            str(target_id),
+                            str(source_id),
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row is not None:
+                        payload = json.loads(str(row[2]))
+                        if (
+                            str(row[0]) != str(source_id)
+                            or str(row[1]) != source.content_digest
+                            or payload != target_item.to_dict()
+                        ):
+                            raise EpisodicLifecycleImportConflict(
+                                "episodic lifecycle import mapping conflicts"
+                            )
+                        existing_count += 1
+                        continue
+                    native_table, native_identity = _NATIVE_LIFECYCLE_TARGETS[kind]
+                    cursor.execute(
+                        f"SELECT 1 FROM mnemo_team.{native_table} WHERE "
+                        "workspace_id = CAST(%s AS uuid) AND "
+                        f"{native_identity} = CAST(%s AS uuid)",
+                        (str(self._workspace_id), str(target_id)),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise EpisodicLifecycleImportConflict(
+                            "episodic lifecycle import target already exists"
+                        )
+                    cursor.execute(
+                        "INSERT INTO mnemo_team.imported_episodic_lifecycle("
+                        "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                        "lifecycle_kind, target_id, source_id, source_content_digest, "
+                        "payload_json, imported_at) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+                        "CAST(%s AS uuid), %s, CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                        "CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS jsonb), %s)",
+                        (
+                            *_task_scope_values(target.scope),
+                            kind,
+                            str(target_id),
+                            str(source_id),
+                            source.content_digest,
+                            json.dumps(
+                                target_item.to_dict(),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            target.exported_at,
+                        ),
+                    )
+            return EpisodicLifecycleImportResult(
+                lifecycle_count,
+                existing_count == lifecycle_count,
             )
 
     def list_due_episodic_memory_retention(
@@ -1049,6 +1175,59 @@ class PostgreSQLEpisodicMemoryRepository:
             if deletion is None:
                 raise EpisodicDeletionNotFound("task activity deletion was not found")
             return deletion
+
+    def _imported_lifecycle(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope
+    ) -> tuple[
+        tuple[EpisodicMemoryExpiration, ...],
+        tuple[EpisodicMemoryPurge, ...],
+        tuple[TaskActivityEventExpiration, ...],
+        tuple[TaskActivityEventPurge, ...],
+        tuple[EpisodicMemoryDeletion, ...],
+        tuple[TaskActivityEventDeletion, ...],
+    ]:
+        cursor.execute(
+            "SELECT lifecycle_kind, payload_json::text FROM "
+            "mnemo_team.imported_episodic_lifecycle WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY lifecycle_kind ASC, target_id ASC",
+            _task_scope_values(scope),
+        )
+        memory_expirations: list[EpisodicMemoryExpiration] = []
+        memory_purges: list[EpisodicMemoryPurge] = []
+        task_expirations: list[TaskActivityEventExpiration] = []
+        task_purges: list[TaskActivityEventPurge] = []
+        memory_deletions: list[EpisodicMemoryDeletion] = []
+        task_deletions: list[TaskActivityEventDeletion] = []
+        for row in cursor.fetchall():
+            payload = json.loads(str(row[1]))
+            if not isinstance(payload, Mapping):
+                raise ValueError("imported episodic lifecycle payload is invalid")
+            kind = str(row[0])
+            if kind == "memory_expiration":
+                memory_expirations.append(EpisodicMemoryExpiration.from_dict(payload))
+            elif kind == "memory_purge":
+                memory_purges.append(EpisodicMemoryPurge.from_dict(payload))
+            elif kind == "task_expiration":
+                task_expirations.append(TaskActivityEventExpiration.from_dict(payload))
+            elif kind == "task_purge":
+                task_purges.append(TaskActivityEventPurge.from_dict(payload))
+            elif kind == "memory_deletion":
+                memory_deletions.append(EpisodicMemoryDeletion.from_dict(payload))
+            elif kind == "task_deletion":
+                task_deletions.append(TaskActivityEventDeletion.from_dict(payload))
+            else:
+                raise ValueError("imported episodic lifecycle kind is invalid")
+        return (
+            tuple(memory_expirations),
+            tuple(memory_purges),
+            tuple(task_expirations),
+            tuple(task_purges),
+            tuple(memory_deletions),
+            tuple(task_deletions),
+        )
 
     def _insert_candidate(
         self, cursor: PostgreSQLCursor, candidate: EpisodicMemoryCandidate
@@ -1913,6 +2092,37 @@ class PostgreSQLEpisodicMemoryRepository:
             connection.rollback()
             raise EpisodicExportStorageFailure(
                 "episodic export database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _lifecycle_import_transaction(self) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicLifecycleImportStorageFailure(
+                "episodic lifecycle import database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            self._configure(cursor, TeamOperation.CONTRIBUTE)
+            yield cursor
+            connection.commit()
+        except EpisodicLifecycleImportRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise EpisodicLifecycleImportConflict(
+                    "episodic lifecycle import database rejected conflicting state"
+                ) from error
+            raise EpisodicLifecycleImportStorageFailure(
+                "episodic lifecycle import database operation failed"
             ) from error
         finally:
             cursor.close()

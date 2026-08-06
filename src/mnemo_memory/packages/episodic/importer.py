@@ -2,28 +2,39 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from uuid import UUID, uuid5
 
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
+    EpisodicDeletionCause,
     EpisodicExportBundle,
     EpisodicExtractionProposal,
     EpisodicMemoryCandidate,
+    EpisodicMemoryDeletion,
+    EpisodicMemoryExpiration,
     EpisodicMemoryGovernanceAction,
     EpisodicMemoryGovernanceKind,
+    EpisodicMemoryPurge,
     EpisodicMemoryRevision,
     EventId,
     MemoryId,
     MemoryScope,
     ScopeLevel,
     TaskActivityEvent,
+    TaskActivityEventDeletion,
+    TaskActivityEventExpiration,
+    TaskActivityEventPurge,
     replay_episodic_memory_revisions,
 )
 from mnemo_memory.packages.storage.contracts import (
     EpisodicExportRepository,
     EpisodicExportRepositoryError,
+    EpisodicLifecycleImportRepository,
+    EpisodicLifecycleImportRepositoryError,
     EpisodicMemoryCandidateRepository,
     EpisodicMemoryCandidateRepositoryError,
     EpisodicMemoryGovernanceRepository,
@@ -44,6 +55,8 @@ _LIFECYCLE_GROUPS = (
     "task_deletions",
 )
 _COUNT_GROUPS = (*_LIVE_GROUPS, "revisions", *_LIFECYCLE_GROUPS)
+_IMPORTED_EVENT_NAMESPACE = UUID("3b6a73dc-bf2d-45e0-b555-8eae6da9f095")
+_IMPORTED_MEMORY_NAMESPACE = UUID("60c983f7-e311-48d9-878c-825eed612a30")
 
 
 class EpisodicImportError(Exception):
@@ -88,12 +101,14 @@ class EpisodicImportService:
         reviews: EpisodicMemoryReviewRepository,
         governance: EpisodicMemoryGovernanceRepository,
         exports: EpisodicExportRepository,
+        lifecycle: EpisodicLifecycleImportRepository | None = None,
     ) -> None:
         self._task_events = task_events
         self._candidates = candidates
         self._reviews = reviews
         self._governance = governance
         self._exports = exports
+        self._lifecycle = lifecycle
 
     def import_bundle(
         self, bundle: EpisodicExportBundle, *, target_scope: MemoryScope
@@ -102,12 +117,13 @@ class EpisodicImportService:
             raise TypeError("episodic import requires a validated export bundle")
         if not isinstance(target_scope, MemoryScope) or target_scope.level is not ScopeLevel.TASK:
             raise ValueError("episodic import requires exact target task scope")
-        if any(getattr(bundle, name) for name in _LIFECYCLE_GROUPS):
+        has_lifecycle = any(getattr(bundle, name) for name in _LIFECYCLE_GROUPS)
+        if has_lifecycle and self._lifecycle is None:
             raise EpisodicImportUnsupportedLifecycle(
                 "episodic import bundle contains lifecycle tombstones"
             )
 
-        expected = _rebase_live_bundle(bundle, target_scope)
+        expected = _rebase_bundle(bundle, target_scope)
         try:
             before = self._exports.export_episodic_state(
                 target_scope, exported_at=bundle.exported_at
@@ -124,6 +140,9 @@ class EpisodicImportService:
                 self._reviews.review_episodic_memory_candidate(review)
             for action in expected.governance_actions:
                 self._governance.govern_episodic_memory(action)
+            if has_lifecycle:
+                assert self._lifecycle is not None
+                self._lifecycle.import_episodic_lifecycle(bundle, expected)
 
             after = self._exports.export_episodic_state(
                 target_scope, exported_at=bundle.exported_at
@@ -136,6 +155,7 @@ class EpisodicImportService:
             EpisodicMemoryReviewRepositoryError,
             EpisodicMemoryGovernanceRepositoryError,
             EpisodicExportRepositoryError,
+            EpisodicLifecycleImportRepositoryError,
         ) as error:
             raise EpisodicImportStorageFailure(
                 "episodic import storage operation failed"
@@ -152,11 +172,10 @@ class EpisodicImportService:
         return _result(bundle, after, idempotent=False)
 
 
-def _rebase_live_bundle(
-    bundle: EpisodicExportBundle, target_scope: MemoryScope
-) -> EpisodicExportBundle:
+def _rebase_bundle(bundle: EpisodicExportBundle, target_scope: MemoryScope) -> EpisodicExportBundle:
     events: list[TaskActivityEvent] = []
     event_by_source: dict[EventId, TaskActivityEvent] = {}
+    event_id_by_source: dict[EventId, EventId] = {}
     for source_event in bundle.task_events:
         target_event = TaskActivityEvent.create(
             scope=target_scope,
@@ -171,6 +190,7 @@ def _rebase_live_bundle(
         )
         events.append(target_event)
         event_by_source[source_event.event_id] = target_event
+        event_id_by_source[source_event.event_id] = target_event.event_id
 
     candidates: list[EpisodicMemoryCandidate] = []
     candidate_by_source: dict[MemoryId, EpisodicMemoryCandidate] = {}
@@ -263,6 +283,114 @@ def _rebase_live_bundle(
             )
         )
 
+    for source_expiration in bundle.task_expirations:
+        event_id_by_source.setdefault(
+            source_expiration.event_id,
+            _imported_event_id(target_scope, source_expiration.event_id),
+        )
+    for source_deletion in bundle.task_deletions:
+        event_id_by_source.setdefault(
+            source_deletion.event_id,
+            _imported_event_id(target_scope, source_deletion.event_id),
+        )
+
+    task_expirations = tuple(
+        TaskActivityEventExpiration(
+            TaskActivityEventExpiration.identity(
+                event_id_by_source[source.event_id],
+                source.retention_policy_id,
+                source.scheduled_expires_at,
+            ),
+            event_id_by_source[source.event_id],
+            target_scope,
+            source.retention_policy_id,
+            source.scheduled_expires_at,
+            source.expired_at,
+        )
+        for source in bundle.task_expirations
+    )
+    task_expiration_by_source = {
+        source.event_id: target
+        for source, target in zip(bundle.task_expirations, task_expirations, strict=True)
+    }
+    task_purges = tuple(
+        TaskActivityEventPurge.create(task_expiration_by_source[source.event_id], source.purged_at)
+        for source in bundle.task_purges
+    )
+    task_deletions = tuple(
+        TaskActivityEventDeletion.create(
+            scope=target_scope,
+            event_id=event_id_by_source[source.event_id],
+            source_action_key=source.source_action_key,
+            deleted_at=source.deleted_at,
+        )
+        for source in bundle.task_deletions
+    )
+    task_deletion_by_source = {
+        source.deletion_id: target
+        for source, target in zip(bundle.task_deletions, task_deletions, strict=True)
+    }
+
+    memory_by_source: dict[MemoryId, MemoryId] = {
+        source_id: candidate.memory_id for source_id, candidate in candidate_by_source.items()
+    }
+    for group_name in ("memory_expirations", "memory_deletions"):
+        for source in getattr(bundle, group_name):
+            memory_by_source.setdefault(
+                source.memory_id,
+                _imported_memory_id(target_scope, source.memory_id),
+            )
+    memory_expirations = tuple(
+        EpisodicMemoryExpiration(
+            EpisodicMemoryExpiration.identity(
+                memory_by_source[source.memory_id],
+                source.retention_policy_id,
+                source.scheduled_expires_at,
+            ),
+            memory_by_source[source.memory_id],
+            event_id_by_source.setdefault(
+                source.source_event_id,
+                _imported_event_id(target_scope, source.source_event_id),
+            ),
+            target_scope,
+            source.retention_policy_id,
+            source.scheduled_expires_at,
+            source.expired_at,
+        )
+        for source in bundle.memory_expirations
+    )
+    memory_expiration_by_source = {
+        source.memory_id: target
+        for source, target in zip(bundle.memory_expirations, memory_expirations, strict=True)
+    }
+    memory_purges = tuple(
+        EpisodicMemoryPurge.create(memory_expiration_by_source[source.memory_id], source.purged_at)
+        for source in bundle.memory_purges
+    )
+    memory_deletions: list[EpisodicMemoryDeletion] = []
+    for source in bundle.memory_deletions:
+        memory_id = memory_by_source[source.memory_id]
+        source_event_id = event_id_by_source.setdefault(
+            source.source_event_id,
+            _imported_event_id(target_scope, source.source_event_id),
+        )
+        if source.cause is EpisodicDeletionCause.USER:
+            target_deletion = EpisodicMemoryDeletion.create(
+                scope=target_scope,
+                memory_id=memory_id,
+                source_event_id=source_event_id,
+                source_action_key=source.source_action_key,
+                deleted_at=source.deleted_at,
+            )
+        else:
+            assert source.source_deletion_id is not None
+            target_deletion = EpisodicMemoryDeletion.from_source(
+                task_deletion_by_source[source.source_deletion_id],
+                memory_id=memory_id,
+                source_event_id=source_event_id,
+            )
+        memory_deletions.append(target_deletion)
+
     return EpisodicExportBundle.create(
         scope=target_scope,
         exported_at=bundle.exported_at,
@@ -271,7 +399,25 @@ def _rebase_live_bundle(
         reviews=tuple(reviews),
         governance_actions=tuple(governance),
         revisions=tuple(revisions),
+        memory_expirations=memory_expirations,
+        memory_purges=memory_purges,
+        task_expirations=task_expirations,
+        task_purges=task_purges,
+        memory_deletions=tuple(memory_deletions),
+        task_deletions=task_deletions,
     )
+
+
+def _imported_event_id(target_scope: MemoryScope, source_id: EventId) -> EventId:
+    return EventId(uuid5(_IMPORTED_EVENT_NAMESPACE, f"{_scope_key(target_scope)}:{source_id}"))
+
+
+def _imported_memory_id(target_scope: MemoryScope, source_id: MemoryId) -> MemoryId:
+    return MemoryId(uuid5(_IMPORTED_MEMORY_NAMESPACE, f"{_scope_key(target_scope)}:{source_id}"))
+
+
+def _scope_key(scope: MemoryScope) -> str:
+    return json.dumps(scope.to_dict(), sort_keys=True, separators=(",", ":"))
 
 
 def _candidate_batches(

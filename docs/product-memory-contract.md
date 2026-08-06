@@ -426,16 +426,24 @@ reconstruction; excluded content never enters the bundle, while tombstones remai
 importer can prevent resurrection. This service returns the bundle but does not persist an export
 file or claim checkpoint, approved-fact, knowledge, structural, or backup support.
 
-The live episodic import path accepts that validated bundle and one exact target task scope. It
+The episodic import path accepts that validated bundle and one exact target task scope. It
 reconstructs task events, candidates, reviews, governance actions, and derived revisions through
 their canonical factories so every scope-derived identity is deterministically rebased while
 content, evidence, retention, timestamps, review decisions, and correction semantics remain
 unchanged. The target may be empty or an exact resumable subset; unrelated state fails before a
 write. Completion requires exact typed target state, category counts, the validated source digest,
 and the target repository's canonical digest. A partial failure is not success and an exact retry
-must converge. Any bundle containing an expiration, purge, or deletion tombstone is rejected before
-mutation until the storage-level anti-resurrection import path exists. Therefore this live slice
-does not yet satisfy the complete personal-to-team import or other-category export requirement.
+must converge.
+
+Payload-free expiration, purge, and deletion records are deterministically mapped from their
+retained source identity and exact target scope, then rebuilt through normal expiration/purge or
+scope-aware deletion factories. PostgreSQL stores the strict target projection, retained source
+identity, and source digest atomically in one forced-RLS canonical table; it never manufactures a
+deleted event or candidate payload and cannot retain a summary or claim. Exact replay is
+idempotent, competing source/target mapping fails closed, ordinary export includes the imported
+tombstones, and ordinary event/candidate writes consult them before mutation. Complete episodic
+personal-to-team state now has verified counts and source/target hashes. Checkpoint,
+approved-fact, knowledge, and structural export/import remain separate requirements.
 
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical

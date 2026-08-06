@@ -53,6 +53,7 @@ from mnemo_memory.packages.episodic import (
     TaskActivityRetentionService,
 )
 from mnemo_memory.packages.storage import (
+    EpisodicLifecycleImportResult,
     InvalidEpisodicExportScope,
     ReferenceEpisodicMemoryCandidateRepository,
     ReferenceTaskActivityEventRepository,
@@ -257,6 +258,43 @@ class _FailSecondEventWrite:
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> TaskActivityEventPage:
         return self._delegate.list_task_activity_events(scope, offset=offset, limit=limit)
+
+
+class _LifecycleTarget:
+    def __init__(self, delegate: Repository) -> None:
+        self._delegate = delegate
+        self._imported: EpisodicExportBundle | None = None
+        self._source_digest: str | None = None
+
+    def export_episodic_state(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> EpisodicExportBundle:
+        if self._imported is not None and self._imported.scope == scope:
+            assert self._imported.exported_at == exported_at
+            return self._imported
+        return self._delegate.export_episodic_state(scope, exported_at=exported_at)
+
+    def import_episodic_lifecycle(
+        self, source: EpisodicExportBundle, target: EpisodicExportBundle
+    ) -> EpisodicLifecycleImportResult:
+        count = sum(
+            len(getattr(target, name))
+            for name in (
+                "memory_expirations",
+                "memory_purges",
+                "task_expirations",
+                "task_purges",
+                "memory_deletions",
+                "task_deletions",
+            )
+        )
+        if self._imported is not None:
+            assert self._imported == target
+            assert self._source_digest == source.content_digest
+            return EpisodicLifecycleImportResult(count, True)
+        self._imported = target
+        self._source_digest = source.content_digest
+        return EpisodicLifecycleImportResult(count, False)
 
 
 def _reference() -> tuple[EventRepository, Repository]:
@@ -482,3 +520,48 @@ def test_interrupted_live_import_is_sanitized_and_retry_converges() -> None:
     assert not resumed.idempotent
     final = EpisodicExportService(target).export(_scope(2), exported_at=EXPORTED)
     assert final.content_digest == resumed.target_content_digest
+
+
+def test_full_lifecycle_import_rebases_tombstones_and_verifies_complete_bundle() -> None:
+    source_events, source = _reference()
+    source_scope = _scope()
+    target_scope = _scope(2)
+    _populate(source_events, source, source_scope)
+    bundle = EpisodicExportService(source).export(source_scope, exported_at=EXPORTED)
+    target_events, target = _reference()
+    lifecycle = _LifecycleTarget(target)
+    service = EpisodicImportService(
+        target_events,
+        target,
+        target,
+        target,
+        lifecycle,
+        lifecycle,
+    )
+
+    result = service.import_bundle(bundle, target_scope=target_scope)
+    imported = lifecycle.export_episodic_state(target_scope, exported_at=EXPORTED)
+
+    assert not result.idempotent
+    assert result.target_content_digest == imported.content_digest
+    assert dict(result.counts) == {
+        "task_events": 3,
+        "candidates": 2,
+        "reviews": 2,
+        "governance_actions": 1,
+        "revisions": 2,
+        "memory_expirations": 1,
+        "memory_purges": 1,
+        "task_expirations": 1,
+        "task_purges": 1,
+        "memory_deletions": 2,
+        "task_deletions": 1,
+    }
+    assert imported.scope == target_scope
+    assert {item.event_id for item in imported.task_expirations}.isdisjoint(
+        item.event_id for item in bundle.task_expirations
+    )
+    assert {item.memory_id for item in imported.memory_deletions}.isdisjoint(
+        item.memory_id for item in bundle.memory_deletions
+    )
+    assert service.import_bundle(bundle, target_scope=target_scope).idempotent

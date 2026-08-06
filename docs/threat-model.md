@@ -419,19 +419,22 @@ identities are rebased rather than trusted from input. Export the authorized tar
 write and require its current live state to be an exact subset of the expected projection. Replay
 only through existing policy-validating repositories and forced PostgreSQL RLS. Re-export after
 replay and require semantic object equality, exact counts, and an independently computed target
-digest. Translate adapter errors without payload or identifier detail. Reject every bundle with an
-expiration, purge, or deletion tombstone before target access until a storage-level path can retain
-those records without bypassing anti-resurrection controls.
+digest. Translate adapter errors without payload or identifier detail. Map payload-free lifecycle
+identities deterministically from exact target scope and retained source identity; rebuild their
+relationships through strict domain factories. Store all imported tombstones atomically behind
+forced RLS with source/target uniqueness and source-digest provenance, never placeholder payload.
+Ordinary export and event/candidate anti-resurrection checks must include that canonical table.
 
 **Verification:** Reference tests cover scope-derived identity changes, content/evidence parity,
 source and target digests, exact retry, conflicting target state, lifecycle rejection, injected
-mid-replay failure, and sanitized recovery. A real PostgreSQL test transfers a SQLite bundle,
-verifies restart-stable counts and hash, retries idempotently, and proves a private-project viewer
-cannot import.
+mid-replay failure, sanitized recovery, and complete lifecycle rebasing. Real PostgreSQL tests
+transfer a full SQLite bundle, verify restart-stable counts/hash, retry idempotently, prove a
+private-project viewer cannot import, assert payload minimization and immutable privileges, and
+block resurrection through an imported deletion.
 
-**Residual risk:** Live replay is resumable but not one cross-repository transaction. Lifecycle
-tombstones, other personal export categories, authenticated remote request/audit composition, and
-backup/deletion propagation remain release blockers; this service is not yet exposed as team mode.
+**Residual risk:** Live replay is resumable but not one cross-repository transaction. Other
+personal export categories, authenticated remote request/audit composition, and backup/deletion
+propagation remain release blockers; this service is not yet exposed as team mode.
 
 ### Cross-tenant source projection and repository-content retention
 

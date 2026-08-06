@@ -2160,6 +2160,48 @@ files, dependency/provenance validation for 93 entries, architecture validation 
 Python files, schema validation, and the isolated installed-package MCP workflow. No dependency or
 schema migration was added.
 
+#### Issue 21S — Verified episodic lifecycle-tombstone import — Complete
+
+The current bounded issue completes episodic personal-to-team import for payload-free memory and
+task expiration, purge, and deletion state. Imported tombstones must be deterministically rebased,
+stored atomically behind forced RLS without manufacturing deleted payloads or bypassing native
+lifecycle triggers, participate in ordinary anti-resurrection checks and exact export, and retain
+source/target identity plus source-digest provenance. Exact retry must be idempotent and conflicting
+mapping must fail closed.
+
+This issue does not add other export categories, a remote service, OAuth, backup propagation,
+quota, dashboard, source governance, or a new dependency.
+
+Implemented PostgreSQL schema version 15 with one canonical imported-lifecycle table for exact
+memory/task expiration, purge, and deletion projections. Each row retains full target task scope,
+kind, deterministic target identity, retained source identity, validated source-bundle digest,
+strict payload-free JSON, and import time. The table forces RLS, grants runtime `SELECT`/`INSERT`
+only, and cannot retain a summary, claim, review, evidence, or manufactured source payload.
+
+Orphan source event and memory identities are mapped with fixed Mnemo UUIDv5 namespaces over the
+canonical target scope and retained source identity. Expiration/purge identities and scope-derived
+deletion actions are then rebuilt through normal domain factories, including dependent source
+deletions, so complete bundle validation proves every relationship. Live identities continue
+through their canonical factories.
+
+The lifecycle repository validates exact scope, source/target counts, native-target absence, and
+source/target mapping uniqueness before inserting the complete tombstone set in one transaction.
+Exact replay is idempotent and competing mapping rolls back. Ordinary repeatable-read export merges
+native and imported tombstones behind RLS, and ordinary event/candidate writes consult both stores
+before mutation. The resumable application import reports success only after the complete target
+export matches every typed object, count, and target digest.
+
+ADR 0027, the product contract, and threat model document the dedicated-table decision,
+minimization, mapping, and recovery. Unit tests prove complete lifecycle rebasing, count/hash
+parity, and replay. Real PostgreSQL tests prove atomic v14-to-v15 rollback/retry, complete
+SQLite-to-team transfer, restart export parity, exact replay, private-viewer denial, payload
+minimization, immutable privileges, and imported deletion anti-resurrection. The complete
+repository gate passes with 830 default tests plus 18 mandatory real-PostgreSQL tests, strict
+typing for 219 source files, dependency/provenance validation for 93 entries, architecture
+validation for 119 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No dependency was added. Episodic personal-to-team import now preserves verified live
+and lifecycle counts and hashes; other export categories remain separate requirements.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable
