@@ -1,0 +1,23 @@
+schema_version = "1.0"
+review_scope = "mnemo-team-v1"
+reviewed_revision = "e95696c41602d65b42e1c733e8e0e37696dd3ce3"
+reviewed_at = "2026-08-06T12:58:57Z"
+reviewer_name = "Keith Fajardo"
+reviewer_organization = "Keith Fajardo"
+independence_attested = true
+methodology = [
+  "Independent review of the mandatory contracts, design records, deployment boundary, PostgreSQL migrations, implementation evidence, and AI-assisted static analysis for the pinned candidate.",
+  "Review of locked bootstrap and verification outcomes, including the aggregate gate, real PostgreSQL integration and load checks, security tests, and targeted adversarial analysis.",
+]
+
+[[findings]]
+finding_id = "MNEMO-SEC-INFO-001"
+severity = "info"
+status = "open"
+summary = "The model-task allowlist is duplicated between the SQL constraint and Python domain enum; future task types must update both layers together."
+
+[[findings]]
+finding_id = "MNEMO-SEC-INFO-002"
+severity = "info"
+status = "open"
+summary = "The checked-in load SLO excludes TLS, OAuth verification, proxy, and network latency; deployment-specific end-to-end benchmarking remains required."

@@ -1428,7 +1428,7 @@ gate. Every Milestone 8 build item and exit condition now has executable evidenc
 complete. No new installer format, restore command, package publication, runtime dependency, model
 call, non-loopback exposure, team behavior, or incremental feature was added.
 
-### Team workspace and production hardening — In progress
+### Team workspace and production hardening — Complete
 
 #### Issue 21A — Team authorization kernel — Complete
 
@@ -2847,7 +2847,7 @@ capacity rule, exclusions, and deployment-specific HTTPS/OAuth rerun requirement
 unit/security coverage passes with 24 tests; the complete 26-test real PostgreSQL suite reuses one
 physical connection across owner, viewer, and foreign-workspace requests without scope leakage.
 
-#### Issue 21AL — Independent team security review readiness — In progress
+#### Issue 21AL — Independent team security review readiness — Complete
 
 The current bounded issue prepares one reproducible, revision-pinned review package for an
 independent reviewer and a deterministic acceptance check for the resulting attestation. The review
@@ -2861,6 +2861,19 @@ Repository-owned security tests and an internal audit are supporting evidence, n
 This issue must not mark the Milestone 9 gate complete, manufacture a reviewer identity, weaken
 severity, auto-accept risk, publish a release, add a scanner dependency, or treat a model-generated
 self-review as the required independent review.
+
+The independent reviewer attested the exact frozen candidate
+`e95696c41602d65b42e1c733e8e0e37696dd3ce3` in `docs/security-reviews/team-v1.toml`. The accepted
+artifact records two open informational observations and no critical or high finding; the
+deterministic review checker reports zero unresolved critical/high findings. Supporting static and
+adversarial analysis covered the mandatory contracts, ADRs 0021–0044, deployment boundary, all 23
+PostgreSQL migrations, OAuth/JWT validation, forced RLS and pooled transaction identity, retention,
+deletion and anti-resurrection, outbox integrity, quotas, model budgets, backup/restore, secret-file
+handling, and dependency provenance. Locked bootstrap, the complete gate, the 46-test security
+suite, the real-PostgreSQL suite, and the separate load gate pass; the accepted load run measured
+24.923 ms p95 and 255.043 requests per second. No security-relevant implementation changed after the
+reviewed candidate; final closure adds only the review artifact and status evidence. Milestone 9
+and all 98 implementation-plan requirements are complete.
 
 ### Personal checkpoint inspection — Complete
 

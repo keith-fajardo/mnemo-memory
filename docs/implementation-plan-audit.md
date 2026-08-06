@@ -2,8 +2,7 @@
 
 Audited on 2026-08-06 against `docs/implementation-plan.md` revision 2 and the current candidate
 worktree. The plan contains 98 explicit Milestone 1–9 build and exit-gate requirements. Evidence
-proves 97 complete; the sole open requirement is the external independent team security review.
-Current requirement completion is therefore 97/98, or 98.98%.
+proves all 98 complete, so current requirement completion is 98/98, or 100%.
 
 Repository status prose is supporting evidence, not the gate by itself. The current full gate
 passes with 942 default tests, 26 real-PostgreSQL tests, schema/dependency/architecture/package
@@ -11,8 +10,7 @@ checks, and installed-workflow verification. The separate team load gate passes 
 runs. Exact implementation checkpoints and narrower verification are recorded under the named
 sections of `docs/implementation-status.md`.
 
-Legend: **Pass** means current code plus the cited executable evidence proves the requirement;
-**External pending** means repository work cannot truthfully supply the required independence.
+Legend: **Pass** means current code plus the cited executable evidence proves the requirement.
 
 ## Milestone 1 — Repository, domain kernel, and minimal MCP path (12/12)
 
@@ -142,7 +140,7 @@ Legend: **Pass** means current code plus the cited executable evidence proves th
 | M8-E3 | Uninstall separates app/data removal | Personal uninstall tests | Pass |
 | M8-E4 | Logs/diagnostics redact by default | Diagnostics and security tests | Pass |
 
-## Milestone 9 — Team workspace and production hardening (9/10)
+## Milestone 9 — Team workspace and production hardening (10/10)
 
 | ID | Requirement | Evidence | Result |
 |---|---|---|---|
@@ -155,12 +153,12 @@ Legend: **Pass** means current code plus the cited executable evidence proves th
 | M9-E2 | Restore/deletion drills meet objectives | Issues 21AD–21AE; backup integration suite | Pass |
 | M9-E3 | Declared load SLO passes | Issue 21AK; `npm run team-load:check` | Pass |
 | M9-E4 | Personal export imports with verified counts/hashes | Issues 21R–21V; import/export tests | Pass |
-| M9-E5 | Independent review has no unresolved critical/high | Review package/checker ready; no independent artifact exists | **External pending** |
+| M9-E5 | Independent review has no unresolved critical/high | Accepted revision-pinned `team-v1.toml`; deterministic review check reports zero unresolved critical/high findings | Pass |
 
 ## Closure rule
 
-The implementation is not 100% complete and the team profile is not general-availability while
-M9-E5 is pending. After an independent reviewer supplies an accepted revision-pinned artifact,
-rerun `npm run security-review:check`, confirm no security-relevant change followed the reviewed
-candidate, rerun the complete and load gates, update this audit to 98/98, and only then close
-Milestone 9 and the implementation plan.
+The implementation plan is 100% complete. The independent review is pinned to candidate
+`e95696c41602d65b42e1c733e8e0e37696dd3ce3`, records two informational findings and no unresolved
+critical or high finding, and passes the deterministic review check. No security-relevant change
+followed the reviewed candidate; only the accepted review artifact and status-only closure changed.
+The complete repository gate and separate team load gate pass for final closure.
