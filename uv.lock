@@ -484,6 +484,7 @@ semantic = [
 ]
 team = [
     { name = "pg8000" },
+    { name = "pyjwt" },
 ]
 
 [package.dev-dependencies]
@@ -500,6 +501,7 @@ requires-dist = [
     { name = "fastembed", marker = "extra == 'semantic'", specifier = "==0.8.0" },
     { name = "mcp", specifier = "==1.28.1" },
     { name = "pg8000", marker = "extra == 'team'", specifier = "==1.31.5" },
+    { name = "pyjwt", marker = "extra == 'team'", specifier = "==2.13.0" },
     { name = "tree-sitter", specifier = "==0.25.2" },
     { name = "tree-sitter-c", specifier = "==0.24.2" },
     { name = "tree-sitter-c-sharp", specifier = "==0.23.5" },

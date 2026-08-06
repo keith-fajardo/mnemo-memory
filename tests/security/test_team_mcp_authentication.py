@@ -1,0 +1,216 @@
+"""OAuth authentication must bind team MCP calls before repository composition."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi.testclient import TestClient
+from mcp.server.auth.provider import AccessToken
+
+from mnemo_memory.apps.mcp.team import AuthenticatedTeamMcpPort, create_team_server
+from mnemo_memory.connectors.oauth import JwtVerifierConfig, MnemoJwtTokenVerifier
+from mnemo_memory.packages.application.mcp_port import McpContextPort
+from mnemo_memory.packages.domain import OwnerId, WorkspaceId
+
+ISSUER = "https://identity.example.test"
+AUDIENCE = "https://memory.example.test/mcp"
+
+
+class _Port:
+    def get_context(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "get_context", "workspace_id": request["workspace_id"]}
+
+    def list_skills(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "list_skills"}
+
+    def get_skill(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "get_skill"}
+
+    def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "save_checkpoint"}
+
+
+class _Factory:
+    def __init__(self) -> None:
+        self.calls: list[tuple[OwnerId, WorkspaceId]] = []
+
+    def __call__(self, principal_id: OwnerId, workspace_id: WorkspaceId) -> McpContextPort:
+        self.calls.append((principal_id, workspace_id))
+        return _Port()
+
+
+@pytest.fixture
+def jwt_keys() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    return private_pem, public_pem
+
+
+def _claims(principal: OwnerId) -> dict[str, object]:
+    now = datetime.now(UTC)
+    return {
+        "aud": AUDIENCE,
+        "client_id": "codex-team-client",
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+        "iat": int((now - timedelta(seconds=1)).timestamp()),
+        "iss": ISSUER,
+        "scope": "mnemo:context mnemo:checkpoint",
+        "sub": str(principal),
+    }
+
+
+def _encode(private_pem: str, claims: dict[str, object]) -> str:
+    return jwt.encode(claims, private_pem, algorithm="RS256")
+
+
+def test_verified_subject_and_explicit_workspace_bind_the_repository_factory() -> None:
+    principal, workspace = OwnerId.new(), WorkspaceId.new()
+    factory = _Factory()
+    access_token = AccessToken(
+        token="not-retained-by-the-port",
+        client_id="codex-team-client",
+        scopes=["mnemo:context"],
+        subject=str(principal),
+    )
+    port = AuthenticatedTeamMcpPort(factory, access_token_loader=lambda: access_token)
+
+    result = port.get_context({"workspace_id": str(workspace)})
+
+    assert result == {"operation": "get_context", "workspace_id": str(workspace)}
+    assert factory.calls == [(principal, workspace)]
+
+
+@pytest.mark.parametrize("payload", [{}, {"workspace_id": "not-a-uuid"}])
+def test_invalid_scope_fails_before_repository_composition(payload: dict[str, object]) -> None:
+    factory = _Factory()
+    token = AccessToken(
+        token="opaque",
+        client_id="client",
+        scopes=["mnemo:context"],
+        subject=str(OwnerId.new()),
+    )
+
+    with pytest.raises(ValueError, match="MNEMO_INVALID_SCOPE"):
+        AuthenticatedTeamMcpPort(factory, access_token_loader=lambda: token).get_context(payload)
+
+    assert factory.calls == []
+
+
+def test_missing_authentication_fails_before_repository_composition() -> None:
+    factory = _Factory()
+    with pytest.raises(ValueError, match="MNEMO_AUTH_REQUIRED"):
+        AuthenticatedTeamMcpPort(factory, access_token_loader=lambda: None).get_context(
+            {"workspace_id": str(WorkspaceId.new())}
+        )
+    assert factory.calls == []
+
+
+def test_pinned_jwt_verifier_accepts_only_exact_signed_oauth_claims(
+    jwt_keys: tuple[str, str],
+) -> None:
+    private_pem, public_pem = jwt_keys
+    principal = OwnerId.new()
+    verifier = MnemoJwtTokenVerifier(JwtVerifierConfig(ISSUER, AUDIENCE, public_pem))
+
+    verified = asyncio.run(verifier.verify_token(_encode(private_pem, _claims(principal))))
+
+    assert verified is not None
+    assert verified.subject == str(principal)
+    assert verified.client_id == "codex-team-client"
+    assert verified.resource == AUDIENCE
+    assert verified.scopes == ["mnemo:checkpoint", "mnemo:context"]
+    assert verified.claims == {"iss": ISSUER}
+
+
+@pytest.mark.parametrize(
+    ("claim", "value"),
+    [
+        ("iss", "https://other.example.test"),
+        ("aud", "https://other.example.test/mcp"),
+        ("scope", "mnemo:checkpoint"),
+        ("sub", "not-a-principal"),
+        ("client_id", "bad client"),
+    ],
+)
+def test_pinned_jwt_verifier_rejects_untrusted_claims(
+    jwt_keys: tuple[str, str], claim: str, value: str
+) -> None:
+    private_pem, public_pem = jwt_keys
+    claims = _claims(OwnerId.new())
+    claims[claim] = value
+    verifier = MnemoJwtTokenVerifier(JwtVerifierConfig(ISSUER, AUDIENCE, public_pem))
+
+    assert asyncio.run(verifier.verify_token(_encode(private_pem, claims))) is None
+
+
+def test_pinned_jwt_verifier_rejects_another_signing_key(
+    jwt_keys: tuple[str, str],
+) -> None:
+    _, public_pem = jwt_keys
+    other_private, _ = _new_key_pair()
+    verifier = MnemoJwtTokenVerifier(JwtVerifierConfig(ISSUER, AUDIENCE, public_pem))
+
+    assert (
+        asyncio.run(verifier.verify_token(_encode(other_private, _claims(OwnerId.new())))) is None
+    )
+
+
+def test_streamable_http_route_requires_bearer_authentication(
+    jwt_keys: tuple[str, str],
+) -> None:
+    private_pem, public_pem = jwt_keys
+    verifier = MnemoJwtTokenVerifier(JwtVerifierConfig(ISSUER, AUDIENCE, public_pem))
+    server = create_team_server(
+        _Factory(),
+        token_verifier=verifier,
+        issuer_url=ISSUER,
+        resource_server_url=AUDIENCE,
+    )
+
+    with TestClient(server.streamable_http_app()) as client:
+        unauthenticated = client.post("/mcp", json={})
+        authenticated = client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {_encode(private_pem, _claims(OwnerId.new()))}"},
+            json={},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code != 401
+    assert server.settings.host == "127.0.0.1"
+    assert server.settings.stateless_http is True
+
+
+def _new_key_pair() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    return private_pem, public_pem

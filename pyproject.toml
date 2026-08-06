@@ -50,6 +50,7 @@ semantic = [
 # Team PostgreSQL support is optional so personal SQLite installs do not acquire a database driver.
 team = [
     "pg8000==1.31.5",
+    "pyjwt==2.13.0",
 ]
 
 [dependency-groups]

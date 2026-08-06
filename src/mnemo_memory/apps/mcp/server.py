@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast
 
+from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -51,9 +53,27 @@ SERVER_VERSION = "0.1.0"
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
 
 
-def create_server(port: McpContextPort) -> FastMCP:
+def create_server(
+    port: McpContextPort,
+    *,
+    auth: AuthSettings | None = None,
+    token_verifier: TokenVerifier | None = None,
+    host: str = "127.0.0.1",
+    http_port: int = 8000,
+    stateless_http: bool = False,
+    json_response: bool = False,
+) -> FastMCP:
     """Create the local context/checkpoint tools around an explicitly supplied application port."""
-    server = FastMCP(SERVER_NAME, instructions="Local Mnemo checkpoint tools.")
+    server = FastMCP(
+        SERVER_NAME,
+        instructions="Mnemo bounded context and checkpoint tools.",
+        auth=auth,
+        token_verifier=token_verifier,
+        host=host,
+        port=http_port,
+        stateless_http=stateless_http,
+        json_response=json_response,
+    )
     server._mcp_server.version = SERVER_VERSION
 
     @server.tool(

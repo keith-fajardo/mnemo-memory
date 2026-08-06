@@ -228,6 +228,16 @@ audit rows. This durable storage boundary does not authenticate a principal by i
 authenticated application service, remote transport controls, personal-data migration, and
 operations requirements remain required before team mode exists.
 
+The team MCP application boundary is an OAuth resource server over stateless Streamable HTTP. A
+pinned asymmetric verifier requires an exact HTTPS issuer and audience, expiration and issuance
+times, canonical UUID subject, bounded client identity, and configured scopes before MCP dispatch.
+The verified subject—not any tool field—becomes the principal for one explicit request workspace.
+Only then does the application construct the existing PostgreSQL checkpoint, episodic, knowledge,
+source, dbt, procedure, and skill stack; repository authorization and forced RLS still precede data
+access. The server binds to loopback and stores no bearer token or credential. Deployment
+configuration, TLS proxying, key-file controls and rotation, and the remaining team governance and
+operations gates are separate requirements before team availability.
+
 ## Evidence requirements
 
 Every durable memory includes:

@@ -14,7 +14,9 @@ from uuid import uuid4
 
 import pg8000.dbapi  # type: ignore[import-untyped]
 import pytest
+from mcp.server.auth.provider import AccessToken
 
+from mnemo_memory.apps.mcp.team import AuthenticatedTeamMcpPort, PostgreSQLTeamMcpPortFactory
 from mnemo_memory.connectors.dbt import (
     DbtCatalogParser,
     DbtManifestParser,
@@ -1690,6 +1692,68 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
         repository.get_aggregate(scope, active_aggregate.checkpoint_id)
     with pytest.raises(RevisionConflict):
         repository.create_checkpoint_aggregate(active_aggregate, active_revision)
+
+
+def test_authenticated_team_mcp_binds_subject_before_forced_rls(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    checkpoint_repository = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    aggregate, revision = _checkpoint_pair(scope, "a")
+    checkpoint_repository.create_checkpoint_aggregate(aggregate, revision)
+    factory = PostgreSQLTeamMcpPortFactory(postgres_harness.runtime_factory(), clock=lambda: NOW)
+
+    def port_for(principal_id: OwnerId) -> AuthenticatedTeamMcpPort:
+        token = AccessToken(
+            token="verified-outside-storage",
+            client_id="codex-team-client",
+            scopes=["mnemo:context"],
+            subject=str(principal_id),
+        )
+        return AuthenticatedTeamMcpPort(factory, access_token_loader=lambda: token)
+
+    request: dict[str, object] = {
+        "owner_id": str(scope.owner_id),
+        "workspace_id": str(scope.workspace_id),
+        "project_id": str(scope.project_id),
+        "session_id": str(scope.session_id),
+        "task_id": str(scope.task_id),
+    }
+    result = port_for(workspace.owner_id).get_context(request)
+    packet = result
+    assert cast(dict[str, object], packet["owner_scope"])["workspace_id"] == str(
+        workspace.workspace_id
+    )
+    assert cast(dict[str, object], packet["active_task_checkpoint"])
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer_packet = port_for(viewer_id).get_context(request)
+    assert viewer_packet["active_task_checkpoint"] is None
+    foreign_packet = port_for(workspace.owner_id).get_context(
+        {**request, "workspace_id": str(WorkspaceId.new())}
+    )
+    assert foreign_packet["active_task_checkpoint"] is None
 
 
 def _task_event(

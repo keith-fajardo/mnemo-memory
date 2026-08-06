@@ -23,7 +23,13 @@ PACKAGE_COMPONENTS = {
     "packages/storage",
     "packages/telemetry",
 }
-APP_COMPONENTS = {"apps/api", "apps/cli", "apps/mcp", "apps/web", "apps/worker"}
+APP_COMPONENTS = {
+    "apps/api",
+    "apps/cli",
+    "apps/mcp",
+    "apps/web",
+    "apps/worker",
+}
 CONNECTOR_COMPONENTS = {
     "connectors/automatic_memory",
     "connectors/claude_code",
@@ -34,6 +40,7 @@ CONNECTOR_COMPONENTS = {
     "connectors/local_embeddings",
     "connectors/git",
     "connectors/obsidian",
+    "connectors/oauth",
 }
 KNOWN_COMPONENTS = PACKAGE_COMPONENTS | APP_COMPONENTS | CONNECTOR_COMPONENTS
 

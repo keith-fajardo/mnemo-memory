@@ -6,10 +6,11 @@ This threat model covers the planned personal, local-first path through native C
 Code MCP integration, explicit checkpoints, SQLite, and dbt structural projections. It specifies
 required controls before those features exist; it does not claim they are implemented.
 
-The pure team authorization contract, PostgreSQL authority control plane, team knowledge, and team
-checkpoint storage, minimized team task events, and their transactional outbox are now included.
-Remote MCP, hosted sync, OAuth, remaining team data parity, and production operations remain
-deferred and require threat-model revisions before exposure.
+The pure team authorization contract, PostgreSQL authority control plane and data parity, plus the
+OAuth-authenticated loopback Streamable HTTP MCP request boundary are now included. Non-loopback
+exposure, TLS proxy deployment, hosted sync, key rotation operations, team knowledge governance,
+and remaining production operations remain deferred and require threat-model revisions before
+exposure.
 
 ## Security objectives
 
@@ -123,11 +124,35 @@ missing private-project grant, suspended project grant, owner-only data, private
 administrator behavior, and deterministic repeated decisions. Later storage and service issues
 must run the same matrix against PostgreSQL RLS and remote request composition before team exposure.
 
-**Residual risk:** The canonical policy, durable PostgreSQL authority schema, and real-database RLS
-parity suite now exist. The service credential must remain infrastructure-only, and the later
-authenticated application boundary must derive transaction identity from verified authentication,
-not request fields. No authenticated team service or remote surface exists yet; therefore team mode
-remains unavailable.
+**Residual risk:** The canonical policy, durable PostgreSQL authority schema, real-database RLS
+parity suite, and authenticated loopback request boundary now exist. The service credential must
+remain infrastructure-only. Non-loopback TLS deployment, key rotation, service audit expansion,
+and remaining production controls are not complete, so team mode remains unavailable.
+
+### Forged OAuth identity or request-selected database principal
+
+**Scenario:** A caller supplies another member's owner ID, changes JWT algorithm or issuer, reuses a
+token for another resource, omits the required scope, presents an expired token, or reaches an MCP
+tool without authentication. A valid private-project viewer may try to turn its token into the
+workspace owner's database principal.
+
+**Required controls:** FastMCP bearer middleware guards the entire Streamable HTTP route. Mnemo's
+verifier uses one configured asymmetric public key and approved algorithm and requires exact HTTPS
+issuer and audience, `exp`, `iat`, canonical UUID `sub`, bounded client identity, and all configured
+scopes. The request port obtains the PostgreSQL principal only from verified `sub`; tool arguments
+must contain an explicit canonical workspace but cannot replace the principal. Repository
+authorization and forced RLS then run normally. Tokens and arbitrary claims are not stored or
+logged. The server is stateless and loopback-only.
+
+**Verification:** Security tests cover missing bearer credentials, independent signing keys,
+issuer/audience/scope/subject/client tampering, and repository-factory non-invocation on invalid
+identity or workspace. The mandatory real-PostgreSQL suite sends authenticated owner, private
+viewer, and foreign-workspace requests through the service port and proves only the owner receives
+the checkpoint.
+
+**Residual risk:** Static public-key configuration needs deployment-time file-permission and
+restart-based rotation procedures. A TLS reverse proxy, non-loopback exposure ADR, rate limits,
+service audit records, and production security review remain required before remote availability.
 
 ### Team authority races and audit gaps
 

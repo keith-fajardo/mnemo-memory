@@ -535,10 +535,10 @@ version="2.13.0"
 license="MIT"
 source_url="https://pypi.org/project/pyjwt/2.13.0/"
 author="PyJWT contributors"
-owner="mcp"
-purpose="MCP authentication support"
-replacement_boundary="Transitive MCP dependency"
-direct=false
+owner="mnemo-memory team authentication"
+purpose="Pinned asymmetric OAuth access-token verification for the optional team MCP profile"
+replacement_boundary="Team JWT verifier connector; replaceable behind the MCP TokenVerifier protocol"
+direct=true
 approved=true
 
 [[dependencies]]

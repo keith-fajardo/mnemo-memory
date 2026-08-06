@@ -2462,6 +2462,52 @@ for 234 source files, dependency/provenance validation for 93 entries, architect
 128 product Python files, schema validation, and the isolated installed-package MCP workflow. No
 dependency or schema migration was added.
 
+#### Issue 21AA — Authenticated team MCP request boundary — Complete
+
+The current bounded issue makes the existing PostgreSQL parity usable through one authenticated,
+loopback-hosted Streamable HTTP MCP composition intended for deployment behind an HTTPS reverse
+proxy. A pinned asymmetric JWT verifier must validate signature, exact issuer, resource audience,
+expiry, subject UUID, client identity, and required scopes before MCP dispatch. The verified subject
+becomes the PostgreSQL principal; the exact request workspace selects one principal/workspace-bound
+repository composition, so existing authorization policy and forced RLS still execute before every
+storage read or mutation.
+
+The team port must compose existing checkpoint, episodic, knowledge, source-structure, dbt, skill,
+and procedure retrieval rather than redesigning them. It must require explicit UUID scope, retain no
+token or database secret, expose no unauthenticated tool route, bind loopback by default, and reject
+invalid issuer/audience/signature/scope/subject before creating a repository. This issue adds no
+authorization server, dynamic client registration, JWKS network fetch, non-loopback listener, team
+knowledge correction/source approval, backup, quota, dashboard, or new memory behavior.
+
+Implemented a pinned asymmetric JWT verifier for the optional team profile. It accepts only
+configured `RS256`, `PS256`, or `ES256`, exact HTTPS issuer and resource audience, valid `exp` and
+`iat`, a canonical UUID subject, bounded client identity, and all configured scopes. Signature,
+claim, or scope failure returns no access token and creates no repository. The verifier retains only
+minimized issuer metadata in request context and never stores or logs the bearer token.
+
+The authenticated MCP port derives its database principal exclusively from the verified subject and
+requires one explicit canonical request workspace before constructing a port. Its PostgreSQL
+factory composes the already-complete checkpoint, approved-event, episodic, knowledge, source,
+dbt, procedure, and skill repositories into the existing unified context and checkpoint service.
+Every repository remains bound to that principal/workspace and executes existing deterministic
+authorization plus forced RLS; private viewers and foreign workspaces receive no checkpoint.
+
+The Streamable HTTP server is stateless, bearer-protected across the route, and fixed to
+`127.0.0.1`; advertised issuer and resource URLs require HTTPS for a later controlled proxy. ADR
+0035, the product contract, dependency register, architecture rules, and threat model record the
+identity binding, no-token-retention rule, dependency/reversal boundary, and residual TLS,
+key-rotation, audit, and operations work. The optional `team` extra now declares the already locked
+and reviewed `pyjwt==2.13.0` dependency directly; no new transitive package or schema migration was
+added.
+
+Security tests cover missing authentication, alternate keys, issuer/audience/scope/subject/client
+tampering, exact principal/workspace binding, unauthenticated HTTP, and loopback/stateless settings.
+The real PostgreSQL service test covers owner success plus private-viewer and foreign-workspace
+non-disclosure. The complete repository gate passes with 868 default tests plus 22 mandatory real-
+PostgreSQL tests, strict typing for 238 source files, dependency/provenance validation for 93
+entries, architecture validation for 131 product Python files, schema validation, and the isolated
+installed-package personal MCP workflow.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable
