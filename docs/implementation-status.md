@@ -1926,6 +1926,49 @@ validation, and the isolated installed-package MCP workflow. No dependency was a
 backup propagation, scheduler/worker, checkpoint/dbt/source-structure parity, personal import,
 remote service, OAuth, quota, dashboard, source governance, or usable team mode was added.
 
+#### Issue 21M — PostgreSQL team episodic export parity — Complete
+
+The current bounded issue implements the existing `EpisodicExportRepository` contract for
+PostgreSQL. One authorized exact-task read-only repeatable snapshot must produce the existing
+versioned canonical bundle with live minimized events/candidates, review and governance streams,
+deterministically replayed revisions, and every matching retention, purge, and deletion tombstone.
+Scope filtering and forced RLS must precede payload reconstruction; stable identity ordering,
+canonical JSON, the SHA-256 content digest, restart stability, and empty non-disclosing denied-scope
+results must match the personal contract. Real-database tests must cover complete mixed lifecycle
+state, byte stability, tamper-verifiable round trip, private-project/cross-task isolation, and
+storage failure translation.
+
+This issue does not add an export file writer, personal-to-team import, checkpoint/approved-fact/
+knowledge/dbt/source-structure export, backup propagation, remote service, OAuth, quota, dashboard,
+source governance, or usable team mode.
+
+Implemented the existing `EpisodicExportRepository` contract on
+`PostgreSQLEpisodicMemoryRepository` without a schema change. Each export starts one repeatable
+read-only transaction configured with the exact authenticated principal, bound workspace, and read
+operation. Forced RLS and complete task scope filter every canonical query before PostgreSQL JSON
+payloads are parsed or revision state is reconstructed.
+
+The adapter returns the existing `mnemo.episodic-export.v1` bundle with permitted live minimized
+events and candidates, candidate reviews, governance action streams, deterministically replayed
+revision chains, and all matching memory/source expiration, purge, and deletion tombstones. The
+existing domain bundle enforces canonical identity ordering, source/dependent relationships,
+backend-independent UTF-8 JSON, and its SHA-256 content digest. Exact exports are byte-stable for
+the same snapshot and export time. Foreign-task and unauthorized private-project reads yield the
+same valid empty bundle shape without leaking identifiers or counts; connection and reconstruction
+failures become payload-free export storage outcomes.
+
+The product contract and threat model document snapshot consistency, authorization-before-
+reconstruction, integrity, portability, and residual file/import boundaries. Real PostgreSQL tests
+cover approved/corrected and rejected live candidates, fully purged memory/source retention,
+source deletion, individual deletion, complete tombstone export, canonical JSON round trip, digest
+stability and time sensitivity, restart parity, foreign-task/private-project non-disclosure,
+invalid-scope rejection, and storage failure translation. The complete repository gate passes with
+826 default tests plus 14 mandatory real-PostgreSQL tests, strict typing for 216 source files,
+dependency/provenance validation for 93 entries, architecture validation for 116 product Python
+files, schema validation, and the isolated installed-package MCP workflow. No migration or
+dependency was added. No export file writer, import, broader category export, backup propagation,
+remote service, OAuth, quota, dashboard, source governance, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

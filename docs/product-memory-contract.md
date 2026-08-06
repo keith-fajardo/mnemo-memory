@@ -106,6 +106,15 @@ one transaction. Existing expiration and purge tombstones survive. Exact replay 
 changed action or target reuse fails closed, and retained tombstones prevent event or candidate
 resurrection. Export, backup propagation, and external-consumer cleanup remain separate operations.
 
+Team episodic export uses the same `mnemo.episodic-export.v1` bundle as personal mode. PostgreSQL
+opens one authorized exact-task repeatable read-only snapshot before reconstructing live minimized
+events and candidates, reviews, governance streams, replayed revisions, and matching retention,
+purge, and deletion tombstones. Identity ordering, canonical UTF-8 JSON, and SHA-256 integrity
+semantics are backend-independent. Forced RLS and exact scope filtering precede payload parsing;
+an unauthorized or foreign task yields the same valid empty bundle shape without disclosing counts
+or identities. The operation returns data only and does not persist an export file or authorize a
+later import.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

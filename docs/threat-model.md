@@ -379,6 +379,33 @@ tombstones. An injected v9-to-v10 migration failure retains v9 without deletion 
 and deletion parity for checkpoints, knowledge, dbt, and source-structure data remain unimplemented.
 The runtime credential remains infrastructure-only and team mode remains unavailable.
 
+### Cross-tenant episodic export and inconsistent snapshots
+
+**Scenario:** A principal exports another task's payload, RLS is applied after reconstruction, a
+concurrent lifecycle mutation produces a bundle with mismatched payload and tombstone state, or
+unstable ordering makes integrity hashes non-repeatable. Error detail or denied-scope counts could
+also reveal private-project existence.
+
+**Required controls:** Export accepts only the repository's bound exact task scope and starts one
+repeatable read-only transaction with the authenticated principal, workspace, and read operation.
+Every query repeats complete scope and runs behind forced RLS before rows are parsed. Payload reads
+exclude matching memory/source expiration or deletion state, while lifecycle queries retain all
+authorized payload-free tombstones. Revisions are deterministically replayed from approval and
+ordered governance actions. The existing bundle validates source/dependent relationships, canonical
+identity order, exact scope, and SHA-256 digest. Foreign-task and unauthorized private-project reads
+return a valid empty bundle rather than identifiers, counts, or database errors.
+
+**Verification:** Real PostgreSQL tests build live approved/corrected and rejected candidates,
+fully purged retention state, source deletion, and individual deletion in one task. They verify the
+complete bundle, canonical JSON round trip, digest stability and time sensitivity, restart parity,
+foreign-task and private-project non-disclosure, invalid-scope rejection, and payload-free storage
+failure translation.
+
+**Residual risk:** The export is returned in memory and is not an encrypted file-delivery service.
+Personal-to-team import, backup/export deletion propagation, checkpoint/approved-fact/knowledge/
+structural export parity, authenticated remote transport, and user-visible export audit remain
+separate issues.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

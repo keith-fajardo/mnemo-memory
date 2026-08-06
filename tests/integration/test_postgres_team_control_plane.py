@@ -29,6 +29,7 @@ from mnemo_memory.packages.domain import (
     CheckpointStatus,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
+    EpisodicExportBundle,
     EpisodicExtractionProposal,
     EpisodicMemoryCandidate,
     EpisodicMemoryExpiration,
@@ -80,6 +81,7 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.episodic import (
     EpisodicDeletionService,
+    EpisodicExportService,
     EpisodicRetentionService,
     TaskActivityRetentionService,
 )
@@ -96,6 +98,7 @@ from mnemo_memory.packages.storage import (
     EventOutboxNotFound,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
+    InvalidEpisodicExportScope,
     InvalidKnowledgeDocumentScope,
     InvalidLifecycleTransition,
     KnowledgeDocumentConflict,
@@ -127,6 +130,7 @@ from mnemo_memory.packages.storage.contracts import (
     ApprovedEpisodicEventSecretRejected,
     EpisodicDeletionConflict,
     EpisodicDeletionNotFound,
+    EpisodicExportStorageFailure,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidateRejected,
@@ -2659,6 +2663,217 @@ def test_postgres_explicit_episodic_deletion_erases_source_dependents_and_is_sco
         connection.rollback()
         cursor.close()
         connection.close()
+
+
+def test_postgres_episodic_export_is_complete_stable_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    repository = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+
+    live_source = _task_event(scope, "export-live")
+    events.append_task_activity_event(live_source)
+    live_candidates = _episodic_candidates(
+        live_source,
+        extractor_version="team-export-live",
+        claims=("export the approved memory", "export the rejected candidate"),
+    )
+    repository.store_episodic_memory_candidates(live_candidates)
+    approval = _episodic_review(
+        scope,
+        live_candidates[0],
+        "export-approve",
+        EpisodicCandidateReviewDecision.APPROVED,
+    )
+    repository.review_episodic_memory_candidate(approval)
+    repository.review_episodic_memory_candidate(
+        _episodic_review(
+            scope,
+            live_candidates[1],
+            "export-reject",
+            EpisodicCandidateReviewDecision.REJECTED,
+        )
+    )
+    correction = EpisodicMemoryGovernanceAction.correct(
+        scope=scope,
+        memory_id=live_candidates[0].memory_id,
+        expected_revision_id=approval.action_id,
+        source_action_key="team-export-correction",
+        reason="the verified export claim needs exact corrected wording",
+        corrected_claim="export the corrected approved memory",
+        corrected_sensitivity=Sensitivity.NORMAL,
+        occurred_at=NOW + timedelta(minutes=1),
+        evidence_references=(_approved_evidence("export-correction", user=True),),
+    )
+    repository.govern_episodic_memory(correction)
+
+    expires_at = NOW + timedelta(minutes=2)
+    retained_source = _task_event(
+        scope,
+        "export-retained",
+        retention=RetentionSchedule(
+            RetentionPolicyId.new(), False, NOW, NOW, NOW, None, expires_at
+        ),
+    )
+    events.append_task_activity_event(retained_source)
+    retained_candidate = _episodic_candidates(
+        retained_source,
+        extractor_version="team-export-retained",
+        claims=("export retained lifecycle state",),
+    )[0]
+    repository.store_episodic_memory_candidates((retained_candidate,))
+    EpisodicRetentionService(repository).expire_due(scope, as_of=expires_at)
+    EpisodicRetentionService(repository).purge_expired(
+        scope, purged_at=expires_at + timedelta(seconds=30)
+    )
+    TaskActivityRetentionService(events).expire_due(scope, as_of=expires_at)
+    TaskActivityRetentionService(events).purge_expired(
+        scope, purged_at=expires_at + timedelta(minutes=1)
+    )
+
+    deleted_source = _task_event(scope, "export-deleted-source")
+    events.append_task_activity_event(deleted_source)
+    source_candidate = _episodic_candidates(
+        deleted_source,
+        extractor_version="team-export-deleted-source",
+        claims=("export the source deletion tombstone",),
+    )[0]
+    repository.store_episodic_memory_candidates((source_candidate,))
+    EpisodicDeletionService(repository).delete_task_event(
+        scope=scope,
+        event_id=deleted_source.event_id,
+        source_action_key="team-export-delete-source",
+        deleted_at=NOW + timedelta(minutes=4),
+    )
+
+    individual_source = _task_event(scope, "export-deleted-memory")
+    events.append_task_activity_event(individual_source)
+    individual_candidate = _episodic_candidates(
+        individual_source,
+        extractor_version="team-export-deleted-memory",
+        claims=("export the individual deletion tombstone",),
+    )[0]
+    repository.store_episodic_memory_candidates((individual_candidate,))
+    EpisodicDeletionService(repository).delete_memory(
+        scope=scope,
+        memory_id=individual_candidate.memory_id,
+        source_event_id=individual_source.event_id,
+        source_action_key="team-export-delete-memory",
+        deleted_at=NOW + timedelta(minutes=5),
+    )
+
+    exported_at = NOW + timedelta(minutes=6)
+    service = EpisodicExportService(repository)
+    bundle = service.export(scope, exported_at=exported_at)
+    assert EpisodicExportBundle.from_json(bundle.canonical_json()) == bundle
+    assert service.export(scope, exported_at=exported_at).canonical_json() == (
+        bundle.canonical_json()
+    )
+    assert (
+        service.export(scope, exported_at=exported_at + timedelta(seconds=1)).content_digest
+        != bundle.content_digest
+    )
+    assert tuple(item.event_id for item in bundle.task_events) == tuple(
+        sorted((live_source.event_id, individual_source.event_id), key=str)
+    )
+    assert tuple(item.memory_id for item in bundle.candidates) == tuple(
+        sorted((item.memory_id for item in live_candidates), key=str)
+    )
+    assert len(bundle.reviews) == 2
+    assert bundle.governance_actions == (correction,)
+    assert tuple(item.revision_number for item in bundle.revisions) == (1, 2)
+    assert len(bundle.memory_expirations) == len(bundle.memory_purges) == 1
+    assert bundle.memory_expirations[0].memory_id == retained_candidate.memory_id
+    assert len(bundle.task_expirations) == len(bundle.task_purges) == 1
+    assert bundle.task_expirations[0].event_id == retained_source.event_id
+    assert {item.memory_id for item in bundle.memory_deletions} == {
+        source_candidate.memory_id,
+        individual_candidate.memory_id,
+    }
+    assert len(bundle.task_deletions) == 1
+    assert bundle.task_deletions[0].event_id == deleted_source.event_id
+
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert EpisodicExportService(restarted).export(scope, exported_at=exported_at) == bundle
+    foreign_task_bundle = EpisodicExportService(restarted).export(
+        replace(scope, task_id=TaskId.new()), exported_at=exported_at
+    )
+    assert not any(
+        (
+            foreign_task_bundle.task_events,
+            foreign_task_bundle.candidates,
+            foreign_task_bundle.memory_expirations,
+            foreign_task_bundle.memory_deletions,
+            foreign_task_bundle.task_deletions,
+        )
+    )
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    viewer_bundle = EpisodicExportService(viewer).export(scope, exported_at=exported_at)
+    assert not any(
+        (
+            viewer_bundle.task_events,
+            viewer_bundle.candidates,
+            viewer_bundle.memory_expirations,
+            viewer_bundle.memory_deletions,
+            viewer_bundle.task_deletions,
+        )
+    )
+    project_scope = MemoryScope(
+        scope.owner_id,
+        ScopeLevel.PROJECT,
+        scope.visibility,
+        scope.workspace_id,
+        scope.project_id,
+    )
+    with pytest.raises(InvalidEpisodicExportScope):
+        service.export(project_scope, exported_at=exported_at)
+
+    def unavailable_connection() -> PostgreSQLConnection:
+        raise RuntimeError("database unavailable")
+
+    unavailable = PostgreSQLEpisodicMemoryRepository(
+        unavailable_connection,
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(EpisodicExportStorageFailure):
+        EpisodicExportService(unavailable).export(scope, exported_at=exported_at)
 
 
 def _database_authorized(

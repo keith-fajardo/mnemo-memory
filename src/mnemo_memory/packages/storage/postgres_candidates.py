@@ -14,6 +14,7 @@ from mnemo_memory.packages.domain import (
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicDeletionCause,
+    EpisodicExportBundle,
     EpisodicMemoryCandidate,
     EpisodicMemoryDeletion,
     EpisodicMemoryExpiration,
@@ -55,6 +56,8 @@ from .contracts import (
     EpisodicDeletionNotFound,
     EpisodicDeletionRepositoryError,
     EpisodicDeletionStorageFailure,
+    EpisodicExportRepositoryError,
+    EpisodicExportStorageFailure,
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
     EpisodicMemoryCandidatePage,
@@ -84,11 +87,22 @@ from .contracts import (
     EpisodicMemoryReviewRepositoryError,
     EpisodicMemoryReviewResult,
     EpisodicMemoryReviewStorageFailure,
+    InvalidEpisodicExportScope,
     InvalidEpisodicMemoryCandidateScope,
     TaskActivityDeletionResult,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
-from .postgres_events import _task_scope_values
+from .postgres_events import (
+    _EXPIRATION_COLUMNS as _TASK_EXPIRATION_COLUMNS,
+)
+from .postgres_events import (
+    _PURGE_COLUMNS as _TASK_PURGE_COLUMNS,
+)
+from .postgres_events import (
+    _TASK_EVENT_COLUMNS,
+    PostgreSQLTaskActivityEventRepository,
+    _task_scope_values,
+)
 
 _CANDIDATE_COLUMNS = (
     "candidate_sequence, memory_id::text, source_event_id::text, proposal_index, memory_kind, "
@@ -115,6 +129,14 @@ _MEMORY_DELETION_COLUMNS = (
 )
 _SOURCE_DELETION_COLUMNS = (
     "deletion_sequence, deletion_id::text, event_id::text, actor, source_action_key, deleted_at"
+)
+_CANDIDATE_EXPORT_COLUMNS = (
+    "candidate.candidate_sequence, candidate.memory_id::text, "
+    "candidate.source_event_id::text, candidate.proposal_index, candidate.memory_kind, "
+    "candidate.claim, candidate.confidence, candidate.sensitivity, candidate.status, "
+    "candidate.extractor_version, candidate.provider_id, candidate.model_id, "
+    "candidate.prompt_version, candidate.retention_json::text, candidate.created_at, "
+    "candidate.evidence_json::text"
 )
 
 
@@ -489,6 +511,221 @@ class PostgreSQLEpisodicMemoryRepository:
             if base is None:
                 raise EpisodicMemoryGovernanceNotFound("episodic memory was not found")
             return self._revisions(cursor, base)
+
+    def export_episodic_state(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> EpisodicExportBundle:
+        if (
+            not isinstance(scope, MemoryScope)
+            or scope.level is not ScopeLevel.TASK
+            or scope.workspace_id != self._workspace_id
+            or scope.project_id is None
+            or scope.session_id is None
+            or scope.task_id is None
+        ):
+            raise InvalidEpisodicExportScope(
+                "team episodic export requires the bound exact task scope"
+            )
+        self._require_aware(exported_at, "exported_at")
+        scope_values = _task_scope_values(scope)
+        with self._export_transaction() as cursor:
+            cursor.execute(
+                "SELECT "
+                + _TASK_EVENT_COLUMNS
+                + " FROM mnemo_team.task_activity_events AS event WHERE "
+                "event.workspace_id = CAST(%s AS uuid) "
+                "AND event.project_id = CAST(%s AS uuid) "
+                "AND event.owner_id = CAST(%s AS uuid) AND event.visibility = %s "
+                "AND event.session_id = CAST(%s AS uuid) AND event.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.task_activity_event_expirations "
+                "AS expiration WHERE expiration.workspace_id = event.workspace_id "
+                "AND expiration.event_id = event.event_id) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.task_activity_event_deletions "
+                "AS deletion WHERE deletion.workspace_id = event.workspace_id "
+                "AND deletion.event_id = event.event_id) ORDER BY event.event_id ASC",
+                scope_values,
+            )
+            task_events = tuple(
+                PostgreSQLTaskActivityEventRepository._event_from_row(row, scope)
+                for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "SELECT "
+                + _CANDIDATE_EXPORT_COLUMNS
+                + " FROM mnemo_team.episodic_memory_candidates AS candidate "
+                "JOIN mnemo_team.task_activity_events AS source "
+                "ON source.workspace_id = candidate.workspace_id "
+                "AND source.event_id = candidate.source_event_id WHERE "
+                "candidate.workspace_id = CAST(%s AS uuid) "
+                "AND candidate.project_id = CAST(%s AS uuid) "
+                "AND candidate.owner_id = CAST(%s AS uuid) AND candidate.visibility = %s "
+                "AND candidate.session_id = CAST(%s AS uuid) "
+                "AND candidate.task_id = CAST(%s AS uuid) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_expirations "
+                "AS expiration WHERE expiration.workspace_id = candidate.workspace_id "
+                "AND expiration.memory_id = candidate.memory_id) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.episodic_memory_deletions "
+                "AS deletion WHERE deletion.workspace_id = candidate.workspace_id "
+                "AND deletion.memory_id = candidate.memory_id) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.task_activity_event_expirations "
+                "AS expiration WHERE expiration.workspace_id = source.workspace_id "
+                "AND expiration.event_id = source.event_id) "
+                "AND NOT EXISTS (SELECT 1 FROM mnemo_team.task_activity_event_deletions "
+                "AS deletion WHERE deletion.workspace_id = source.workspace_id "
+                "AND deletion.event_id = source.event_id) ORDER BY candidate.memory_id ASC",
+                scope_values,
+            )
+            candidates = tuple(self._candidate_from_row(row, scope) for row in cursor.fetchall())
+            candidate_ids = "{" + ",".join(str(item.memory_id) for item in candidates) + "}"
+            reviews: tuple[EpisodicCandidateReviewAction, ...] = ()
+            governance_actions: tuple[EpisodicMemoryGovernanceAction, ...] = ()
+            revisions: tuple[EpisodicMemoryRevision, ...] = ()
+            if candidates:
+                cursor.execute(
+                    "SELECT "
+                    + _REVIEW_COLUMNS
+                    + " FROM mnemo_team.episodic_candidate_reviews WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                    "AND candidate_id = ANY(CAST(%s AS uuid[])) ORDER BY candidate_id ASC",
+                    (*scope_values, candidate_ids),
+                )
+                reviews = tuple(self._review_from_row(row, scope) for row in cursor.fetchall())
+                cursor.execute(
+                    "SELECT "
+                    + _GOVERNANCE_COLUMNS
+                    + " FROM mnemo_team.episodic_memory_governance WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                    "AND memory_id = ANY(CAST(%s AS uuid[])) "
+                    "ORDER BY memory_id ASC, action_sequence ASC",
+                    (*scope_values, candidate_ids),
+                )
+                governance_actions = tuple(
+                    self._governance_from_row(row, scope) for row in cursor.fetchall()
+                )
+                cursor.execute(
+                    "SELECT memory_id::text, approval_action_id::text FROM "
+                    "mnemo_team.active_episodic_memories WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                    "AND memory_id = ANY(CAST(%s AS uuid[])) ORDER BY memory_id ASC",
+                    (*scope_values, candidate_ids),
+                )
+                active_rows = tuple(cursor.fetchall())
+                candidate_by_id = {item.memory_id: item for item in candidates}
+                review_by_id = {item.candidate_id: item for item in reviews}
+                actions_by_id: dict[MemoryId, list[EpisodicMemoryGovernanceAction]] = {}
+                for action in governance_actions:
+                    actions_by_id.setdefault(action.memory_id, []).append(action)
+                revision_values: list[EpisodicMemoryRevision] = []
+                for row in active_rows:
+                    memory_id = MemoryId.from_string(str(row[0]))
+                    candidate = candidate_by_id[memory_id]
+                    review = review_by_id[memory_id]
+                    base = ActiveEpisodicMemory.approve(candidate, review)
+                    if base.approval_action_id != EventId.from_string(str(row[1])):
+                        raise ValueError("episodic export active approval relationship is invalid")
+                    revision_values.extend(
+                        replay_episodic_memory_revisions(
+                            base, tuple(actions_by_id.get(memory_id, ()))
+                        )
+                    )
+                revisions = tuple(revision_values)
+            cursor.execute(
+                "SELECT "
+                + _EXPIRATION_COLUMNS
+                + " FROM mnemo_team.episodic_memory_expirations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY memory_id ASC",
+                scope_values,
+            )
+            memory_expirations = tuple(
+                self._expiration_from_row(row, scope) for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "SELECT " + _PURGE_COLUMNS + " FROM mnemo_team.episodic_memory_purges WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY memory_id ASC",
+                scope_values,
+            )
+            memory_purges = tuple(self._purge_from_row(row, scope) for row in cursor.fetchall())
+            cursor.execute(
+                "SELECT "
+                + _TASK_EXPIRATION_COLUMNS
+                + " FROM mnemo_team.task_activity_event_expirations WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY event_id ASC",
+                scope_values,
+            )
+            task_expirations = tuple(
+                PostgreSQLTaskActivityEventRepository._expiration_from_row(row, scope)
+                for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "SELECT "
+                + _TASK_PURGE_COLUMNS
+                + " FROM mnemo_team.task_activity_event_purges WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY event_id ASC",
+                scope_values,
+            )
+            task_purges = tuple(
+                PostgreSQLTaskActivityEventRepository._purge_from_row(row, scope)
+                for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "SELECT "
+                + _MEMORY_DELETION_COLUMNS
+                + " FROM mnemo_team.episodic_memory_deletions WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY memory_id ASC",
+                scope_values,
+            )
+            memory_deletions = tuple(
+                self._memory_deletion_from_row(row, scope) for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "SELECT "
+                + _SOURCE_DELETION_COLUMNS
+                + " FROM mnemo_team.task_activity_event_deletions WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+                "ORDER BY event_id ASC",
+                scope_values,
+            )
+            task_deletions = tuple(
+                self._source_deletion_from_row(row, scope) for row in cursor.fetchall()
+            )
+            return EpisodicExportBundle.create(
+                scope=scope,
+                exported_at=exported_at,
+                task_events=task_events,
+                candidates=candidates,
+                reviews=reviews,
+                governance_actions=governance_actions,
+                revisions=revisions,
+                memory_expirations=memory_expirations,
+                memory_purges=memory_purges,
+                task_expirations=task_expirations,
+                task_purges=task_purges,
+                memory_deletions=memory_deletions,
+                task_deletions=task_deletions,
+            )
 
     def list_due_episodic_memory_retention(
         self, scope: MemoryScope, *, as_of: datetime
@@ -1649,6 +1886,33 @@ class PostgreSQLEpisodicMemoryRepository:
                 ) from error
             raise EpisodicDeletionStorageFailure(
                 "episodic deletion database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    @contextmanager
+    def _export_transaction(self) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise EpisodicExportStorageFailure(
+                "episodic export database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            self._configure(cursor, TeamOperation.READ)
+            yield cursor
+            connection.commit()
+        except EpisodicExportRepositoryError:
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            raise EpisodicExportStorageFailure(
+                "episodic export database operation failed"
             ) from error
         finally:
             cursor.close()
