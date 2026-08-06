@@ -44,7 +44,8 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a4
+uv tool install mnemo-unified-context==0.1.0a5
+mnemo-memory --version
 mnemo-memory init
 cd /path/to/your/project
 mnemo-memory connect codex --auto-memory --yes --project-dir .
@@ -357,6 +358,7 @@ For an installation managed by uv or pipx, perform the backup and package upgrad
 
 ```bash
 mnemo-memory upgrade
+mnemo-memory --version
 ```
 
 Mnemo accepts exactly one ownership marker in its running isolated environment and resolves only

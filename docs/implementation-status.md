@@ -3957,3 +3957,23 @@ and the first complete repository gate passes with 944 tests, 27 expected skips,
 PostgreSQL suite with one expected load-test skip, schema validation, dependency/provenance
 validation for 94 entries, architecture validation for 144 product Python files, and installed
 package verification.
+
+### PyPI 0.1.0a5 CLI version release candidate — Complete
+
+This bounded release issue packages the completed root `mnemo-memory --version` option in the next
+immutable PyPI prerelease. It updates active package, lockfile, workflow, verifier, test, and user
+installation references to `0.1.0a5`, then publishes only through the existing protected PyPI OIDC
+workflow. It adds no further runtime behavior, dependency, schema, policy, MCP tool, client
+registration, or deployment-boundary change.
+
+The release candidate passes the focused CLI and release suite (`43 passed`), direct
+`mnemo-memory --version` verification, workflow YAML parsing, relative Markdown link validation,
+`git diff --check`, and the complete `npm run check` gate (`944 passed`, `27 skipped`; PostgreSQL
+integration `26 passed`, `1 skipped`). The independently built artifacts pass the release verifier
+with these SHA-256 digests:
+
+- wheel: `146c4583f2b4e343d0b718f5b09e9e8177bdf3aaacb909b6219525df2bbc7d16`
+- source distribution: `5e08f904e8db13a8aab56f55d3e597f66333a81aa3538861545e04043390fe77`
+
+Publication remains an operational action performed from the committed revision by the existing
+protected workflow, which rebuilds and verifies its own exact artifact bundle before upload.

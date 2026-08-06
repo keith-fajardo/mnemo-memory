@@ -14,7 +14,7 @@ For a non-operator explanation of the capability and trust boundary, begin with
 Install the optional PostgreSQL profile from a reviewed Mnemo release:
 
 ```bash
-uv tool install 'mnemo-unified-context[team]==0.1.0a4'
+uv tool install 'mnemo-unified-context[team]==0.1.0a5'
 ```
 
 Provision the PostgreSQL schema and non-owner runtime role using the existing team migration
