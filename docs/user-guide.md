@@ -22,12 +22,29 @@ digest to this repository and its exact release workflow. That establishes how t
 were published; it does not replace reviewing the project, pinning the version you intend to
 install, or treating all installed software as privileged code.
 
+## Choose the guide you need
+
+- **I want to start using Mnemo:** continue with
+  [Install and connect your first project](#install-and-connect-your-first-project).
+- **I want the short product overview:** return to the [README](../README.md).
+- **I want to understand what is saved:** read
+  [Does Mnemo remember an entire codebase?](#does-mnemo-remember-an-entire-codebase).
+- **I want to correct or remove memory:** use
+  [Review, correct, and forget memory](managing-memory.md).
+- **I use Codex or Claude Code:** use the
+  [client connection guide](codex-claude-mcp-guide.md).
+- **I operate a shared organizational service:** start with
+  [Mnemo Team mode in everyday terms](team-guide.md).
+- **I use dbt:** jump to
+  [Optional dbt help](#optional-dbt-help-keep-lineage-current-without-changing-your-dbt-workflow).
+- **I use Obsidian:** jump to [Optional: add one Obsidian vault](#optional-add-one-obsidian-vault).
+
 ## Install and connect your first project
 
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a3
+uv tool install mnemo-unified-context==0.1.0a4
 mnemo-memory init
 cd /path/to/your/project
 mnemo-memory connect codex --auto-memory --yes --project-dir .

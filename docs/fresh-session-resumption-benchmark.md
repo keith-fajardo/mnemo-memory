@@ -64,15 +64,21 @@ Mnemo context adds none of those tokens, and every real packet has its own bound
 
 ## Boundaries
 
-Issue 12 will add the dbt structural-memory comparison and finalize the broader
-no-memory/full-transcript/Mnemo quality and cost baseline.
-Mnemo currently relies on explicit checkpoint saves: it performs no automatic transcript ingestion,
-embedding, structural indexing, or LLM extraction.
+This fixture isolates task-handoff resumption. The separate
+[unified-context benchmark](unified-context-benchmark.md) measures a checkpoint combined with
+authoritative dbt lineage. The released product also supports automatic lifecycle reminders,
+rebuildable source-structure projections, bounded project knowledge, and optional local semantic
+note search; none of those features changes this fixture's checkpoint-only comparison.
+
+Mnemo still performs no automatic transcript ingestion or model-based extraction of checkpoint
+facts. A connected agent explicitly saves the evidence-backed handoff. The benchmark does not
+measure provider-specific answer quality, latency, cache behavior, or cost.
 
 ## Cross-client transport proof
 
-Issue 11B runs the same fixture through real isolated Codex CLI `0.145.0` and Claude Code `2.1.220`
-registrations. Reproduce it with:
+The cross-client evaluator runs the same fixture through real isolated Codex CLI and Claude Code
+registrations. The latest completion audit recorded Codex CLI `0.146.0` and Claude Code `2.1.221`.
+Reproduce it with:
 
 ```sh
 npm run eval:cross-client -- --json
@@ -92,5 +98,5 @@ failure without a database fallback. Existing restart tests cover abrupt MCP pro
 the registered launchers are always restarted as fresh processes in this proof.
 
 This is an MCP transport and information-retention proof, not a claim about a generated answer
-during a live client outage. Full model-quality, provider-cost, and dbt comparison baselines remain
-post-Issue-12, explicit opt-in work.
+during a live client outage. Provider-specific model-quality and cost studies remain separate,
+explicit opt-in work.

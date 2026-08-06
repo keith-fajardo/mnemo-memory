@@ -3898,3 +3898,45 @@ The complete repository gate remains green with 729 tests, strict typing for 184
 dependency/provenance validation for 86 entries, and architecture validation for 97 product Python
 files. Milestone 5 is complete; no incremental ranking, new dependency, model call, API/UI,
 packaging, or team feature was added during the audit.
+
+### User onboarding and memory-lifecycle documentation — Complete
+
+The current bounded documentation-only issue makes the GitHub and PyPI landing page useful to a
+first-time user, adds plain-language memory-management and Team-mode guides, and corrects stale
+benchmark and release-boundary statements. It changes no runtime behavior, schema, dependency,
+policy, storage, MCP tool, packaging version, or release artifact.
+
+The GitHub/PyPI README now leads with the problem, user benefits, supported use cases, corrected
+deterministic token-reduction evidence, a five-minute install path, everyday automatic-memory
+behavior, and a plain-language context lifecycle. The same README remains the package's PyPI long
+description. New focused guides explain review/correction/forgetting choices and the Team trust and
+operator boundary. The practical and client guides link to those paths, the accepted Team security
+review replaces the stale release-gate statement, and both benchmark documents match the current
+fixtures and product boundary.
+
+The deterministic evaluations pass with a 499-token handoff packet versus 2,948 transcript tokens
+(83.07% reduction) and a 1,426-token unified packet versus 6,379 transcript-plus-manifest tokens
+(77.65% reduction); the structural slice is 927 versus 3,431 tokens (72.98% reduction). The first
+complete repository gate after the content changes passed with 942 tests, 27 expected skips, the
+26-test real PostgreSQL suite with one expected load-test skip, schema validation, dependency and
+provenance validation for 94 entries, architecture validation for 144 product Python files, and
+installed-package verification. Relative Markdown link targets and `git diff --check` also pass.
+
+### PyPI 0.1.0a4 documentation release candidate — Complete
+
+This bounded release issue packages the completed user-onboarding documentation for the next
+immutable PyPI prerelease. It updates only active `0.1.0a4` package, workflow, verifier, test, and
+installation references and regenerates the committed lockfile through uv. It adds no runtime
+behavior, schema, dependency, policy, MCP tool, or deployment-boundary change.
+
+The release candidate passed the focused release suite (`10 passed`), workflow YAML parsing,
+relative Markdown link validation, `git diff --check`, and the complete `npm run check` gate
+(`942 passed`, `27 skipped`; PostgreSQL integration `26 passed`, `1 skipped`). The independently
+built artifacts passed the release verifier with these SHA-256 digests:
+
+- wheel: `005667efdafbd4149950cb77866efbe3e434a0b9c159aaf2501b57a1ce26471a`
+- source distribution: `a95919a9e2372526648f773fb50a4711239904e3f64168a38c2a47b9287821d9`
+
+Publication remains an operational action performed from the committed revision by the existing
+protected PyPI workflow; the workflow performs its own clean build, exact-bundle hash checks,
+trusted publication, provenance verification, and installed-package smoke test.

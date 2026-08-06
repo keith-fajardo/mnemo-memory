@@ -1,15 +1,20 @@
 # Team MCP deployment boundary
 
-The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: the independent security review remains a release
-gate.
+The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. The
+Team v1 review pinned in `docs/security-reviews/team-v1.toml` records no unresolved critical or
+high findings. Each operator must still complete the deployment-specific HTTPS/OAuth/proxy load
+test, secret provisioning, recovery checks, and capacity review described below before exposing a
+release.
+
+For a non-operator explanation of the capability and trust boundary, begin with
+[`docs/team-guide.md`](../../docs/team-guide.md).
 
 ## Install and prerequisites
 
 Install the optional PostgreSQL profile from a reviewed Mnemo release:
 
 ```bash
-uv tool install 'mnemo-unified-context[team]'
+uv tool install 'mnemo-unified-context[team]==0.1.0a4'
 ```
 
 Provision the PostgreSQL schema and non-owner runtime role using the existing team migration

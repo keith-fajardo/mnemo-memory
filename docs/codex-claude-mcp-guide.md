@@ -16,6 +16,10 @@ That server provides exactly five tools:
 The server starts when the client needs it and reads the local Mnemo database. It does not upload
 that database, capture every conversation, or call a model on its own.
 
+For a plain-language explanation of revisions, correction lessons, fact retraction, note removal,
+retention, and full local-data erasure, see
+[Review, correct, and forget Mnemo memory](managing-memory.md).
+
 `get_context` returns the canonical structured packet by default. A direct tool caller may set
 `render_for` to `codex` or `claude-code`; the response then contains the unchanged packet beside a
 deterministic agent-readable rendering. Automatic-memory hooks select this rendering themselves.
@@ -27,7 +31,7 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a3
+uv tool install mnemo-unified-context==0.1.0a4
 mnemo-memory --help
 mnemo-memory init
 ```
@@ -157,8 +161,8 @@ either client after changing its hook configuration.
 
 The automatic mode remembers task handoffs and creates a private static source-structure snapshot
 for the enabled project: modules, imports, declarations, and explicit syntactic calls. The local
-development branch currently supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++,
-C#, Java, and PHP. Mnemo does not claim an unproven runtime call graph.
+release supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP.
+Mnemo does not claim an unproven runtime call graph.
 
 At a fresh session, Mnemo also shows bounded added/removed/modified relative files, declarations,
 and resolved relationships from the most recent proved structural transition. It is a cue to investigate a
@@ -234,7 +238,7 @@ are enabled for that canonical directory.
 
 Explicit scope IDs remain an advanced interface for controlled automation and manual MCP/dbt
 ingestion. They are deliberately absent from normal onboarding; use the normal personal setup in
-the [README](../README.md#start-here-let-mnemo-explain-the-setup) unless you are building such
+the [README](../README.md#install-and-connect-in-five-minutes) unless you are building such
 automation.
 
 ## What Mnemo does not change
