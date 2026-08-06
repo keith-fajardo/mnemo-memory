@@ -1,8 +1,8 @@
 # Team MCP deployment boundary
 
 The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: per-tenant model budgets, declared load objectives,
-and the independent security review remain release gates.
+is not yet a general-availability team release: declared load objectives and the independent
+security review remain release gates.
 
 ## Install and prerequisites
 
@@ -122,6 +122,46 @@ An absent or exceeded quota returns `MNEMO_QUOTA_EXCEEDED` without partial check
 lifecycle, or outbox state. Reads remain available so an operator can diagnose and recover by
 raising the exact workspace limit or applying an authorized data lifecycle action.
 
+## Provision daily model budgets
+
+Migration 0023 leaves every optional team model task fail-closed until an administrator provisions
+an exact workspace/task budget. Mnemo currently has one such task,
+`episodic_candidate_extraction`. Connect as the trusted schema owner or migration administrator;
+never grant the runtime role direct access to either model-budget table.
+
+```sql
+INSERT INTO mnemo_team.workspace_model_budgets (
+    workspace_id,
+    task_type,
+    max_call_count,
+    max_input_tokens,
+    max_output_tokens,
+    max_cost_microusd,
+    updated_at
+) VALUES (
+    '00000000-0000-0000-0000-000000000000'::uuid,
+    'episodic_candidate_extraction',
+    1000,
+    2000000,
+    500000,
+    5000000,
+    CURRENT_TIMESTAMP
+)
+ON CONFLICT (workspace_id, task_type) DO UPDATE SET
+    max_call_count = EXCLUDED.max_call_count,
+    max_input_tokens = EXCLUDED.max_input_tokens,
+    max_output_tokens = EXCLUDED.max_output_tokens,
+    max_cost_microusd = EXCLUDED.max_cost_microusd,
+    updated_at = CURRENT_TIMESTAMP;
+```
+
+Replace the example UUID and derive all four limits from the configured provider/model's reviewed
+worst-case reservation and measured demand; these values are examples, not defaults. Monetary
+limits use micro-US dollars, where 1,000,000 micro-USD equals USD 1. Mnemo atomically charges the
+configured worst case before every provider attempt on the PostgreSQL-defined UTC day. A malformed
+output retry is a second charged attempt, and failed or interrupted calls are not refunded. An
+absent or exhausted budget prevents the provider request and returns a stable payload-free code.
+
 ## Operations status and alert checks
 
 Use the same tightly controlled backup/operations environment to render the content-free aggregate
@@ -130,22 +170,25 @@ dashboard:
 ```bash
 mnemo-memory-team-admin status \
   --quota-warning-percent 90 \
+  --model-budget-warning-percent 90 \
   --pending-jobs 1000 \
   --pending-job-age-seconds 300 \
   --failed-jobs 0
 ```
 
 The canonical JSON contains schema support, whole-team workspace/project/active-membership totals,
-checkpoint and quota totals, maximum quota utilization, and durable outbox backlog, active/expired
-lease, failure, and oldest-pending-age counters. It contains no tenant identity, path, job body,
-memory payload, credential, or exception. `status` exits 0 after any valid snapshot and includes all
-active stable `MNEMO_TEAM_*` alert codes.
+checkpoint-quota coverage and maximum utilization, current-UTC-day model-budget coverage and
+maximum utilization, and durable outbox backlog, active/expired lease, failure, and
+oldest-pending-age counters. It contains no tenant identity, path, job body, memory payload,
+credential, or exception. `status` exits 0 after any valid snapshot and includes all active stable
+`MNEMO_TEAM_*` alert codes.
 
 For a scheduler, service supervisor, or monitoring agent, run the same thresholds with `check`:
 
 ```bash
 mnemo-memory-team-admin check \
   --quota-warning-percent 90 \
+  --model-budget-warning-percent 90 \
   --pending-jobs 1000 \
   --pending-job-age-seconds 300 \
   --failed-jobs 0
@@ -210,7 +253,7 @@ contain the `mnemo_team` schema. Never name the live database. Then run:
 
 ```bash
 mnemo-memory-team-admin restore-drill \
-  --manifest /srv/mnemo/backups/mnemo-team-v21-<timestamp>-<digest>.dump.json \
+  --manifest /srv/mnemo/backups/mnemo-team-v23-<timestamp>-<digest>.dump.json \
   --target-database mnemo_restore_drill
 ```
 

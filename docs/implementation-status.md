@@ -2790,6 +2790,37 @@ repository gate passes with 927 default tests plus those 25 mandatory real-Postg
 typing for 257 source files, dependency/provenance validation for 94 entries, architecture
 validation for 142 product Python files, schema validation, and installed-package verification.
 
+#### Issue 21AJ — Durable per-workspace model budgets — Complete
+
+The current bounded issue protects Mnemo's only optional model task, episodic-candidate extraction,
+with an explicit daily workspace budget before every provider attempt. Each workspace/task budget
+must independently cap call count, reserved input tokens, reserved output tokens, and reserved
+monetary micro-USD. PostgreSQL must serialize competing reservations, use a database-defined UTC
+day, fail closed when unprovisioned or exhausted, and reveal no usage or tenant detail to the model
+provider or MCP caller.
+
+The existing schema-bound gateway must reserve a trusted configured worst-case charge before each
+provider call, including its one malformed-output retry. Budget denial or storage failure must
+prevent the provider call and return a stable payload-free model-gateway code. This issue adds no
+provider SDK, model endpoint, automatic extraction worker, new MCP tool, billing system, price
+discovery, notification transport, second model task, dependency, or general cost framework.
+
+Implemented a strict model-budget domain port and schema-bound gateway reservation before each
+episodic-extraction provider attempt. PostgreSQL migration 0023 adds administrator-provisioned
+workspace/task limits plus UTC-day usage, an atomic fixed-search-path reservation function, and
+execute-only runtime authority. The gateway maps exhaustion and storage failure to stable
+payload-free codes and charges its one malformed-output retry separately. Team operations status
+now reports only aggregate model-budget coverage and maximum current-day utilization with closed
+missing, warning, and exhausted alerts. ADR 0043, the product contract, deployment runbook, and
+threat model record provisioning, conservative worst-case charging, retry, privilege, residual
+pricing, and retention boundaries.
+
+Focused gateway, operations, and backup-security coverage passes with 45 tests. The mandatory real
+PostgreSQL suite passes with 26 tests, including absent-budget denial, runtime table isolation,
+three concurrent reservations with exactly two winners, exact UTC usage, foreign-scope denial, and
+content-free operations alerts. The complete repository gate passes with formatting, linting,
+strict typing, schema, dependency/provenance, architecture, package, and installed-package checks.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

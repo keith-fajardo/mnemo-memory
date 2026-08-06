@@ -15,16 +15,15 @@ class TeamOperationsStorageFailure(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class TeamOperationsThresholds:
     quota_warning_percent: int = 90
+    model_budget_warning_percent: int = 90
     pending_jobs: int = 1_000
     pending_job_age_seconds: int = 300
     failed_jobs: int = 0
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.quota_warning_percent, bool)
-            or not 1 <= self.quota_warning_percent <= 100
-        ):
-            raise ValueError("quota warning percent must be between 1 and 100")
+        for percent in (self.quota_warning_percent, self.model_budget_warning_percent):
+            if isinstance(percent, bool) or not 1 <= percent <= 100:
+                raise ValueError("warning percentages must be between 1 and 100")
         for item in (self.pending_jobs, self.pending_job_age_seconds, self.failed_jobs):
             if (
                 isinstance(item, bool)
@@ -49,6 +48,11 @@ class TeamOperationsSnapshot:
     quota_warning_workspace_count: int
     quota_exceeded_workspace_count: int
     maximum_quota_utilization_percent: int
+    model_budget_configured_workspace_count: int
+    model_budget_missing_workspace_count: int
+    model_budget_warning_workspace_count: int
+    model_budget_exhausted_workspace_count: int
+    maximum_model_budget_utilization_percent: int
     pending_job_count: int
     active_lease_job_count: int
     expired_lease_job_count: int
@@ -92,12 +96,21 @@ class TeamOperationsSnapshot:
                 "quota_missing_workspaces": self.quota_missing_workspace_count,
                 "quota_warning_workspaces": self.quota_warning_workspace_count,
                 "quota_exceeded_workspaces": self.quota_exceeded_workspace_count,
+                "model_budget_configured_workspaces": (
+                    self.model_budget_configured_workspace_count
+                ),
+                "model_budget_missing_workspaces": self.model_budget_missing_workspace_count,
+                "model_budget_warning_workspaces": self.model_budget_warning_workspace_count,
+                "model_budget_exhausted_workspaces": self.model_budget_exhausted_workspace_count,
                 "pending_jobs": self.pending_job_count,
                 "active_lease_jobs": self.active_lease_job_count,
                 "expired_lease_jobs": self.expired_lease_job_count,
                 "failed_jobs": self.failed_job_count,
             },
             "maximum_quota_utilization_percent": self.maximum_quota_utilization_percent,
+            "maximum_model_budget_utilization_percent": (
+                self.maximum_model_budget_utilization_percent
+            ),
             "oldest_pending_job_age_seconds": self.oldest_pending_job_age_seconds,
         }
 
@@ -115,9 +128,12 @@ class PostgreSQLTeamOperationsRepository:
         connection.autocommit = False
         cursor = connection.cursor()
         try:
-            cursor.execute(_SNAPSHOT_SQL, (thresholds.quota_warning_percent,))
+            cursor.execute(
+                _SNAPSHOT_SQL,
+                (thresholds.quota_warning_percent, thresholds.model_budget_warning_percent),
+            )
             row = cursor.fetchone()
-            if row is None or len(row) != 18:
+            if row is None or len(row) != 23:
                 raise TeamOperationsStorageFailure("MNEMO_TEAM_OPERATIONS_UNAVAILABLE")
             values = tuple(row)
             observed_at = values[0]
@@ -144,6 +160,11 @@ class PostgreSQLTeamOperationsRepository:
                 counters[14],
                 counters[15],
                 counters[16],
+                counters[17],
+                counters[18],
+                counters[19],
+                counters[20],
+                counters[21],
                 alerts,
             )
         except TeamOperationsStorageFailure:
@@ -170,6 +191,11 @@ def _alerts(counters: tuple[int, ...], thresholds: TeamOperationsThresholds) -> 
         quota_warning,
         quota_exceeded,
         _maximum_utilization,
+        _model_budget_configured,
+        model_budget_missing,
+        model_budget_warning,
+        model_budget_exhausted,
+        _maximum_model_budget_utilization,
         pending_jobs,
         _active_leases,
         expired_leases,
@@ -185,6 +211,12 @@ def _alerts(counters: tuple[int, ...], thresholds: TeamOperationsThresholds) -> 
         values.append("MNEMO_TEAM_CHECKPOINT_QUOTA_EXCEEDED")
     if quota_warning:
         values.append("MNEMO_TEAM_CHECKPOINT_QUOTA_HIGH")
+    if model_budget_missing:
+        values.append("MNEMO_TEAM_MODEL_BUDGET_MISSING")
+    if model_budget_exhausted:
+        values.append("MNEMO_TEAM_MODEL_BUDGET_EXHAUSTED")
+    if model_budget_warning:
+        values.append("MNEMO_TEAM_MODEL_BUDGET_HIGH")
     if pending_jobs > thresholds.pending_jobs:
         values.append("MNEMO_TEAM_OUTBOX_BACKLOG_HIGH")
     if oldest_pending_age > thresholds.pending_job_age_seconds:
@@ -263,6 +295,64 @@ WITH aggregate_usage AS (
                ) END
            ), 0)::bigint AS maximum_utilization
       FROM quota_state
+), model_budget_state AS (
+    SELECT workspace.workspace_id,
+           budget.workspace_id AS configured_workspace_id,
+           budget.max_call_count,
+           budget.max_input_tokens,
+           budget.max_output_tokens,
+           budget.max_cost_microusd,
+           coalesce(usage.used_call_count, 0) AS used_call_count,
+           coalesce(usage.used_input_tokens, 0) AS used_input_tokens,
+           coalesce(usage.used_output_tokens, 0) AS used_output_tokens,
+           coalesce(usage.used_cost_microusd, 0) AS used_cost_microusd
+      FROM mnemo_team.workspaces AS workspace
+      LEFT JOIN mnemo_team.workspace_model_budgets AS budget
+        ON budget.workspace_id = workspace.workspace_id
+       AND budget.task_type = 'episodic_candidate_extraction'
+      LEFT JOIN mnemo_team.workspace_model_budget_usage AS usage
+        ON usage.workspace_id = workspace.workspace_id
+       AND usage.task_type = 'episodic_candidate_extraction'
+       AND usage.usage_date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date
+), model_budget_summary AS (
+    SELECT count(*) FILTER (WHERE configured_workspace_id IS NOT NULL)::bigint
+               AS configured_count,
+           count(*) FILTER (WHERE configured_workspace_id IS NULL)::bigint AS missing_count,
+           count(*) FILTER (
+               WHERE configured_workspace_id IS NOT NULL
+                 AND NOT (
+                     used_call_count >= max_call_count
+                     OR used_input_tokens >= max_input_tokens
+                     OR used_output_tokens >= max_output_tokens
+                     OR (max_cost_microusd > 0 AND used_cost_microusd >= max_cost_microusd)
+                 )
+                 AND greatest(
+                     used_call_count::numeric * 100 / max_call_count,
+                     used_input_tokens::numeric * 100 / max_input_tokens,
+                     used_output_tokens::numeric * 100 / max_output_tokens,
+                     CASE WHEN max_cost_microusd = 0 THEN 0
+                          ELSE used_cost_microusd::numeric * 100 / max_cost_microusd END
+                 ) >= %s
+           )::bigint AS warning_count,
+           count(*) FILTER (
+               WHERE configured_workspace_id IS NOT NULL
+                 AND (
+                     used_call_count >= max_call_count
+                     OR used_input_tokens >= max_input_tokens
+                     OR used_output_tokens >= max_output_tokens
+                     OR (max_cost_microusd > 0 AND used_cost_microusd >= max_cost_microusd)
+                 )
+           )::bigint AS exhausted_count,
+           coalesce(max(
+               CASE WHEN configured_workspace_id IS NULL THEN 0 ELSE greatest(
+                   used_call_count::numeric * 100 / max_call_count,
+                   used_input_tokens::numeric * 100 / max_input_tokens,
+                   used_output_tokens::numeric * 100 / max_output_tokens,
+                   CASE WHEN max_cost_microusd = 0 THEN 0
+                        ELSE used_cost_microusd::numeric * 100 / max_cost_microusd END
+               ) END
+           ), 0)::bigint AS maximum_utilization
+      FROM model_budget_state
 ), outbox_summary AS (
     SELECT count(*) FILTER (WHERE completed_at IS NULL)::bigint AS pending_count,
            count(*) FILTER (
@@ -292,10 +382,15 @@ SELECT CURRENT_TIMESTAMP,
        quota_summary.warning_count,
        quota_summary.exceeded_count,
        quota_summary.maximum_utilization,
+       model_budget_summary.configured_count,
+       model_budget_summary.missing_count,
+       model_budget_summary.warning_count,
+       model_budget_summary.exhausted_count,
+       model_budget_summary.maximum_utilization,
        outbox_summary.pending_count,
        outbox_summary.active_lease_count,
        outbox_summary.expired_lease_count,
        outbox_summary.failed_count,
        outbox_summary.oldest_pending_age
-  FROM quota_summary CROSS JOIN outbox_summary
+  FROM quota_summary CROSS JOIN model_budget_summary CROSS JOIN outbox_summary
 """

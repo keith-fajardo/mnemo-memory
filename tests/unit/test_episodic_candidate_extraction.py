@@ -19,6 +19,9 @@ from mnemo_memory.packages.domain import (
     EvidenceSourceType,
     MemoryScope,
     MemoryStatus,
+    ModelBudgetDenied,
+    ModelBudgetReservation,
+    ModelTaskType,
     OwnerId,
     ProjectId,
     RetentionPolicyId,
@@ -136,6 +139,22 @@ class FakeLunaProvider:
         return value
 
 
+class FakeModelBudget:
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure = failure
+        self.reservations: list[tuple[WorkspaceId, ModelTaskType, ModelBudgetReservation]] = []
+
+    def reserve(
+        self,
+        workspace_id: WorkspaceId,
+        task_type: ModelTaskType,
+        reservation: ModelBudgetReservation,
+    ) -> None:
+        if self.failure is not None:
+            raise self.failure
+        self.reservations.append((workspace_id, task_type, reservation))
+
+
 def _valid_output(
     claim: str = "The complete gate passed for the bounded implementation.",
 ) -> dict[str, object]:
@@ -151,13 +170,17 @@ def _valid_output(
     }
 
 
-def _gateway(provider: FakeLunaProvider) -> SchemaBoundEpisodicExtractionGateway:
+def _gateway(
+    provider: FakeLunaProvider, budget: FakeModelBudget | None = None
+) -> SchemaBoundEpisodicExtractionGateway:
     return SchemaBoundEpisodicExtractionGateway(
         provider,
         provider_id="luna-fixture",
         model_id="gpt-5.6-luna-fixture",
         extractor_version="episodic-extractor-v1",
         prompt_version="episodic-candidates-v1",
+        budget=budget or FakeModelBudget(),
+        reservation=ModelBudgetReservation(512, 256, 25_000),
     )
 
 
@@ -222,7 +245,11 @@ def test_gateway_retries_invalid_schema_once_and_sends_only_minimized_event() ->
     )
     event = _event(_scope())
 
-    proposals = _gateway(provider).extract(EpisodicExtractionRequest.from_event(event))
+    scope = _scope()
+    budget = FakeModelBudget()
+    proposals = _gateway(provider, budget).extract(
+        scope, EpisodicExtractionRequest.from_event(event)
+    )
 
     assert len(provider.calls) == 2
     assert proposals[0].kind is EpisodicMemoryKind.OUTCOME
@@ -237,6 +264,18 @@ def test_gateway_retries_invalid_schema_once_and_sends_only_minimized_event() ->
         name not in provider.calls[0].to_dict()
         for name in ("scope", "evidence", "retention", "transcript", "tool_result")
     )
+    assert budget.reservations == [
+        (
+            scope.workspace_id,
+            ModelTaskType.EPISODIC_CANDIDATE_EXTRACTION,
+            ModelBudgetReservation(512, 256, 25_000),
+        ),
+        (
+            scope.workspace_id,
+            ModelTaskType.EPISODIC_CANDIDATE_EXTRACTION,
+            ModelBudgetReservation(512, 256, 25_000),
+        ),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -256,7 +295,8 @@ def test_gateway_failures_are_bounded_and_payload_free(
     provider = FakeLunaProvider(outputs)
 
     with pytest.raises(EpisodicExtractionGatewayError) as captured:
-        _gateway(provider).extract(EpisodicExtractionRequest.from_event(_event(_scope())))
+        scope = _scope()
+        _gateway(provider).extract(scope, EpisodicExtractionRequest.from_event(_event(scope)))
 
     assert captured.value.code == code
     assert str(captured.value) == code
@@ -269,10 +309,51 @@ def test_gateway_rejects_mismatched_provider_metadata_without_calling_provider()
     provider.model_id = "different-model"
 
     with pytest.raises(EpisodicExtractionGatewayError) as captured:
-        _gateway(provider).extract(EpisodicExtractionRequest.from_event(_event(_scope())))
+        scope = _scope()
+        _gateway(provider).extract(scope, EpisodicExtractionRequest.from_event(_event(scope)))
 
     assert captured.value.code == "MNEMO_EPISODIC_PROVIDER_METADATA_MISMATCH"
     assert provider.calls == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        (ModelBudgetDenied("private usage must not escape"), "MNEMO_MODEL_BUDGET_EXCEEDED"),
+        (RuntimeError("private storage must not escape"), "MNEMO_MODEL_BUDGET_UNAVAILABLE"),
+    ],
+)
+def test_gateway_denies_before_provider_when_model_budget_is_unavailable(
+    failure: Exception, code: str
+) -> None:
+    provider = FakeLunaProvider([_valid_output()])
+    scope = _scope()
+
+    with pytest.raises(EpisodicExtractionGatewayError) as captured:
+        _gateway(provider, FakeModelBudget(failure)).extract(
+            scope, EpisodicExtractionRequest.from_event(_event(scope))
+        )
+
+    assert captured.value.code == code
+    assert str(captured.value) == code
+    assert provider.calls == []
+    assert "private" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (0, 1, 0),
+        (1, 0, 0),
+        (1, 1, -1),
+        (True, 1, 0),
+    ],
+)
+def test_model_budget_reservation_rejects_invalid_bounds(
+    values: tuple[object, object, object],
+) -> None:
+    with pytest.raises(ValueError):
+        ModelBudgetReservation(*values)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -311,7 +392,8 @@ def test_gateway_rejects_authority_fields_and_invalid_proposal_types(
     provider = FakeLunaProvider([{"candidates": [proposal]}, {"candidates": [proposal]}])
 
     with pytest.raises(EpisodicExtractionGatewayError) as captured:
-        _gateway(provider).extract(EpisodicExtractionRequest.from_event(_event(_scope())))
+        scope = _scope()
+        _gateway(provider).extract(scope, EpisodicExtractionRequest.from_event(_event(scope)))
 
     assert captured.value.code == "MNEMO_EPISODIC_INVALID_OUTPUT"
     assert len(provider.calls) == 2

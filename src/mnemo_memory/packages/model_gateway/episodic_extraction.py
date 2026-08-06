@@ -9,6 +9,11 @@ from mnemo_memory.packages.domain import (
     EpisodicExtractionProposal,
     EpisodicExtractionRequest,
     EpisodicMemoryKind,
+    MemoryScope,
+    ModelBudgetDenied,
+    ModelBudgetReservation,
+    ModelBudgetReservationPort,
+    ModelTaskType,
     Sensitivity,
 )
 
@@ -45,12 +50,18 @@ class SchemaBoundEpisodicExtractionGateway:
         model_id: str,
         extractor_version: str,
         prompt_version: str,
+        budget: ModelBudgetReservationPort,
+        reservation: ModelBudgetReservation,
     ) -> None:
         self._provider = provider
         self._provider_id = _metadata(provider_id, "provider_id")
         self._model_id = _metadata(model_id, "model_id")
         self._extractor_version = _metadata(extractor_version, "extractor_version")
         self._prompt_version = _metadata(prompt_version, "prompt_version")
+        self._budget = budget
+        if not isinstance(reservation, ModelBudgetReservation):
+            raise TypeError("episodic extraction model reservation is invalid")
+        self._reservation = reservation
 
     @property
     def extractor_version(self) -> str:
@@ -68,9 +79,13 @@ class SchemaBoundEpisodicExtractionGateway:
     def prompt_version(self) -> str:
         return self._prompt_version
 
-    def extract(self, request: EpisodicExtractionRequest) -> tuple[EpisodicExtractionProposal, ...]:
-        if not isinstance(request, EpisodicExtractionRequest):
+    def extract(
+        self, scope: MemoryScope, request: EpisodicExtractionRequest
+    ) -> tuple[EpisodicExtractionProposal, ...]:
+        if not isinstance(scope, MemoryScope) or not isinstance(request, EpisodicExtractionRequest):
             raise TypeError("episodic extraction request is invalid")
+        if scope.workspace_id is None:
+            raise EpisodicExtractionGatewayError("MNEMO_MODEL_BUDGET_SCOPE_REQUIRED")
         try:
             metadata_matches = (
                 self._provider.provider_id == self.provider_id
@@ -83,6 +98,16 @@ class SchemaBoundEpisodicExtractionGateway:
         if not metadata_matches:
             raise EpisodicExtractionGatewayError("MNEMO_EPISODIC_PROVIDER_METADATA_MISMATCH")
         for attempt in range(2):
+            try:
+                self._budget.reserve(
+                    scope.workspace_id,
+                    ModelTaskType.EPISODIC_CANDIDATE_EXTRACTION,
+                    self._reservation,
+                )
+            except ModelBudgetDenied as error:
+                raise EpisodicExtractionGatewayError("MNEMO_MODEL_BUDGET_EXCEEDED") from error
+            except Exception as error:
+                raise EpisodicExtractionGatewayError("MNEMO_MODEL_BUDGET_UNAVAILABLE") from error
             try:
                 raw = self._provider.generate(request)
             except Exception as error:

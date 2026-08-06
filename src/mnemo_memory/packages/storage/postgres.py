@@ -14,6 +14,7 @@ from typing import Protocol, cast
 from mnemo_memory.packages.domain import (
     EventId,
     MembershipStatus,
+    ModelTaskType,
     OwnerId,
     ProjectId,
     ProjectMembership,
@@ -40,7 +41,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 22
+POSTGRES_TEAM_SCHEMA_VERSION = 23
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -64,6 +65,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (20, "0020_team_checkpoint_deletion_import.sql"),
     (21, "0021_team_knowledge_governance.sql"),
     (22, "0022_team_checkpoint_quotas.sql"),
+    (23, "0023_team_model_budgets.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -215,6 +217,9 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT EXECUTE ON FUNCTION mnemo_team.current_workspace() TO {role}",
                 f"GRANT EXECUTE ON FUNCTION mnemo_team.current_operation() TO {role}",
                 "GRANT EXECUTE ON FUNCTION "
+                "mnemo_team.reserve_model_budget(uuid, text, bigint, bigint, bigint) "
+                f"TO {role}",
+                "GRANT EXECUTE ON FUNCTION "
                 f"mnemo_team.workspace_role_allowed(text, text) TO {role}",
                 f"GRANT EXECUTE ON FUNCTION mnemo_team.project_role_allowed(text, text) TO {role}",
                 "GRANT EXECUTE ON FUNCTION "
@@ -337,6 +342,66 @@ class PostgreSQLTeamMigrationRunner:
             connection.rollback()
             raise PostgreSQLTeamMigrationError(
                 "PostgreSQL workspace checkpoint quota provisioning failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
+
+    def provision_workspace_model_budget(
+        self,
+        workspace_id: WorkspaceId,
+        task_type: ModelTaskType,
+        *,
+        max_call_count: int,
+        max_input_tokens: int,
+        max_output_tokens: int,
+        max_cost_microusd: int,
+    ) -> None:
+        """Set one explicit daily model budget through the schema-admin connection."""
+        if not isinstance(workspace_id, WorkspaceId) or not isinstance(task_type, ModelTaskType):
+            raise TypeError("workspace model budget scope is invalid")
+        positive_limits = (max_call_count, max_input_tokens, max_output_tokens)
+        if any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= 9_223_372_036_854_775_807
+            for value in positive_limits
+        ):
+            raise ValueError("model call and token limits must be positive bigint values")
+        if (
+            not isinstance(max_cost_microusd, int)
+            or isinstance(max_cost_microusd, bool)
+            or not 0 <= max_cost_microusd <= 9_223_372_036_854_775_807
+        ):
+            raise ValueError("model cost limit must be a non-negative bigint value")
+        connection = self._connect()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO mnemo_team.workspace_model_budgets("
+                "workspace_id, task_type, max_call_count, max_input_tokens, "
+                "max_output_tokens, max_cost_microusd, updated_at) VALUES ("
+                "CAST(%s AS uuid), %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (workspace_id, task_type) DO UPDATE SET "
+                "max_call_count = EXCLUDED.max_call_count, "
+                "max_input_tokens = EXCLUDED.max_input_tokens, "
+                "max_output_tokens = EXCLUDED.max_output_tokens, "
+                "max_cost_microusd = EXCLUDED.max_cost_microusd, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    str(workspace_id),
+                    task_type.value,
+                    max_call_count,
+                    max_input_tokens,
+                    max_output_tokens,
+                    max_cost_microusd,
+                ),
+            )
+            connection.commit()
+        except Exception as error:
+            connection.rollback()
+            raise PostgreSQLTeamMigrationError(
+                "PostgreSQL workspace model budget provisioning failed"
             ) from error
         finally:
             cursor.close()

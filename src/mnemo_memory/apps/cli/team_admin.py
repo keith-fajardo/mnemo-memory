@@ -161,6 +161,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
             try:
                 thresholds = TeamOperationsThresholds(
                     parsed.quota_warning_percent,
+                    parsed.model_budget_warning_percent,
                     parsed.pending_jobs,
                     parsed.pending_job_age_seconds,
                     parsed.failed_jobs,
@@ -189,6 +190,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
 
 def _add_operations_thresholds(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quota-warning-percent", type=int, default=90)
+    parser.add_argument("--model-budget-warning-percent", type=int, default=90)
     parser.add_argument("--pending-jobs", type=int, default=1_000)
     parser.add_argument("--pending-job-age-seconds", type=int, default=300)
     parser.add_argument("--failed-jobs", type=int, default=0)

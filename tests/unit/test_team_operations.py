@@ -70,7 +70,7 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
     cursor = _Cursor(
         (
             NOW,
-            22,
+            23,
             3,
             5,
             8,
@@ -82,6 +82,11 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
             1,
             1,
             112,
+            2,
+            1,
+            1,
+            1,
+            100,
             9,
             2,
             1,
@@ -106,6 +111,9 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
         "MNEMO_TEAM_CHECKPOINT_QUOTA_MISSING",
         "MNEMO_TEAM_CHECKPOINT_QUOTA_EXCEEDED",
         "MNEMO_TEAM_CHECKPOINT_QUOTA_HIGH",
+        "MNEMO_TEAM_MODEL_BUDGET_MISSING",
+        "MNEMO_TEAM_MODEL_BUDGET_EXHAUSTED",
+        "MNEMO_TEAM_MODEL_BUDGET_HIGH",
         "MNEMO_TEAM_OUTBOX_BACKLOG_HIGH",
         "MNEMO_TEAM_OUTBOX_AGE_HIGH",
         "MNEMO_TEAM_OUTBOX_LEASE_EXPIRED",
@@ -120,6 +128,7 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
         "alerts",
         "counts",
         "maximum_quota_utilization_percent",
+        "maximum_model_budget_utilization_percent",
         "oldest_pending_job_age_seconds",
     }
     assert set(cast(dict[str, int], payload["counts"])) == {
@@ -133,12 +142,16 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
         "quota_missing_workspaces",
         "quota_warning_workspaces",
         "quota_exceeded_workspaces",
+        "model_budget_configured_workspaces",
+        "model_budget_missing_workspaces",
+        "model_budget_warning_workspaces",
+        "model_budget_exhausted_workspaces",
         "pending_jobs",
         "active_lease_jobs",
         "expired_lease_jobs",
         "failed_jobs",
     }
-    assert cursor.args == (85,)
+    assert cursor.args == (85, 90)
     assert "workspace_id" not in payload
     assert "content_json" not in payload
     assert connection.rolled_back and connection.closed and cursor.closed
@@ -149,6 +162,7 @@ def test_team_operations_snapshot_is_content_free_bounded_and_alertable() -> Non
     [
         {"quota_warning_percent": 0},
         {"quota_warning_percent": 101},
+        {"model_budget_warning_percent": 0},
         {"pending_jobs": -1},
         {"pending_job_age_seconds": 1_000_000_001},
         {"failed_jobs": True},
@@ -189,7 +203,7 @@ def test_team_admin_status_and_check_are_machine_readable(
         monkeypatch.setenv(name, value)
     snapshot = TeamOperationsSnapshot(
         NOW,
-        22,
+        23,
         1,
         1,
         1,
@@ -203,6 +217,11 @@ def test_team_admin_status_and_check_are_machine_readable(
         0,
         0,
         0,
+        0,
+        0,
+        0,
+        0,
+        1,
         0,
         0,
         0,

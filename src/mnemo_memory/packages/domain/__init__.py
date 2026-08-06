@@ -165,6 +165,12 @@ from .knowledge_sync import (
     KnowledgeSyncPlan,
     KnowledgeSyncPlanner,
 )
+from .model_budget import (
+    ModelBudgetDenied,
+    ModelBudgetReservation,
+    ModelBudgetReservationPort,
+    ModelTaskType,
+)
 from .models import (
     Checkpoint,
     CheckpointAggregate,
@@ -356,6 +362,10 @@ __all__ = [
     "MemoryId",
     "MemoryScope",
     "MemoryStatus",
+    "ModelBudgetDenied",
+    "ModelBudgetReservation",
+    "ModelBudgetReservationPort",
+    "ModelTaskType",
     "OmissionNotice",
     "OmissionReason",
     "OutboxJobId",

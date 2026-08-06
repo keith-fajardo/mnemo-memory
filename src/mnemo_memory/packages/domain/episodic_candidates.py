@@ -133,7 +133,7 @@ class EpisodicExtractionPort(Protocol):
     def prompt_version(self) -> str: ...
 
     def extract(
-        self, request: EpisodicExtractionRequest
+        self, scope: MemoryScope, request: EpisodicExtractionRequest
     ) -> tuple[EpisodicExtractionProposal, ...]: ...
 
 

@@ -298,11 +298,21 @@ the limit or usage is removed through an authorized lifecycle operation.
 Team operations inspection uses the dedicated backup/operations credential, never the MCP runtime
 credential. The installed administrator command returns one whole-team point-in-time snapshot with
 only schema version, aggregate workspace/project/active-membership counts, aggregate checkpoint
-quota coverage and utilization, and durable outbox backlog/lease/failure counters. It returns no
-tenant identity, memory or job payload, source path, credential, or exception. Strict operator
-thresholds produce closed `MNEMO_TEAM_*` alert codes; the machine check exits 0 for healthy, 1 for
-active alerts, and 2 for an unavailable or invalid check. Alert notification and historical metric
-storage remain external operator responsibilities.
+quota coverage and utilization, model-budget coverage and current UTC-day utilization, and durable
+outbox backlog/lease/failure counters. It returns no tenant identity, memory or job payload, source
+path, credential, or exception. Strict operator thresholds produce closed `MNEMO_TEAM_*` alert
+codes; the machine check exits 0 for healthy, 1 for active alerts, and 2 for an unavailable or
+invalid check. Alert notification and historical metric storage remain external operator
+responsibilities.
+
+Every enabled optional team model task requires an explicit administrator daily workspace budget.
+The first and currently only task is episodic-candidate extraction. Before each provider attempt,
+the model gateway reserves one trusted configured worst-case call, input-token, output-token, and
+micro-USD charge. PostgreSQL serializes reservations for the exact workspace/task and defines the
+day in UTC; absent or exhausted capacity prevents provider invocation. The malformed-output retry
+requires a second reservation. The provider receives no scope, budget, usage, or cost fields, and
+denial is payload-free. Usage is not refunded after a failed attempt, pricing is never inferred from
+provider output, and no optional model call may be composed without the reservation port.
 
 ## Evidence requirements
 

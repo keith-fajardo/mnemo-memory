@@ -91,6 +91,9 @@ from mnemo_memory.packages.domain import (
     KnowledgeSectionEmbedding,
     MembershipStatus,
     MemoryScope,
+    ModelBudgetDenied,
+    ModelBudgetReservation,
+    ModelTaskType,
     OwnerId,
     ProjectId,
     ProjectMembership,
@@ -157,6 +160,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLEpisodicMemoryRepository,
     PostgreSQLEventOutboxRepository,
     PostgreSQLKnowledgeDocumentRepository,
+    PostgreSQLModelBudgetRepository,
     PostgreSQLProjectIndexRepository,
     PostgreSQLSourceStructureRepository,
     PostgreSQLTaskActivityEventRepository,
@@ -579,6 +583,21 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert "REVOKE ALL ON mnemo_team.workspace_checkpoint_quotas FROM PUBLIC" in (
         checkpoint_quota_sql
     )
+    model_budget_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0023_team_model_budgets.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert model_budget_sql.count("FOR UPDATE") == 1
+    assert model_budget_sql.count("ERRCODE = 'MZB01'") == 2
+    assert "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'" in model_budget_sql
+    assert "workspace_role_allowed(member_role, 'contribute')" in model_budget_sql
+    assert "REVOKE ALL ON mnemo_team.workspace_model_budgets FROM PUBLIC" in model_budget_sql
+    assert "REVOKE ALL ON mnemo_team.workspace_model_budget_usage FROM PUBLIC" in model_budget_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -1157,12 +1176,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=23).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.workspace_model_budgets')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 23))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 24))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -2099,6 +2131,96 @@ def test_team_checkpoint_quota_is_fail_closed_atomic_and_race_safe(
         == completed
     )
     assert len(repository.list_events(aggregate.scope).items) == 2
+
+
+def test_team_model_budget_is_daily_scoped_atomic_and_fail_closed(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    _control, workspace, _ = _create_workspace(postgres_harness)
+    task_type = ModelTaskType.EPISODIC_CANDIDATE_EXTRACTION
+    reservation = ModelBudgetReservation(512, 256, 25_000)
+    repository = PostgreSQLModelBudgetRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+
+    with pytest.raises(ModelBudgetDenied):
+        repository.reserve(workspace.workspace_id, task_type, reservation)
+
+    admin = PostgreSQLTeamMigrationRunner(postgres_harness.admin_factory())
+    admin.provision_workspace_model_budget(
+        workspace.workspace_id,
+        task_type,
+        max_call_count=2,
+        max_input_tokens=1_024,
+        max_output_tokens=512,
+        max_cost_microusd=50_000,
+    )
+    runtime_connection = postgres_harness.runtime_factory()()
+    runtime_cursor = runtime_connection.cursor()
+    try:
+        runtime_cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.workspace_model_budgets', 'SELECT'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.workspace_model_budget_usage', 'SELECT,INSERT,UPDATE')"
+        )
+        assert tuple(runtime_cursor.fetchone() or ()) == (False, False)
+    finally:
+        runtime_connection.rollback()
+        runtime_cursor.close()
+        runtime_connection.close()
+
+    def reserve_once(_: int) -> bool:
+        contender = PostgreSQLModelBudgetRepository(
+            postgres_harness.runtime_factory(),
+            principal_id=workspace.owner_id,
+            workspace_id=workspace.workspace_id,
+        )
+        try:
+            contender.reserve(workspace.workspace_id, task_type, reservation)
+            return True
+        except ModelBudgetDenied:
+            return False
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        outcomes = tuple(executor.map(reserve_once, range(3)))
+    assert outcomes.count(True) == 2
+    assert outcomes.count(False) == 1
+
+    admin_connection = postgres_harness.admin_factory()()
+    admin_cursor = admin_connection.cursor()
+    try:
+        admin_cursor.execute(
+            "SELECT usage_date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, "
+            "used_call_count, used_input_tokens, used_output_tokens, used_cost_microusd "
+            "FROM mnemo_team.workspace_model_budget_usage "
+            "WHERE workspace_id = CAST(%s AS uuid) AND task_type = %s",
+            (str(workspace.workspace_id), task_type.value),
+        )
+        assert tuple(admin_cursor.fetchone() or ()) == (True, 2, 1_024, 512, 50_000)
+    finally:
+        admin_connection.rollback()
+        admin_cursor.close()
+        admin_connection.close()
+
+    operations = PostgreSQLTeamOperationsRepository(postgres_harness.admin_factory()).snapshot(
+        TeamOperationsThresholds(model_budget_warning_percent=90)
+    )
+    assert operations.model_budget_configured_workspace_count >= 1
+    assert operations.model_budget_exhausted_workspace_count >= 1
+    assert operations.maximum_model_budget_utilization_percent >= 100
+    assert "MNEMO_TEAM_MODEL_BUDGET_EXHAUSTED" in operations.alerts
+
+    with pytest.raises(ModelBudgetDenied):
+        PostgreSQLModelBudgetRepository(
+            postgres_harness.runtime_factory(),
+            principal_id=OwnerId.new(),
+            workspace_id=workspace.workspace_id,
+        ).reserve(workspace.workspace_id, task_type, ModelBudgetReservation(1, 1, 0))
+    with pytest.raises(ModelBudgetDenied):
+        repository.reserve(WorkspaceId.new(), task_type, ModelBudgetReservation(1, 1, 0))
 
 
 def test_team_operations_snapshot_reports_only_aggregate_alert_state(

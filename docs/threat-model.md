@@ -230,6 +230,31 @@ can expose payload if compromised or used outside Mnemo; its owner-only secret, 
 and rotation controls remain critical. The snapshot has no durable history or notification
 transport, so the operator must schedule `check` and route its exit status.
 
+### Concurrent or retried model calls overspend a tenant budget
+
+**Scenario:** Concurrent workers pass an application-only balance check, restart clears daily
+usage, a malformed provider response receives an uncharged retry, one workspace consumes another's
+allowance, provider-reported usage understates cost, or an absent budget silently permits calls.
+
+**Required controls:** A trusted worst-case reservation is mandatory before every provider attempt.
+PostgreSQL defines the UTC day, locks the exact workspace/task budget, and atomically admits the
+call only if call, input-token, output-token, and micro-USD totals all remain within their maxima.
+The security-definer reservation verifies exact transaction workspace, active principal membership,
+and contribute authority. Runtime has execute-only access, not budget-table access. Unprovisioned,
+exhausted, foreign, and inactive requests fail closed before provider invocation. Retries reserve
+again, failures are not refunded, and the provider never receives tenant or budget metadata.
+
+**Verification:** Unit tests cover reservation ordering, one charge per provider attempt, malformed-
+output retry charging, denial/storage failure before provider invocation, strict numeric bounds,
+and payload-free errors. The mandatory real-PostgreSQL suite proves runtime table privilege denial,
+UTC-day accounting, two winners among three concurrent reservations, exact accumulated call/token/
+cost limits, foreign-principal and workspace denial, and aggregate operations alerts.
+
+**Residual risk:** Administrators must configure conservative per-attempt reservations from the
+provider adapter's actual maximum token and price settings; Mnemo does not discover prices or
+reconcile provider invoices. Failed calls consume reservations. Historical daily usage has no
+automatic retention policy, and future model task types require explicit schema and policy review.
+
 ### Team authority races and audit gaps
 
 **Scenario:** Two administrators overwrite the same membership, a delayed request restores a

@@ -69,7 +69,7 @@ class EpisodicCandidateExtractionService:
             for evidence in event.evidence_references
         ):
             raise EpisodicCandidateExtractionError("MNEMO_EPISODIC_EVIDENCE_INSUFFICIENT")
-        proposals = self._extractor.extract(EpisodicExtractionRequest.from_event(event))
+        proposals = self._extractor.extract(scope, EpisodicExtractionRequest.from_event(event))
         if len(proposals) > 4:
             raise EpisodicCandidateExtractionError("MNEMO_EPISODIC_INVALID_OUTPUT")
         created_at = self._clock()

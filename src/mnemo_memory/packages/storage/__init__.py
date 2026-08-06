@@ -135,6 +135,10 @@ from .postgres_checkpoints import PostgreSQLCheckpointRepository
 from .postgres_dbt import PostgreSQLProjectIndexRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
+from .postgres_model_budget import (
+    ModelBudgetStorageFailure,
+    PostgreSQLModelBudgetRepository,
+)
 from .postgres_operations import (
     PostgreSQLTeamOperationsRepository,
     TeamOperationsSnapshot,
@@ -267,6 +271,7 @@ __all__ = [
     "KnowledgeDocumentSyncStoreResult",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
+    "ModelBudgetStorageFailure",
     "PostgreSQLApprovedEpisodicEventRepository",
     "PostgreSQLCheckpointRepository",
     "PostgreSQLConnection",
@@ -275,6 +280,7 @@ __all__ = [
     "PostgreSQLEpisodicMemoryRepository",
     "PostgreSQLEventOutboxRepository",
     "PostgreSQLKnowledgeDocumentRepository",
+    "PostgreSQLModelBudgetRepository",
     "PostgreSQLProjectIndexRepository",
     "PostgreSQLSourceStructureRepository",
     "PostgreSQLTaskActivityEventRepository",
