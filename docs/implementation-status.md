@@ -2508,6 +2508,46 @@ PostgreSQL tests, strict typing for 238 source files, dependency/provenance vali
 entries, architecture validation for 131 product Python files, schema validation, and the isolated
 installed-package personal MCP workflow.
 
+#### Issue 21AB — Secret-safe team service deployment — Complete
+
+The current bounded issue makes the authenticated loopback team MCP server operable without placing
+database passwords or bearer material in command arguments, repository files, logs, or diagnostic
+output. A dedicated installed entry point must load strict non-secret settings from environment,
+read the database password from one owner-only regular file, read the OAuth public key from one
+bounded regular file, require certificate-verified PostgreSQL TLS, and bind only to loopback. It
+must fail closed with stable content-free errors and support restart-based public-key rotation.
+
+Deployment documentation must define the HTTPS reverse-proxy trust boundary, authorization-header
+forwarding, key/password file permissions, health/start/stop/rotation checks, and the prohibition on
+direct non-loopback Mnemo binding. This issue adds no bundled proxy, authorization server, client
+secret storage, automatic certificate issuance, team knowledge governance, backup, quota,
+dashboard, or new memory behavior.
+
+Implemented the dedicated `mnemo-memory-team` installed entry point. Strict environment parsing
+accepts only bounded non-secret host, port, database, OAuth, scope, and public-resource metadata.
+The database password must come from an absolute owner-owned mode-0600 regular file; the OAuth key
+must come from an absolute owner-owned regular file with no group/other write bit. Both use
+descriptor-verified no-follow opens, byte bounds, and UTF-8 validation, rejecting symlinks,
+relative paths, unsafe modes, and oversized or malformed content without including values or paths
+in errors.
+
+Every optional-team PostgreSQL connection now uses the system trust store, certificate and hostname
+verification, TLS 1.2 or newer, a five-second connection timeout, and no plaintext fallback. The
+authenticated stateless MCP upstream remains fixed to `127.0.0.1`; there is no host configuration.
+The packaged deployment runbook and non-secret environment example define an HTTPS-only reverse
+proxy, bearer-header forwarding, direct-port isolation, content-free logging, start/stop checks,
+PostgreSQL TLS failure, and atomic-file/restart password and public-key rotation with rollback.
+
+ADR 0036, the product contract, threat model, release archive verifier, installed-package verifier,
+and build source include record and enforce the deployment boundary. Release verification now
+requires both console entry points, both team runtime modules, the OAuth verifier, and team
+deployment documentation. Security tests cover valid inert startup, unsafe permissions, symlinks,
+invalid configuration, content-free failures, and the exact certificate-verifying database TLS
+context. The complete repository gate passes with 882 default tests plus 22 mandatory real-
+PostgreSQL tests, strict typing for 240 source files, dependency/provenance validation for 93
+entries, architecture validation for 132 product Python files, schema validation, and installed-
+package workflow verification. No new dependency or schema migration was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

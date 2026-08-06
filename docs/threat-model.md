@@ -150,9 +150,17 @@ identity or workspace. The mandatory real-PostgreSQL suite sends authenticated o
 viewer, and foreign-workspace requests through the service port and proves only the owner receives
 the checkpoint.
 
-**Residual risk:** Static public-key configuration needs deployment-time file-permission and
-restart-based rotation procedures. A TLS reverse proxy, non-loopback exposure ADR, rate limits,
-service audit records, and production security review remain required before remote availability.
+The installed runtime reads the database password only from an absolute owner-only regular file and
+the OAuth public key only from an absolute owner-owned non-writable regular file. No-follow,
+descriptor-verified bounded reads reject symlinks, unsafe modes, invalid UTF-8, and oversized files.
+PostgreSQL connections always use certificate and hostname verification with TLS 1.2 or newer. The
+MCP upstream has no host override and remains fixed to loopback. The deployment runbook specifies
+an HTTPS-only reverse proxy, authorization-header forwarding, direct-port isolation, content-free
+logging, startup checks, and atomic-file/restart key and password rotation.
+
+**Residual risk:** The external TLS proxy and its certificate remain operator-controlled. Rate
+limits, service audit records, backup/restore, production monitoring, and independent security
+review remain required before remote availability.
 
 ### Team authority races and audit gaps
 
@@ -175,8 +183,8 @@ project membership, wrong-workspace reads, bounded audit pages, and a two-thread
 with one state winner and one audit append.
 
 **Residual risk:** PostgreSQL now supplies atomic transactions, database constraints, forced RLS,
-and a failure-injected parity suite, but it does not authenticate its actor. Authenticated
-application composition, audit retention/deletion policy, and operational recovery remain required
+and a failure-injected parity suite. The OAuth application boundary authenticates its actor, but
+service audit expansion, audit retention/deletion policy, and operational recovery remain required
 before team use.
 
 ### Cross-tenant team knowledge and vector residue

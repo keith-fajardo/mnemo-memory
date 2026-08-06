@@ -34,6 +34,7 @@ dependencies = [
 
 [project.scripts]
 mnemo-memory = "mnemo_memory.cli:main"
+mnemo-memory-team = "mnemo_memory.apps.mcp.team_runtime:main"
 
 [project.urls]
 Homepage = "https://github.com/keith-fajardo/mnemo-memory"
@@ -68,6 +69,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "mnemo_memory"
 namespace = true
+source-include = ["deploy/team/**"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]

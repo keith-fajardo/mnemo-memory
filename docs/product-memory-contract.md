@@ -238,6 +238,15 @@ access. The server binds to loopback and stores no bearer token or credential. D
 configuration, TLS proxying, key-file controls and rotation, and the remaining team governance and
 operations gates are separate requirements before team availability.
 
+The installed `mnemo-memory-team` runtime accepts only non-secret deployment metadata through its
+environment. Its PostgreSQL password must come from an absolute owner-only regular file; its OAuth
+verification key must come from an absolute owner-owned, non-writable regular file. Descriptor-
+verified no-follow reads enforce type, ownership, permissions, byte limits, and UTF-8 before server
+construction. Every PostgreSQL connection uses certificate and hostname verification with TLS 1.2
+or newer and has no plaintext fallback. The MCP upstream remains fixed to `127.0.0.1`; the public
+HTTPS proxy, certificate, and network policy are a separate operator-controlled boundary. Rotation
+is atomic file replacement plus restart, and startup failures expose only stable content-free codes.
+
 ## Evidence requirements
 
 Every durable memory includes:
