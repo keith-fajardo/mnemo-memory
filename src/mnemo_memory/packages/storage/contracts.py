@@ -50,6 +50,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentRevisionId,
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
+    KnowledgeExportBundle,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryId,
@@ -478,6 +479,43 @@ class KnowledgeDocumentSecretRejected(KnowledgeDocumentRepositoryError):
 
 class KnowledgeDocumentStorageFailure(KnowledgeDocumentRepositoryError):
     pass
+
+
+class KnowledgeExportRepositoryError(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class KnowledgeImportRepositoryError(KnowledgeDocumentRepositoryError):
+    pass
+
+
+class KnowledgeImportConflict(KnowledgeImportRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeImportResult:
+    active_document_count: int
+    revision_count: int
+    deletion_count: int
+    idempotent: bool
+
+    def __post_init__(self) -> None:
+        for value in (self.active_document_count, self.revision_count, self.deletion_count):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("knowledge import counts must be non-negative integers")
+
+
+class KnowledgeExportRepository(Protocol):
+    def export_knowledge_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> KnowledgeExportBundle: ...
+
+
+class KnowledgeImportRepository(Protocol):
+    def import_knowledge_history(
+        self, source: KnowledgeExportBundle, target: KnowledgeExportBundle
+    ) -> KnowledgeImportResult: ...
 
 
 @dataclass(frozen=True, slots=True)

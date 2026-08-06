@@ -10,6 +10,7 @@ from typing import cast
 
 from mnemo_memory.packages.domain import (
     CurrentKnowledgeDocumentSection,
+    KnowledgeDeletionRecord,
     KnowledgeDocument,
     KnowledgeDocumentId,
     KnowledgeDocumentLink,
@@ -19,12 +20,14 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
+    KnowledgeExportBundle,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryScope,
     OwnerId,
     ScopeLevel,
     WorkspaceId,
+    knowledge_import_document_identity,
 )
 from mnemo_memory.packages.policy import KnowledgeDocumentSafetyPolicy, TeamOperation
 
@@ -35,6 +38,9 @@ from .contracts import (
     KnowledgeDocumentSecretRejected,
     KnowledgeDocumentStorageFailure,
     KnowledgeDocumentSyncStoreResult,
+    KnowledgeExportRepositoryError,
+    KnowledgeImportConflict,
+    KnowledgeImportResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
@@ -360,6 +366,256 @@ class PostgreSQLKnowledgeDocumentRepository:
             )
             return KnowledgeDocumentSyncStoreResult(active, len(revisions), len(tombstones))
 
+    def export_knowledge_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> KnowledgeExportBundle:
+        self._require_scope(scope)
+        try:
+            with self._transaction(TeamOperation.READ) as cursor:
+                return self._export_with_cursor(cursor, scope, exported_at)
+        except KnowledgeDocumentStorageFailure as error:
+            raise KnowledgeExportRepositoryError(
+                "knowledge export storage operation failed"
+            ) from error
+
+    def import_knowledge_history(
+        self, source: KnowledgeExportBundle, target: KnowledgeExportBundle
+    ) -> KnowledgeImportResult:
+        if not isinstance(source, KnowledgeExportBundle) or not isinstance(
+            target, KnowledgeExportBundle
+        ):
+            raise TypeError("knowledge import requires validated bundles")
+        self._require_scope(target.scope)
+        self._validate_import_rebase(source, target)
+        with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
+            before = self._export_with_cursor(cursor, target.scope, target.exported_at)
+            if self._same_export(before, target):
+                return KnowledgeImportResult(
+                    len(target.active_documents),
+                    len(target.revisions),
+                    len(target.deletions),
+                    True,
+                )
+            if (
+                before.last_synced_at is not None
+                or before.active_documents
+                or before.revisions
+                or before.deletions
+            ):
+                raise KnowledgeImportConflict("knowledge import target contains conflicting state")
+            source_by_target = {
+                knowledge_import_document_identity(target.scope, item.document_id): item
+                for item in source.active_documents
+            }
+            for revision in target.revisions:
+                self._store_revision(cursor, target.scope, revision)
+            for active in target.active_documents:
+                source_active = source_by_target[active.document_id]
+                cursor.execute(
+                    "UPDATE mnemo_team.knowledge_document_sources SET "
+                    "import_source_document_id = CAST(%s AS uuid), "
+                    "import_source_content_digest = %s, imported_at = CURRENT_TIMESTAMP "
+                    "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND document_id = CAST(%s AS uuid)",
+                    (
+                        str(source_active.document_id),
+                        source.content_digest,
+                        *self._scope_values(target.scope),
+                        str(active.document_id),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise KnowledgeImportConflict("knowledge import source mapping failed")
+            source_deletions = {
+                knowledge_import_document_identity(target.scope, item.document_id): item
+                for item in source.deletions
+            }
+            for deletion in target.deletions:
+                source_deletion = source_deletions[deletion.document_id]
+                cursor.execute(
+                    "INSERT INTO mnemo_team.imported_knowledge_deletions("
+                    "workspace_id, project_id, owner_id, visibility, document_id, "
+                    "source_document_id, relative_path, content_digest, deleted_at, "
+                    "source_content_digest, imported_at) VALUES ("
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                    "CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+                    (
+                        *self._scope_values(target.scope),
+                        str(deletion.document_id),
+                        str(source_deletion.document_id),
+                        deletion.relative_path,
+                        deletion.content_digest,
+                        deletion.deleted_at,
+                        source.content_digest,
+                    ),
+                )
+            if target.last_synced_at is not None:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.knowledge_sync_status("
+                    "workspace_id, project_id, owner_id, visibility, last_synced_at) "
+                    "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s)",
+                    (*self._scope_values(target.scope), target.last_synced_at),
+                )
+            after = self._export_with_cursor(cursor, target.scope, target.exported_at)
+            if not self._same_export(after, target):
+                raise KnowledgeImportConflict("knowledge import verification failed")
+            return KnowledgeImportResult(
+                len(target.active_documents),
+                len(target.revisions),
+                len(target.deletions),
+                False,
+            )
+
+    def _export_with_cursor(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, exported_at: datetime
+    ) -> KnowledgeExportBundle:
+        values = self._scope_values(scope)
+        cursor.execute(
+            "SELECT last_synced_at FROM mnemo_team.knowledge_sync_status "
+            "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s",
+            values,
+        )
+        sync_row = cursor.fetchone()
+        last_synced_at = None if sync_row is None else cast(datetime, sync_row[0])
+        active = tuple(
+            self._known_document(row, scope) for row in self._active_document_rows(cursor, scope)
+        )
+        cursor.execute(
+            "SELECT " + _REVISION_COLUMNS + " FROM "
+            "mnemo_team.knowledge_document_sources AS source JOIN "
+            "mnemo_team.knowledge_document_revisions AS revision "
+            "ON revision.workspace_id = source.workspace_id "
+            "AND revision.document_id = source.document_id "
+            "WHERE source.workspace_id = CAST(%s AS uuid) "
+            "AND source.project_id = CAST(%s AS uuid) "
+            "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
+            "AND NOT source.is_deleted ORDER BY revision.document_id, revision.revision_number",
+            values,
+        )
+        revision_rows = tuple(cursor.fetchall())
+        revisions = tuple(self._revision_from_row(cursor, row, scope) for row in revision_rows)
+        cursor.execute(
+            "SELECT document_id::text, relative_path, content_digest, deleted_at "
+            "FROM mnemo_team.knowledge_document_tombstones WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s ORDER BY document_id",
+            values,
+        )
+        native_deletions = tuple(
+            KnowledgeDeletionRecord(
+                KnowledgeDocumentId.from_string(str(row[0])),
+                scope,
+                str(row[1]),
+                str(row[2]),
+                cast(datetime, row[3]),
+            )
+            for row in cursor.fetchall()
+        )
+        cursor.execute(
+            "SELECT document_id::text, relative_path, content_digest, deleted_at "
+            "FROM mnemo_team.imported_knowledge_deletions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s ORDER BY document_id",
+            values,
+        )
+        imported_deletions = tuple(
+            KnowledgeDeletionRecord(
+                KnowledgeDocumentId.from_string(str(row[0])),
+                scope,
+                str(row[1]),
+                str(row[2]),
+                cast(datetime, row[3]),
+            )
+            for row in cursor.fetchall()
+        )
+        return KnowledgeExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            last_synced_at=last_synced_at,
+            active_documents=active,
+            revisions=revisions,
+            deletions=(*native_deletions, *imported_deletions),
+        )
+
+    @staticmethod
+    def _validate_import_rebase(
+        source: KnowledgeExportBundle, target: KnowledgeExportBundle
+    ) -> None:
+        if source.exported_at != target.exported_at:
+            raise KnowledgeImportConflict("knowledge import timestamps differ")
+        mapped = {
+            document_id: knowledge_import_document_identity(target.scope, document_id)
+            for document_id in (
+                *(item.document_id for item in source.active_documents),
+                *(item.document_id for item in source.deletions),
+            )
+        }
+        active = tuple(
+            KnownKnowledgeDocument(
+                mapped[item.document_id],
+                target.scope,
+                item.relative_path,
+                item.content_digest,
+                item.current_revision_id,
+                item.revision_number,
+            )
+            for item in source.active_documents
+        )
+        revisions = tuple(
+            KnowledgeDocumentRevision(
+                item.revision_id,
+                KnowledgeDocument(
+                    mapped[item.document.document_id],
+                    target.scope,
+                    item.document.relative_path,
+                    item.document.source_kind,
+                    item.document.content_digest,
+                    item.document.title,
+                    item.document.frontmatter,
+                    item.document.sections,
+                    item.document.links,
+                ),
+                item.revision_number,
+                item.predecessor_revision_id,
+                item.created_at,
+            )
+            for item in source.revisions
+        )
+        deletions = tuple(
+            KnowledgeDeletionRecord(
+                mapped[item.document_id],
+                target.scope,
+                item.relative_path,
+                item.content_digest,
+                item.deleted_at,
+            )
+            for item in source.deletions
+        )
+        expected = KnowledgeExportBundle.create(
+            scope=target.scope,
+            exported_at=source.exported_at,
+            last_synced_at=source.last_synced_at,
+            active_documents=active,
+            revisions=revisions,
+            deletions=deletions,
+        )
+        if not PostgreSQLKnowledgeDocumentRepository._same_export(expected, target):
+            raise KnowledgeImportConflict("knowledge import source and target differ")
+
+    @staticmethod
+    def _same_export(left: KnowledgeExportBundle, right: KnowledgeExportBundle) -> bool:
+        return (
+            left.format_version == right.format_version
+            and left.scope == right.scope
+            and left.exported_at == right.exported_at
+            and left.last_synced_at == right.last_synced_at
+            and left.active_documents == right.active_documents
+            and left.revisions == right.revisions
+            and left.deletions == right.deletions
+        )
+
     @contextmanager
     def _transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
         try:
@@ -389,6 +645,7 @@ class PostgreSQLKnowledgeDocumentRepository:
             KnowledgeDocumentNotFound,
             KnowledgeDocumentSecretRejected,
             KnowledgeDocumentStorageFailure,
+            KnowledgeImportConflict,
         ):
             connection.rollback()
             raise

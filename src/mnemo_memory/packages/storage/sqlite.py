@@ -79,6 +79,7 @@ from mnemo_memory.packages.domain import (
     EventOutboxJob,
     EventOutboxTopic,
     EvidenceReference,
+    KnowledgeDeletionRecord,
     KnowledgeDocument,
     KnowledgeDocumentId,
     KnowledgeDocumentLink,
@@ -88,6 +89,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentSourceKind,
     KnowledgeDocumentTombstone,
+    KnowledgeExportBundle,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryClassification,
@@ -212,6 +214,7 @@ from .contracts import (
     KnowledgeDocumentSecretRejected,
     KnowledgeDocumentStorageFailure,
     KnowledgeDocumentSyncStoreResult,
+    KnowledgeExportRepositoryError,
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ManifestSnapshotPage,
@@ -7305,6 +7308,52 @@ class SQLiteKnowledgeDocumentRepository:
         return _KnowledgeOperations.apply_knowledge_sync(
             self._backend, scope, revisions, tombstones
         )
+
+    def export_knowledge_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> KnowledgeExportBundle:
+        self._backend._require_project_scope(scope)
+        try:
+            with self._backend._connect() as connection:
+                active = self.list_active_documents(scope)
+                revision_rows = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source "
+                    "JOIN knowledge_document_revisions AS revision "
+                    "ON revision.document_id = source.document_id "
+                    "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0 "
+                    "ORDER BY revision.document_id, revision.revision_number",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+                tombstone_rows = connection.execute(
+                    "SELECT * FROM knowledge_document_tombstones WHERE owner_id = ? "
+                    "AND workspace_id IS ? AND project_id = ? ORDER BY document_id",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+                return KnowledgeExportBundle.create(
+                    scope=scope,
+                    exported_at=exported_at,
+                    last_synced_at=self.last_sync_at(scope),
+                    active_documents=active,
+                    revisions=tuple(
+                        _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+                        for row in revision_rows
+                    ),
+                    deletions=tuple(
+                        KnowledgeDeletionRecord(
+                            KnowledgeDocumentId.from_string(row["document_id"]),
+                            scope,
+                            row["relative_path"],
+                            row["content_digest"],
+                            datetime.fromisoformat(row["deleted_at"]),
+                        )
+                        for row in tombstone_rows
+                    ),
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise KnowledgeExportRepositoryError(
+                "knowledge export storage operation failed"
+            ) from error
 
 
 class SQLiteSourceStructureRepository:

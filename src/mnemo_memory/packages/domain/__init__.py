@@ -152,6 +152,12 @@ from .knowledge import (
     knowledge_section_digest,
     normalize_knowledge_query,
 )
+from .knowledge_export import (
+    KNOWLEDGE_EXPORT_FORMAT,
+    KnowledgeDeletionRecord,
+    KnowledgeExportBundle,
+    knowledge_import_document_identity,
+)
 from .knowledge_sync import (
     KnowledgeSyncAction,
     KnowledgeSyncActionKind,
@@ -217,6 +223,7 @@ __all__ = [
     "CHECKPOINT_EXPORT_FORMAT",
     "DEFAULT_CONTEXT_BUDGET",
     "EPISODIC_EXPORT_FORMAT",
+    "KNOWLEDGE_EXPORT_FORMAT",
     "ActiveEpisodicMemory",
     "AgentId",
     "ApprovedEpisodicEvent",
@@ -308,6 +315,7 @@ __all__ = [
     "EvidenceLocation",
     "EvidenceReference",
     "EvidenceSourceType",
+    "KnowledgeDeletionRecord",
     "KnowledgeDocument",
     "KnowledgeDocumentId",
     "KnowledgeDocumentLink",
@@ -318,6 +326,7 @@ __all__ = [
     "KnowledgeDocumentSectionMatch",
     "KnowledgeDocumentSourceKind",
     "KnowledgeDocumentTombstone",
+    "KnowledgeExportBundle",
     "KnowledgeLinkDirection",
     "KnowledgeSectionEmbedding",
     "KnowledgeSyncAction",
@@ -386,6 +395,7 @@ __all__ = [
     "WorkspaceRole",
     "active_episodic_memory_at_revision",
     "approved_event_import_identity",
+    "knowledge_import_document_identity",
     "knowledge_search_tokens",
     "knowledge_section_digest",
     "normalize_agent_client",

@@ -488,6 +488,33 @@ private-viewer denial.
 delivery endpoint. Approved-event deletion propagation into exports and backups remains a release
 requirement.
 
+### Restored deleted notes or cross-tenant knowledge transfer
+
+**Scenario:** A modified knowledge bundle is imported, another project's note content is read,
+scope-derived source IDs are copied without rebasing, revision history is truncated, a private
+viewer imports notes, embeddings are treated as portable authority, or a deleted note is rebuilt
+from placeholder title/section/revision data.
+
+**Required controls:** Export only one exact project scope into the strict
+`mnemo.knowledge-export.v1` domain object. Validate canonical source/revision/deletion ordering,
+unique source/path/revision identities, complete contiguous predecessor chains, current source
+pointers, exact scope, deleted/active separation, and the canonical digest. Rebase document identity
+only from retained source identity and explicit target scope while preserving revision identity and
+payload. Store active history in native tables and already-deleted state in a forced-RLS projection
+that has no title, frontmatter, section, link, revision, or source-created-at field. Require an empty
+or identical target, atomic insert and pre-commit re-export, independent application verification,
+and sanitized failure translation. Exclude search and embedding projections.
+
+**Verification:** Domain, Reference, and SQLite tests cover tampering, chain completeness, renamed
+paths, links, deletion minimization, restart stability, conflict rejection, and replay. Real
+PostgreSQL tests prove v16-to-v17 rollback/retry, SQLite transfer, restart-stable counts/hashes,
+native retrieval/search, insert-only provenance, absent deleted payload and embeddings,
+anti-resurrection, exact replay, and private-viewer denial.
+
+**Residual risk:** The bundle is not yet an encrypted remote delivery endpoint. Team knowledge
+ownership, conflicting corrections, source approval, and backup/export deletion propagation remain
+separate production-hardening requirements.
+
 ### Cross-tenant source projection and repository-content retention
 
 **Scenario:** A source snapshot is written into another project, child rows substitute a different

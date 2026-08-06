@@ -30,6 +30,9 @@ from mnemo_memory.packages.application import (
     CheckpointExportService,
     CheckpointImportService,
     CheckpointTransferStorageFailure,
+    KnowledgeExportService,
+    KnowledgeImportService,
+    KnowledgeTransferStorageFailure,
 )
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
@@ -155,6 +158,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLTeamMigrationRunner,
     RevisionConflict,
     SQLiteCheckpointRepository,
+    SQLiteKnowledgeDocumentRepository,
     TaskActivityEventConflict,
     TaskActivityEventNotFound,
     TaskActivityEventRejected,
@@ -500,6 +504,19 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert "imported_without_target_payload" in imported_approved_sql
     assert "imported retraction unexpectedly retains target payload" in imported_approved_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in imported_approved_sql
+    imported_knowledge_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0017_team_imported_knowledge.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert imported_knowledge_sql.count("FORCE ROW LEVEL SECURITY") == 1
+    assert "imported knowledge deletion prevents resurrection" in imported_knowledge_sql
+    assert "import_source_document_id uuid" in imported_knowledge_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in imported_knowledge_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -978,12 +995,47 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath(
+                    "resources",
+                    "postgres_migrations",
+                    "0016_team_imported_approved_events.sql",
+                )
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=17).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.imported_knowledge_deletions')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+            cursor.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'mnemo_team' "
+                "AND table_name = 'knowledge_document_sources' "
+                "AND column_name = 'import_source_document_id'"
+            )
+            assert cursor.fetchone() is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 18))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3676,6 +3728,183 @@ def test_personal_approved_event_history_imports_without_retracted_payload(
     with pytest.raises(ApprovedEventTransferStorageFailure):
         ApprovedEventImportService(viewer, viewer).import_bundle(
             bundle, target_scope=replace(target_scope, task_id=TaskId.new())
+        )
+
+
+def test_personal_knowledge_history_imports_without_deleted_note_payload(
+    postgres_harness: PostgreSQLHarness, tmp_path: Path
+) -> None:
+    personal_scope = MemoryScope(
+        OwnerId.new(),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.new(),
+        ProjectId.new(),
+    )
+    personal = SQLiteKnowledgeDocumentRepository(
+        tmp_path / "personal-knowledge-import.sqlite3", base_directory=tmp_path
+    )
+    personal.migrate()
+    first = _knowledge_revision(
+        personal_scope,
+        "Architecture/decision.md",
+        "# Decision\nUse the initial bounded workflow.\n[Runbook](../runbook.md)",
+    )
+    deleted = _knowledge_revision(
+        personal_scope,
+        "Archive/deleted.md",
+        "# Deleted\nThis deleted note payload must not be imported.",
+    )
+    personal.apply_sync(personal_scope, (first, deleted), ())
+    second = _knowledge_revision(
+        personal_scope,
+        "Architecture/renamed.md",
+        "# Decision\nUse the verified bounded workflow.\n[[Runbook]]",
+        number=2,
+        predecessor=first.revision_id,
+        document_id=first.document.document_id,
+    )
+    personal.apply_sync(personal_scope, (second,), ())
+    personal.apply_sync(
+        personal_scope,
+        (),
+        (
+            KnowledgeDocumentTombstone(
+                deleted.document.document_id,
+                personal_scope,
+                deleted.document.relative_path,
+                deleted.document.content_digest,
+                deleted.revision_id,
+                NOW + timedelta(minutes=2),
+            ),
+        ),
+    )
+    exported_at = NOW + timedelta(minutes=3)
+    bundle = KnowledgeExportService(personal).export(personal_scope, exported_at=exported_at)
+    assert "deleted note payload" not in bundle.canonical_json()
+
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    target_scope = MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        workspace_id=workspace.workspace_id,
+        project_id=project.project_id,
+    )
+    target = PostgreSQLKnowledgeDocumentRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    importer = KnowledgeImportService(target, target)
+    result = importer.import_bundle(bundle, target_scope=target_scope)
+
+    assert not result.idempotent
+    assert (result.active_document_count, result.revision_count, result.deletion_count) == (
+        1,
+        2,
+        1,
+    )
+    assert result.source_content_digest == bundle.content_digest
+    assert result.source_content_digest != result.target_content_digest
+    restarted = PostgreSQLKnowledgeDocumentRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    imported = KnowledgeExportService(restarted).export(target_scope, exported_at=exported_at)
+    assert imported.content_digest == result.target_content_digest
+    assert {item.revision_id for item in imported.revisions} == {
+        item.revision_id for item in bundle.revisions
+    }
+    assert (
+        restarted.get_current_revision_by_path(target_scope, "Architecture/renamed.md")
+        == imported.revisions[-1]
+    )
+    assert restarted.search_current_sections(target_scope, ("verified",), 8, 128)
+    assert (
+        restarted.list_current_section_embeddings(target_scope, "test:no-imported-projection", 128)
+        == ()
+    )
+    assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+    imported_deletion = imported.deletions[0]
+    resurrection = _knowledge_revision(
+        target_scope,
+        imported_deletion.relative_path,
+        "# Restored\nThis payload must not bypass the deletion.",
+    )
+    resurrection = replace(
+        resurrection,
+        document=replace(resurrection.document, document_id=imported_deletion.document_id),
+    )
+    with pytest.raises(KnowledgeDocumentConflict):
+        restarted.apply_sync(target_scope, (resurrection,), ())
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'read', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        cursor.execute(
+            "SELECT COUNT(*), COUNT(import_source_document_id) FROM "
+            "mnemo_team.knowledge_document_sources WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (1, 1)
+        cursor.execute(
+            "SELECT COUNT(*), bool_or(relative_path = 'Archive/deleted.md'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.imported_knowledge_deletions', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.imported_knowledge_deletions', 'DELETE') FROM "
+            "mnemo_team.imported_knowledge_deletions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (1, True, False, False)
+        cursor.execute(
+            "SELECT COUNT(*) FROM mnemo_team.knowledge_document_revisions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (2,)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLKnowledgeDocumentRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    viewer_bundle = KnowledgeExportService(viewer).export(target_scope, exported_at=exported_at)
+    assert viewer_bundle.active_documents == () and viewer_bundle.deletions == ()
+    with pytest.raises(KnowledgeTransferStorageFailure):
+        KnowledgeImportService(viewer, viewer).import_bundle(
+            bundle, target_scope=replace(target_scope, project_id=ProjectId.new())
         )
 
 

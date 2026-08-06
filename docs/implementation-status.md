@@ -2284,6 +2284,48 @@ for 225 source files, dependency/provenance validation for 93 entries, architect
 123 product Python files, schema validation, and the isolated installed-package MCP workflow. No
 dependency was added. Knowledge transfer remains a separate requirement.
 
+#### Issue 21V — Verified knowledge-history personal-to-team import — Complete
+
+The current bounded issue adds one portable, integrity-verified bundle for active knowledge source
+state, complete retained document revision/link history, and payload-free deletion records in one
+exact project scope, then imports that state atomically into one authorized team project scope.
+Scope-derived document identities must be deterministically rebased while revision, content,
+frontmatter, section, link, timestamp, source-kind, and deletion metadata remain exact. Deleted note
+payload must not be reconstructed. Rebuildable search and embedding projections are excluded.
+
+This issue adds no remote service, OAuth, backup propagation, quota, dashboard, team correction
+governance, source approval, or dependency.
+
+Implemented the strict `mnemo.knowledge-export.v1` domain bundle for active source pointers, every
+retained immutable document revision, and minimal payload-free deletion state in one exact project
+scope. The bundle retains source kind, path, content digest, title, frontmatter, ordered sections,
+declared Markdown/Obsidian links, revision identity, predecessor, number, timestamp, and last sync
+time. It validates canonical order, unique source/path/revision identities, complete contiguous
+predecessor chains, current-pointer binding, active/deleted separation, canonical UTF-8 JSON, and
+one SHA-256 digest. SQLite and Reference exports are scope-first and restart stable.
+
+The transfer service deterministically rebases source document identity while preserving revision
+IDs and all retained content and provenance. PostgreSQL schema version 17 records source identity,
+source bundle digest, and import time on native active knowledge sources. Already-deleted notes use
+one forced-RLS payload-free projection containing only source/target identity, path, digest,
+deletion time, and import provenance; no placeholder source creation time, revision, title,
+frontmatter, section, or link is created. A database trigger blocks resurrection. PostgreSQL
+requires an unsynchronized empty or already-identical target, writes active history, deletion
+state, and last-sync state atomically, and reconstructs the target bundle before commit. Search and
+embedding data remain excluded rebuildable projections.
+
+ADR 0030, the product contract, and threat model document retained-history, erasure, scope, RLS,
+provenance, untrusted-content, and recovery boundaries. Unit tests prove revision/link history,
+renamed paths, tamper rejection, payload minimization, rebasing, conflict rejection, replay, and
+SQLite restart durability. Real PostgreSQL tests prove atomic v16-to-v17 rollback/retry,
+SQLite-to-team counts and hashes after restart, native retrieval/search, exact revision identity,
+source/target provenance, absent deleted payload and embeddings, anti-resurrection, replay, and
+private-project viewer denial. The complete repository gate passes with 839 default tests plus 21
+mandatory real-PostgreSQL tests, strict typing for 228 source files, dependency/provenance
+validation for 93 entries, architecture validation for 125 product Python files, schema validation,
+and the isolated installed-package MCP workflow. No dependency was added. Structural projection
+transfer remains separate from durable personal state.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

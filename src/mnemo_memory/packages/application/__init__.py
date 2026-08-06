@@ -121,6 +121,14 @@ from .knowledge import (
     KnowledgeSynchronizationResult,
     SynchronizeKnowledgeDocuments,
 )
+from .knowledge_transfer import (
+    KnowledgeExportService,
+    KnowledgeImportService,
+    KnowledgeTransferConflict,
+    KnowledgeTransferError,
+    KnowledgeTransferResult,
+    KnowledgeTransferStorageFailure,
+)
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
 from .uninstalls import (
@@ -205,7 +213,13 @@ __all__ = [
     "KnowledgeApplicationRejected",
     "KnowledgeApplicationStorageFailure",
     "KnowledgeDocumentApplicationService",
+    "KnowledgeExportService",
+    "KnowledgeImportService",
     "KnowledgeSynchronizationResult",
+    "KnowledgeTransferConflict",
+    "KnowledgeTransferError",
+    "KnowledgeTransferResult",
+    "KnowledgeTransferStorageFailure",
     "LifecycleService",
     "LineageDirection",
     "LineageQueryResult",

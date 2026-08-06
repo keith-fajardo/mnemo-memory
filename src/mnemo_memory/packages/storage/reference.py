@@ -54,11 +54,13 @@ from mnemo_memory.packages.domain import (
     EventOutboxJob,
     EventOutboxTopic,
     EvidenceReference,
+    KnowledgeDeletionRecord,
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
     KnowledgeDocumentSectionMatch,
     KnowledgeDocumentTombstone,
+    KnowledgeExportBundle,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
     MemoryId,
@@ -156,6 +158,8 @@ from .contracts import (
     KnowledgeDocumentNotFound,
     KnowledgeDocumentSecretRejected,
     KnowledgeDocumentSyncStoreResult,
+    KnowledgeImportConflict,
+    KnowledgeImportResult,
     ManifestNodeNotFound,
     ManifestSnapshotNotFound,
     ManifestSnapshotPage,
@@ -216,6 +220,7 @@ class ReferenceKnowledgeDocumentRepository:
         self._active: dict[KnowledgeDocumentId, KnownKnowledgeDocument] = {}
         self._revisions: dict[KnowledgeDocumentRevisionId, KnowledgeDocumentRevision] = {}
         self._tombstones: dict[KnowledgeDocumentId, KnowledgeDocumentTombstone] = {}
+        self._imported_deletions: dict[KnowledgeDocumentId, KnowledgeDeletionRecord] = {}
         self._embeddings: dict[
             tuple[KnowledgeDocumentRevisionId, int, str], KnowledgeSectionEmbedding
         ] = {}
@@ -396,6 +401,112 @@ class ReferenceKnowledgeDocumentRepository:
             self.list_active_documents(scope), len(revisions), len(tombstones)
         )
 
+    def export_knowledge_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> KnowledgeExportBundle:
+        self._require_scope(scope)
+        active = self.list_active_documents(scope)
+        active_ids = {item.document_id for item in active}
+        revisions = tuple(
+            item
+            for item in self._revisions.values()
+            if item.document.scope == scope and item.document.document_id in active_ids
+        )
+        native_deletions = tuple(
+            KnowledgeDeletionRecord(
+                item.document_id,
+                item.scope,
+                item.relative_path,
+                item.content_digest,
+                item.deleted_at,
+            )
+            for item in self._tombstones.values()
+            if item.scope == scope
+        )
+        imported_deletions = tuple(
+            item for item in self._imported_deletions.values() if item.scope == scope
+        )
+        return KnowledgeExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            last_synced_at=self._last_sync.get(scope),
+            active_documents=active,
+            revisions=revisions,
+            deletions=(*native_deletions, *imported_deletions),
+        )
+
+    def import_knowledge_history(
+        self, source: KnowledgeExportBundle, target: KnowledgeExportBundle
+    ) -> KnowledgeImportResult:
+        if not isinstance(source, KnowledgeExportBundle) or not isinstance(
+            target, KnowledgeExportBundle
+        ):
+            raise TypeError("knowledge import requires validated bundles")
+        self._require_scope(target.scope)
+        if source.exported_at != target.exported_at or (
+            len(source.active_documents),
+            len(source.revisions),
+            len(source.deletions),
+        ) != (len(target.active_documents), len(target.revisions), len(target.deletions)):
+            raise KnowledgeImportConflict("knowledge import source and target differ")
+        before = self.export_knowledge_history(target.scope, exported_at=target.exported_at)
+        if (
+            before.last_synced_at == target.last_synced_at
+            and before.active_documents == target.active_documents
+            and before.revisions == target.revisions
+            and before.deletions == target.deletions
+        ):
+            return KnowledgeImportResult(
+                len(target.active_documents), len(target.revisions), len(target.deletions), True
+            )
+        if (
+            before.last_synced_at is not None
+            or before.active_documents
+            or before.revisions
+            or before.deletions
+        ):
+            raise KnowledgeImportConflict("knowledge import target contains conflicting state")
+        state = (
+            dict(self._last_sync),
+            dict(self._active),
+            dict(self._revisions),
+            dict(self._tombstones),
+            dict(self._imported_deletions),
+        )
+        try:
+            for active_item in target.active_documents:
+                if active_item.document_id in self._active:
+                    raise KnowledgeImportConflict("knowledge import identity conflicts")
+                self._active[active_item.document_id] = active_item
+            for revision in target.revisions:
+                if revision.revision_id in self._revisions:
+                    raise KnowledgeImportConflict("knowledge import revision conflicts")
+                self._revisions[revision.revision_id] = revision
+            for deletion in target.deletions:
+                self._imported_deletions[deletion.document_id] = deletion
+            if target.last_synced_at is not None:
+                self._last_sync[target.scope] = target.last_synced_at
+            after = self.export_knowledge_history(target.scope, exported_at=target.exported_at)
+            if (
+                after.last_synced_at != target.last_synced_at
+                or after.active_documents != target.active_documents
+                or after.revisions != target.revisions
+                or after.deletions != target.deletions
+            ):
+                raise KnowledgeImportConflict("knowledge import verification failed")
+        except BaseException:
+            (
+                self._last_sync,
+                self._active,
+                self._revisions,
+                self._tombstones,
+                self._imported_deletions,
+            ) = state
+            raise
+        return KnowledgeImportResult(
+            len(target.active_documents), len(target.revisions), len(target.deletions), False
+        )
+
     def _validate(
         self,
         scope: MemoryScope,
@@ -415,6 +526,8 @@ class ReferenceKnowledgeDocumentRepository:
         ):
             raise InvalidKnowledgeDocumentScope("knowledge document scope is invalid")
         for revision in revisions:
+            if revision.document.document_id in self._imported_deletions:
+                raise KnowledgeDocumentConflict("deleted knowledge document cannot be restored")
             decision = self._policy.assess(revision.document)
             if not decision.accepted:
                 raise KnowledgeDocumentSecretRejected(

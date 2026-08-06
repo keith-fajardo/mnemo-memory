@@ -464,7 +464,18 @@ behind forced RLS and verifies the target bundle before commit. An already-retra
 only a deterministic payload-free target identity: its deleted summary, source key, and direct
 event evidence are never manufactured or restored. Exact replay is idempotent, ordinary governance
 inspection and anti-resurrection remain effective, and the application returns verified counts and
-source/target hashes. Knowledge and structural export/import remain separate requirements.
+source/target hashes.
+
+Knowledge history uses a separate `mnemo.knowledge-export.v1` exact-project bundle containing every
+active source pointer, all retained immutable revisions, declared Markdown/Obsidian links, minimal
+payload-free deletions, and last successful sync time. Import deterministically rebases document
+identity to the target project while preserving revision IDs, predecessor chains, paths, digests,
+source kinds, titles, frontmatter, sections, links, and timestamps. PostgreSQL stores active history
+in the native forced-RLS tables with source identity and digest provenance. An already-deleted note
+uses a dedicated forced-RLS projection containing only source/target identity, path, digest,
+deletion time, and import provenance; it never recreates a source creation time, revision, title,
+frontmatter, section, or link. Exact retry is idempotent and target embeddings/search data remain
+rebuildable projections. Structural export/import remains a separate requirement.
 
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical
