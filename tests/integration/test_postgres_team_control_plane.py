@@ -22,6 +22,8 @@ from mnemo_memory.packages.domain import (
     CheckpointRevisionId,
     CheckpointStatus,
     EventId,
+    EventOutboxJob,
+    EventOutboxTopic,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -38,10 +40,16 @@ from mnemo_memory.packages.domain import (
     ProjectMembership,
     ProjectRole,
     RequestId,
+    RetentionPolicyId,
+    RetentionSchedule,
     ScopeLevel,
+    Sensitivity,
     SessionId,
     SourceId,
     SourceTrustClass,
+    TaskActivityActor,
+    TaskActivityEvent,
+    TaskActivityEventKind,
     TaskId,
     TeamAuditAction,
     TeamAuditEvent,
@@ -64,6 +72,8 @@ from mnemo_memory.packages.policy import (
 from mnemo_memory.packages.storage import (
     POSTGRES_TEAM_SCHEMA_VERSION,
     CheckpointNotFound,
+    EventOutboxLeaseConflict,
+    EventOutboxNotFound,
     InvalidCheckpointScope,
     InvalidEpisodicEventScope,
     InvalidKnowledgeDocumentScope,
@@ -74,11 +84,16 @@ from mnemo_memory.packages.storage import (
     PostgreSQLCheckpointRepository,
     PostgreSQLConnection,
     PostgreSQLConnectionFactory,
+    PostgreSQLEventOutboxRepository,
     PostgreSQLKnowledgeDocumentRepository,
+    PostgreSQLTaskActivityEventRepository,
     PostgreSQLTeamControlPlaneRepository,
     PostgreSQLTeamMigrationError,
     PostgreSQLTeamMigrationRunner,
     RevisionConflict,
+    TaskActivityEventConflict,
+    TaskActivityEventNotFound,
+    TaskActivityEventRejected,
     TeamControlPlaneNotFound,
 )
 
@@ -271,6 +286,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert checkpoint_sql.count("FORCE ROW LEVEL SECURITY") == 3
     assert "DEFERRABLE INITIALLY DEFERRED" in checkpoint_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in checkpoint_sql
+    event_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0004_team_task_events_outbox.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert event_sql.count("FORCE ROW LEVEL SECURITY") == 2
+    assert "FOR UPDATE SKIP LOCKED" not in event_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in event_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -371,12 +394,37 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0003_team_checkpoints.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=4).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3)
+            cursor.execute("SELECT to_regclass('mnemo_team.task_activity_events')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4)
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -884,6 +932,209 @@ def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
         == abandoned
     )
     assert repository.select_current_checkpoint(scope) is None
+
+
+def _task_event(
+    scope: MemoryScope, suffix: str, *, summary: str | None = None
+) -> TaskActivityEvent:
+    return TaskActivityEvent.create(
+        scope=scope,
+        kind=TaskActivityEventKind.TASK_ACTIVITY,
+        actor=TaskActivityActor.USER,
+        summary=summary or f"reviewed bounded event {suffix}",
+        source_event_key=f"team-task-event-{suffix}",
+        sensitivity=Sensitivity.NORMAL,
+        retention=RetentionSchedule(
+            RetentionPolicyId.new(),
+            True,
+            NOW,
+            NOW,
+            NOW,
+            None,
+            None,
+        ),
+        occurred_at=NOW + timedelta(seconds=10),
+        evidence_references=(_checkpoint_evidence(suffix),),
+    )
+
+
+def test_postgres_task_events_and_outbox_are_atomic_leased_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    project_scope = MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        workspace_id=workspace.workspace_id,
+        project_id=project.project_id,
+    )
+    events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    outbox = PostgreSQLEventOutboxRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    event = _task_event(scope, "a")
+    assert not events.append_task_activity_event(event).idempotent
+    assert events.append_task_activity_event(event).idempotent
+    assert events.get_task_activity_event(scope, event.event_id) == event
+    assert events.list_task_activity_events(scope).items == (event,)
+    with pytest.raises(TaskActivityEventConflict):
+        events.append_task_activity_event(replace(event, summary="different canonical payload"))
+    with pytest.raises(TaskActivityEventRejected):
+        events.append_task_activity_event(
+            _task_event(
+                scope,
+                "b",
+                summary="api_key: 1234567890abcdefghijklmnop",
+            )
+        )
+    assert events.list_task_activity_events(scope).items == (event,)
+
+    job = EventOutboxJob.create(
+        scope=scope,
+        topic=EventOutboxTopic.TASK_ACTIVITY,
+        source_event_id=event.event_id,
+        event_kind=event.kind.value,
+        occurred_at=event.occurred_at,
+        created_at=event.occurred_at,
+    )
+    assert outbox.get_event_job(scope, job.job_id) == job
+    assert (
+        outbox.get_project_event_job_status(project_scope, now=NOW + timedelta(seconds=11)).pending
+        == 1
+    )
+
+    claimed = outbox.claim_event_jobs(
+        scope,
+        worker_id="worker-one",
+        now=NOW + timedelta(seconds=11),
+        lease_expires_at=NOW + timedelta(minutes=1),
+        limit=10,
+    )
+    assert len(claimed) == 1 and claimed[0].attempt_count == 1
+    assert (
+        outbox.claim_event_jobs(
+            scope,
+            worker_id="worker-two",
+            now=NOW + timedelta(seconds=12),
+            lease_expires_at=NOW + timedelta(minutes=2),
+            limit=10,
+        )
+        == ()
+    )
+    with pytest.raises(EventOutboxLeaseConflict):
+        outbox.complete_event_job(
+            scope,
+            job.job_id,
+            worker_id="worker-two",
+            completed_at=NOW + timedelta(seconds=12),
+        )
+    failed = outbox.retry_event_job(
+        scope,
+        job.job_id,
+        worker_id="worker-one",
+        now=NOW + timedelta(seconds=12),
+        available_at=NOW + timedelta(seconds=15),
+        failure_code="HANDLER_FAILED",
+    )
+    assert failed.attempt_count == 1 and failed.last_failure_code == "HANDLER_FAILED"
+    status = outbox.get_project_event_job_status(project_scope, now=NOW + timedelta(seconds=13))
+    assert (status.pending, status.processing, status.failed) == (0, 0, 1)
+    assert (
+        outbox.requeue_failed_project_event_jobs(
+            project_scope, requested_at=NOW + timedelta(seconds=16), limit=100
+        )
+        == 1
+    )
+    assert (
+        outbox.requeue_failed_project_event_jobs(
+            project_scope, requested_at=NOW + timedelta(seconds=16), limit=100
+        )
+        == 0
+    )
+    reclaimed = outbox.claim_event_jobs(
+        scope,
+        worker_id="worker-two",
+        now=NOW + timedelta(seconds=16),
+        lease_expires_at=NOW + timedelta(minutes=2),
+        limit=1,
+    )[0]
+    assert reclaimed.attempt_count == 2 and reclaimed.last_failure_code is None
+    completed = outbox.complete_event_job(
+        scope,
+        job.job_id,
+        worker_id="worker-two",
+        completed_at=NOW + timedelta(seconds=17),
+    )
+    assert completed.completed_at == NOW + timedelta(seconds=17)
+    final_status = outbox.get_project_event_job_status(
+        project_scope, now=NOW + timedelta(seconds=18)
+    )
+    assert (final_status.pending, final_status.processing, final_status.failed) == (0, 0, 0)
+    restarted = PostgreSQLEventOutboxRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_event_job(scope, job.job_id) == completed
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer_events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    viewer_outbox = PostgreSQLEventOutboxRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(TaskActivityEventNotFound):
+        viewer_events.get_task_activity_event(scope, event.event_id)
+    with pytest.raises(EventOutboxNotFound):
+        viewer_outbox.get_event_job(scope, job.job_id)
+    with pytest.raises(TaskActivityEventConflict):
+        viewer_events.append_task_activity_event(_task_event(scope, "c"))
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(EventOutboxNotFound):
+        outbox.get_event_job(foreign_task, job.job_id)
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.task_activity_events', 'UPDATE'), "
+            "has_table_privilege(current_user, 'mnemo_team.event_outbox', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
 
 
 def _database_authorized(

@@ -7,8 +7,9 @@ Code MCP integration, explicit checkpoints, SQLite, and dbt structural projectio
 required controls before those features exist; it does not claim they are implemented.
 
 The pure team authorization contract, PostgreSQL authority control plane, team knowledge, and team
-checkpoint storage are now included. Remote MCP, hosted sync, OAuth, remaining team data parity,
-and production operations remain deferred and require threat-model revisions before exposure.
+checkpoint storage, minimized team task events, and their transactional outbox are now included.
+Remote MCP, hosted sync, OAuth, remaining team data parity, and production operations remain
+deferred and require threat-model revisions before exposure.
 
 ## Security objectives
 
@@ -202,6 +203,30 @@ an idempotent retry reaches v3.
 checkpoint outbox, source-observation, retention, deletion, backup, or remote-service boundary.
 The adapter remains unavailable to agents until the authenticated team composition and remaining
 production controls are complete.
+
+### Cross-tenant team event delivery and lease races
+
+**Scenario:** A worker claims another task's event, two workers process one attempt, an unauthorized
+viewer observes queue state, a failed-job retry erases attempt history, or an event commits without
+its delivery intent. A malicious minimized summary could also carry a prohibited secret.
+
+**Required controls:** Deterministic content-safety policy runs before persistence. Canonical event
+and outbox rows repeat exact workspace, project, owner, visibility, session, and task scope and use
+forced RLS before selection, insertion, update, or row lock. Event and deterministic job commit in
+one transaction. A fixed-search-path trigger matches every job to its canonical event scope, kind,
+and occurrence time. Claims use `FOR UPDATE SKIP LOCKED`, increment attempts, and attach a bounded
+worker/expiry lease. Only that unexpired lease can complete or retry. Project retry selects at most
+100 failed jobs with absent/expired leases, preserves attempts, and clears no completion state.
+
+**Verification:** Real PostgreSQL tests cover accepted/idempotent/conflicting/secret events,
+restart durability, exact task and private-project denial, one event-to-job mapping, active-lease
+claim exclusion, wrong-worker completion denial, failure retry, content-free status, bounded
+requeue, attempt preservation, second claim, completion, and runtime privilege restrictions. An
+injected v3-to-v4 migration failure retains v3 without either new table.
+
+**Residual risk:** No authenticated service, worker daemon, scheduler, retention/deletion path,
+approved-memory governance, or backup cleanup is composed. Pre-v4 checkpoint events are not
+backfilled because replay safety and operator intent are undefined. Team exposure remains blocked.
 
 ### Prompt injection through retrieved content
 

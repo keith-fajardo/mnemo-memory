@@ -45,6 +45,15 @@ An identical terminal retry returns the committed revision, while stale or compe
 without a partial revision or event. This storage boundary does not authenticate the principal or
 provide checkpoint retention, deletion propagation, source observations, or a remote team service.
 
+Team task activity retains only the existing explicitly minimized event contract, never raw
+interaction bodies. PostgreSQL applies deterministic secret/sensitivity policy before persistence
+and atomically inserts one deterministic delivery job with an accepted event. Queue claims require
+exact task scope, increment attempts under a worker lease, and use row locks that prevent concurrent
+claim duplication. Completion and retry require the live lease owner. Explicit project-level
+failed-job requeue is capped at 100, preserves attempt counts, and cannot record successful
+handling. Both canonical event rows and delivery metadata remain behind forced RLS; content-free
+project status returns counts only. Pre-v4 checkpoint history is not silently replayed or backfilled.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

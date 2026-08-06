@@ -1614,6 +1614,54 @@ validation, and the isolated installed-package MCP workflow. No checkpoint sourc
 projection, event outbox, episodic memory, dbt/source-structure parity, personal import, remote
 service, OAuth, backup, quota, dashboard, or usable team mode was added.
 
+#### Issue 21F — PostgreSQL team task events and transactional outbox — Complete
+
+The current bounded issue implements the existing minimized task-activity event and event-outbox
+repository contracts in PostgreSQL. A forward-only migration must preserve exact task scope,
+deterministic safety rejection, event identity/source-key idempotency, immutable evidence and
+retention provenance, and atomic creation of one delivery job with every accepted event. The
+outbox must support exact-scope claim, completion, retry, bounded project status, and explicit
+failed-job requeue without duplicate effects. All rows and operations must use forced RLS and the
+existing authenticated principal/workspace/operation boundary, with real-database tests for lease
+races, restart durability, rollback, and cross-tenant denial. This issue adds no approved-fact
+governance, extraction candidates, retention expiry/purge, checkpoint outbox backfill,
+dbt/source-structure parity, import, remote service, OAuth, backup, quota, dashboard, or usable team
+mode.
+
+Implemented PostgreSQL schema version 4 with append-only exact-task `task_activity_events` and a
+mutable metadata-only `event_outbox`, plus `PostgreSQLTaskActivityEventRepository` and
+`PostgreSQLEventOutboxRepository` implementations of the existing storage-neutral contracts. Both
+tables repeat workspace/project/owner/visibility/session/task identity and force RLS. Runtime task
+event grants are insert/read only; outbox workers can read/insert/update delivery metadata but
+cannot delete it.
+
+Task-event secret and sensitivity policy runs before a transaction. One accepted minimized event
+and its deterministic delivery job commit atomically; exact retries are idempotent, while changed
+source-key or identity reuse fails without a second row. Retention and evidence retain their strict
+canonical serialization, and raw prompts, transcripts, commands, tool bodies, and tool results are
+not admitted. New PostgreSQL checkpoint lifecycle events now use the same atomic outbox insertion;
+pre-v4 history is deliberately not replayed or backfilled.
+
+Outbox claims select only an authorized exact task and use `FOR UPDATE SKIP LOCKED`, incrementing
+attempts under a bounded worker lease. Completion and retry require the exact live lease owner.
+Retry records only a bounded failure code and next availability; explicit project requeue selects
+at most 100 failed jobs with absent/expired leases, preserves attempt counts, clears neither
+completion nor handler effects, and exposes only content-free status counts. A fixed-search-path
+trigger requires every inserted task/checkpoint job to match its canonical source scope, kind, and
+time; unsupported future topics fail closed.
+
+ADR 0015, the product contract, and threat model document minimization, authorization, replay,
+lease, and recovery boundaries. The real PostgreSQL suite proves atomic v3-to-v4 rollback/retry,
+accepted/idempotent/conflicting/secret events, event/job restart durability, private-project and
+different-task denial, active-lease exclusion, wrong-worker rejection, retry/status/requeue,
+attempt preservation, second claim, completion, and immutable-table runtime privileges. The
+complete repository gate passes with 826 default tests plus 7 mandatory real-PostgreSQL tests,
+strict typing for 214 source files, dependency/provenance validation for 93 entries, architecture
+validation for 114 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No approved-fact governance, extraction candidates, retention expiry/purge, checkpoint
+outbox backfill, dbt/source-structure parity, import, remote service, OAuth, backup, quota,
+dashboard, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

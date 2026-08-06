@@ -19,6 +19,8 @@ from mnemo_memory.packages.domain import (
     CheckpointRevisionId,
     CheckpointStatus,
     EventId,
+    EventOutboxJob,
+    EventOutboxTopic,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -45,6 +47,7 @@ from .contracts import (
     RevisionConflict,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
+from .postgres_events import _insert_outbox_job
 
 _AGGREGATE_COLUMNS = (
     "checkpoint_id::text, current_revision_id::text, current_revision_number, "
@@ -668,6 +671,17 @@ class PostgreSQLCheckpointRepository:
                 str(event.revision_id),
                 event.revision_number,
                 event.occurred_at,
+            ),
+        )
+        _insert_outbox_job(
+            cursor,
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.CHECKPOINT_LIFECYCLE,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
             ),
         )
 
