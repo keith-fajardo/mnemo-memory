@@ -14,6 +14,18 @@ import pg8000.dbapi  # type: ignore[import-untyped]
 import pytest
 
 from mnemo_memory.packages.domain import (
+    CheckpointAggregate,
+    CheckpointContent,
+    CheckpointEventKind,
+    CheckpointId,
+    CheckpointRevision,
+    CheckpointRevisionId,
+    CheckpointStatus,
+    EventId,
+    EvidenceId,
+    EvidenceLocation,
+    EvidenceReference,
+    EvidenceSourceType,
     KnowledgeDocumentId,
     KnowledgeDocumentRevision,
     KnowledgeDocumentRevisionId,
@@ -27,11 +39,16 @@ from mnemo_memory.packages.domain import (
     ProjectRole,
     RequestId,
     ScopeLevel,
+    SessionId,
+    SourceId,
+    SourceTrustClass,
+    TaskId,
     TeamAuditAction,
     TeamAuditEvent,
     TeamProject,
     TeamProjectVisibility,
     TeamWorkspace,
+    VerificationStatus,
     Visibility,
     WorkspaceId,
     WorkspaceMembership,
@@ -46,16 +63,22 @@ from mnemo_memory.packages.policy import (
 )
 from mnemo_memory.packages.storage import (
     POSTGRES_TEAM_SCHEMA_VERSION,
+    CheckpointNotFound,
+    InvalidCheckpointScope,
+    InvalidEpisodicEventScope,
     InvalidKnowledgeDocumentScope,
+    InvalidLifecycleTransition,
     KnowledgeDocumentConflict,
     KnowledgeDocumentNotFound,
     KnowledgeDocumentSecretRejected,
+    PostgreSQLCheckpointRepository,
     PostgreSQLConnection,
     PostgreSQLConnectionFactory,
     PostgreSQLKnowledgeDocumentRepository,
     PostgreSQLTeamControlPlaneRepository,
     PostgreSQLTeamMigrationError,
     PostgreSQLTeamMigrationRunner,
+    RevisionConflict,
     TeamControlPlaneNotFound,
 )
 
@@ -240,6 +263,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert "CREATE EXTENSION IF NOT EXISTS vector" in knowledge_sql
     assert knowledge_sql.count("FORCE ROW LEVEL SECURITY") == 7
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in knowledge_sql
+    checkpoint_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0003_team_checkpoints.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert checkpoint_sql.count("FORCE ROW LEVEL SECURITY") == 3
+    assert "DEFERRABLE INITIALLY DEFERRED" in checkpoint_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in checkpoint_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -274,7 +305,7 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
         )
 
 
-def test_team_knowledge_migration_upgrades_v1_atomically(
+def test_team_data_migrations_upgrade_atomically(
     postgres_harness: PostgreSQLHarness,
 ) -> None:
     suffix = uuid4().hex[:12]
@@ -315,12 +346,37 @@ def test_team_knowledge_migration_upgrades_v1_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0002_team_knowledge.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=3).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2)
+            cursor.execute("SELECT to_regclass('mnemo_team.checkpoint_aggregates')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3)
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -576,6 +632,258 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
     with pytest.raises(KnowledgeDocumentSecretRejected):
         repository.apply_sync(scope, (unsafe,), ())
     assert repository.list_active_documents(scope) == ()
+
+
+def _checkpoint_scope(workspace: TeamWorkspace, project: TeamProject) -> MemoryScope:
+    return MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.TASK,
+        Visibility.PROJECT,
+        workspace_id=workspace.workspace_id,
+        project_id=project.project_id,
+        session_id=SessionId.new(),
+        task_id=TaskId.new(),
+    )
+
+
+def _checkpoint_evidence(suffix: str) -> EvidenceReference:
+    return EvidenceReference(
+        EvidenceId.new(),
+        SourceId.new(),
+        EvidenceSourceType.CHECKPOINT,
+        SourceTrustClass.USER_AUTHORED,
+        f"synthetic://team-checkpoint/{suffix}",
+        "sha256:" + suffix[0] * 64,
+        EvidenceLocation(f"fixture://team-checkpoint/{suffix}"),
+        NOW,
+        VerificationStatus.VERIFIED,
+    )
+
+
+def _checkpoint_content(suffix: str, *, complete: bool = False) -> CheckpointContent:
+    return CheckpointContent(
+        "exercise PostgreSQL checkpoint parity",
+        (f"completed-{suffix}",),
+        "complete" if complete else "active",
+        () if complete else (f"remaining-{suffix}",),
+        (f"decision-{suffix}",),
+        (),
+        (),
+        ("src/example.py",),
+        (),
+        ("pytest",),
+        24,
+    )
+
+
+def _checkpoint_pair(
+    scope: MemoryScope, suffix: str
+) -> tuple[CheckpointAggregate, CheckpointRevision]:
+    checkpoint_id = CheckpointId.new()
+    revision = CheckpointRevision(
+        CheckpointRevisionId.new(),
+        checkpoint_id,
+        1,
+        None,
+        scope,
+        _checkpoint_content(suffix),
+        CheckpointStatus.ACTIVE,
+        (_checkpoint_evidence(suffix),),
+        NOW,
+    )
+    return (
+        CheckpointAggregate(
+            checkpoint_id,
+            scope,
+            revision.revision_id,
+            1,
+            CheckpointStatus.ACTIVE,
+            NOW,
+            NOW,
+        ),
+        revision,
+    )
+
+
+def test_postgres_checkpoints_are_atomic_revisioned_and_cross_tenant_safe(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    repository = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    aggregate, first = _checkpoint_pair(scope, "a")
+    repository.create_checkpoint_aggregate(aggregate, first)
+    assert repository.get_aggregate(scope, aggregate.checkpoint_id) == aggregate
+    assert repository.get_current_revision(scope, aggregate.checkpoint_id) == first
+    created_event = repository.list_events(scope).items[0]
+    assert created_event.kind is CheckpointEventKind.CREATED
+    assert repository.get_event(scope, created_event.event_id) == created_event
+    assert repository.append_event(created_event).idempotent
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.checkpoint_revisions', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.checkpoint_lifecycle_events', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+    second_evidence = (_checkpoint_evidence("b"),)
+    second = repository.append_revision(
+        scope,
+        aggregate.checkpoint_id,
+        first.revision_id,
+        _checkpoint_content("b"),
+        second_evidence,
+        NOW + timedelta(seconds=1),
+    )
+    assert second.revision_number == 2
+    assert second.predecessor_revision_id == first.revision_id
+    assert repository.get_revision(scope, aggregate.checkpoint_id, revision_number=1) == first
+    assert (
+        repository.get_revision(scope, aggregate.checkpoint_id, revision_id=second.revision_id)
+        == second
+    )
+
+    with pytest.raises(RevisionConflict):
+        repository.append_revision(
+            scope,
+            aggregate.checkpoint_id,
+            first.revision_id,
+            _checkpoint_content("c"),
+            (_checkpoint_evidence("c"),),
+            NOW + timedelta(seconds=2),
+        )
+    assert repository.get_current_revision(scope, aggregate.checkpoint_id) == second
+    assert len(repository.list_events(scope).items) == 2
+
+    with pytest.raises(InvalidLifecycleTransition):
+        repository.complete_checkpoint(
+            scope,
+            aggregate.checkpoint_id,
+            second.revision_id,
+            _checkpoint_content("c"),
+            (_checkpoint_evidence("c"),),
+            NOW + timedelta(seconds=2),
+        )
+    completed_content = _checkpoint_content("c", complete=True)
+    completed_evidence = (_checkpoint_evidence("c"),)
+    completed = repository.complete_checkpoint(
+        scope,
+        aggregate.checkpoint_id,
+        second.revision_id,
+        completed_content,
+        completed_evidence,
+        NOW + timedelta(seconds=3),
+    )
+    assert completed.status is CheckpointStatus.COMPLETED
+    assert (
+        repository.complete_checkpoint(
+            scope,
+            aggregate.checkpoint_id,
+            second.revision_id,
+            completed_content,
+            completed_evidence,
+            NOW + timedelta(minutes=1),
+        )
+        == completed
+    )
+    with pytest.raises(InvalidLifecycleTransition):
+        repository.append_revision(
+            scope,
+            aggregate.checkpoint_id,
+            completed.revision_id,
+            _checkpoint_content("d"),
+            (_checkpoint_evidence("d"),),
+            NOW + timedelta(seconds=4),
+        )
+    assert repository.select_current_checkpoint(scope) is None
+    events = repository.list_events(scope, checkpoint_id=aggregate.checkpoint_id).items
+    assert tuple(event.kind for event in events) == (
+        CheckpointEventKind.COMPLETED,
+        CheckpointEventKind.REVISED,
+        CheckpointEventKind.CREATED,
+    )
+    with pytest.raises(InvalidEpisodicEventScope):
+        repository.append_event(replace(created_event, event_id=EventId.new()))
+
+    active_aggregate, active_revision = _checkpoint_pair(scope, "d")
+    repository.create_checkpoint_aggregate(active_aggregate, active_revision)
+    assert repository.select_current_checkpoint(scope) == active_aggregate
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(CheckpointNotFound):
+        viewer.get_current_revision(scope, active_aggregate.checkpoint_id)
+    hidden_aggregate, hidden_revision = _checkpoint_pair(scope, "e")
+    with pytest.raises(RevisionConflict):
+        viewer.create_checkpoint_aggregate(hidden_aggregate, hidden_revision)
+    assert repository.list_current_checkpoints(scope).items == (active_aggregate,)
+
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(CheckpointNotFound):
+        repository.get_aggregate(foreign_task, active_aggregate.checkpoint_id)
+    with pytest.raises(InvalidCheckpointScope):
+        repository.list_current_checkpoints(
+            replace(scope, workspace_id=WorkspaceId.new(), project_id=ProjectId.new())
+        )
+    abandoned_evidence = (_checkpoint_evidence("e"),)
+    abandoned_content = _checkpoint_content("e")
+    abandoned = repository.abandon_checkpoint(
+        scope,
+        active_aggregate.checkpoint_id,
+        active_revision.revision_id,
+        "superseded task",
+        abandoned_content,
+        abandoned_evidence,
+        NOW + timedelta(seconds=5),
+    )
+    assert abandoned.status is CheckpointStatus.ABANDONED
+    assert "superseded task" in abandoned.content.failures
+    assert (
+        repository.abandon_checkpoint(
+            scope,
+            active_aggregate.checkpoint_id,
+            active_revision.revision_id,
+            "superseded task",
+            abandoned_content,
+            abandoned_evidence,
+            NOW + timedelta(minutes=2),
+        )
+        == abandoned
+    )
+    assert repository.select_current_checkpoint(scope) is None
 
 
 def _database_authorized(

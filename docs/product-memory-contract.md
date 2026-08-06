@@ -36,6 +36,15 @@ Tombstoning removes revision text, sections, links, and vectors atomically while
 anti-resurrection metadata. This storage boundary does not decide shared-source ownership,
 approval, or correction authority; those require the later authenticated team governance service.
 
+Team checkpoints use the same canonical aggregate, revision, content, evidence, and lifecycle-event
+contracts as personal checkpoints. PostgreSQL stores one exact workspace/project/session/task scope
+on every aggregate, immutable revision, and append-only lifecycle event behind forced row-level
+security. Creation and revision transitions append the matching deterministic event atomically;
+current-pointer changes compare the expected revision, and completion or abandonment is terminal.
+An identical terminal retry returns the committed revision, while stale or competing writes fail
+without a partial revision or event. This storage boundary does not authenticate the principal or
+provide checkpoint retention, deletion propagation, source observations, or a remote team service.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

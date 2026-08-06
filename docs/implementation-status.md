@@ -1576,6 +1576,44 @@ installed-package MCP workflow. No checkpoint, episodic, dbt/source-structure, p
 source-approval, remote service, OAuth, backup, deletion orchestration, quota, dashboard, or usable
 team mode was added.
 
+#### Issue 21E — PostgreSQL team checkpoint parity — Complete
+
+The current bounded issue adds PostgreSQL implementations of the existing checkpoint aggregate and
+checkpoint lifecycle-event repository contracts. A forward-only migration must preserve exact task
+scope, immutable revision history, compare-and-set current revisions, terminal completion and
+abandonment, evidence provenance, atomic lifecycle-event append, and bounded active-checkpoint and
+event queries. Every checkpoint table and query must use the existing forced-RLS authenticated
+principal/workspace/operation boundary, and real-database tests must prove lifecycle parity,
+idempotency, stale-writer rollback, terminal-state enforcement, and cross-tenant denial. This issue
+adds no checkpoint source-observation projection, episodic memory, dbt/source-structure parity,
+personal import, remote service, OAuth, backup, quota, dashboard, or usable team mode.
+
+Implemented PostgreSQL schema version 3 and `PostgreSQLCheckpointRepository` against the existing
+checkpoint aggregate and lifecycle-event contracts. Aggregate, immutable revision, and append-only
+event rows repeat exact workspace/project/owner/visibility/session/task scope and all three tables
+force RLS. Runtime transactions set the bound principal, workspace, closed operation, and statement
+timeout before any read, insert, update, or row lock. The runtime role may update only aggregate
+current pointers; immutable revisions and events have no update or delete grant.
+
+Canonical checkpoint content and evidence use their existing strict JSON serialization, while
+scope, identity, predecessor, revision number, lifecycle status, and time remain constrained
+columns. A deferred current-pointer constraint and fixed-search-path triggers require aggregates,
+predecessors, and events to match the same scoped revision. Creation, revision, completion, and
+abandonment append their deterministic lifecycle event in the same transaction. Aggregate row
+locking plus compare-and-set rejects stale writers without a partial revision or event; identical
+terminal retries return the committed revision, while competing terminal actions fail closed.
+
+ADR 0014, the product contract, and threat model document the authorization, immutability,
+recovery, and remaining service boundary. The real PostgreSQL gate proves atomic v2-to-v3 rollback
+and retry, current/historical revision reads, active selection, lifecycle event ordering and
+idempotency, completion, abandonment, stale-writer rollback, different-task isolation, and
+private-project viewer denial. The complete repository gate passes with 826 default tests plus 6
+mandatory real-PostgreSQL tests, strict typing for 213 source files, dependency/provenance
+validation for 93 entries, architecture validation for 113 product Python files, schema
+validation, and the isolated installed-package MCP workflow. No checkpoint source-observation
+projection, event outbox, episodic memory, dbt/source-structure parity, personal import, remote
+service, OAuth, backup, quota, dashboard, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

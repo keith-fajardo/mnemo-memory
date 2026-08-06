@@ -6,9 +6,9 @@ This threat model covers the planned personal, local-first path through native C
 Code MCP integration, explicit checkpoints, SQLite, and dbt structural projections. It specifies
 required controls before those features exist; it does not claim they are implemented.
 
-The pure team authorization contract and PostgreSQL authority control plane are now included.
-Remote MCP, hosted sync, OAuth, team memory data, and production operations remain deferred and
-require threat-model revisions before exposure.
+The pure team authorization contract, PostgreSQL authority control plane, team knowledge, and team
+checkpoint storage are now included. Remote MCP, hosted sync, OAuth, remaining team data parity,
+and production operations remain deferred and require threat-model revisions before exposure.
 
 ## Security objectives
 
@@ -177,6 +177,31 @@ authority state.
 shared-source ownership and approval workflow. Until the authenticated service binds verified
 identity and implements source governance, the PostgreSQL knowledge adapter is not exposed as team
 mode. Backups and user-controlled exports can retain deleted data and remain later operations work.
+
+### Cross-tenant team checkpoint history and lifecycle races
+
+**Scenario:** A task reads another task's handoff, a private-project viewer observes checkpoint
+history, two writers fork one current revision, a terminal transition commits without its event,
+or an event is attached to another revision's evidence.
+
+**Required controls:** Every checkpoint aggregate, revision, and lifecycle event repeats exact
+workspace, project, owner, visibility, session, and task scope. PostgreSQL applies forced RLS before
+every read, insert, update, and row lock. Composite foreign keys, a deferred aggregate-state
+constraint, and fixed-search-path triggers require the current pointer, predecessor, and event to
+match the same scoped revision. Revision changes lock the aggregate and compare the expected
+current identity. The revision, current pointer, and deterministic lifecycle event commit in one
+transaction. Immutable revision/event tables grant no runtime update or delete privilege.
+
+**Verification:** A real non-owner/non-`BYPASSRLS` PostgreSQL suite covers private-project denial,
+different-task isolation, historical/current revision reads, stale-writer rollback, terminal-state
+enforcement, identical terminal retries, event idempotency/conflict, and direct lifecycle ordering.
+An injected v2-to-v3 migration failure must retain ledger `(1, 2)` and no checkpoint table before
+an idempotent retry reaches v3.
+
+**Residual risk:** PostgreSQL does not authenticate the principal and does not yet implement the
+checkpoint outbox, source-observation, retention, deletion, backup, or remote-service boundary.
+The adapter remains unavailable to agents until the authenticated team composition and remaining
+production controls are complete.
 
 ### Prompt injection through retrieved content
 
