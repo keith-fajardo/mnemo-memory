@@ -20,6 +20,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEpisodicEventPinAction,
+    ApprovedEventExportBundle,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
@@ -149,6 +150,7 @@ from .contracts import (
     ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStorageFailure,
     ApprovedEpisodicEventStoreResult,
+    ApprovedEventExportRepositoryError,
     CheckpointExportStorageFailure,
     CheckpointNotFound,
     CheckpointPage,
@@ -3468,6 +3470,50 @@ class SQLiteCheckpointRepository:
         except (sqlite3.Error, TypeError, ValueError) as error:
             raise ApprovedEpisodicEventStorageFailure(
                 "approved episodic event pin operation failed"
+            ) from error
+
+    def export_approved_event_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> ApprovedEventExportBundle:
+        self._require_approved_episodic_scope(scope)
+        try:
+            with self._connect() as connection:
+                values = self._scope_values(scope)
+                event_rows = connection.execute(
+                    "SELECT * FROM approved_episodic_events WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY event_id ASC",
+                    values,
+                ).fetchall()
+                governance_rows = connection.execute(
+                    "SELECT * FROM approved_episodic_event_governance WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY target_event_id ASC",
+                    values,
+                ).fetchall()
+                pin_rows = connection.execute(
+                    "SELECT * FROM approved_episodic_event_pin_actions WHERE owner_id = ? "
+                    "AND visibility = ? AND workspace_id IS ? AND project_id = ? "
+                    "AND session_id = ? AND task_id = ? ORDER BY action_sequence ASC",
+                    values,
+                ).fetchall()
+                return ApprovedEventExportBundle.create(
+                    scope=scope,
+                    exported_at=exported_at,
+                    events=tuple(
+                        self._approved_event_from_row(connection, row, scope) for row in event_rows
+                    ),
+                    governance_actions=tuple(
+                        self._approved_governance_from_row(connection, row, scope)
+                        for row in governance_rows
+                    ),
+                    pin_actions=tuple(
+                        self._approved_pin_from_row(connection, row, scope) for row in pin_rows
+                    ),
+                )
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEventExportRepositoryError(
+                "approved event export storage operation failed"
             ) from error
 
     def store_and_activate(

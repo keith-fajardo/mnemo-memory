@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 15
+POSTGRES_TEAM_SCHEMA_VERSION = 16
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -57,6 +57,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (13, "0013_team_dbt_manifest.sql"),
     (14, "0014_team_dbt_supplemental.sql"),
     (15, "0015_team_imported_episodic_lifecycle.sql"),
+    (16, "0016_team_imported_approved_events.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 

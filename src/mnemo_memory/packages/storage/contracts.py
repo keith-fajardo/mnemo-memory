@@ -11,6 +11,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEpisodicEventPinAction,
+    ApprovedEventExportBundle,
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
@@ -214,6 +215,45 @@ class ApprovedEpisodicEventStorageFailure(ApprovedEpisodicEventRepositoryError):
 
 class ApprovedEpisodicEventSecretRejected(ApprovedEpisodicEventRepositoryError):
     pass
+
+
+class ApprovedEventExportRepositoryError(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+class ApprovedEventImportRepositoryError(ApprovedEpisodicEventRepositoryError):
+    pass
+
+
+class ApprovedEventImportConflict(ApprovedEventImportRepositoryError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedEventImportResult:
+    event_count: int
+    governance_count: int
+    pin_action_count: int
+    idempotent: bool
+
+    def __post_init__(self) -> None:
+        for value in (self.event_count, self.governance_count, self.pin_action_count):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("approved event import counts must be non-negative integers")
+
+
+class ApprovedEventExportRepository(Protocol):
+    def export_approved_event_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> ApprovedEventExportBundle: ...
+
+
+class ApprovedEventImportRepository(Protocol):
+    def import_approved_event_history(
+        self,
+        source: ApprovedEventExportBundle,
+        target: ApprovedEventExportBundle,
+    ) -> ApprovedEventImportResult: ...
 
 
 class TaskActivityEventRepositoryError(Exception):

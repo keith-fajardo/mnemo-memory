@@ -2243,6 +2243,47 @@ dependency/provenance validation for 93 entries, architecture validation for 121
 files, schema validation, and the isolated installed-package MCP workflow. No schema migration or
 dependency was added. Approved-event and knowledge transfer remain separate requirements.
 
+#### Issue 21U — Verified approved-event personal-to-team import — Complete
+
+The current bounded issue adds one portable, integrity-verified bundle for approved episodic
+events, immutable correction/retraction governance, and complete pin-action history in one exact
+task scope, then imports that state atomically into one authorized team task scope. The import must
+preserve live payload and evidence, preserve erased retraction state without reconstructing deleted
+payload, rebase deterministic identities to the target scope, reject partial or conflicting state,
+and make exact retry idempotent. Completion requires verified SQLite-to-PostgreSQL counts and
+canonical hashes behind forced RLS.
+
+This issue adds no knowledge export, remote service, OAuth, backup propagation, quota, dashboard,
+source governance, or dependency.
+
+Implemented the strict `mnemo.approved-event-export.v1` domain bundle for every retained approved
+event, immutable correction/retraction action, and ordered pin action in one exact task scope. The
+bundle validates deterministic identities, canonical event/governance order, contiguous pin order,
+unique keys, correction relationships and kind preservation, acyclic correction chains, final
+governed pin state, erased retraction targets, canonical UTF-8 JSON, and one SHA-256 digest. SQLite
+and Reference exports are scope-first and restart stable.
+
+The transfer service rebuilds retained event, governance, and pin identities in the explicit target
+scope. Erased source targets receive deterministic payload-free target identities derived only from
+target scope and retained source identity. PostgreSQL schema version 16 adds insert-only import
+provenance to the native event, governance, and pin tables and narrowly permits already-erased
+retraction and pin history without recreating a summary, source key, or direct event evidence. The
+repository validates the complete source-to-target projection, requires an empty or identical
+target, inserts all canonical rows and normal outbox jobs in one forced-RLS transaction, and
+reconstructs the target bundle before commit. Exact retry is idempotent and ordinary governance
+inspection and anti-resurrection include imported retractions.
+
+ADR 0029, the product contract, and threat model document the portable format, payload-erasure,
+scope, RLS, provenance, and recovery boundaries. Unit tests prove complete correction/retraction
+and pin-history export, tamper and reorder rejection, scope rebasing, conflict rejection, replay,
+and SQLite restart durability. Real PostgreSQL tests prove atomic v15-to-v16 rollback/retry,
+SQLite-to-team counts and hashes after restart, normal outbox insertion, source/target provenance,
+payload absence, anti-resurrection, exact replay, and private-project viewer denial. The complete
+repository gate passes with 836 default tests plus 20 mandatory real-PostgreSQL tests, strict typing
+for 225 source files, dependency/provenance validation for 93 entries, architecture validation for
+123 product Python files, schema validation, and the isolated installed-package MCP workflow. No
+dependency was added. Knowledge transfer remains a separate requirement.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

@@ -8,6 +8,12 @@ from .approved_episodic_events import (
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
 )
+from .approved_event_export import (
+    APPROVED_EVENT_EXPORT_FORMAT,
+    ApprovedEventExportBundle,
+    ApprovedEventPinHistoryEntry,
+    approved_event_import_identity,
+)
 from .checkpoint_export import CHECKPOINT_EXPORT_FORMAT, CheckpointExportBundle
 from .checkpoint_source_observation import CheckpointSourceObservation
 from .code_structure import (
@@ -207,6 +213,7 @@ from .team import (
 )
 
 __all__ = [
+    "APPROVED_EVENT_EXPORT_FORMAT",
     "CHECKPOINT_EXPORT_FORMAT",
     "DEFAULT_CONTEXT_BUDGET",
     "EPISODIC_EXPORT_FORMAT",
@@ -215,9 +222,11 @@ __all__ = [
     "ApprovedEpisodicEvent",
     "ApprovedEpisodicEventGovernance",
     "ApprovedEpisodicEventPinAction",
+    "ApprovedEventExportBundle",
     "ApprovedEventGovernanceKind",
     "ApprovedEventKind",
     "ApprovedEventLifecycleStatus",
+    "ApprovedEventPinHistoryEntry",
     "ArtifactCurrentness",
     "BudgetOverride",
     "Checkpoint",
@@ -376,6 +385,7 @@ __all__ = [
     "WorkspaceMembership",
     "WorkspaceRole",
     "active_episodic_memory_at_revision",
+    "approved_event_import_identity",
     "knowledge_search_tokens",
     "knowledge_section_digest",
     "normalize_agent_client",

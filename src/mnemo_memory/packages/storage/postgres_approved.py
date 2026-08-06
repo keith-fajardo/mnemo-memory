@@ -12,6 +12,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEpisodicEventPinAction,
+    ApprovedEventExportBundle,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
     ApprovedEventLifecycleStatus,
@@ -23,6 +24,7 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ScopeLevel,
     WorkspaceId,
+    approved_event_import_identity,
 )
 from mnemo_memory.packages.policy import ApprovedEpisodicEventSafetyPolicy, TeamOperation
 
@@ -38,6 +40,9 @@ from .contracts import (
     ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStorageFailure,
     ApprovedEpisodicEventStoreResult,
+    ApprovedEventExportRepositoryError,
+    ApprovedEventImportConflict,
+    ApprovedEventImportResult,
     InvalidApprovedEpisodicEventScope,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
@@ -359,6 +364,336 @@ class PostgreSQLApprovedEpisodicEventRepository:
             return ApprovedEpisodicEventPinResult(
                 action, self._record(cursor, action.scope, action.event_id), False
             )
+
+    def export_approved_event_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> ApprovedEventExportBundle:
+        self._require_scope(scope)
+        try:
+            with self._transaction(TeamOperation.READ) as cursor:
+                return self._export_with_cursor(cursor, scope, exported_at)
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise ApprovedEventExportRepositoryError(
+                "approved event export storage operation failed"
+            ) from error
+
+    def import_approved_event_history(
+        self,
+        source: ApprovedEventExportBundle,
+        target: ApprovedEventExportBundle,
+    ) -> ApprovedEventImportResult:
+        if not isinstance(source, ApprovedEventExportBundle) or not isinstance(
+            target, ApprovedEventExportBundle
+        ):
+            raise TypeError("approved event import requires validated bundles")
+        self._require_scope(target.scope)
+        self._validate_import_rebase(source, target)
+        with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
+            before = self._export_with_cursor(cursor, target.scope, target.exported_at)
+            if self._same_export(before, target):
+                return ApprovedEventImportResult(
+                    len(target.events),
+                    len(target.governance_actions),
+                    len(target.pin_history),
+                    True,
+                )
+            if before.events or before.governance_actions or before.pin_history:
+                raise ApprovedEventImportConflict(
+                    "approved event import target contains conflicting state"
+                )
+            source_events = {item.source_event_key: item for item in source.events}
+            for event in target.events:
+                self._insert_imported_event(
+                    cursor, event, source_events[event.source_event_key], source.content_digest
+                )
+            source_governance = {item.source_action_key: item for item in source.governance_actions}
+            ordered_governance = sorted(
+                target.governance_actions,
+                key=lambda item: item.kind is not ApprovedEventGovernanceKind.RETRACTED,
+            )
+            target_event_ids = {item.event_id for item in target.events}
+            for action in ordered_governance:
+                source_action = source_governance[action.source_action_key]
+                self._insert_imported_governance(
+                    cursor,
+                    action,
+                    source_action,
+                    source.content_digest,
+                    missing_target=action.target_event_id not in target_event_ids,
+                )
+            source_pins = {
+                item.action.source_action_key: item.action for item in source.pin_history
+            }
+            for entry in target.pin_history:
+                self._insert_imported_pin(
+                    cursor,
+                    entry.action,
+                    source_pins[entry.action.source_action_key],
+                    source.content_digest,
+                    missing_target=entry.action.event_id not in target_event_ids,
+                )
+            after = self._export_with_cursor(cursor, target.scope, target.exported_at)
+            if not self._same_export(after, target):
+                raise ApprovedEventImportConflict("approved event import verification failed")
+            return ApprovedEventImportResult(
+                len(target.events),
+                len(target.governance_actions),
+                len(target.pin_history),
+                False,
+            )
+
+    def _export_with_cursor(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, exported_at: datetime
+    ) -> ApprovedEventExportBundle:
+        values = _task_scope_values(scope)
+        cursor.execute(
+            "SELECT " + _EVENT_COLUMNS + " FROM mnemo_team.approved_episodic_events WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY event_id ASC",
+            values,
+        )
+        events = tuple(self._event_from_row(row, scope) for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT " + _GOVERNANCE_COLUMNS + " FROM "
+            "mnemo_team.approved_episodic_event_governance WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY target_event_id ASC",
+            values,
+        )
+        governance = tuple(self._governance_from_row(row, scope) for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT " + _PIN_COLUMNS + " FROM "
+            "mnemo_team.approved_episodic_event_pin_actions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "ORDER BY action_sequence ASC",
+            values,
+        )
+        pins = tuple(self._pin_from_row(row, scope) for row in cursor.fetchall())
+        return ApprovedEventExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            events=events,
+            governance_actions=governance,
+            pin_actions=pins,
+        )
+
+    @staticmethod
+    def _validate_import_rebase(
+        source: ApprovedEventExportBundle, target: ApprovedEventExportBundle
+    ) -> None:
+        if source.exported_at != target.exported_at:
+            raise ApprovedEventImportConflict("approved event import timestamps differ")
+        mapped: dict[EventId, EventId] = {}
+        expected_events: list[ApprovedEpisodicEvent] = []
+        for event in source.events:
+            expected_event = ApprovedEpisodicEvent.create(
+                scope=target.scope,
+                kind=event.kind,
+                summary=event.summary,
+                source_event_key=event.source_event_key,
+                occurred_at=event.occurred_at,
+                evidence_references=event.evidence_references,
+            )
+            mapped[event.event_id] = expected_event.event_id
+            expected_events.append(expected_event)
+        for action in source.governance_actions:
+            if action.target_event_id not in mapped:
+                mapped[action.target_event_id] = approved_event_import_identity(
+                    target.scope, action.target_event_id
+                )
+        expected_governance = tuple(
+            ApprovedEpisodicEventGovernance.create(
+                scope=target.scope,
+                kind=action.kind,
+                target_event_id=mapped[action.target_event_id],
+                replacement_event_id=(
+                    None
+                    if action.replacement_event_id is None
+                    else mapped[action.replacement_event_id]
+                ),
+                reason=action.reason,
+                source_action_key=action.source_action_key,
+                occurred_at=action.occurred_at,
+                evidence_references=action.evidence_references,
+            )
+            for action in source.governance_actions
+        )
+        expected_pins = tuple(
+            ApprovedEpisodicEventPinAction.create(
+                scope=target.scope,
+                event_id=mapped[entry.action.event_id],
+                pinned=entry.action.pinned,
+                source_action_key=entry.action.source_action_key,
+                occurred_at=entry.action.occurred_at,
+                evidence_references=entry.action.evidence_references,
+            )
+            for entry in source.pin_history
+        )
+        expected_bundle = ApprovedEventExportBundle.create(
+            scope=target.scope,
+            exported_at=source.exported_at,
+            events=tuple(expected_events),
+            governance_actions=expected_governance,
+            pin_actions=expected_pins,
+        )
+        if not PostgreSQLApprovedEpisodicEventRepository._same_export(expected_bundle, target):
+            raise ApprovedEventImportConflict("approved event import source and target differ")
+
+    @staticmethod
+    def _same_export(left: ApprovedEventExportBundle, right: ApprovedEventExportBundle) -> bool:
+        return (
+            left.format_version == right.format_version
+            and left.scope == right.scope
+            and left.exported_at == right.exported_at
+            and left.events == right.events
+            and left.governance_actions == right.governance_actions
+            and left.pin_history == right.pin_history
+        )
+
+    def _insert_imported_event(
+        self,
+        cursor: PostgreSQLCursor,
+        event: ApprovedEpisodicEvent,
+        source: ApprovedEpisodicEvent,
+        source_digest: str,
+    ) -> None:
+        cursor.execute(
+            "INSERT INTO mnemo_team.approved_episodic_events("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, event_id, "
+            "source_event_key, event_kind, summary, occurred_at, evidence_json, "
+            "import_source_event_id, import_source_content_digest, imported_at) VALUES ("
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, %s, %s, CAST(%s AS jsonb), "
+            "CAST(%s AS uuid), %s, CURRENT_TIMESTAMP)",
+            (
+                *_task_scope_values(event.scope),
+                str(event.event_id),
+                event.source_event_key,
+                event.kind.value,
+                event.summary,
+                event.occurred_at,
+                self._evidence_json(event.evidence_references),
+                str(source.event_id),
+                source_digest,
+            ),
+        )
+        _insert_outbox_job(
+            cursor,
+            EventOutboxJob.create(
+                scope=event.scope,
+                topic=EventOutboxTopic.APPROVED_EPISODIC,
+                source_event_id=event.event_id,
+                event_kind=event.kind.value,
+                occurred_at=event.occurred_at,
+                created_at=event.occurred_at,
+            ),
+        )
+
+    def _insert_imported_governance(
+        self,
+        cursor: PostgreSQLCursor,
+        action: ApprovedEpisodicEventGovernance,
+        source: ApprovedEpisodicEventGovernance,
+        source_digest: str,
+        *,
+        missing_target: bool,
+    ) -> None:
+        target_sequence = 0
+        if not missing_target:
+            target_row = self._scoped_event_row(cursor, action.scope, action.target_event_id)
+            if target_row is None:
+                raise ApprovedEventImportConflict("approved event import target is missing")
+            target_sequence = int(str(target_row[0]))
+        cursor.execute(
+            "INSERT INTO mnemo_team.approved_episodic_event_governance("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, action_id, "
+            "source_action_key, action_kind, target_event_id, target_event_sequence, "
+            "replacement_event_id, reason, occurred_at, evidence_json, import_source_action_id, "
+            "import_source_target_event_id, import_source_replacement_event_id, "
+            "import_source_content_digest, imported_at, imported_without_target_payload) "
+            "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, "
+            "CAST(%s AS uuid), %s, CAST(%s AS uuid), %s, %s, CAST(%s AS jsonb), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, CURRENT_TIMESTAMP, %s)",
+            (
+                *_task_scope_values(action.scope),
+                str(action.action_id),
+                action.source_action_key,
+                action.kind.value,
+                str(action.target_event_id),
+                target_sequence,
+                None if action.replacement_event_id is None else str(action.replacement_event_id),
+                action.reason,
+                action.occurred_at,
+                self._evidence_json(action.evidence_references),
+                str(source.action_id),
+                str(source.target_event_id),
+                None if source.replacement_event_id is None else str(source.replacement_event_id),
+                source_digest,
+                missing_target,
+            ),
+        )
+        _insert_outbox_job(
+            cursor,
+            EventOutboxJob.create(
+                scope=action.scope,
+                topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+                source_event_id=action.action_id,
+                event_kind=action.kind.value,
+                occurred_at=action.occurred_at,
+                created_at=action.occurred_at,
+            ),
+        )
+
+    def _insert_imported_pin(
+        self,
+        cursor: PostgreSQLCursor,
+        action: ApprovedEpisodicEventPinAction,
+        source: ApprovedEpisodicEventPinAction,
+        source_digest: str,
+        *,
+        missing_target: bool,
+    ) -> None:
+        cursor.execute(
+            "INSERT INTO mnemo_team.approved_episodic_event_pin_actions("
+            "workspace_id, project_id, owner_id, visibility, session_id, task_id, action_id, "
+            "event_id, pinned, source_action_key, occurred_at, evidence_json, "
+            "import_source_action_id, import_source_event_id, import_source_content_digest, "
+            "imported_at, imported_without_event_payload) VALUES ("
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), "
+            "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s, %s, "
+            "CAST(%s AS jsonb), CAST(%s AS uuid), CAST(%s AS uuid), %s, CURRENT_TIMESTAMP, %s)",
+            (
+                *_task_scope_values(action.scope),
+                str(action.action_id),
+                str(action.event_id),
+                action.pinned,
+                action.source_action_key,
+                action.occurred_at,
+                self._evidence_json(action.evidence_references),
+                str(source.action_id),
+                str(source.event_id),
+                source_digest,
+                missing_target,
+            ),
+        )
+        _insert_outbox_job(
+            cursor,
+            EventOutboxJob.create(
+                scope=action.scope,
+                topic=EventOutboxTopic.APPROVED_GOVERNANCE,
+                source_event_id=action.action_id,
+                event_kind="pinned" if action.pinned else "unpinned",
+                occurred_at=action.occurred_at,
+                created_at=action.occurred_at,
+            ),
+        )
 
     def _insert_event(self, cursor: PostgreSQLCursor, event: ApprovedEpisodicEvent) -> None:
         cursor.execute(

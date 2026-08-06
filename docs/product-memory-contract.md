@@ -454,8 +454,17 @@ and rebases only the explicit scope. PostgreSQL accepts only an empty or already
 inserts the entire history and normal outbox jobs atomically behind forced RLS, and verifies the
 target bundle before commit. The application returns verified counts plus strict source and target
 digests; exact replay is idempotent. Source-structure observations remain excluded rebuildable
-projection links. Approved-fact, knowledge, and structural export/import remain separate
-requirements.
+projection links.
+
+Approved episodic facts use a separate `mnemo.approved-event-export.v1` exact-task bundle containing
+every retained event payload, immutable correction or retraction, and ordered pin action. Import
+rebuilds scope-derived identities in the exact target scope and retains source identity plus source
+digest provenance. PostgreSQL writes the native event, governance, pin, and outbox rows atomically
+behind forced RLS and verifies the target bundle before commit. An already-retracted target receives
+only a deterministic payload-free target identity: its deleted summary, source key, and direct
+event evidence are never manufactured or restored. Exact replay is idempotent, ordinary governance
+inspection and anti-resurrection remain effective, and the application returns verified counts and
+source/target hashes. Knowledge and structural export/import remain separate requirements.
 
 Deletion fails closed and is idempotent. It immediately removes the item from retrieval, writes a
 minimal non-sensitive tombstone when needed to prevent resurrection, and propagates to canonical

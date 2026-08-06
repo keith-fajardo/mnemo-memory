@@ -462,6 +462,32 @@ outbox creation, exact replay, and private-project viewer denial.
 required. The bundle is an in-memory application contract and is not yet an authenticated remote
 transfer endpoint or encrypted delivery format.
 
+### Restored payload or cross-tenant approved-event transfer
+
+**Scenario:** A modified approved-event bundle is imported, scope-derived source identities are
+copied into another tenant, pin order is changed, a conflicting target is overwritten, a viewer
+imports private facts, or a previously retracted summary is reconstructed to replay its tombstone.
+
+**Required controls:** Export only one exact task scope into the strict
+`mnemo.approved-event-export.v1` domain object. Validate deterministic event, governance, and pin
+identities; stable event/governance order; contiguous pin order; unique keys; complete correction
+relationships; final governed pin state; erased retraction targets; and the canonical SHA-256
+digest. Rebuild all target identities from canonical factories and the explicit target scope. Map
+an erased target only from retained source identity and target scope. Store source identity, source
+bundle digest, and import time, but never manufacture its summary, source key, or direct event
+evidence. Require an empty or identical target, one forced-RLS transaction, normal outbox jobs, a
+pre-commit target reconstruction, and independent application-level before/after verification.
+
+**Verification:** Domain and Reference tests reject tampering, reordered pins, invalid erasure,
+and conflicting targets. SQLite tests prove complete restart-stable governance export. Real
+PostgreSQL tests prove v15-to-v16 rollback/retry, SQLite transfer, restart-stable counts and hashes,
+insert-only provenance, payload absence, anti-resurrection, outbox creation, exact replay, and
+private-viewer denial.
+
+**Residual risk:** The bundle remains an in-memory contract rather than an encrypted remote
+delivery endpoint. Approved-event deletion propagation into exports and backups remains a release
+requirement.
+
 ### Cross-tenant source projection and repository-content retention
 
 **Scenario:** A source snapshot is written into another project, child rows substitute a different

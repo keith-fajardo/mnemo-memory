@@ -24,6 +24,9 @@ from mnemo_memory.connectors.dbt import (
     ManifestParseRequest,
 )
 from mnemo_memory.packages.application import (
+    ApprovedEventExportService,
+    ApprovedEventImportService,
+    ApprovedEventTransferStorageFailure,
     CheckpointExportService,
     CheckpointImportService,
     CheckpointTransferStorageFailure,
@@ -484,6 +487,19 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert imported_lifecycle_sql.count("FORCE ROW LEVEL SECURITY") == 1
     assert "source_content_digest ~ '^sha256:[0-9a-f]{64}$'" in imported_lifecycle_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in (imported_lifecycle_sql)
+    imported_approved_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0016_team_imported_approved_events.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert "import_source_event_id uuid" in imported_approved_sql
+    assert "imported_without_target_payload" in imported_approved_sql
+    assert "imported retraction unexpectedly retains target payload" in imported_approved_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in imported_approved_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -930,12 +946,44 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath(
+                    "resources",
+                    "postgres_migrations",
+                    "0015_team_imported_episodic_lifecycle.sql",
+                )
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=16).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 16))
+            cursor.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'mnemo_team' "
+                "AND table_name = 'approved_episodic_events' "
+                "AND column_name = 'import_source_event_id'"
+            )
+            assert cursor.fetchone() is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3451,6 +3499,182 @@ def test_personal_checkpoint_history_imports_to_team_with_verified_hashes(
     )
     with pytest.raises(CheckpointTransferStorageFailure):
         CheckpointImportService(viewer, viewer).import_bundle(
+            bundle, target_scope=replace(target_scope, task_id=TaskId.new())
+        )
+
+
+def test_personal_approved_event_history_imports_without_retracted_payload(
+    postgres_harness: PostgreSQLHarness, tmp_path: Path
+) -> None:
+    personal_scope = MemoryScope(
+        OwnerId.new(),
+        ScopeLevel.TASK,
+        Visibility.PROJECT,
+        WorkspaceId.new(),
+        ProjectId.new(),
+        SessionId.new(),
+        TaskId.new(),
+    )
+    personal = SQLiteCheckpointRepository(
+        tmp_path / "personal-approved-import.sqlite3", base_directory=tmp_path
+    )
+    personal.migrate()
+    original = _approved_event(personal_scope, "import-original")
+    replacement = _approved_event(
+        personal_scope,
+        "import-replacement",
+        summary="retain the corrected portable fact",
+    )
+    active = _approved_event(personal_scope, "import-active")
+    personal.append_approved_event(original)
+    personal.set_approved_event_pin(
+        ApprovedEpisodicEventPinAction.create(
+            scope=personal_scope,
+            event_id=original.event_id,
+            pinned=True,
+            source_action_key="import-pin-original",
+            occurred_at=NOW + timedelta(seconds=21),
+            evidence_references=(_approved_evidence("import-pin", user=True),),
+        )
+    )
+    correction = _approved_governance(
+        personal_scope,
+        original,
+        "import-correct",
+        kind=ApprovedEventGovernanceKind.CORRECTED,
+        replacement=replacement,
+    )
+    personal.correct_approved_event(replacement, correction)
+    retraction = _approved_governance(
+        personal_scope,
+        replacement,
+        "import-retract",
+        kind=ApprovedEventGovernanceKind.RETRACTED,
+    )
+    personal.retract_approved_event(retraction)
+    personal.append_approved_event(active)
+    exported_at = NOW + timedelta(minutes=4)
+    bundle = ApprovedEventExportService(personal).export(personal_scope, exported_at=exported_at)
+
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    target_scope = _checkpoint_scope(workspace, project)
+    target = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    importer = ApprovedEventImportService(target, target)
+    result = importer.import_bundle(bundle, target_scope=target_scope)
+
+    assert not result.idempotent
+    assert (result.event_count, result.governance_count, result.pin_action_count) == (2, 2, 4)
+    assert result.source_content_digest == bundle.content_digest
+    assert result.source_content_digest != result.target_content_digest
+    restarted = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    imported = ApprovedEventExportService(restarted).export(target_scope, exported_at=exported_at)
+    assert imported.content_digest == result.target_content_digest
+    assert importer.import_bundle(bundle, target_scope=target_scope).idempotent
+    imported_retraction = next(
+        item
+        for item in imported.governance_actions
+        if item.kind is ApprovedEventGovernanceKind.RETRACTED
+    )
+    assert (
+        restarted.get_approved_event_record(
+            target_scope, imported_retraction.target_event_id
+        ).status
+        is ApprovedEventLifecycleStatus.RETRACTED
+    )
+    with pytest.raises(ApprovedEpisodicEventConflict, match="cannot be restored"):
+        restarted.append_approved_event(
+            replace(
+                _approved_event(target_scope, "import-replacement"),
+                event_id=imported_retraction.target_event_id,
+            )
+        )
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'read', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        cursor.execute(
+            "SELECT COUNT(*), COUNT(import_source_event_id), "
+            "bool_or(summary = 'retain the corrected portable fact') "
+            "FROM mnemo_team.approved_episodic_events WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (2, 2, False)
+        cursor.execute(
+            "SELECT COUNT(*), COUNT(import_source_action_id), "
+            "bool_or(imported_without_target_payload) FROM "
+            "mnemo_team.approved_episodic_event_governance WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (2, 2, True)
+        cursor.execute(
+            "SELECT COUNT(*), COUNT(import_source_action_id), "
+            "bool_or(imported_without_event_payload) FROM "
+            "mnemo_team.approved_episodic_event_pin_actions WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(project.project_id)),
+        )
+        assert tuple(cursor.fetchone() or ()) == (4, 4, True)
+        cursor.execute(
+            "SELECT COUNT(*) FROM mnemo_team.event_outbox WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid)",
+            (
+                str(target_scope.workspace_id),
+                str(target_scope.project_id),
+                str(target_scope.session_id),
+                str(target_scope.task_id),
+            ),
+        )
+        assert tuple(cursor.fetchone() or ()) == (8,)
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLApprovedEpisodicEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert (
+        ApprovedEventExportService(viewer).export(target_scope, exported_at=exported_at).events
+        == ()
+    )
+    with pytest.raises(ApprovedEventTransferStorageFailure):
+        ApprovedEventImportService(viewer, viewer).import_bundle(
             bundle, target_scope=replace(target_scope, task_id=TaskId.new())
         )
 

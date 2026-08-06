@@ -1,5 +1,13 @@
 """Application services for local Mnemo lifecycle operations."""
 
+from .approved_event_transfer import (
+    ApprovedEventExportService,
+    ApprovedEventImportService,
+    ApprovedEventTransferConflict,
+    ApprovedEventTransferError,
+    ApprovedEventTransferResult,
+    ApprovedEventTransferStorageFailure,
+)
 from .backups import PersonalBackupError, PersonalBackupResult, PersonalBackupService
 from .bootstrap import (
     CheckpointRuntime,
@@ -132,6 +140,12 @@ __all__ = [
     "ApprovedEpisodicEventGovernanceView",
     "ApprovedEpisodicEventPinView",
     "ApprovedEpisodicEventView",
+    "ApprovedEventExportService",
+    "ApprovedEventImportService",
+    "ApprovedEventTransferConflict",
+    "ApprovedEventTransferError",
+    "ApprovedEventTransferResult",
+    "ApprovedEventTransferStorageFailure",
     "CheckpointApplicationBudgetExceeded",
     "CheckpointApplicationDuplicate",
     "CheckpointApplicationEpisodicEventConflict",

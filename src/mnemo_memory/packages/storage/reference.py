@@ -13,6 +13,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
     ApprovedEpisodicEventPinAction,
+    ApprovedEventExportBundle,
     ApprovedEventGovernanceKind,
     ApprovedEventLifecycleStatus,
     CheckpointAggregate,
@@ -102,6 +103,8 @@ from .contracts import (
     ApprovedEpisodicEventRecordPage,
     ApprovedEpisodicEventSecretRejected,
     ApprovedEpisodicEventStoreResult,
+    ApprovedEventImportConflict,
+    ApprovedEventImportResult,
     CheckpointImportConflict,
     CheckpointImportResult,
     CheckpointNotFound,
@@ -2001,6 +2004,90 @@ class ReferenceApprovedEpisodicEventRepository:
             action,
             self.get_approved_event_record(action.scope, action.event_id),
             False,
+        )
+
+    def export_approved_event_history(
+        self, scope: MemoryScope, *, exported_at: datetime
+    ) -> ApprovedEventExportBundle:
+        self._require_scope(scope)
+        return ApprovedEventExportBundle.create(
+            scope=scope,
+            exported_at=exported_at,
+            events=tuple(item for item in self._events.values() if item.scope == scope),
+            governance_actions=tuple(
+                item for item in self._governance.values() if item.scope == scope
+            ),
+            pin_actions=tuple(item for item in self._pin_actions.values() if item.scope == scope),
+        )
+
+    def import_approved_event_history(
+        self,
+        source: ApprovedEventExportBundle,
+        target: ApprovedEventExportBundle,
+    ) -> ApprovedEventImportResult:
+        if not isinstance(source, ApprovedEventExportBundle) or not isinstance(
+            target, ApprovedEventExportBundle
+        ):
+            raise TypeError("approved event import requires validated bundles")
+        self._require_scope(target.scope)
+        if source.exported_at != target.exported_at or (
+            len(source.events),
+            len(source.governance_actions),
+            len(source.pin_history),
+        ) != (len(target.events), len(target.governance_actions), len(target.pin_history)):
+            raise ApprovedEventImportConflict("approved event import source and target differ")
+        before = self.export_approved_event_history(target.scope, exported_at=target.exported_at)
+        if (
+            before.events == target.events
+            and before.governance_actions == target.governance_actions
+            and before.pin_history == target.pin_history
+        ):
+            return ApprovedEventImportResult(
+                len(target.events), len(target.governance_actions), len(target.pin_history), True
+            )
+        if before.events or before.governance_actions or before.pin_history:
+            raise ApprovedEventImportConflict(
+                "approved event import target contains conflicting state"
+            )
+        state = self._snapshot()
+        outbox_state = dict(self.outbox._jobs)
+        try:
+            for event in target.events:
+                if (
+                    event.event_id in self._events
+                    or (
+                        event.scope,
+                        event.source_event_key,
+                    )
+                    in self._keys
+                ):
+                    raise ApprovedEventImportConflict("approved event import identity conflicts")
+                self._events[event.event_id] = event
+                self._keys[(event.scope, event.source_event_key)] = event.event_id
+                self._ordered.append(event.event_id)
+                self.outbox._enqueue(self._event_job(event))
+            for action in target.governance_actions:
+                self._governance[action.target_event_id] = action
+                self._action_keys[(action.scope, action.source_action_key)] = action.action_id
+                if action.target_event_id not in self._ordered:
+                    self._ordered.append(action.target_event_id)
+                self.outbox._enqueue(self._governance_job(action))
+            for entry in target.pin_history:
+                self._store_pin_action(entry.action)
+                self.outbox._enqueue(self._pin_job(entry.action))
+            after = self.export_approved_event_history(target.scope, exported_at=target.exported_at)
+            if (
+                after.events != target.events
+                or after.governance_actions != target.governance_actions
+                or after.pin_history != target.pin_history
+            ):
+                raise ApprovedEventImportConflict("approved event import verification failed")
+        except BaseException:
+            self._restore(state)
+            self.outbox._jobs = outbox_state
+            raise
+        return ApprovedEventImportResult(
+            len(target.events), len(target.governance_actions), len(target.pin_history), False
         )
 
     def _is_pinned(self, event_id: EventId) -> bool:
