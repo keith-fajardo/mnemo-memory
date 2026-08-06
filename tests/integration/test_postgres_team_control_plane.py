@@ -27,6 +27,11 @@ from mnemo_memory.packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
+    EpisodicCandidateReviewAction,
+    EpisodicCandidateReviewDecision,
+    EpisodicExtractionProposal,
+    EpisodicMemoryCandidate,
+    EpisodicMemoryKind,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -91,6 +96,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLCheckpointRepository,
     PostgreSQLConnection,
     PostgreSQLConnectionFactory,
+    PostgreSQLEpisodicMemoryRepository,
     PostgreSQLEventOutboxRepository,
     PostgreSQLKnowledgeDocumentRepository,
     PostgreSQLTaskActivityEventRepository,
@@ -104,9 +110,16 @@ from mnemo_memory.packages.storage import (
     TeamControlPlaneNotFound,
 )
 from mnemo_memory.packages.storage.contracts import (
+    ActiveEpisodicMemoryNotFound,
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventSecretRejected,
+    EpisodicMemoryCandidateConflict,
+    EpisodicMemoryCandidateNotFound,
+    EpisodicMemoryCandidateRejected,
+    EpisodicMemoryReviewConflict,
+    EpisodicMemoryReviewNotFound,
+    EpisodicMemoryReviewRejected,
 )
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -314,6 +327,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert approved_sql.count("FORCE ROW LEVEL SECURITY") == 3
     assert "CREATE OR REPLACE FUNCTION mnemo_team.ensure_event_outbox_source()" in approved_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in approved_sql
+    candidate_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0006_team_episodic_candidates.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert candidate_sql.count("FORCE ROW LEVEL SECURITY") == 3
+    assert "source.retention_json = NEW.retention_json" in candidate_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in candidate_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -464,12 +485,39 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath(
+                    "resources", "postgres_migrations", "0005_team_approved_episodic_events.sql"
+                )
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=6).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4, 5)
+            cursor.execute("SELECT to_regclass('mnemo_team.episodic_memory_candidates')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (1, 2, 3, 4, 5, 6)
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1443,6 +1491,271 @@ def test_postgres_approved_events_are_governed_payload_erasing_and_scoped(
         cursor.close()
         connection.close()
     assert repository.get_approved_event(scope, newer.event_id) == newer
+
+
+def _episodic_candidates(
+    source: TaskActivityEvent,
+    *,
+    extractor_version: str = "team-extractor-v1",
+    claims: tuple[str, ...] = (
+        "retain the verified task decision",
+        "remember the bounded task failure",
+        "reuse the verified task lesson",
+    ),
+) -> tuple[EpisodicMemoryCandidate, ...]:
+    kinds = (
+        EpisodicMemoryKind.DECISION,
+        EpisodicMemoryKind.FAILURE,
+        EpisodicMemoryKind.LESSON,
+    )
+    return tuple(
+        EpisodicMemoryCandidate.create(
+            source_event=source,
+            proposal=EpisodicExtractionProposal(
+                kinds[index], claim, 0.9 - index * 0.1, Sensitivity.NORMAL
+            ),
+            proposal_index=index,
+            sensitivity=Sensitivity.NORMAL,
+            extractor_version=extractor_version,
+            provider_id="team-provider",
+            model_id="team-model",
+            prompt_version="team-prompt-v1",
+            created_at=NOW + timedelta(seconds=40),
+        )
+        for index, claim in enumerate(claims)
+    )
+
+
+def _episodic_review(
+    scope: MemoryScope,
+    candidate: EpisodicMemoryCandidate,
+    suffix: str,
+    decision: EpisodicCandidateReviewDecision,
+    *,
+    reason: str | None = None,
+    source_action_key: str | None = None,
+) -> EpisodicCandidateReviewAction:
+    return EpisodicCandidateReviewAction.create(
+        scope=scope,
+        candidate_id=candidate.memory_id,
+        decision=decision,
+        source_action_key=source_action_key or f"team-review-{suffix}",
+        reason=reason or f"verified explicit review {suffix}",
+        reviewed_at=NOW + timedelta(seconds=50),
+        evidence_references=(_approved_evidence(f"review-{suffix}", user=True),),
+    )
+
+
+def test_postgres_episodic_candidates_require_source_and_explicit_review(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    task_events = PostgreSQLTaskActivityEventRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    source = _task_event(scope, "candidate")
+    task_events.append_task_activity_event(source)
+    repository = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    candidates = _episodic_candidates(source)
+    assert not repository.store_episodic_memory_candidates(candidates).idempotent
+    assert repository.store_episodic_memory_candidates(candidates).idempotent
+    assert repository.get_episodic_memory_candidate(scope, candidates[0].memory_id) == candidates[0]
+    assert repository.list_episodic_memory_candidates(scope).items == tuple(reversed(candidates))
+    assert (
+        repository.list_episodic_memory_candidates(
+            scope, source_event_id=source.event_id, limit=2
+        ).next_offset
+        == 2
+    )
+
+    conflicting = replace(
+        candidates[0], memory=replace(candidates[0].memory, claim="changed extracted output")
+    )
+    with pytest.raises(EpisodicMemoryCandidateConflict):
+        repository.store_episodic_memory_candidates((conflicting, *candidates[1:]))
+    secret = _episodic_candidates(
+        source,
+        extractor_version="team-extractor-secret",
+        claims=("api_key=ABCDEFGHIJKLMNOPQRSTUVWX",),
+    )
+    with pytest.raises(EpisodicMemoryCandidateRejected):
+        repository.store_episodic_memory_candidates(secret)
+    mismatched_retention = RetentionSchedule(
+        RetentionPolicyId.new(),
+        True,
+        NOW,
+        NOW,
+        NOW,
+        None,
+        None,
+    )
+    mismatched_source = replace(source, retention=mismatched_retention)
+    mismatched = _episodic_candidates(
+        mismatched_source,
+        extractor_version="team-extractor-mismatch",
+        claims=("safe but authority-mismatched candidate",),
+    )
+    with pytest.raises(EpisodicMemoryCandidateConflict):
+        repository.store_episodic_memory_candidates(mismatched)
+    assert len(repository.list_episodic_memory_candidates(scope).items) == 3
+
+    approval = _episodic_review(
+        scope, candidates[0], "approve", EpisodicCandidateReviewDecision.APPROVED
+    )
+    approved = repository.review_episodic_memory_candidate(approval)
+    assert not approved.idempotent and approved.active_memory is not None
+    assert repository.review_episodic_memory_candidate(approval).idempotent
+    assert repository.get_episodic_memory_review(scope, candidates[0].memory_id) == approval
+    assert repository.get_active_episodic_memory(scope, candidates[0].memory_id) == (
+        approved.active_memory
+    )
+
+    rejection = _episodic_review(
+        scope, candidates[1], "reject", EpisodicCandidateReviewDecision.REJECTED
+    )
+    rejected = repository.review_episodic_memory_candidate(rejection)
+    assert not rejected.idempotent and rejected.active_memory is None
+    with pytest.raises(ActiveEpisodicMemoryNotFound):
+        repository.get_active_episodic_memory(scope, candidates[1].memory_id)
+    assert repository.list_active_episodic_memories(scope).items == (approved.active_memory,)
+
+    with pytest.raises(EpisodicMemoryReviewConflict):
+        repository.review_episodic_memory_candidate(
+            _episodic_review(
+                scope,
+                candidates[0],
+                "competing",
+                EpisodicCandidateReviewDecision.REJECTED,
+            )
+        )
+    with pytest.raises(EpisodicMemoryReviewConflict):
+        repository.review_episodic_memory_candidate(
+            _episodic_review(
+                scope,
+                candidates[2],
+                "key-reuse",
+                EpisodicCandidateReviewDecision.APPROVED,
+                source_action_key=approval.source_action_key,
+            )
+        )
+    with pytest.raises(EpisodicMemoryReviewRejected):
+        repository.review_episodic_memory_candidate(
+            _episodic_review(
+                scope,
+                candidates[2],
+                "secret",
+                EpisodicCandidateReviewDecision.APPROVED,
+                reason="access_token=ABCDEFGHIJKLMNOPQRSTUVWX",
+            )
+        )
+    with pytest.raises(EpisodicMemoryReviewNotFound):
+        repository.get_episodic_memory_review(scope, candidates[2].memory_id)
+
+    restarted = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_active_episodic_memory(scope, candidates[0].memory_id) == (
+        approved.active_memory
+    )
+    foreign_task = replace(scope, task_id=TaskId.new())
+    with pytest.raises(EpisodicMemoryCandidateNotFound):
+        repository.get_episodic_memory_candidate(foreign_task, candidates[0].memory_id)
+    with pytest.raises(ActiveEpisodicMemoryNotFound):
+        repository.get_active_episodic_memory(foreign_task, candidates[0].memory_id)
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLEpisodicMemoryRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert viewer.list_episodic_memory_candidates(scope).items == ()
+    assert viewer.list_active_episodic_memories(scope).items == ()
+    with pytest.raises(EpisodicMemoryCandidateConflict):
+        viewer.store_episodic_memory_candidates(
+            _episodic_candidates(
+                source,
+                extractor_version="team-extractor-viewer",
+                claims=("viewer cannot stage this candidate",),
+            )
+        )
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_candidates', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_memory_candidates', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_candidate_reviews', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.episodic_candidate_reviews', 'DELETE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.active_episodic_memories', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.active_episodic_memories', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False, False, False, False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'contribute', true)",
+            (str(workspace.owner_id), str(workspace.workspace_id)),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "INSERT INTO mnemo_team.active_episodic_memories("
+                "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                "memory_id, approval_action_id, activated_at) VALUES ("
+                "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                "CAST(%s AS uuid), %s)",
+                (
+                    str(scope.workspace_id),
+                    str(scope.project_id),
+                    str(scope.owner_id),
+                    scope.visibility.value,
+                    str(scope.session_id),
+                    str(scope.task_id),
+                    str(candidates[1].memory_id),
+                    str(rejection.action_id),
+                    rejection.reviewed_at,
+                ),
+            )
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+    assert repository.get_active_episodic_memory(scope, candidates[0].memory_id) == (
+        approved.active_memory
+    )
 
 
 def _database_authorized(

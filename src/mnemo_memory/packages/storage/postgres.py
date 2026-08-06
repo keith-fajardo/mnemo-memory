@@ -40,13 +40,14 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 5
+POSTGRES_TEAM_SCHEMA_VERSION = 6
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
     (3, "0003_team_checkpoints.sql"),
     (4, "0004_team_task_events_outbox.sql"),
     (5, "0005_team_approved_episodic_events.sql"),
+    (6, "0006_team_episodic_candidates.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -223,6 +224,9 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT SELECT, INSERT, DELETE ON mnemo_team.approved_episodic_events TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.approved_episodic_event_governance TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.approved_episodic_event_pin_actions TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_candidates TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.episodic_candidate_reviews TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.active_episodic_memories TO {role}",
             )
             for statement in statements:
                 cursor.execute(statement)

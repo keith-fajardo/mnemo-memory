@@ -64,6 +64,16 @@ fact evidence in the same transaction. Exact retries are idempotent; competing t
 source-key, or action-key reuse fails. This storage boundary does not authenticate actors or decide
 shared-source ownership, approval authority, or conflicting team corrections.
 
+Team extracted episodic candidates remain inactive PostgreSQL records until one explicit verified
+user review approves them. Each bounded batch contains at most four contiguous proposals from one
+authorized task event and extractor version. Scope, retention, and evidence are copied from and
+database-bound to that canonical source; provider/model/prompt provenance and deterministic
+candidate identities are retained. Candidate and review safety is rerun before persistence. A
+rejection creates no active memory; an approval atomically creates one matching active marker and
+merges review evidence. Exact retries are idempotent, while changed extraction output, competing
+review, action-key reuse, or cross-task linkage fails. No model confidence value authorizes
+activation, and this storage boundary invokes no extractor.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

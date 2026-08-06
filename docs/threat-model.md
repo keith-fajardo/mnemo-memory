@@ -255,6 +255,30 @@ ownership or conflicting team corrections, enforce approved-fact retention, or p
 to backups and external handlers. The runtime credential remains infrastructure-only and team
 exposure remains blocked until the authenticated service and operational controls exist.
 
+### Cross-tenant episodic candidates and forged activation
+
+**Scenario:** An extraction result changes canonical scope or retention, a private-project viewer
+reads a candidate, a model confidence score activates memory without consent, two reviews disagree,
+or an attacker forges an active marker for a rejected or cross-task candidate.
+
+**Required controls:** Candidate batches are bounded to four contiguous proposals from one exact
+task event and extractor version. Candidate safety runs before persistence, and canonical scope,
+retention, and evidence must match the source event. Candidate, review, and active rows repeat exact
+scope and use forced RLS. Composite foreign keys and fixed-search-path triggers bind each source,
+candidate, review, and active marker. Only a verified user approval creates an active marker;
+rejection never does. Exact batch/review retry is idempotent, while changed output, competing
+review, identity reuse, and action-key reuse fail atomically.
+
+**Verification:** Real PostgreSQL tests cover exact/changed/secret/source-mismatched batches,
+ordering and source filtering, approval, rejection, active-state reads, competing review,
+action-key reuse, unsafe review, restart durability, different-task and private-project denial,
+immutable runtime privileges, and database rejection of an active marker backed by rejection. An
+injected v5-to-v6 migration failure retains v5 without the candidate tables.
+
+**Residual risk:** No extraction worker, provider consent/budget enforcement, authenticated team
+service, active-memory correction/retention/deletion/export, or backup propagation is composed.
+The database credential remains infrastructure-only and team mode remains unavailable.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

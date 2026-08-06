@@ -109,6 +109,7 @@ from .postgres import (
     PostgreSQLTeamSchemaTooNewError,
 )
 from .postgres_approved import PostgreSQLApprovedEpisodicEventRepository
+from .postgres_candidates import PostgreSQLEpisodicMemoryRepository
 from .postgres_checkpoints import PostgreSQLCheckpointRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
@@ -223,6 +224,7 @@ __all__ = [
     "PostgreSQLConnection",
     "PostgreSQLConnectionFactory",
     "PostgreSQLCursor",
+    "PostgreSQLEpisodicMemoryRepository",
     "PostgreSQLEventOutboxRepository",
     "PostgreSQLKnowledgeDocumentRepository",
     "PostgreSQLTaskActivityEventRepository",

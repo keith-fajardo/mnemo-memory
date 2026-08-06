@@ -1708,6 +1708,53 @@ workflow. No dependency was added. No extraction-candidate storage, retention ex
 source approval or correction resolution, dbt/source-structure parity, personal import, remote
 service, OAuth, backup, quota, dashboard, or usable team mode was added.
 
+#### Issue 21H — PostgreSQL team episodic candidates and explicit review — Complete
+
+The current bounded issue implements the existing `EpisodicMemoryCandidateRepository` and
+`EpisodicMemoryReviewRepository` contracts in PostgreSQL. A forward-only migration and adapter
+must preserve exact task scope; task-event source binding; deterministic candidate/review safety;
+bounded one-source batches; candidate identity and extraction provenance; immutable evidence,
+retention, and review actions; active state only after explicit approval; stable pagination; and
+atomic rollback/idempotency. Every table and operation must use forced RLS and the existing
+authenticated principal/workspace/operation boundary, with real-database tests for migration
+rollback, restart durability, runtime privilege limits, and cross-tenant/cross-task denial.
+
+This issue adds no extractor or model call, worker/scheduler, episodic correction/retraction,
+retention expiry/purge, deletion/export, team source approval workflow, dbt/source-structure parity,
+personal import, remote service, OAuth, backup, quota, dashboard, or usable team mode.
+
+Implemented PostgreSQL schema version 6 and `PostgreSQLEpisodicMemoryRepository` for the existing
+inactive-candidate and explicit-review contracts. Candidate, review, and active-marker rows repeat
+exact workspace/project/owner/visibility/session/task identity and force RLS. Composite foreign
+keys plus fixed-search-path triggers bind candidates to canonical task events, reviews to exact
+candidates, and active markers to matching approvals. Runtime access is insert/read only for all
+three immutable tables.
+
+Candidate storage accepts one contiguous batch of at most four proposals from one source event and
+extractor version. Deterministic identity, scope, source, retention, evidence, extraction/provider/
+model/prompt provenance, sensitivity, and safety are validated before insertion; retention and
+evidence must equal the canonical source row. Exact batch retries are idempotent and changed output
+or identity reuse rolls back atomically. Candidates remain inactive regardless of confidence.
+
+Review reloads one authorized candidate and reruns candidate/review safety. One verified user
+approval atomically stores the immutable action and matching active marker, preserving source and
+extraction provenance and merging review evidence through the existing domain contract. Rejection
+stores the action without an active marker. Exact retry is idempotent; competing review,
+action-key reuse, unsafe review, and forged rejected activation fail closed.
+
+ADR 0017, the product contract, and threat model document the inactivity, authorization,
+provenance, activation, and recovery boundaries. The real PostgreSQL suite proves atomic v5-to-v6
+rollback/retry, exact/changed/secret/source-mismatched batches, ordering and source filtering,
+approval, rejection, active reads, competing review, action-key reuse, unsafe review, restart
+durability, different-task and private-project denial, immutable runtime grants, and database
+rejection of an active marker backed by rejection. The complete repository gate passes with 826
+default tests plus 9 mandatory real-PostgreSQL tests, strict typing for 216 source files,
+dependency/provenance validation for 93 entries, architecture validation for 116 product Python
+files, schema validation, and the isolated installed-package MCP workflow. No dependency was added.
+No extractor/model call, worker/scheduler, episodic correction/retraction, retention expiry/purge,
+deletion/export, source approval workflow, dbt/source-structure parity, personal import, remote
+service, OAuth, backup, quota, dashboard, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable
