@@ -43,7 +43,13 @@ from mnemo_memory.packages.domain import (
     Visibility,
     WorkspaceId,
 )
-from mnemo_memory.packages.project_index import PythonSourceParser, PythonSourceParseRequest
+from mnemo_memory.packages.project_index import (
+    PythonSourceParser,
+    PythonSourceParseRequest,
+    SourceStructureParser,
+    SourceStructureParseRequest,
+)
+from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 ROOT = Path(__file__).parents[2]
 DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
@@ -1165,6 +1171,19 @@ def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments
         project.mkdir()
         data = tmp_path / "registered data Ω"
         binding = LocalMemoryProjectBindingStore(data).enable(project)
+        source_repository = SQLiteSourceStructureRepository(
+            data / "mnemo.sqlite3", base_directory=data
+        )
+        source_repository.migrate()
+        source_repository.store_and_activate(
+            SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+        )
+        current_source = project / "src" / "current_service.py"
+        current_source.parent.mkdir()
+        current_source.write_text(
+            "class CurrentService:\n    pass\n",
+            encoding="utf-8",
+        )
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "mnemo_memory.apps.mcp.server", "--data-dir", str(data)],
@@ -1182,6 +1201,14 @@ def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments
             packet = ContextPacket.from_dict(context.structuredContent or {})
             assert packet.owner_scope == binding.checkpoint_scope
             assert packet.active_task_checkpoint is not None
+            structure = await session.call_tool("get_context", {"source_query": "CurrentService"})
+            assert structure.isError is False
+            structural_packet = ContextPacket.from_dict(structure.structuredContent or {})
+            assert any(
+                '"path":"src/current_service.py"' in item.content
+                and '"symbol":"src.current_service.CurrentService"' in item.content
+                for item in structural_packet.structural_items
+            )
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 

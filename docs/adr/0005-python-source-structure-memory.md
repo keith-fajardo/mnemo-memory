@@ -65,6 +65,9 @@ Mnemo will build a separate, immutable, scoped projection of source structure.
 - Snapshots are immutable and rebuildable. A later parser/storage service may select the current
   snapshot only with explicit source-state evidence; an active snapshot is not automatically
   current.
+- A local MCP process that resolves one registered project performs one fail-open syntax-only
+  refresh before serving requests. This closes the gap when a client lifecycle hook did not run;
+  parser or projection failure never prevents the MCP process from starting.
 - Context retrieval can return only a bounded, relevant subset with provenance and omission
   notices. It supports deterministic dependency/dependent impact candidates through resolved
   internal links, but will not replay a checkout or claim a complete runtime call graph.
@@ -76,3 +79,6 @@ imports, aliases that cannot be proven, runtime dispatch, generated code, unreso
 targets, and a complete call graph remain unsupported until they have explicit, tested contracts. No source is uploaded, and no model
 participates in authoritative structural facts. New languages join through a Mnemo-owned adapter;
 we do not download or execute arbitrary grammar code from a user's repository.
+
+Startup refresh adds one bounded local parse to a registered-project MCP launch. Exact digest replay
+is idempotent, and later automatic-memory lifecycle refreshes preserve the normal transition history.

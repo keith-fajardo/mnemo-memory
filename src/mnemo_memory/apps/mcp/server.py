@@ -16,7 +16,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
+from mnemo_memory.connectors.automatic_memory.source_observation import (
+    CheckpointSourceObserver,
+    refresh_registered_project_source,
+)
 from mnemo_memory.connectors.dbt.code_excerpt import DbtLocalCodeExcerptReader
 from mnemo_memory.connectors.dbt.git_state import DbtGitStateObserver
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
@@ -588,6 +591,8 @@ def main(data_directory: Path | None = None) -> None:
             binding = binding_store.get(Path.cwd())
         except AutomaticMemoryBindingError:
             binding = None
+        if binding is not None:
+            refresh_registered_project_source(binding, runtime.source_structure_repository)
         observer = CheckpointSourceObserver(
             binding_store,
             runtime.source_structure_repository,

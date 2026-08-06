@@ -633,6 +633,27 @@ active-state change. Migration failure from v10 leaves no source table.
 worker schedules refresh. dbt parity, checkpoint source observation, source approval governance,
 deletion/export/import of structural projections, and backup propagation remain separate issues.
 
+### Stale registered-project structure at local MCP startup
+
+**Scenario:** An MCP process resolves the correct registered project but serves an old active source
+snapshot because the coding-client session hook did not run, causing exact current paths or symbols
+to be absent from structural retrieval.
+
+**Required controls:** Before serving a registered project, the local MCP composition root performs
+one bounded syntax-only refresh through the existing parser and scoped projection repository. The
+project binding supplies the exact local root and durable scope. The refresh remains fail-open and
+does not retain source bodies, log paths or parser payloads, execute project code, or make MCP
+availability depend on repository readability.
+
+**Verification:** A real stdio MCP test starts with a deliberately stale saved snapshot, adds a new
+source class, launches a fresh process, and retrieves that exact path and symbol without UUID
+arguments. Focused failure-isolation coverage rejects an oversized source file without creating a
+snapshot or raising through the refresh boundary.
+
+**Residual risk:** A long-lived process still relies on automatic lifecycle refreshes or explicit
+`mnemo-memory memory refresh` after later edits; freshness remains unknown without comparable source
+digest evidence.
+
 ### Cross-tenant checkpoint/source co-observation
 
 **Scenario:** A checkpoint revision is linked to another task or project's source snapshot, a

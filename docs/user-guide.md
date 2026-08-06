@@ -129,16 +129,18 @@ was supplied. It is a useful change-planning aid, not a promise that every runti
 An agent can also request an exact immutable snapshot ID through `get_context` when it needs to
 compare a past structural state rather than the active one; otherwise Mnemo uses the active snapshot.
 When automatic memory refreshes a repository at session start, its private agent instruction carries
-the exact source digest for that refresh. An impact request that supplies that same digest is labeled
+the exact source digest for that refresh. A freshly started local MCP process also performs one
+fail-open refresh for its registered project before serving structural requests. An impact request
+that supplies that same digest is labeled
 `current`; a different digest is labeled `stale`; without comparable evidence it remains `unknown`.
 `require_current` omits a stale or unproven source map rather than presenting it as current.
 `memory impact --path` is the safer form when you know the changed file: Mnemo starts from every
 saved declaration in that exact relative path and never falls back to a same-named file elsewhere.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
 Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. With
-automatic memory enabled, Mnemo refreshes at session start, after a checkpoint save, and before an
-unsaved changed session is stopped. It rebuilds the bounded structural snapshot from current local
-syntax and preserves the previous snapshot for comparison.
+automatic memory enabled, Mnemo refreshes at MCP startup, session start, after a checkpoint save,
+and before an unsaved changed session is stopped. It rebuilds the bounded structural snapshot from
+current local syntax and preserves the previous snapshot for comparison.
 
 When the question is specifically “what changed in this model or file?”, an agent can request a
 small `source_changes` history for a path such as `models/orders.sql`. Mnemo returns the newest

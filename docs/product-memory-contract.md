@@ -579,6 +579,10 @@ fingerprints are rebuildable structural projections. They retain source IDs, dig
 times, target/environment, and staleness state, but are not user facts and do not gain durable
 authority through retrieval frequency.
 
+A local MCP process bound to one registered project refreshes that project's syntax-only source
+projection once before serving requests. Refresh is fail-open: an unreadable, unsafe, or oversized
+checkout leaves the prior projection available but cannot prevent the coding agent from operating.
+
 Durable memories represent approved evidence-bearing claims, decisions, preferences, outcomes,
 and checkpoints with revision and retention lifecycles. They may cite a structural projection but
 must not duplicate it as an allegedly timeless fact. When the authoritative artifact changes,

@@ -19,7 +19,10 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     enable_client_hooks,
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
-from mnemo_memory.connectors.automatic_memory.source_observation import CheckpointSourceObserver
+from mnemo_memory.connectors.automatic_memory.source_observation import (
+    CheckpointSourceObserver,
+    refresh_registered_project_source,
+)
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -1466,6 +1469,19 @@ def test_session_start_refreshes_supported_static_source_structure(tmp_path: Pat
     )
     assert snapshot is not None
     assert snapshot.symbol_count == 2
+
+
+def test_registered_project_source_refresh_fails_open_on_an_unsafe_file(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "oversized.py").write_bytes(b"x" * 1_000_001)
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
+    repository.migrate()
+
+    assert refresh_registered_project_source(binding, repository) is None
+    assert repository.get_active_snapshot(binding.scope) is None
 
 
 def test_session_start_indexes_typescript_without_reading_source_text(tmp_path: Path) -> None:
