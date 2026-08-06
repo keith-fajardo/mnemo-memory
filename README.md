@@ -289,7 +289,7 @@ whose normalized local path and package name both match another parsed local lib
 not run Cargo, read `Cargo.lock`, or infer version, feature, build, development, optional, renamed,
 or workspace-inherited dependencies.
 
-> Status: `0.1.0a2` is an early alpha. It is useful for the documented local workflow, but the
+> Status: `0.1.0a3` is an early alpha. It is useful for the documented local workflow, but the
 > project intentionally does not yet provide automatic transcript capture, semantic cross-language
 > call graphs, or team workspaces.
 >
@@ -302,14 +302,14 @@ The PyPI distribution is `mnemo-unified-context`. The import package remains `mn
 the command is deliberately `mnemo-memory`.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a2
+uv tool install mnemo-unified-context==0.1.0a3
 mnemo-memory --help
 ```
 
 `mnemo-memory` is a separate executable. It neither replaces nor shadows an existing `mnemo`
 command on your machine.
 
-For a local wheel, use `uv tool install /path/to/mnemo_unified_context-0.1.0a2-py3-none-any.whl`.
+For a local wheel, use `uv tool install /path/to/mnemo_unified_context-0.1.0a3-py3-none-any.whl`.
 For development in this checkout:
 
 ```bash

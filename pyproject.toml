@@ -1,6 +1,6 @@
 [project]
 name = "mnemo-unified-context"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
