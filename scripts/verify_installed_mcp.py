@@ -46,8 +46,13 @@ def _run(
         timeout=timeout,
     )
     if completed.returncode != 0:
+        details = (completed.stderr or completed.stdout).strip()
+        if len(details) > 2000:
+            details = details[-2000:]
+        suffix = f": {details}" if details else ""
         raise InstalledWorkflowError(
-            f"installed workflow command failed with code {completed.returncode}: {command[0]}"
+            "installed workflow command failed with code "
+            f"{completed.returncode}: {command[0]}{suffix}"
         )
     return completed
 
