@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from importlib import resources
 from pathlib import Path
+from time import perf_counter
 from typing import cast
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ import pytest
 from mcp.server.auth.provider import AccessToken
 
 from mnemo_memory.apps.mcp.team import AuthenticatedTeamMcpPort, PostgreSQLTeamMcpPortFactory
+from mnemo_memory.apps.mcp.team_runtime import _PostgreSQLConnectionPool
 from mnemo_memory.connectors.dbt import (
     DbtCatalogParser,
     DbtManifestParser,
@@ -2313,7 +2315,16 @@ def test_authenticated_team_mcp_binds_subject_before_forced_rls(
     )
     aggregate, revision = _checkpoint_pair(scope, "a")
     checkpoint_repository.create_checkpoint_aggregate(aggregate, revision)
-    factory = PostgreSQLTeamMcpPortFactory(postgres_harness.runtime_factory(), clock=lambda: NOW)
+    runtime_factory = postgres_harness.runtime_factory()
+    connection_count = 0
+
+    def counted_connection_factory() -> PostgreSQLConnection:
+        nonlocal connection_count
+        connection_count += 1
+        return runtime_factory()
+
+    connection_pool = _PostgreSQLConnectionPool(counted_connection_factory, maximum_connections=1)
+    factory = PostgreSQLTeamMcpPortFactory(connection_pool, clock=lambda: NOW)
 
     def port_for(principal_id: OwnerId) -> AuthenticatedTeamMcpPort:
         token = AccessToken(
@@ -2337,15 +2348,117 @@ def test_authenticated_team_mcp_binds_subject_before_forced_rls(
         workspace.workspace_id
     )
     assert cast(dict[str, object], packet["active_task_checkpoint"])
+    assert connection_count == 1
 
     viewer_id = OwnerId.new()
     _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
     viewer_packet = port_for(viewer_id).get_context(request)
     assert viewer_packet["active_task_checkpoint"] is None
+    assert connection_count == 1
     foreign_packet = port_for(workspace.owner_id).get_context(
         {**request, "workspace_id": str(WorkspaceId.new())}
     )
     assert foreign_packet["active_task_checkpoint"] is None
+    assert connection_count == 1
+    connection_pool.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("MNEMO_RUN_TEAM_LOAD_TEST") != "1",
+    reason="team load gate requires explicit MNEMO_RUN_TEAM_LOAD_TEST=1",
+)
+def test_team_context_load_slo(postgres_harness: PostgreSQLHarness) -> None:
+    concurrency = 8
+    operations = 160
+    warmup_operations = 8
+    maximum_p95_ms = 250.0
+    minimum_throughput_per_second = 30.0
+
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = _checkpoint_scope(workspace, project)
+    checkpoint_repository = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    aggregate, revision = _checkpoint_pair(scope, "a")
+    checkpoint_repository.create_checkpoint_aggregate(aggregate, revision)
+    token = AccessToken(
+        token="verified-load-test",
+        client_id="mnemo-team-load-test",
+        scopes=["mnemo:context"],
+        subject=str(workspace.owner_id),
+    )
+    connection_pool = _PostgreSQLConnectionPool(
+        postgres_harness.runtime_factory(), maximum_connections=concurrency
+    )
+    port = AuthenticatedTeamMcpPort(
+        PostgreSQLTeamMcpPortFactory(connection_pool, clock=lambda: NOW),
+        access_token_loader=lambda: token,
+    )
+    request: dict[str, object] = {
+        "owner_id": str(scope.owner_id),
+        "workspace_id": str(scope.workspace_id),
+        "project_id": str(scope.project_id),
+        "session_id": str(scope.session_id),
+        "task_id": str(scope.task_id),
+    }
+
+    def timed_context_read(_: int) -> float:
+        started = perf_counter()
+        packet = port.get_context(request)
+        if packet["active_task_checkpoint"] is None:
+            raise AssertionError("load request did not return its scoped checkpoint")
+        return (perf_counter() - started) * 1000.0
+
+    try:
+        for operation in range(warmup_operations):
+            timed_context_read(operation)
+
+        started = perf_counter()
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            latencies_ms = list(executor.map(timed_context_read, range(operations)))
+        duration_seconds = perf_counter() - started
+        sorted_latencies = sorted(latencies_ms)
+        p95_index = ((95 * len(sorted_latencies) + 99) // 100) - 1
+        p95_ms = sorted_latencies[p95_index]
+        throughput_per_second = operations / duration_seconds
+        result = {
+            "concurrency": concurrency,
+            "duration_seconds": round(duration_seconds, 6),
+            "errors": 0,
+            "operation": "authenticated_team_get_context",
+            "operations": operations,
+            "p95_latency_ms": round(p95_ms, 3),
+            "schema_version": "1.0",
+            "slo": {
+                "maximum_p95_latency_ms": maximum_p95_ms,
+                "minimum_throughput_per_second": minimum_throughput_per_second,
+            },
+            "throughput_per_second": round(throughput_per_second, 3),
+            "warmup_operations": warmup_operations,
+        }
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+
+        assert p95_ms <= maximum_p95_ms
+        assert throughput_per_second >= minimum_throughput_per_second
+    finally:
+        connection_pool.close()
 
 
 def _task_event(

@@ -44,7 +44,9 @@ from mnemo_memory.packages.skills_registry import (
 from mnemo_memory.packages.storage import (
     PostgreSQLApprovedEpisodicEventRepository,
     PostgreSQLCheckpointRepository,
+    PostgreSQLConnection,
     PostgreSQLConnectionFactory,
+    PostgreSQLCursor,
     PostgreSQLEpisodicMemoryRepository,
     PostgreSQLKnowledgeDocumentRepository,
     PostgreSQLProjectIndexRepository,
@@ -62,6 +64,53 @@ class TeamMcpPortFactory(Protocol):
     def __call__(self, principal_id: OwnerId, workspace_id: WorkspaceId) -> McpContextPort: ...
 
 
+class _BorrowedRequestConnection:
+    """Keep one physical connection alive across repositories in one tool call."""
+
+    def __init__(self, connection: PostgreSQLConnection) -> None:
+        self._connection = connection
+
+    @property
+    def autocommit(self) -> bool:
+        return self._connection.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        self._connection.autocommit = value
+
+    def cursor(self) -> PostgreSQLCursor:
+        return self._connection.cursor()
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        """Repository close returns the request-owned connection to its caller."""
+
+
+class _RequestConnectionFactory:
+    def __init__(self, connection_factory: PostgreSQLConnectionFactory) -> None:
+        self._connection_factory = connection_factory
+        self._connection: PostgreSQLConnection | None = None
+
+    def __call__(self) -> PostgreSQLConnection:
+        if self._connection is None:
+            self._connection = self._connection_factory()
+        return _BorrowedRequestConnection(self._connection)
+
+    def release(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            connection.rollback()
+        finally:
+            connection.close()
+
+
 class PostgreSQLTeamMcpPort:
     """Team context plus content-free source-governance transport operations."""
 
@@ -72,23 +121,37 @@ class PostgreSQLTeamMcpPort:
         *,
         principal_id: OwnerId,
         workspace_id: WorkspaceId,
+        release_connection: Callable[[], None] = lambda: None,
     ) -> None:
         self._context = context
         self._governance = governance
         self._principal_id = principal_id
         self._workspace_id = workspace_id
+        self._release_connection = release_connection
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
-        return self._context.get_context(request)
+        try:
+            return self._context.get_context(request)
+        finally:
+            self._release_connection()
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
-        return self._context.list_skills(request)
+        try:
+            return self._context.list_skills(request)
+        finally:
+            self._release_connection()
 
     def get_skill(self, request: dict[str, object]) -> dict[str, object]:
-        return self._context.get_skill(request)
+        try:
+            return self._context.get_skill(request)
+        finally:
+            self._release_connection()
 
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
-        return self._context.save_checkpoint(request)
+        try:
+            return self._context.save_checkpoint(request)
+        finally:
+            self._release_connection()
 
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -111,6 +174,8 @@ class PostgreSQLTeamMcpPort:
             raise ValueError("MNEMO_STORAGE_UNAVAILABLE: team knowledge is unavailable") from None
         except (TypeError, ValueError):
             raise ValueError("MNEMO_INVALID_REQUEST: source request is invalid") from None
+        finally:
+            self._release_connection()
 
     def approve_knowledge_source(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -140,6 +205,8 @@ class PostgreSQLTeamMcpPort:
             raise ValueError("MNEMO_STORAGE_UNAVAILABLE: team knowledge is unavailable") from None
         except (TypeError, ValueError):
             raise ValueError("MNEMO_INVALID_REQUEST: source approval is invalid") from None
+        finally:
+            self._release_connection()
 
     def _scope(self, request: dict[str, object]) -> MemoryScope:
         owner = request.get("owner_id")
@@ -173,13 +240,14 @@ class PostgreSQLTeamMcpPortFactory:
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def __call__(self, principal_id: OwnerId, workspace_id: WorkspaceId) -> TeamMcpPort:
+        request_connections = _RequestConnectionFactory(self._connection_factory)
         checkpoints = PostgreSQLCheckpointRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
         approved = PostgreSQLApprovedEpisodicEventRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
@@ -190,22 +258,22 @@ class PostgreSQLTeamMcpPortFactory:
             approved_event_repository=approved,
         )
         dbt = PostgreSQLProjectIndexRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
         source = PostgreSQLSourceStructureRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
         knowledge = PostgreSQLKnowledgeDocumentRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
         episodic = PostgreSQLEpisodicMemoryRepository(
-            self._connection_factory,
+            request_connections,
             principal_id=principal_id,
             workspace_id=workspace_id,
         )
@@ -231,6 +299,7 @@ class PostgreSQLTeamMcpPortFactory:
             TeamKnowledgeGovernanceApplicationService(knowledge, clock=self._clock),
             principal_id=principal_id,
             workspace_id=workspace_id,
+            release_connection=request_connections.release,
         )
 
 

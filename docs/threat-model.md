@@ -102,8 +102,9 @@ personal-mode nullability as authorization.
 ### Cross-tenant team authorization
 
 **Scenario:** A caller supplies a membership from another workspace or project, uses a suspended
-membership, exploits a broad administrator role to read an owner-only item, or relies on missing
-scope as a wildcard before storage or ranking.
+membership, exploits a broad administrator role to read an owner-only item, relies on missing scope
+as a wildcard before storage or ranking, or inherits a previous tenant's transaction settings when
+a PostgreSQL connection is reused.
 
 **Required controls:** Team requests require an authenticated principal, non-null workspace, exact
 scope, and one exact active workspace membership before any project or item rule is evaluated. The
@@ -116,6 +117,10 @@ PostgreSQL RLS reproduces these decisions beneath application authorization, usi
 authenticated identity, workspace, and a closed operation rather than caller-controlled row fields.
 The runtime database role is not the schema owner, a superuser, or `BYPASSRLS`; all authority tables
 force RLS and missing, malformed, or cross-workspace transaction settings deny rows.
+The process-local pool defensively rolls back before returning a connection, discards a connection
+that cannot roll back, and caps acquisition time and physical connection count. Every repository
+transaction sets fresh transaction-local principal, workspace, and operation values before its
+first query; pooled state is never authentication evidence.
 
 **Verification:** Pure domain round trips reject unknown fields and invalid identity/role values.
 The complete operation matrix is tested for every workspace and project role. Adversarial tests
@@ -123,6 +128,9 @@ cover absent membership, suspended membership, wrong principal, wrong workspace,
 missing private-project grant, suspended project grant, owner-only data, private-project owner and
 administrator behavior, and deterministic repeated decisions. Later storage and service issues
 must run the same matrix against PostgreSQL RLS and remote request composition before team exposure.
+The real PostgreSQL suite additionally reuses one physical pooled connection across owner, viewer,
+and foreign-workspace context requests and proves scope does not leak. Pool unit tests cover
+capacity timeout, rollback-based reuse, broken-connection discard, and close behavior.
 
 **Residual risk:** The canonical policy, durable PostgreSQL authority schema, real-database RLS
 parity suite, and authenticated loopback request boundary now exist. The service credential must

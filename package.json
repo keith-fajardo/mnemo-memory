@@ -14,6 +14,7 @@
     "typecheck": "uv run mypy .",
     "test": "uv run pytest",
     "postgres:check": "uv run python -m scripts.run_postgres_team_tests",
+    "team-load:check": "uv run python -m scripts.run_postgres_team_load_test",
     "dependencies:check": "uv run python scripts/check_dependencies.py",
     "architecture:check": "uv run python scripts/check_architecture.py",
     "schema:check": "uv run python scripts/check_context_packet_schema.py",

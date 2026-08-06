@@ -76,22 +76,34 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _run_pytest(environment: Mapping[str, str]) -> None:
+def _run_pytest(
+    environment: Mapping[str, str],
+    *,
+    test_paths: Sequence[str] = TEST_PATHS,
+    pytest_args: Sequence[str] = (),
+) -> None:
     _run(
-        (sys.executable, "-m", "pytest", "-q", *TEST_PATHS),
+        (sys.executable, "-m", "pytest", "-q", *pytest_args, *test_paths),
         environment=environment,
     )
 
 
-def run_checks() -> None:
+def run_checks(
+    *,
+    test_paths: Sequence[str] = TEST_PATHS,
+    pytest_args: Sequence[str] = (),
+    environment_overrides: Mapping[str, str] | None = None,
+) -> None:
     environment = dict(os.environ)
+    if environment_overrides is not None:
+        environment.update(environment_overrides)
     configured = [bool(environment.get(name)) for name in REQUIRED_SETTINGS]
     if any(configured):
         if not all(configured):
             raise PostgreSQLTestHarnessError(
                 "all MNEMO_TEST_POSTGRES_* settings are required when one is supplied"
             )
-        _run_pytest(environment)
+        _run_pytest(environment, test_paths=test_paths, pytest_args=pytest_args)
         return
 
     initdb = _postgres_binary("initdb")
@@ -142,7 +154,7 @@ def run_checks() -> None:
                     "MNEMO_TEST_POSTGRES_ADMIN_USER": admin_user,
                 }
             )
-            _run_pytest(environment)
+            _run_pytest(environment, test_paths=test_paths, pytest_args=pytest_args)
         finally:
             if started:
                 _run(

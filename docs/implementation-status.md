@@ -2821,6 +2821,32 @@ three concurrent reservations with exactly two winners, exact UTC usage, foreign
 content-free operations alerts. The complete repository gate passes with formatting, linting,
 strict typing, schema, dependency/provenance, architecture, package, and installed-package checks.
 
+#### Issue 21AK — Declared PostgreSQL team load objectives — Complete
+
+The current bounded issue adds one reproducible, opt-in load gate for the existing authenticated
+team `get_context` path against a real PostgreSQL server. It must exercise concurrent exact-scope
+requests through the production team composition, report zero-error throughput and nearest-rank
+p95 latency in canonical content-free JSON, and fail when either declared objective is missed. The
+runbook must state the workload, reference environment, limitations, and capacity-planning rule.
+
+The first measured run exposed fresh physical connection creation as the bottleneck: 2,458.889 ms
+p95 and 3.711 requests per second. Reusing one connection per tool call improved the result to
+590.646 ms p95 and 15.455 requests per second but still missed the objectives. The smallest complete
+production fix now composes all repositories in one tool call over one request-owned connection and
+returns it to a lazy bounded process pool. The pool defaults to 16, caps configuration at 64, waits
+at most five seconds, rolls back before reuse, discards broken connections, and adds no dependency,
+cache, background queue, retry, autoscaling, multi-process profile, or endpoint.
+
+The explicit `npm run team-load:check` gate provisions an isolated PostgreSQL 17.10 server and runs
+160 authenticated production-composition context requests after eight warm-ups at concurrency
+eight. It requires zero errors, nearest-rank p95 no greater than 250 ms, and throughput of at least
+30 requests per second. Three consecutive accepted runs had zero errors; the worst p95 was 23.245
+ms and the lowest throughput was 290.239 requests per second. ADR 0044, the product contract,
+deployment runbook, threat model, and load-objective document record the measured decision,
+capacity rule, exclusions, and deployment-specific HTTPS/OAuth rerun requirement. Pool and config
+unit/security coverage passes with 24 tests; the complete 26-test real PostgreSQL suite reuses one
+physical connection across owner, viewer, and foreign-workspace requests without scope leakage.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

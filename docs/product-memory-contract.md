@@ -305,6 +305,14 @@ codes; the machine check exits 0 for healthy, 1 for active alerts, and 2 for an 
 invalid check. Alert notification and historical metric storage remain external operator
 responsibilities.
 
+The installed single-process team service uses a bounded lazy PostgreSQL pool, default 16 and
+configurable from 1 through 64. One authenticated tool call reuses one checked-out physical
+connection across its sequential repository transactions; transaction-local principal, workspace,
+and operation settings are cleared by commit or rollback before the connection returns. Pool
+exhaustion and broken connections fail content-free, and a failed rollback discards rather than
+reuses the connection. Pool size is capacity, not authorization, and never permits post-query
+scope filtering.
+
 Every enabled optional team model task requires an explicit administrator daily workspace budget.
 The first and currently only task is episodic-candidate extraction. Before each provider attempt,
 the model gateway reserves one trusted configured worst-case call, input-token, output-token, and

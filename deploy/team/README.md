@@ -1,8 +1,8 @@
 # Team MCP deployment boundary
 
 The optional team service is an authenticated OAuth resource server over MCP Streamable HTTP. It
-is not yet a general-availability team release: declared load objectives and the independent
-security review remain release gates.
+is not yet a general-availability team release: the independent security review remains a release
+gate.
 
 ## Install and prerequisites
 
@@ -44,6 +44,8 @@ no secret value.
 - `MNEMO_TEAM_RATE_LIMIT_REQUESTS` — per-principal/workspace requests per window, default `120`
 - `MNEMO_TEAM_RATE_LIMIT_WINDOW_SECONDS` — fixed-window duration, default `60`
 - `MNEMO_TEAM_RATE_LIMIT_IDENTITIES` — in-process tracked identity cap, default `10000`
+- `MNEMO_TEAM_DB_POOL_SIZE` — bounded process-local PostgreSQL connections, default `16`, maximum
+  `64`
 
 Backup administration uses the same host, port, and database variables plus:
 
@@ -67,6 +69,27 @@ the configured identity cap. Denial returns `MNEMO_RATE_LIMITED` without touchin
 This limiter is intentionally process-local: use exactly one Mnemo service process for this
 guarantee. A later declared multi-process profile requires a shared Mnemo-owned counter; do not
 assume a reverse proxy makes these application buckets global.
+
+## PostgreSQL connection capacity and load gate
+
+The single Mnemo process lazily opens at most `MNEMO_TEAM_DB_POOL_SIZE` physical PostgreSQL
+connections. All repositories used by one tool call share one checked-out connection while keeping
+their existing transaction boundaries. Commit or rollback clears transaction-local authorization
+settings before reuse; a connection that cannot roll back is discarded. Choose a pool size within
+the database connection budget after reserving capacity for migrations, backup/restore, operations
+checks, and administration. Do not multiply the configured size across service processes; the
+supported profile remains exactly one Mnemo process.
+
+Before exposing a reviewed release, run the server-side reference gate:
+
+```bash
+npm run team-load:check
+```
+
+It requires zero errors, nearest-rank p95 at or below 250 ms, and at least 30 authenticated
+`get_context` operations per second for the checked-in eight-client workload. See
+`docs/team-load-slo.md` for the exact workload, accepted reference result, exclusions, and the
+mandatory deployment-specific HTTPS/OAuth capacity run.
 
 ## Provision checkpoint storage quotas
 
