@@ -470,8 +470,16 @@ reactivation, deterministic graph queries, invalid endpoints, conflicting identi
 restart durability, foreign-project/private-viewer denial, least-privilege columns, trigger denial,
 and atomic v12-to-v13 migration rollback/retry.
 
-**Residual risk:** Supplemental dbt artifacts, authenticated remote composition, projection
-deletion/export/import, backup propagation, and scheduled ingestion remain separate issues.
+Supplemental catalog, run-results, and source-freshness projections use the same exact scope and
+forced RLS. Each immutable version is bound to its exact manifest through composite resource links,
+and only one version per snapshot/kind is active. Stored JSON is a strict Mnemo-owned projection of
+the reviewed domain fields, never the raw artifact; reconstruction revalidates every typed value.
+Real PostgreSQL tests cover all three kinds, idempotent replay and switching, unknown resources,
+restart parity, private-viewer denial, immutable privileges, and absence of prohibited fixture
+payloads.
+
+**Residual risk:** Authenticated remote composition, projection deletion/export/import, backup
+propagation, and scheduled ingestion remain separate issues.
 
 ### Prompt injection through retrieved content
 

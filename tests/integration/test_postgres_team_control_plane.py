@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -14,7 +15,14 @@ from uuid import uuid4
 import pg8000.dbapi  # type: ignore[import-untyped]
 import pytest
 
-from mnemo_memory.connectors.dbt.manifest import DbtManifestParser, ManifestParseRequest
+from mnemo_memory.connectors.dbt import (
+    DbtCatalogParser,
+    DbtManifestParser,
+    DbtRunResultsParser,
+    DbtSourceFreshnessParser,
+    DbtSupplementalParseRequest,
+    ManifestParseRequest,
+)
 from mnemo_memory.packages.domain import (
     ApprovedEpisodicEvent,
     ApprovedEpisodicEventGovernance,
@@ -39,9 +47,12 @@ from mnemo_memory.packages.domain import (
     CodeSymbol,
     CodeSymbolId,
     CodeSymbolKind,
+    DbtCatalogArtifact,
     DbtManifestArtifact,
     DbtNodeId,
+    DbtRunResultsArtifact,
     DbtSnapshotId,
+    DbtSourceFreshnessArtifact,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicExportBundle,
@@ -169,6 +180,7 @@ from mnemo_memory.packages.storage.contracts import (
     ProjectIndexStorageFailure,
     SourceIndexStorageFailure,
     SourceSnapshotNotFound,
+    SupplementalArtifactConflict,
 )
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -444,6 +456,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert dbt_manifest_sql.count("FORCE ROW LEVEL SECURITY") == 5
     assert "dbt manifest snapshot immutable fields cannot change" in dbt_manifest_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in dbt_manifest_sql
+    dbt_supplemental_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0014_team_dbt_supplemental.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert dbt_supplemental_sql.count("FORCE ROW LEVEL SECURITY") == 2
+    assert "dbt supplemental immutable fields cannot change" in dbt_supplemental_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in dbt_supplemental_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -840,12 +860,37 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
-        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0013_team_dbt_manifest.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=14).migrate()
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
             assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 14))
+            cursor.execute("SELECT to_regclass('mnemo_team.dbt_supplemental_artifacts')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
+        assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 15))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -3223,6 +3268,36 @@ def _dbt_manifest_artifact(scope: MemoryScope, stamp: int = 0) -> DbtManifestArt
     )
 
 
+def _dbt_catalog_artifact(scope: MemoryScope, stamp: int = 0) -> DbtCatalogArtifact:
+    raw = _DBT_MANIFEST_FIXTURE.with_name("catalog-v1.json").read_text(encoding="utf-8")
+    if stamp:
+        value = json.loads(raw)
+        value["nodes"]["model.mnemo_analytics.fct_orders"]["columns"]["amount"]["type"] = "NUMERIC"
+        raw = json.dumps(value)
+    return DbtCatalogParser().parse(
+        raw,
+        DbtSupplementalParseRequest(
+            scope,
+            "target/catalog.json",
+            NOW + timedelta(minutes=stamp),
+        ),
+    )
+
+
+def _dbt_run_results_artifact(scope: MemoryScope) -> DbtRunResultsArtifact:
+    return DbtRunResultsParser().parse(
+        _DBT_MANIFEST_FIXTURE.with_name("run-results-v6.json").read_bytes(),
+        DbtSupplementalParseRequest(scope, "target/run_results.json", NOW),
+    )
+
+
+def _dbt_source_freshness_artifact(scope: MemoryScope) -> DbtSourceFreshnessArtifact:
+    return DbtSourceFreshnessParser().parse(
+        _DBT_MANIFEST_FIXTURE.with_name("sources-v3.json").read_bytes(),
+        DbtSupplementalParseRequest(scope, "target/sources.json", NOW),
+    )
+
+
 def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
     postgres_harness: PostgreSQLHarness,
 ) -> None:
@@ -3290,6 +3365,36 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
     assert upstream[0] in downstream
     assert repository.get_downstream_edges(scope, first_id, (parent,)) == downstream
 
+    assert repository.get_catalog_projection(scope, first_id) is None
+    assert repository.get_run_results_projection(scope, first_id) is None
+    assert repository.get_source_freshness_projection(scope, first_id) is None
+    first_catalog = _dbt_catalog_artifact(scope)
+    assert not repository.store_catalog_projection(scope, first_id, first_catalog).idempotent
+    assert repository.get_catalog_projection(scope, first_id) == first_catalog
+    assert repository.store_catalog_projection(scope, first_id, first_catalog).idempotent
+    latest_catalog = _dbt_catalog_artifact(scope, 1)
+    assert not repository.store_catalog_projection(scope, first_id, latest_catalog).idempotent
+    assert repository.get_catalog_projection(scope, first_id) == latest_catalog
+    assert repository.store_catalog_projection(scope, first_id, first_catalog).idempotent
+    assert repository.get_catalog_projection(scope, first_id) == first_catalog
+
+    execution = _dbt_run_results_artifact(scope)
+    assert not repository.store_run_results_projection(scope, first_id, execution).idempotent
+    assert repository.get_run_results_projection(scope, first_id) == execution
+    assert repository.store_run_results_projection(scope, first_id, execution).idempotent
+    freshness = _dbt_source_freshness_artifact(scope)
+    assert not repository.store_source_freshness_projection(scope, first_id, freshness).idempotent
+    assert repository.get_source_freshness_projection(scope, first_id) == freshness
+    assert repository.store_source_freshness_projection(scope, first_id, freshness).idempotent
+
+    unknown_catalog = replace(
+        first_catalog,
+        relations=(replace(first_catalog.relations[0], unique_id=DbtNodeId("model.absent")),),
+    )
+    with pytest.raises(SupplementalArtifactConflict, match="absent from the manifest"):
+        repository.store_catalog_projection(scope, first_id, unknown_catalog)
+    assert repository.get_catalog_projection(scope, first_id) == first_catalog
+
     second_graph = _dbt_manifest_artifact(scope, 1)
     second_id = DbtSnapshotId.new()
     second = repository.store_and_activate(
@@ -3341,6 +3446,9 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
     )
     assert restarted.get_active_snapshot(scope) == reactivated.snapshot
     assert restarted.iter_nodes(scope, first_id) == first_graph.nodes
+    assert restarted.get_catalog_projection(scope, first_id) == first_catalog
+    assert restarted.get_run_results_projection(scope, first_id) == execution
+    assert restarted.get_source_freshness_projection(scope, first_id) == freshness
     foreign_scope = replace(scope, project_id=ProjectId.new())
     assert restarted.get_active_snapshot(foreign_scope) is None
     assert (
@@ -3353,6 +3461,8 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
         restarted.get_snapshot(foreign_scope, first_id)
     with pytest.raises(ManifestNodeNotFound):
         restarted.get_node(foreign_scope, first_id, selected.unique_id)
+    with pytest.raises(ManifestSnapshotNotFound):
+        restarted.get_catalog_projection(foreign_scope, first_id)
 
     viewer_id = OwnerId.new()
     _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
@@ -3362,6 +3472,8 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
         workspace_id=workspace.workspace_id,
     )
     assert viewer.get_active_snapshot(scope) is None
+    with pytest.raises(ManifestSnapshotNotFound):
+        viewer.get_catalog_projection(scope, first_id)
     with pytest.raises(ProjectIndexStorageFailure, match="project index database operation failed"):
         viewer.store_and_activate(_dbt_manifest_artifact(scope, 3), DbtSnapshotId.new())
 
@@ -3375,6 +3487,15 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
             "'mnemo_team.dbt_manifest_snapshots', 'is_active', 'UPDATE'), "
             "has_table_privilege(current_user, "
             "'mnemo_team.dbt_manifest_snapshots', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, True, False)
+        cursor.execute(
+            "SELECT has_column_privilege(current_user, "
+            "'mnemo_team.dbt_supplemental_artifacts', 'projection', 'UPDATE'), "
+            "has_column_privilege(current_user, "
+            "'mnemo_team.dbt_supplemental_artifacts', 'is_active', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.dbt_supplemental_artifacts', 'DELETE')"
         )
         assert tuple(cursor.fetchone() or ()) == (False, True, False)
         cursor.execute(
@@ -3393,6 +3514,50 @@ def test_postgres_dbt_manifest_is_atomic_queryable_and_scoped(
                 "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
                 (str(workspace.workspace_id), str(first_id)),
             )
+        connection.rollback()
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (
+                str(workspace.owner_id),
+                str(workspace.workspace_id),
+                TeamOperation.CONTRIBUTE.value,
+            ),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "UPDATE mnemo_team.dbt_supplemental_artifacts "
+                "SET projection = '{\"tampered\":true}'::jsonb WHERE "
+                "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(first_id)),
+            )
+        connection.rollback()
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (
+                str(workspace.owner_id),
+                str(workspace.workspace_id),
+                TeamOperation.READ.value,
+            ),
+        )
+        cursor.execute(
+            "SELECT COALESCE(string_agg(projection::text, ''), '') FROM "
+            "mnemo_team.dbt_supplemental_artifacts WHERE "
+            "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
+            (str(workspace.workspace_id), str(first_id)),
+        )
+        payload = str((cursor.fetchone() or ("",))[0])
+        for prohibited in (
+            "secret-that-must-not-be-retained",
+            "private_table",
+            "warehouse-owner",
+            "private database error",
+            "private_filter_expression",
+        ):
+            assert prohibited not in payload
     finally:
         connection.rollback()
         cursor.close()

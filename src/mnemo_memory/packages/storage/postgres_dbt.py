@@ -11,13 +11,27 @@ from typing import cast
 from mnemo_memory.packages.domain import (
     ArtifactCurrentness,
     DbtArtifactMetadata,
+    DbtCatalogArtifact,
+    DbtCatalogCollection,
+    DbtCatalogColumn,
+    DbtCatalogRelation,
+    DbtFreshnessPeriod,
+    DbtFreshnessStatus,
+    DbtFreshnessThreshold,
     DbtLineageEdge,
     DbtManifestArtifact,
     DbtManifestNode,
     DbtManifestSnapshot,
     DbtNodeId,
+    DbtNodeRunResult,
     DbtResourceType,
+    DbtRunResultsArtifact,
+    DbtRunStatus,
+    DbtRunTiming,
     DbtSnapshotId,
+    DbtSourceFreshnessArtifact,
+    DbtSourceFreshnessResult,
+    DbtSupplementalArtifactMetadata,
     EvidenceReference,
     LineageEdgeType,
     MemoryScope,
@@ -38,6 +52,8 @@ from .contracts import (
     ManifestSnapshotStoreResult,
     ProjectIndexRepositoryError,
     ProjectIndexStorageFailure,
+    SupplementalArtifactConflict,
+    SupplementalArtifactStoreResult,
 )
 from .postgres import PostgreSQLConnectionFactory, PostgreSQLCursor
 
@@ -52,6 +68,10 @@ _NODE_COLUMNS = (
     "description, dependency_ids::text, macro_dependency_ids::text, evidence::text"
 )
 _EDGE_COLUMNS = "parent_id, child_id, edge_type, evidence::text, artifact_digest"
+_SUPPLEMENTAL_COLUMNS = (
+    "artifact_kind, content_digest, schema_version, dbt_version, generated_at, invocation_id, "
+    "normalized_digest, source_identity, ingested_at, projection::text"
+)
 
 
 class PostgreSQLProjectIndexRepository:
@@ -230,6 +250,78 @@ class PostgreSQLProjectIndexRepository:
                 return None
             return self._snapshot_from_row(rows[1], scope), self._snapshot_from_row(rows[0], scope)
 
+    def store_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtCatalogArtifact
+    ) -> SupplementalArtifactStoreResult:
+        if not isinstance(artifact, DbtCatalogArtifact):
+            raise TypeError("catalog artifact is invalid")
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            "catalog",
+            artifact.metadata,
+            artifact.scope,
+            tuple(item.unique_id for item in artifact.relations),
+            self._catalog_projection(artifact),
+        )
+
+    def store_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact: DbtRunResultsArtifact
+    ) -> SupplementalArtifactStoreResult:
+        if not isinstance(artifact, DbtRunResultsArtifact):
+            raise TypeError("run-results artifact is invalid")
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            "run_results",
+            artifact.metadata,
+            artifact.scope,
+            tuple(item.unique_id for item in artifact.results),
+            self._run_results_projection(artifact),
+        )
+
+    def store_source_freshness_projection(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        artifact: DbtSourceFreshnessArtifact,
+    ) -> SupplementalArtifactStoreResult:
+        if not isinstance(artifact, DbtSourceFreshnessArtifact):
+            raise TypeError("source-freshness artifact is invalid")
+        return self._store_supplemental(
+            scope,
+            snapshot_id,
+            "source_freshness",
+            artifact.metadata,
+            artifact.scope,
+            tuple(item.unique_id for item in artifact.results),
+            self._source_freshness_projection(artifact),
+        )
+
+    def get_catalog_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtCatalogArtifact | None:
+        row = self._get_active_supplemental(scope, snapshot_id, "catalog")
+        if row is None:
+            return None
+        return self._catalog_from_row(row, scope)
+
+    def get_run_results_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtRunResultsArtifact | None:
+        row = self._get_active_supplemental(scope, snapshot_id, "run_results")
+        if row is None:
+            return None
+        return self._run_results_from_row(row, scope)
+
+    def get_source_freshness_projection(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId
+    ) -> DbtSourceFreshnessArtifact | None:
+        row = self._get_active_supplemental(scope, snapshot_id, "source_freshness")
+        if row is None:
+            return None
+        return self._source_freshness_from_row(row, scope)
+
     def get_node(
         self, scope: MemoryScope, snapshot_id: DbtSnapshotId, unique_id: DbtNodeId
     ) -> DbtManifestNode:
@@ -348,6 +440,417 @@ class PostgreSQLProjectIndexRepository:
             rows = cursor.fetchall()
             items = tuple(self._snapshot_from_row(row, scope) for row in rows[:limit])
             return ManifestSnapshotPage(items, offset + limit if len(rows) > limit else None)
+
+    def _store_supplemental(
+        self,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        artifact_kind: str,
+        metadata: DbtSupplementalArtifactMetadata,
+        artifact_scope: MemoryScope,
+        resource_ids: tuple[DbtNodeId, ...],
+        projection: Mapping[str, object],
+    ) -> SupplementalArtifactStoreResult:
+        self._require_scope(scope)
+        if artifact_scope != scope:
+            raise InvalidManifestSnapshotScope(
+                "supplemental dbt artifact requires exact manifest scope"
+            )
+        with self._transaction(TeamOperation.CONTRIBUTE) as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"mnemo-dbt-supplemental:{self._workspace_id}:{snapshot_id}:{artifact_kind}",),
+            )
+            self._required_snapshot(cursor, scope, snapshot_id)
+            self._require_supplemental_resources(cursor, scope, snapshot_id, resource_ids)
+            cursor.execute(
+                "SELECT " + _SUPPLEMENTAL_COLUMNS + ", is_active FROM "
+                "mnemo_team.dbt_supplemental_artifacts WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND snapshot_id = CAST(%s AS uuid) AND artifact_kind = %s "
+                "AND content_digest = %s",
+                (
+                    *self._scope_values(scope),
+                    str(snapshot_id),
+                    artifact_kind,
+                    metadata.content_digest,
+                ),
+            )
+            existing = cursor.fetchone()
+            idempotent = existing is not None
+            if existing is not None:
+                if (
+                    str(existing[2]) != metadata.schema_version
+                    or str(existing[6]) != metadata.normalized_digest
+                    or str(existing[7]) != metadata.source_identity
+                ):
+                    raise SupplementalArtifactConflict(
+                        "supplemental dbt artifact digest conflicts with retained metadata"
+                    )
+                already_active = bool(existing[10])
+            else:
+                cursor.execute(
+                    "INSERT INTO mnemo_team.dbt_supplemental_artifacts("
+                    "workspace_id, project_id, owner_id, visibility, snapshot_id, artifact_kind, "
+                    "content_digest, schema_version, dbt_version, generated_at, invocation_id, "
+                    "normalized_digest, source_identity, ingested_at, projection) VALUES ("
+                    "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                    "CAST(%s AS uuid), %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                    "CAST(%s AS jsonb))",
+                    (
+                        *self._scope_values(scope),
+                        str(snapshot_id),
+                        artifact_kind,
+                        metadata.content_digest,
+                        metadata.schema_version,
+                        metadata.dbt_version,
+                        metadata.generated_at,
+                        metadata.invocation_id,
+                        metadata.normalized_digest,
+                        metadata.source_identity,
+                        metadata.ingested_at,
+                        self._json(projection),
+                    ),
+                )
+                for unique_id in resource_ids:
+                    cursor.execute(
+                        "INSERT INTO mnemo_team.dbt_supplemental_resources("
+                        "workspace_id, project_id, owner_id, visibility, snapshot_id, "
+                        "artifact_kind, content_digest, unique_id) VALUES (CAST(%s AS uuid), "
+                        "CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), %s, %s, %s)",
+                        (
+                            *self._scope_values(scope),
+                            str(snapshot_id),
+                            artifact_kind,
+                            metadata.content_digest,
+                            str(unique_id),
+                        ),
+                    )
+                already_active = False
+            if not already_active:
+                cursor.execute(
+                    "UPDATE mnemo_team.dbt_supplemental_artifacts SET is_active = false WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND snapshot_id = CAST(%s AS uuid) AND artifact_kind = %s AND is_active",
+                    (*self._scope_values(scope), str(snapshot_id), artifact_kind),
+                )
+                cursor.execute(
+                    "UPDATE mnemo_team.dbt_supplemental_artifacts SET is_active = true WHERE "
+                    "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                    "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                    "AND snapshot_id = CAST(%s AS uuid) AND artifact_kind = %s "
+                    "AND content_digest = %s AND NOT is_active",
+                    (
+                        *self._scope_values(scope),
+                        str(snapshot_id),
+                        artifact_kind,
+                        metadata.content_digest,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise SupplementalArtifactConflict(
+                        "supplemental dbt artifact could not be activated"
+                    )
+            return SupplementalArtifactStoreResult(snapshot_id, metadata.content_digest, idempotent)
+
+    def _get_active_supplemental(
+        self, scope: MemoryScope, snapshot_id: DbtSnapshotId, artifact_kind: str
+    ) -> Sequence[object] | None:
+        self._require_scope(scope)
+        with self._transaction(TeamOperation.READ) as cursor:
+            self._required_snapshot(cursor, scope, snapshot_id)
+            cursor.execute(
+                "SELECT " + _SUPPLEMENTAL_COLUMNS + " FROM "
+                "mnemo_team.dbt_supplemental_artifacts WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND snapshot_id = CAST(%s AS uuid) AND artifact_kind = %s AND is_active",
+                (*self._scope_values(scope), str(snapshot_id), artifact_kind),
+            )
+            return cursor.fetchone()
+
+    def _require_supplemental_resources(
+        self,
+        cursor: PostgreSQLCursor,
+        scope: MemoryScope,
+        snapshot_id: DbtSnapshotId,
+        resource_ids: tuple[DbtNodeId, ...],
+    ) -> None:
+        requested = tuple(sorted({str(item) for item in resource_ids}))
+        found: set[str] = set()
+        for index in range(0, len(requested), 500):
+            batch = requested[index : index + 500]
+            placeholders = ", ".join("%s" for _ in batch)
+            cursor.execute(
+                "SELECT unique_id FROM mnemo_team.dbt_manifest_nodes WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND snapshot_id = CAST(%s AS uuid) AND unique_id IN (" + placeholders + ")",
+                (*self._scope_values(scope), str(snapshot_id), *batch),
+            )
+            found.update(str(row[0]) for row in cursor.fetchall())
+        if found != set(requested):
+            raise SupplementalArtifactConflict(
+                "supplemental dbt artifact references a node absent from the manifest snapshot"
+            )
+
+    @staticmethod
+    def _catalog_projection(artifact: DbtCatalogArtifact) -> Mapping[str, object]:
+        return {
+            "error_count": artifact.error_count,
+            "relations": [
+                {
+                    "unique_id": str(relation.unique_id),
+                    "collection": relation.collection.value,
+                    "relation_type": relation.relation_type,
+                    "database": relation.database,
+                    "schema_name": relation.schema_name,
+                    "name": relation.name,
+                    "columns": [
+                        {
+                            "index": column.index,
+                            "name": column.name,
+                            "data_type": column.data_type,
+                        }
+                        for column in relation.columns
+                    ],
+                    "evidence": relation.evidence.to_dict(),
+                }
+                for relation in artifact.relations
+            ],
+        }
+
+    @staticmethod
+    def _run_results_projection(artifact: DbtRunResultsArtifact) -> Mapping[str, object]:
+        return {
+            "elapsed_time_seconds": artifact.elapsed_time_seconds,
+            "command": artifact.command,
+            "results": [
+                {
+                    "unique_id": str(result.unique_id),
+                    "status": result.status.value,
+                    "execution_time_seconds": result.execution_time_seconds,
+                    "failures": result.failures,
+                    "timing": [
+                        {
+                            "name": timing.name,
+                            "started_at": None
+                            if timing.started_at is None
+                            else timing.started_at.isoformat(),
+                            "completed_at": None
+                            if timing.completed_at is None
+                            else timing.completed_at.isoformat(),
+                        }
+                        for timing in result.timing
+                    ],
+                    "evidence": result.evidence.to_dict(),
+                }
+                for result in artifact.results
+            ],
+        }
+
+    @staticmethod
+    def _source_freshness_projection(
+        artifact: DbtSourceFreshnessArtifact,
+    ) -> Mapping[str, object]:
+        def threshold(value: DbtFreshnessThreshold | None) -> object:
+            return None if value is None else {"count": value.count, "period": value.period.value}
+
+        return {
+            "elapsed_time_seconds": artifact.elapsed_time_seconds,
+            "results": [
+                {
+                    "unique_id": str(result.unique_id),
+                    "status": result.status.value,
+                    "max_loaded_at": None
+                    if result.max_loaded_at is None
+                    else result.max_loaded_at.isoformat(),
+                    "snapshotted_at": None
+                    if result.snapshotted_at is None
+                    else result.snapshotted_at.isoformat(),
+                    "age_seconds": result.age_seconds,
+                    "warn_after": threshold(result.warn_after),
+                    "error_after": threshold(result.error_after),
+                    "execution_time_seconds": result.execution_time_seconds,
+                    "evidence": result.evidence.to_dict(),
+                }
+                for result in artifact.results
+            ],
+        }
+
+    @classmethod
+    def _catalog_from_row(cls, row: Sequence[object], scope: MemoryScope) -> DbtCatalogArtifact:
+        projection = cls._projection_mapping(row[9])
+        relations = cls._mapping_list(projection.get("relations"), "catalog relations")
+        return DbtCatalogArtifact(
+            cls._supplemental_metadata_from_row(row),
+            scope,
+            tuple(
+                DbtCatalogRelation(
+                    DbtNodeId(cls._required_string(item.get("unique_id"), "unique_id")),
+                    DbtCatalogCollection(
+                        cls._required_string(item.get("collection"), "collection")
+                    ),
+                    cls._required_string(item.get("relation_type"), "relation_type"),
+                    cls._optional_string(item.get("database")),
+                    cls._required_string(item.get("schema_name"), "schema_name"),
+                    cls._required_string(item.get("name"), "name"),
+                    tuple(
+                        DbtCatalogColumn(
+                            cls._required_int(column.get("index"), "column index"),
+                            cls._required_string(column.get("name"), "column name"),
+                            cls._required_string(column.get("data_type"), "column data type"),
+                        )
+                        for column in cls._mapping_list(item.get("columns"), "catalog columns")
+                    ),
+                    EvidenceReference.from_dict(
+                        cls._required_mapping(item.get("evidence"), "catalog evidence")
+                    ),
+                )
+                for item in relations
+            ),
+            cls._required_int(projection.get("error_count"), "catalog error count"),
+        )
+
+    @classmethod
+    def _run_results_from_row(
+        cls, row: Sequence[object], scope: MemoryScope
+    ) -> DbtRunResultsArtifact:
+        projection = cls._projection_mapping(row[9])
+        results = cls._mapping_list(projection.get("results"), "run results")
+        return DbtRunResultsArtifact(
+            cls._supplemental_metadata_from_row(row),
+            scope,
+            cls._required_float(projection.get("elapsed_time_seconds"), "elapsed time"),
+            cls._optional_string(projection.get("command")),
+            tuple(
+                DbtNodeRunResult(
+                    DbtNodeId(cls._required_string(item.get("unique_id"), "unique_id")),
+                    DbtRunStatus(cls._required_string(item.get("status"), "run status")),
+                    cls._required_float(item.get("execution_time_seconds"), "execution time"),
+                    cls._optional_int(item.get("failures"), "failures"),
+                    tuple(
+                        DbtRunTiming(
+                            cls._required_string(timing.get("name"), "timing name"),
+                            cls._optional_datetime(timing.get("started_at"), "started_at"),
+                            cls._optional_datetime(timing.get("completed_at"), "completed_at"),
+                        )
+                        for timing in cls._mapping_list(item.get("timing"), "run timing")
+                    ),
+                    EvidenceReference.from_dict(
+                        cls._required_mapping(item.get("evidence"), "run-result evidence")
+                    ),
+                )
+                for item in results
+            ),
+        )
+
+    @classmethod
+    def _source_freshness_from_row(
+        cls, row: Sequence[object], scope: MemoryScope
+    ) -> DbtSourceFreshnessArtifact:
+        projection = cls._projection_mapping(row[9])
+        results = cls._mapping_list(projection.get("results"), "freshness results")
+        return DbtSourceFreshnessArtifact(
+            cls._supplemental_metadata_from_row(row),
+            scope,
+            cls._required_float(projection.get("elapsed_time_seconds"), "elapsed time"),
+            tuple(
+                DbtSourceFreshnessResult(
+                    DbtNodeId(cls._required_string(item.get("unique_id"), "unique_id")),
+                    DbtFreshnessStatus(
+                        cls._required_string(item.get("status"), "freshness status")
+                    ),
+                    cls._optional_datetime(item.get("max_loaded_at"), "max_loaded_at"),
+                    cls._optional_datetime(item.get("snapshotted_at"), "snapshotted_at"),
+                    cls._optional_float(item.get("age_seconds"), "age_seconds"),
+                    cls._threshold(item.get("warn_after"), "warn_after"),
+                    cls._threshold(item.get("error_after"), "error_after"),
+                    cls._optional_float(
+                        item.get("execution_time_seconds"), "execution_time_seconds"
+                    ),
+                    EvidenceReference.from_dict(
+                        cls._required_mapping(item.get("evidence"), "freshness evidence")
+                    ),
+                )
+                for item in results
+            ),
+        )
+
+    @classmethod
+    def _supplemental_metadata_from_row(
+        cls, row: Sequence[object]
+    ) -> DbtSupplementalArtifactMetadata:
+        return DbtSupplementalArtifactMetadata(
+            str(row[2]),
+            cls._optional_string(row[3]),
+            None if row[4] is None else cast(datetime, row[4]),
+            cls._optional_string(row[5]),
+            str(row[1]),
+            str(row[6]),
+            str(row[7]),
+            cast(datetime, row[8]),
+        )
+
+    @classmethod
+    def _projection_mapping(cls, value: object) -> Mapping[str, object]:
+        return cls._required_mapping(cls._json_value(value), "supplemental projection")
+
+    @staticmethod
+    def _required_mapping(value: object, name: str) -> Mapping[str, object]:
+        if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+            raise ProjectIndexStorageFailure(f"stored {name} is invalid")
+        return cast(Mapping[str, object], value)
+
+    @classmethod
+    def _mapping_list(cls, value: object, name: str) -> tuple[Mapping[str, object], ...]:
+        if not isinstance(value, list):
+            raise ProjectIndexStorageFailure(f"stored {name} is invalid")
+        return tuple(cls._required_mapping(item, name) for item in value)
+
+    @staticmethod
+    def _required_string(value: object, name: str) -> str:
+        if not isinstance(value, str):
+            raise ProjectIndexStorageFailure(f"stored {name} is invalid")
+        return value
+
+    @staticmethod
+    def _required_int(value: object, name: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ProjectIndexStorageFailure(f"stored {name} is invalid")
+        return value
+
+    @classmethod
+    def _optional_int(cls, value: object, name: str) -> int | None:
+        return None if value is None else cls._required_int(value, name)
+
+    @staticmethod
+    def _required_float(value: object, name: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ProjectIndexStorageFailure(f"stored {name} is invalid")
+        return float(value)
+
+    @classmethod
+    def _optional_float(cls, value: object, name: str) -> float | None:
+        return None if value is None else cls._required_float(value, name)
+
+    @classmethod
+    def _optional_datetime(cls, value: object, name: str) -> datetime | None:
+        if value is None:
+            return None
+        return datetime.fromisoformat(cls._required_string(value, name))
+
+    @classmethod
+    def _threshold(cls, value: object, name: str) -> DbtFreshnessThreshold | None:
+        if value is None:
+            return None
+        item = cls._required_mapping(value, name)
+        return DbtFreshnessThreshold(
+            cls._required_int(item.get("count"), f"{name} count"),
+            DbtFreshnessPeriod(cls._required_string(item.get("period"), f"{name} period")),
+        )
 
     def _insert_artifact(
         self, cursor: PostgreSQLCursor, artifact: DbtManifestArtifact, snapshot_id: DbtSnapshotId

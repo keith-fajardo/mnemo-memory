@@ -55,7 +55,10 @@ transaction lock and expected-active comparison serialize activation; exact cont
 the retained snapshot, while composite foreign keys bind every edge endpoint to the same scoped
 graph. Runtime access cannot mutate metadata or delete projections. The projection contains no raw
 manifest, SQL, compiled content, macro body, warehouse response, credential, or environment value.
-Catalog, run-results, and source-freshness parity remain a separate projection boundary.
+Minimized catalog, run-results, and source-freshness versions attach to that exact graph through
+same-snapshot resource links. Their independently active immutable versions retain only reviewed
+typed fields and evidence; raw comments, statistics, messages, adapter/database errors, filters,
+arbitrary arguments, and environment values are discarded before persistence.
 
 Team task activity retains only the existing explicitly minimized event contract, never raw
 interaction bodies. PostgreSQL applies deterministic secret/sensitivity policy before persistence

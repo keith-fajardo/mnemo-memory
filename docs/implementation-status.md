@@ -2084,6 +2084,42 @@ validation for 118 product Python files, schema validation, and the isolated ins
 workflow. No dependency was added. Supplemental dbt projection parity remains the next bounded
 team-backend issue.
 
+#### Issue 21Q — PostgreSQL team dbt supplemental projection parity — Complete
+
+The current bounded issue completes the existing `ProjectIndexRepository` contract on PostgreSQL
+with minimized catalog, run-results, and source-freshness projections attached to one exact
+authorized manifest snapshot. Each immutable artifact must retain typed domain fields and evidence,
+validate every referenced resource against that snapshot, activate idempotently by kind and digest,
+force RLS, and survive restart. Raw artifacts, SQL, compiled content, comments, statistics, adapter
+responses, database errors, filters, credentials, and environment values must not be retained.
+
+This issue does not add dbt execution, a warehouse connection, scheduled ingestion, personal
+import, remote service, OAuth, backup, quota, dashboard, source governance, or usable team mode.
+
+Implemented PostgreSQL schema version 14 and completed the existing `ProjectIndexRepository`
+contract with catalog, run-results, and source-freshness projections. One immutable supplemental
+artifact table retains versioned typed metadata and a Mnemo-owned minimized projection; one
+resource-link table uses composite foreign keys to bind every referenced identity to the exact
+scoped manifest snapshot. Both tables force RLS. Raw artifact bytes and unreviewed comments,
+statistics, messages, adapter/database payloads, filters, credentials, and environment values are
+not stored.
+
+A project/snapshot/kind advisory transaction lock serializes insertion and activation. Exact
+content-digest replay is idempotent, a different retained version can become active, and conflicting
+schema, normalized digest, source identity, scope, or manifest resource fails closed. A
+fixed-search-path trigger makes every artifact field except active state immutable; runtime updates
+are column-limited. Retrieval verifies the authorized manifest before selecting and reconstructing
+one active strict domain projection.
+
+ADR 0025, the product contract, and threat model document minimization, relational binding, and
+forward-only recovery. Real PostgreSQL tests cover all three artifact kinds, exact replay, catalog
+version switching, absent-resource rejection, restart round trips, foreign-project/private-viewer
+denial, immutable privileges, trigger enforcement, and absence of prohibited fixture payloads. The
+complete repository gate passes with 826 default tests plus 17 mandatory real-PostgreSQL tests,
+strict typing for 218 source files, dependency/provenance validation for 93 entries, architecture
+validation for 118 product Python files, schema validation, and the isolated installed-package MCP
+workflow. No dependency was added. PostgreSQL dbt project-index parity is complete.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable
