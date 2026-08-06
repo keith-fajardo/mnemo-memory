@@ -2012,6 +2012,39 @@ files, schema validation, and the isolated installed-package MCP workflow. No de
 No checkpoint source observation, dbt projection, filesystem service, worker, import, remote
 service, OAuth, backup, quota, dashboard, source governance, or usable team mode was added.
 
+#### Issue 21O — PostgreSQL team checkpoint source-observation parity — Complete
+
+The current bounded issue implements the existing `CheckpointSourceObservationRepository` contract
+on PostgreSQL. One immutable exact-task observation must bind an existing exact checkpoint revision
+to an existing authorized exact-project source snapshot, remain explicitly non-causal, and store
+only identities, scope, and observation time. Exact replay is idempotent; a second snapshot for the
+revision, mismatched scope, missing side, cross-tenant access, or concurrent conflict fails closed.
+The table must force RLS, expose read/insert-only runtime privileges, survive restart, and roll back
+atomically on migration or mutation failure.
+
+This issue does not add automatic filesystem parsing, causal inference, checkpoint retention/
+deletion/export, dbt parity, worker scheduling, personal import, remote service, OAuth, backup,
+quota, dashboard, source governance, or usable team mode.
+
+Implemented PostgreSQL schema version 12 and the existing checkpoint source-observation contract on
+`PostgreSQLCheckpointRepository`. The immutable exact-task row forces RLS, exposes read/insert-only
+runtime access, and contains checkpoint/revision/source-snapshot identities plus observation time
+only. A composite source foreign key and fixed-search-path revision trigger bind both authorized
+sides to exact workspace/project/owner/visibility and task scope.
+
+The adapter verifies the checkpoint revision and source snapshot before mutation. Exact replay is
+idempotent; a second valid snapshot conflicts, a missing snapshot or revision is not found, and
+cross-task/private-project reads disclose nothing. ADR 0023, the product contract, and threat model
+make the co-observation/non-causality boundary explicit. Real PostgreSQL tests prove atomic v11-to-
+v12 rollback/retry, exact replay, competing and missing targets, restart durability, cross-task and
+private-project denial, immutable privileges, and one-row persistence. The complete repository gate
+passes with 826 default tests plus 16 mandatory real-PostgreSQL tests, strict typing for 217 source
+files, dependency/provenance validation for 93 entries, architecture validation for 117 product
+Python files, schema validation, and the isolated installed-package MCP workflow. No dependency was
+added. No automatic parsing, causal inference, checkpoint retention/deletion/export, dbt parity,
+worker, import, remote service, OAuth, backup, quota, dashboard, source governance, or usable team
+mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

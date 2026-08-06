@@ -42,8 +42,11 @@ on every aggregate, immutable revision, and append-only lifecycle event behind f
 security. Creation and revision transitions append the matching deterministic event atomically;
 current-pointer changes compare the expected revision, and completion or abandonment is terminal.
 An identical terminal retry returns the committed revision, while stale or competing writes fail
-without a partial revision or event. This storage boundary does not authenticate the principal or
-provide checkpoint retention, deletion propagation, source observations, or a remote team service.
+without a partial revision or event. PostgreSQL may also attach one immutable exact-scope source
+observation to a revision only when the matching authorized project snapshot already exists. That
+identity-and-time record means co-observation, not causation, and stores no checkpoint or source
+payload. This storage boundary does not authenticate the principal or provide checkpoint retention,
+deletion propagation, export, or a remote team service.
 
 Team task activity retains only the existing explicitly minimized event contract, never raw
 interaction bodies. PostgreSQL applies deterministic secret/sensitivity policy before persistence

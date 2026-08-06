@@ -26,6 +26,7 @@ from mnemo_memory.packages.domain import (
     CheckpointId,
     CheckpointRevision,
     CheckpointRevisionId,
+    CheckpointSourceObservation,
     CheckpointStatus,
     CodeEdge,
     CodeEdgeKind,
@@ -138,6 +139,8 @@ from mnemo_memory.packages.storage.contracts import (
     ApprovedEpisodicEventConflict,
     ApprovedEpisodicEventNotFound,
     ApprovedEpisodicEventSecretRejected,
+    CheckpointSourceObservationConflict,
+    CheckpointSourceObservationNotFound,
     EpisodicDeletionConflict,
     EpisodicDeletionNotFound,
     EpisodicExportStorageFailure,
@@ -410,6 +413,18 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert source_sql.count("FORCE ROW LEVEL SECURITY") == 6
     assert "source snapshot immutable fields cannot change" in source_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in source_sql
+    observation_sql = (
+        resources.files("mnemo_memory")
+        .joinpath(
+            "resources",
+            "postgres_migrations",
+            "0012_team_checkpoint_source_observations.sql",
+        )
+        .read_text(encoding="utf-8")
+    )
+    assert observation_sql.count("FORCE ROW LEVEL SECURITY") == 1
+    assert "checkpoint source observation revision mismatch" in observation_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in observation_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -752,6 +767,31 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0011_team_source_structure.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=12).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 12))
+            cursor.execute("SELECT to_regclass('mnemo_team.checkpoint_source_observations')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
@@ -769,6 +809,7 @@ def test_team_data_migrations_upgrade_atomically(
                 9,
                 10,
                 11,
+                12,
             )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
@@ -3124,6 +3165,137 @@ def test_postgres_source_structure_is_atomic_searchable_and_scoped(
                 "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
                 (str(workspace.workspace_id), str(first.snapshot.snapshot_id)),
             )
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+
+
+def test_postgres_checkpoint_source_observation_is_immutable_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    task_scope = _checkpoint_scope(workspace, project)
+    project_scope = MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        workspace.workspace_id,
+        project.project_id,
+    )
+    source = PostgreSQLSourceStructureRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    first_snapshot = _source_structure_artifact(project_scope, 4)
+    second_snapshot = _source_structure_artifact(project_scope, 5)
+    source.store_and_activate(first_snapshot)
+    source.store_and_activate(second_snapshot)
+
+    checkpoints = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    aggregate, revision = _checkpoint_pair(task_scope, "a-observation")
+    checkpoints.create_checkpoint_aggregate(aggregate, revision)
+    observation = CheckpointSourceObservation(
+        task_scope,
+        aggregate.checkpoint_id,
+        revision.revision_id,
+        first_snapshot.snapshot.snapshot_id,
+        NOW + timedelta(minutes=1),
+    )
+    first = checkpoints.append_checkpoint_source_observation(observation)
+    assert not first.idempotent
+    assert checkpoints.append_checkpoint_source_observation(observation).idempotent
+    assert (
+        checkpoints.get_checkpoint_source_observation(
+            task_scope, aggregate.checkpoint_id, revision.revision_id
+        )
+        == observation
+    )
+
+    competing = replace(
+        observation,
+        source_snapshot_id=second_snapshot.snapshot.snapshot_id,
+    )
+    with pytest.raises(CheckpointSourceObservationConflict):
+        checkpoints.append_checkpoint_source_observation(competing)
+    with pytest.raises(CheckpointSourceObservationNotFound):
+        checkpoints.append_checkpoint_source_observation(
+            replace(observation, source_snapshot_id=CodeSnapshotId.new())
+        )
+
+    restarted = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert (
+        restarted.get_checkpoint_source_observation(
+            task_scope, aggregate.checkpoint_id, revision.revision_id
+        )
+        == observation
+    )
+    with pytest.raises(CheckpointSourceObservationNotFound):
+        restarted.get_checkpoint_source_observation(
+            replace(task_scope, task_id=TaskId.new()),
+            aggregate.checkpoint_id,
+            revision.revision_id,
+        )
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLCheckpointRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    with pytest.raises(CheckpointSourceObservationNotFound):
+        viewer.get_checkpoint_source_observation(
+            task_scope, aggregate.checkpoint_id, revision.revision_id
+        )
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_table_privilege(current_user, "
+            "'mnemo_team.checkpoint_source_observations', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.checkpoint_source_observations', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (
+                str(workspace.owner_id),
+                str(workspace.workspace_id),
+                TeamOperation.READ.value,
+            ),
+        )
+        cursor.execute("SELECT COUNT(*) FROM mnemo_team.checkpoint_source_observations")
+        row = cursor.fetchone()
+        assert row is not None and int(str(row[0])) == 1
     finally:
         connection.rollback()
         cursor.close()

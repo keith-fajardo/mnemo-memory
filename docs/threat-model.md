@@ -431,6 +431,25 @@ active-state change. Migration failure from v10 leaves no source table.
 worker schedules refresh. dbt parity, checkpoint source observation, source approval governance,
 deletion/export/import of structural projections, and backup propagation remain separate issues.
 
+### Cross-tenant checkpoint/source co-observation
+
+**Scenario:** A checkpoint revision is linked to another task or project's source snapshot, a
+second snapshot silently replaces the first, or the relation is interpreted as proof that source
+state caused the checkpoint's decisions.
+
+**Required controls:** Observation rows repeat complete task scope, force RLS, and are immutable.
+Foreign keys and a fixed-search-path trigger bind the exact revision and project snapshot before
+insert. The adapter authorizes and verifies both sides first. One revision permits one observation;
+exact replay is idempotent and changed snapshot, missing target, scope mismatch, or concurrent reuse
+fails closed. The record stores identities and time only and is explicitly non-causal.
+
+**Verification:** Real PostgreSQL tests cover exact replay, competing and missing snapshots,
+restart durability, cross-task/private-project denial, read/insert-only runtime privileges, and
+atomic v11-to-v12 rollback/retry.
+
+**Residual risk:** Automatic source refresh composition, dbt observation, checkpoint retention,
+deletion/export, remote authentication, and backup propagation remain separate issues.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

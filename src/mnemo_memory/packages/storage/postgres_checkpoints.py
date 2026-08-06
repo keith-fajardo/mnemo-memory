@@ -17,7 +17,9 @@ from mnemo_memory.packages.domain import (
     CheckpointLifecycleEvent,
     CheckpointRevision,
     CheckpointRevisionId,
+    CheckpointSourceObservation,
     CheckpointStatus,
+    CodeSnapshotId,
     EventId,
     EventOutboxJob,
     EventOutboxTopic,
@@ -33,6 +35,10 @@ from .contracts import (
     CheckpointNotFound,
     CheckpointPage,
     CheckpointRepositoryError,
+    CheckpointSourceObservationConflict,
+    CheckpointSourceObservationNotFound,
+    CheckpointSourceObservationStorageFailure,
+    CheckpointSourceObservationStoreResult,
     DuplicateCheckpoint,
     EpisodicEventNotFound,
     EpisodicEventPage,
@@ -64,6 +70,7 @@ _EVENT_COLUMNS = (
     "event.revision_id::text, event.revision_number, event.occurred_at, "
     "event.idempotency_key, revision.evidence_json::text"
 )
+_OBSERVATION_COLUMNS = "source_snapshot_id::text, observed_at"
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -328,6 +335,80 @@ class PostgreSQLCheckpointRepository:
     def select_current_checkpoint(self, scope: MemoryScope) -> CheckpointAggregate | None:
         items = self.list_current_checkpoints(scope, limit=1).items
         return items[0] if items else None
+
+    def append_checkpoint_source_observation(
+        self, observation: CheckpointSourceObservation
+    ) -> CheckpointSourceObservationStoreResult:
+        if not isinstance(observation, CheckpointSourceObservation):
+            raise TypeError("checkpoint source observation is invalid")
+        self._require_scope(observation.scope)
+        with self._observation_transaction(TeamOperation.CONTRIBUTE) as cursor:
+            revision = self._select_revision(
+                cursor,
+                observation.scope,
+                observation.checkpoint_id,
+                observation.revision_id,
+            )
+            if revision is None:
+                raise CheckpointSourceObservationNotFound("checkpoint revision was not found")
+            cursor.execute(
+                "SELECT 1 FROM mnemo_team.source_structure_snapshots WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND snapshot_id = CAST(%s AS uuid)",
+                (
+                    str(observation.scope.workspace_id),
+                    str(observation.scope.project_id),
+                    str(observation.scope.owner_id),
+                    observation.scope.visibility.value,
+                    str(observation.source_snapshot_id),
+                ),
+            )
+            if cursor.fetchone() is None:
+                raise CheckpointSourceObservationNotFound("source snapshot was not found")
+            existing = self._select_observation(
+                cursor,
+                observation.scope,
+                observation.checkpoint_id,
+                observation.revision_id,
+            )
+            if existing is not None:
+                if existing == observation:
+                    return CheckpointSourceObservationStoreResult(existing, True)
+                raise CheckpointSourceObservationConflict(
+                    "checkpoint revision already has a source observation"
+                )
+            cursor.execute(
+                "INSERT INTO mnemo_team.checkpoint_source_observations("
+                "workspace_id, project_id, owner_id, visibility, session_id, task_id, "
+                "checkpoint_id, revision_id, source_snapshot_id, observed_at) VALUES ("
+                "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), "
+                "CAST(%s AS uuid), %s)",
+                (
+                    *self._scope_values(observation.scope),
+                    str(observation.checkpoint_id),
+                    str(observation.revision_id),
+                    str(observation.source_snapshot_id),
+                    observation.observed_at,
+                ),
+            )
+            return CheckpointSourceObservationStoreResult(observation, False)
+
+    def get_checkpoint_source_observation(
+        self,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        revision_id: CheckpointRevisionId,
+    ) -> CheckpointSourceObservation:
+        self._require_scope(scope)
+        with self._observation_transaction(TeamOperation.READ) as cursor:
+            observation = self._select_observation(cursor, scope, checkpoint_id, revision_id)
+            if observation is None:
+                raise CheckpointSourceObservationNotFound(
+                    "checkpoint source observation was not found"
+                )
+            return observation
 
     def append_event(self, event: CheckpointLifecycleEvent) -> EpisodicEventStoreResult:
         self._require_event_scope(event.scope)
@@ -622,6 +703,78 @@ class PostgreSQLCheckpointRepository:
         )
         row = cursor.fetchone()
         return None if row is None else self._event_from_row(row, scope)
+
+    def _select_observation(
+        self,
+        cursor: PostgreSQLCursor,
+        scope: MemoryScope,
+        checkpoint_id: CheckpointId,
+        revision_id: CheckpointRevisionId,
+    ) -> CheckpointSourceObservation | None:
+        cursor.execute(
+            "SELECT "
+            + _OBSERVATION_COLUMNS
+            + " FROM mnemo_team.checkpoint_source_observations WHERE "
+            "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+            "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+            "AND session_id = CAST(%s AS uuid) AND task_id = CAST(%s AS uuid) "
+            "AND checkpoint_id = CAST(%s AS uuid) AND revision_id = CAST(%s AS uuid)",
+            (*self._scope_values(scope), str(checkpoint_id), str(revision_id)),
+        )
+        row = cursor.fetchone()
+        return (
+            None
+            if row is None
+            else CheckpointSourceObservation(
+                scope,
+                checkpoint_id,
+                revision_id,
+                CodeSnapshotId.from_string(str(row[0])),
+                cast(datetime, row[1]),
+            )
+        )
+
+    @contextmanager
+    def _observation_transaction(self, operation: TeamOperation) -> Iterator[PostgreSQLCursor]:
+        try:
+            connection = self._connection_factory()
+            connection.autocommit = False
+        except Exception as error:
+            raise CheckpointSourceObservationStorageFailure(
+                "checkpoint source observation database connection failed"
+            ) from error
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "SELECT set_config('mnemo.principal_id', %s, true), "
+                "set_config('mnemo.workspace_id', %s, true), "
+                "set_config('mnemo.operation', %s, true), "
+                "set_config('statement_timeout', %s, true)",
+                (
+                    str(self._principal_id),
+                    str(self._workspace_id),
+                    operation.value,
+                    str(self._statement_timeout_ms),
+                ),
+            )
+            yield cursor
+            connection.commit()
+        except (CheckpointSourceObservationNotFound, CheckpointSourceObservationConflict):
+            connection.rollback()
+            raise
+        except Exception as error:
+            connection.rollback()
+            state = _sqlstate(error)
+            if state == "42501" or (state is not None and state.startswith("23")):
+                raise CheckpointSourceObservationConflict(
+                    "checkpoint source observation conflicts with stored state"
+                ) from error
+            raise CheckpointSourceObservationStorageFailure(
+                "checkpoint source observation database operation failed"
+            ) from error
+        finally:
+            cursor.close()
+            connection.close()
 
     @staticmethod
     def _insert_revision(cursor: PostgreSQLCursor, revision: CheckpointRevision) -> None:
