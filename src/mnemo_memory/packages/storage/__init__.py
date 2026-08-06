@@ -115,6 +115,8 @@ from .contracts import (
     TaskActivityRetentionNotFound,
     TaskActivityRetentionRepository,
     TaskActivityRetentionStorageFailure,
+    TeamKnowledgeGovernanceRepository,
+    TeamKnowledgeSourceApprovalResult,
 )
 from .postgres import (
     POSTGRES_TEAM_SCHEMA_VERSION,
@@ -316,5 +318,7 @@ __all__ = [
     "TeamControlPlaneNotFound",
     "TeamControlPlaneRepository",
     "TeamControlPlaneStorageFailure",
+    "TeamKnowledgeGovernanceRepository",
+    "TeamKnowledgeSourceApprovalResult",
     "TeamMutationResult",
 ]

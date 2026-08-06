@@ -2548,6 +2548,48 @@ PostgreSQL tests, strict typing for 240 source files, dependency/provenance vali
 entries, architecture validation for 132 product Python files, schema validation, and installed-
 package workflow verification. No new dependency or schema migration was added.
 
+#### Issue 21AC — Team knowledge source governance — Complete
+
+The current bounded issue makes shared PostgreSQL knowledge explicitly attributable and reviewable.
+Every team source must retain its creating principal as owner and every immutable revision must
+retain its author. Existing predecessor compare-and-swap remains the conflict boundary: two
+corrections based on the same current revision cannot both commit. Team retrieval must exclude a
+source until a project maintainer, workspace administrator, or workspace owner records one explicit
+approval against its exact current revision; approval remains attached to the stable source identity
+across later conflict-checked revisions. Reused action keys, stale expected revisions, insufficient
+roles, foreign scopes, and deleted sources must fail closed, while an exact retry is idempotent.
+
+The issue will expose bounded, content-free source status and approval operations only on the
+authenticated team MCP surface. It adds no automatic merge, prose contradiction inference, source
+rejection workflow, general knowledge editor, personal-mode approval, backup, quota, dashboard,
+model call, or dependency.
+
+Implemented immutable team source ownership and revision authorship backed by the authenticated
+PostgreSQL principal. Pre-v21 rows are marked as unauthenticated legacy scope-owner attribution
+rather than receiving invented actor provenance. New sources are pending and all content-bearing
+document, procedure, skill, lexical, and vector retrieval paths require one immutable source
+approval. Project maintainers, workspace administrators, and workspace owners can approve an exact
+live revision through forced RLS; the MCP mutation additionally requires the dedicated
+`mnemo:knowledge:approve` OAuth scope. Approval follows the stable source identity across later
+revisions, while the existing predecessor compare-and-swap rejects competing corrections.
+
+The authenticated team MCP surface now exposes bounded `list_knowledge_sources` metadata and
+`approve_knowledge_source`; personal MCP retains its existing five tools. Approval identity and
+caller keys are deterministic, exact retry is idempotent, and changed/reused actions, stale
+revisions, contributors/viewers, foreign scopes, and deleted sources fail closed. PostgreSQL
+migration 0021 is additive, forced-RLS, fixed-search-path, and rollback-atomic. ADR 0037, the product
+contract, deployment guide, and threat model record stable-source approval, explicit provenance,
+OAuth scope, deletion behavior, and residual semantic-conflict/backup boundaries.
+
+Focused unit and security tests cover serialization, metadata minimization, transport scope,
+dedicated OAuth permission, and retries. The mandatory real PostgreSQL suite covers migration
+rollback, pending-source exclusion, maintainer approval, contributor/viewer denial, stale approval,
+stable ownership, authenticated authorship, competing corrections, approved retrieval, vector
+handling, and payload deletion. The complete repository gate passes with 886 default tests plus 22
+mandatory real-PostgreSQL tests, strict typing for 243 source files, dependency/provenance
+validation for 93 entries, architecture validation for 134 product Python files, schema validation,
+and installed-package workflow verification. No dependency was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

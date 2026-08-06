@@ -109,6 +109,7 @@ from mnemo_memory.packages.domain import (
     TaskId,
     TeamAuditAction,
     TeamAuditEvent,
+    TeamKnowledgeSourceApproval,
     TeamProject,
     TeamProjectVisibility,
     TeamWorkspace,
@@ -1102,12 +1103,25 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=21).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 17))
+            cursor.execute("SELECT to_regclass('mnemo_team.knowledge_source_approvals')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
         try:
             cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
-            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 21))
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == tuple(range(1, 22))
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
         finally:
@@ -1269,6 +1283,25 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
     repository.apply_sync(scope, (second,), ())
 
     assert repository.last_sync_at(scope) is not None
+    with pytest.raises(KnowledgeDocumentNotFound):
+        repository.get_current_revision(scope, first.document.document_id)
+    pending = repository.list_team_knowledge_sources(scope)
+    assert len(pending) == 1
+    assert pending[0].source_owner_id == workspace.owner_id
+    assert pending[0].source_owner_authenticated
+    assert pending[0].current_author_id == workspace.owner_id
+    assert pending[0].current_author_authenticated
+    assert not pending[0].approved
+    approval = TeamKnowledgeSourceApproval.create(
+        scope=scope,
+        document_id=second.document.document_id,
+        expected_revision_id=second.revision_id,
+        approved_by_id=workspace.owner_id,
+        source_action_key="approve-decision-source",
+        approved_at=NOW + timedelta(seconds=3),
+    )
+    assert not repository.approve_team_knowledge_source(approval).idempotent
+    assert repository.approve_team_knowledge_source(approval).idempotent
     assert repository.get_revision(scope, first.document.document_id, first.revision_id) == first
     assert repository.get_current_revision_by_path(scope, second.document.relative_path) == second
     assert repository.search_current_sections(scope, ("bounded",), 8, 128)[0].revision == second
@@ -1300,6 +1333,132 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
         cursor.close()
         connection.close()
 
+    contributor_id = OwnerId.new()
+    _add_workspace_member(control, workspace, contributor_id, WorkspaceRole.EDITOR)
+    control.set_project_membership(
+        ProjectMembership(
+            workspace.workspace_id,
+            project.project_id,
+            contributor_id,
+            ProjectRole.CONTRIBUTOR,
+            MembershipStatus.ACTIVE,
+        ),
+        expected=None,
+        audit_event=_audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_MEMBERSHIP_CHANGED,
+            project_id=project.project_id,
+            subject_principal_id=contributor_id,
+        ),
+    )
+    contributor = PostgreSQLKnowledgeDocumentRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=contributor_id,
+        workspace_id=workspace.workspace_id,
+    )
+    third = _knowledge_revision(
+        scope,
+        "docs/decision.md",
+        "# Decision\nUse approved, conflict-checked team context.",
+        number=3,
+        predecessor=second.revision_id,
+        document_id=second.document.document_id,
+    )
+    stale_competitor = _knowledge_revision(
+        scope,
+        "docs/decision.md",
+        "# Decision\nA competing correction must not overwrite the winner.",
+        number=3,
+        predecessor=second.revision_id,
+        document_id=second.document.document_id,
+    )
+    contributor.apply_sync(scope, (third,), ())
+    with pytest.raises(KnowledgeDocumentConflict):
+        repository.apply_sync(scope, (stale_competitor,), ())
+    governed = repository.list_team_knowledge_sources(scope)[0]
+    assert governed.source_owner_id == workspace.owner_id
+    assert governed.source_owner_authenticated
+    assert governed.current_author_id == contributor_id
+    assert governed.current_author_authenticated
+    assert governed.approved
+    assert repository.get_current_revision(scope, third.document.document_id) == third
+    contributor_source = _knowledge_revision(
+        scope,
+        "docs/contributor.md",
+        "# Contributor source\nThis source requires an independent approval.",
+    )
+    contributor.apply_sync(scope, (contributor_source,), ())
+    contributor_approval = TeamKnowledgeSourceApproval.create(
+        scope=scope,
+        document_id=contributor_source.document.document_id,
+        expected_revision_id=contributor_source.revision_id,
+        approved_by_id=contributor_id,
+        source_action_key="contributor-cannot-self-approve",
+        approved_at=NOW + timedelta(seconds=5),
+    )
+    with pytest.raises(KnowledgeDocumentConflict):
+        contributor.approve_team_knowledge_source(contributor_approval)
+    with pytest.raises(KnowledgeDocumentConflict):
+        repository.approve_team_knowledge_source(
+            TeamKnowledgeSourceApproval.create(
+                scope=scope,
+                document_id=contributor_source.document.document_id,
+                expected_revision_id=KnowledgeDocumentRevisionId.new(),
+                approved_by_id=workspace.owner_id,
+                source_action_key="stale-contributor-source-approval",
+                approved_at=NOW + timedelta(seconds=6),
+            )
+        )
+    maintainer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, maintainer_id, WorkspaceRole.EDITOR)
+    control.set_project_membership(
+        ProjectMembership(
+            workspace.workspace_id,
+            project.project_id,
+            maintainer_id,
+            ProjectRole.MAINTAINER,
+            MembershipStatus.ACTIVE,
+        ),
+        expected=None,
+        audit_event=_audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_MEMBERSHIP_CHANGED,
+            project_id=project.project_id,
+            subject_principal_id=maintainer_id,
+        ),
+    )
+    maintainer = PostgreSQLKnowledgeDocumentRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=maintainer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    maintainer.approve_team_knowledge_source(
+        TeamKnowledgeSourceApproval.create(
+            scope=scope,
+            document_id=contributor_source.document.document_id,
+            expected_revision_id=contributor_source.revision_id,
+            approved_by_id=maintainer_id,
+            source_action_key="maintainer-approves-contributor-source",
+            approved_at=NOW + timedelta(seconds=7),
+        )
+    )
+    contributor.apply_sync(
+        scope,
+        (),
+        (
+            KnowledgeDocumentTombstone(
+                contributor_source.document.document_id,
+                scope,
+                contributor_source.document.relative_path,
+                contributor_source.document.content_digest,
+                contributor_source.revision_id,
+                NOW + timedelta(seconds=8),
+            ),
+        ),
+    )
+
     viewer_id = OwnerId.new()
     _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
     viewer = PostgreSQLKnowledgeDocumentRepository(
@@ -1308,6 +1467,18 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
         workspace_id=workspace.workspace_id,
     )
     assert viewer.list_active_documents(scope) == ()
+    assert viewer.list_team_knowledge_sources(scope) == ()
+    with pytest.raises(KnowledgeDocumentConflict):
+        viewer.approve_team_knowledge_source(
+            TeamKnowledgeSourceApproval.create(
+                scope=scope,
+                document_id=second.document.document_id,
+                expected_revision_id=second.revision_id,
+                approved_by_id=viewer_id,
+                source_action_key="viewer-cannot-approve",
+                approved_at=NOW + timedelta(seconds=4),
+            )
+        )
     foreign_scope = replace(scope, project_id=ProjectId.new())
     assert repository.list_active_documents(foreign_scope) == ()
     with pytest.raises(InvalidKnowledgeDocumentScope):
@@ -1316,19 +1487,21 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
         )
 
     tombstone = KnowledgeDocumentTombstone(
-        second.document.document_id,
+        third.document.document_id,
         scope,
-        second.document.relative_path,
-        second.document.content_digest,
-        second.revision_id,
+        third.document.relative_path,
+        third.document.content_digest,
+        third.revision_id,
         NOW + timedelta(minutes=1),
     )
     with pytest.raises(KnowledgeDocumentConflict):
         viewer.apply_sync(scope, (), (tombstone,))
-    assert repository.get_current_revision(scope, second.document.document_id) == second
+    assert repository.get_current_revision(scope, third.document.document_id) == third
     repository.apply_sync(scope, (), (tombstone,))
     with pytest.raises(KnowledgeDocumentNotFound):
-        repository.get_current_revision(scope, second.document.document_id)
+        repository.get_current_revision(scope, third.document.document_id)
+    with pytest.raises(KnowledgeDocumentConflict):
+        repository.approve_team_knowledge_source(approval)
     connection = postgres_harness.connection()
     cursor = connection.cursor()
     try:
@@ -1338,7 +1511,7 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
             "(SELECT count(*) FROM mnemo_team.knowledge_section_embeddings), "
             "(SELECT count(*) FROM mnemo_team.knowledge_document_tombstones)"
         )
-        assert tuple(cursor.fetchone() or ()) == (0, 0, 0, 1)
+        assert tuple(cursor.fetchone() or ()) == (0, 0, 0, 2)
     finally:
         connection.rollback()
         cursor.close()
@@ -4099,6 +4272,18 @@ def test_personal_knowledge_history_imports_without_deleted_note_payload(
     assert {item.revision_id for item in imported.revisions} == {
         item.revision_id for item in bundle.revisions
     }
+    imported_status = restarted.list_team_knowledge_sources(target_scope)
+    assert len(imported_status) == 1 and not imported_status[0].approved
+    restarted.approve_team_knowledge_source(
+        TeamKnowledgeSourceApproval.create(
+            scope=target_scope,
+            document_id=imported_status[0].document_id,
+            expected_revision_id=imported_status[0].current_revision_id,
+            approved_by_id=workspace.owner_id,
+            source_action_key="approve-imported-knowledge",
+            approved_at=NOW + timedelta(minutes=4),
+        )
+    )
     assert (
         restarted.get_current_revision_by_path(target_scope, "Architecture/renamed.md")
         == imported.revisions[-1]

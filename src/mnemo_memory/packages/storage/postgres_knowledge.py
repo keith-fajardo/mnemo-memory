@@ -10,6 +10,7 @@ from typing import cast
 
 from mnemo_memory.packages.domain import (
     CurrentKnowledgeDocumentSection,
+    EventId,
     KnowledgeDeletionRecord,
     KnowledgeDocument,
     KnowledgeDocumentId,
@@ -26,6 +27,8 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ScopeLevel,
+    TeamKnowledgeSourceApproval,
+    TeamKnowledgeSourceStatus,
     WorkspaceId,
     knowledge_import_document_identity,
 )
@@ -41,6 +44,7 @@ from .contracts import (
     KnowledgeExportRepositoryError,
     KnowledgeImportConflict,
     KnowledgeImportResult,
+    TeamKnowledgeSourceApprovalResult,
     rank_knowledge_sections,
     validate_knowledge_search,
 )
@@ -51,6 +55,10 @@ _REVISION_COLUMNS = (
     "revision.revision_number, revision.predecessor_revision_id::text, "
     "revision.source_kind, revision.relative_path, revision.content_digest, "
     "revision.title, revision.frontmatter_json::text, revision.created_at"
+)
+_APPROVAL_COLUMNS = (
+    "approval.approval_id::text, approval.expected_revision_id::text, "
+    "approval.approved_by_id::text, approval.source_action_key, approval.approved_at"
 )
 
 
@@ -146,7 +154,10 @@ class PostgreSQLKnowledgeDocumentRepository:
                 "WHERE source.workspace_id = CAST(%s AS uuid) "
                 "AND source.project_id = CAST(%s AS uuid) "
                 "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
-                "AND source.document_id = CAST(%s AS uuid) AND NOT source.is_deleted",
+                "AND source.document_id = CAST(%s AS uuid) AND NOT source.is_deleted "
+                "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+                "WHERE approval.workspace_id = source.workspace_id "
+                "AND approval.document_id = source.document_id)",
                 (*self._scope_values(scope), str(document_id)),
             )
             row = cursor.fetchone()
@@ -176,7 +187,10 @@ class PostgreSQLKnowledgeDocumentRepository:
                 "WHERE source.workspace_id = CAST(%s AS uuid) "
                 "AND source.project_id = CAST(%s AS uuid) "
                 "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
-                "AND source.relative_path = %s AND NOT source.is_deleted",
+                "AND source.relative_path = %s AND NOT source.is_deleted "
+                "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+                "WHERE approval.workspace_id = source.workspace_id "
+                "AND approval.document_id = source.document_id)",
                 (*self._scope_values(scope), relative_path),
             )
             row = cursor.fetchone()
@@ -207,7 +221,10 @@ class PostgreSQLKnowledgeDocumentRepository:
                 "AND source.project_id = CAST(%s AS uuid) "
                 "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
                 "AND source.document_id = CAST(%s AS uuid) "
-                "AND revision.revision_id = CAST(%s AS uuid) AND NOT source.is_deleted",
+                "AND revision.revision_id = CAST(%s AS uuid) AND NOT source.is_deleted "
+                "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+                "WHERE approval.workspace_id = source.workspace_id "
+                "AND approval.document_id = source.document_id)",
                 (*self._scope_values(scope), str(document_id), str(revision_id)),
             )
             row = cursor.fetchone()
@@ -260,6 +277,9 @@ class PostgreSQLKnowledgeDocumentRepository:
                 "SELECT current_revision_id FROM mnemo_team.knowledge_document_sources "
                 "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
                 "AND owner_id = CAST(%s AS uuid) AND visibility = %s AND NOT is_deleted "
+                "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+                "WHERE approval.workspace_id = knowledge_document_sources.workspace_id "
+                "AND approval.document_id = knowledge_document_sources.document_id) "
                 "ORDER BY relative_path, document_id LIMIT %s"
                 ") SELECT embedding.revision_id::text, embedding.section_index, "
                 "embedding.model_id, embedding.section_digest, embedding.embedding::text "
@@ -310,7 +330,10 @@ class PostgreSQLKnowledgeDocumentRepository:
                     "AND source.project_id = CAST(%s AS uuid) "
                     "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
                     "AND source.current_revision_id = CAST(%s AS uuid) "
-                    "AND section.section_index = %s AND NOT source.is_deleted",
+                    "AND section.section_index = %s AND NOT source.is_deleted "
+                    "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+                    "WHERE approval.workspace_id = source.workspace_id "
+                    "AND approval.document_id = source.document_id)",
                     (*self._scope_values(scope), str(item.revision_id), item.section_index),
                 )
                 if cursor.fetchone() is None:
@@ -365,6 +388,94 @@ class PostgreSQLKnowledgeDocumentRepository:
                 for row in self._active_document_rows(cursor, scope)
             )
             return KnowledgeDocumentSyncStoreResult(active, len(revisions), len(tombstones))
+
+    def list_team_knowledge_sources(
+        self, scope: MemoryScope, *, limit: int = 100
+    ) -> tuple[TeamKnowledgeSourceStatus, ...]:
+        self._require_scope(scope)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise KnowledgeDocumentConflict("team knowledge source limit is invalid")
+        with self._transaction(TeamOperation.READ) as cursor:
+            cursor.execute(
+                "SELECT source.document_id::text, source.relative_path, "
+                "source.current_revision_id::text, revision.revision_number, "
+                "source.source_owner_id::text, source.source_owner_authenticated, "
+                "revision.authored_by_id::text, revision.author_authenticated, "
+                + _APPROVAL_COLUMNS
+                + " FROM mnemo_team.knowledge_document_sources AS source "
+                "JOIN mnemo_team.knowledge_document_revisions AS revision "
+                "ON revision.workspace_id = source.workspace_id "
+                "AND revision.revision_id = source.current_revision_id "
+                "LEFT JOIN mnemo_team.knowledge_source_approvals AS approval "
+                "ON approval.workspace_id = source.workspace_id "
+                "AND approval.document_id = source.document_id "
+                "WHERE source.workspace_id = CAST(%s AS uuid) "
+                "AND source.project_id = CAST(%s AS uuid) "
+                "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
+                "AND NOT source.is_deleted ORDER BY source.relative_path, source.document_id "
+                "LIMIT %s",
+                (*self._scope_values(scope), limit),
+            )
+            return tuple(self._source_status(row, scope) for row in cursor.fetchall())
+
+    def approve_team_knowledge_source(
+        self, approval: TeamKnowledgeSourceApproval
+    ) -> TeamKnowledgeSourceApprovalResult:
+        if not isinstance(approval, TeamKnowledgeSourceApproval):
+            raise TypeError("approval must be a TeamKnowledgeSourceApproval")
+        self._require_scope(approval.scope)
+        if approval.approved_by_id != self._principal_id:
+            raise KnowledgeDocumentConflict("knowledge source approver is invalid")
+        with self._transaction(TeamOperation.APPROVE_SOURCE) as cursor:
+            cursor.execute(
+                "SELECT is_deleted FROM mnemo_team.knowledge_document_sources WHERE "
+                "workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
+                "AND owner_id = CAST(%s AS uuid) AND visibility = %s "
+                "AND document_id = CAST(%s AS uuid)",
+                (*self._scope_values(approval.scope), str(approval.document_id)),
+            )
+            source_row = cursor.fetchone()
+            if source_row is None or bool(source_row[0]):
+                raise KnowledgeDocumentConflict("knowledge source is not active")
+            cursor.execute(
+                "SELECT " + _APPROVAL_COLUMNS + " FROM "
+                "mnemo_team.knowledge_source_approvals AS approval WHERE "
+                "approval.workspace_id = CAST(%s AS uuid) "
+                "AND approval.document_id = CAST(%s AS uuid)",
+                (str(self._workspace_id), str(approval.document_id)),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row is not None:
+                existing = self._approval_from_row(
+                    existing_row, approval.scope, approval.document_id
+                )
+                if existing.same_intent(approval):
+                    return TeamKnowledgeSourceApprovalResult(existing, True)
+                raise KnowledgeDocumentConflict("knowledge source already has another approval")
+            cursor.execute(
+                "SELECT document_id::text FROM mnemo_team.knowledge_source_approvals "
+                "WHERE workspace_id = CAST(%s AS uuid) AND source_action_key = %s",
+                (str(self._workspace_id), approval.source_action_key),
+            )
+            if cursor.fetchone() is not None:
+                raise KnowledgeDocumentConflict("knowledge source approval action key was reused")
+            cursor.execute(
+                "INSERT INTO mnemo_team.knowledge_source_approvals("
+                "workspace_id, project_id, owner_id, visibility, document_id, approval_id, "
+                "expected_revision_id, approved_by_id, source_action_key, approved_at) "
+                "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                "CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, %s)",
+                (
+                    *self._scope_values(approval.scope),
+                    str(approval.document_id),
+                    str(approval.approval_id),
+                    str(approval.expected_revision_id),
+                    str(approval.approved_by_id),
+                    approval.source_action_key,
+                    approval.approved_at,
+                ),
+            )
+            return TeamKnowledgeSourceApprovalResult(approval, False)
 
     def export_knowledge_history(
         self, scope: MemoryScope, *, exported_at: datetime
@@ -703,6 +814,9 @@ class PostgreSQLKnowledgeDocumentRepository:
             "FROM mnemo_team.knowledge_document_sources "
             "WHERE workspace_id = CAST(%s AS uuid) AND project_id = CAST(%s AS uuid) "
             "AND owner_id = CAST(%s AS uuid) AND visibility = %s AND NOT is_deleted "
+            "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+            "WHERE approval.workspace_id = knowledge_document_sources.workspace_id "
+            "AND approval.document_id = knowledge_document_sources.document_id) "
             "ORDER BY relative_path, document_id LIMIT %s"
             ") SELECT " + _REVISION_COLUMNS + " FROM selected_sources AS selected "
             "JOIN mnemo_team.knowledge_document_revisions AS revision "
@@ -732,13 +846,15 @@ class PostgreSQLKnowledgeDocumentRepository:
             cursor.execute(
                 "INSERT INTO mnemo_team.knowledge_document_sources("
                 "workspace_id, project_id, owner_id, visibility, document_id, relative_path, "
-                "content_digest, current_revision_id, is_deleted, created_at, deleted_at) "
-                "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
-                "CAST(%s AS uuid), %s, %s, NULL, false, %s, NULL)",
+                "source_owner_id, source_owner_authenticated, content_digest, "
+                "current_revision_id, is_deleted, created_at, "
+                "deleted_at) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
+                "CAST(%s AS uuid), %s, CAST(%s AS uuid), true, %s, NULL, false, %s, NULL)",
                 (
                     *self._scope_values(scope),
                     str(document.document_id),
                     document.relative_path,
+                    str(self._principal_id),
                     document.content_digest,
                     revision.created_at,
                 ),
@@ -758,10 +874,11 @@ class PostgreSQLKnowledgeDocumentRepository:
             "INSERT INTO mnemo_team.knowledge_document_revisions("
             "workspace_id, project_id, owner_id, visibility, revision_id, document_id, "
             "revision_number, predecessor_revision_id, source_kind, relative_path, "
-            "content_digest, title, frontmatter_json, created_at) "
+            "content_digest, title, frontmatter_json, created_at, authored_by_id, "
+            "author_authenticated) "
             "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), %s, "
             "CAST(%s AS uuid), CAST(%s AS uuid), %s, CAST(%s AS uuid), %s, %s, %s, %s, "
-            "CAST(%s AS jsonb), %s)",
+            "CAST(%s AS jsonb), %s, CAST(%s AS uuid), true)",
             (
                 *self._scope_values(scope),
                 str(revision.revision_id),
@@ -776,6 +893,7 @@ class PostgreSQLKnowledgeDocumentRepository:
                 document.title,
                 json.dumps(document.frontmatter, separators=(",", ":")),
                 revision.created_at,
+                str(self._principal_id),
             ),
         )
         for index, section in enumerate(document.sections):
@@ -940,6 +1058,39 @@ class PostgreSQLKnowledgeDocumentRepository:
             int(str(row[2])),
             None if row[3] is None else KnowledgeDocumentRevisionId.from_string(str(row[3])),
             cast(datetime, row[9]),
+        )
+
+    @staticmethod
+    def _approval_from_row(
+        row: Sequence[object], scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> TeamKnowledgeSourceApproval:
+        return TeamKnowledgeSourceApproval(
+            EventId.from_string(str(row[0])),
+            scope,
+            document_id,
+            KnowledgeDocumentRevisionId.from_string(str(row[1])),
+            OwnerId.from_string(str(row[2])),
+            str(row[3]),
+            cast(datetime, row[4]),
+        )
+
+    @classmethod
+    def _source_status(cls, row: Sequence[object], scope: MemoryScope) -> TeamKnowledgeSourceStatus:
+        document_id = KnowledgeDocumentId.from_string(str(row[0]))
+        approval = None
+        if row[8] is not None:
+            approval = cls._approval_from_row(row[8:13], scope, document_id)
+        return TeamKnowledgeSourceStatus(
+            scope,
+            document_id,
+            str(row[1]),
+            KnowledgeDocumentRevisionId.from_string(str(row[2])),
+            int(str(row[3])),
+            OwnerId.from_string(str(row[4])),
+            bool(row[5]),
+            OwnerId.from_string(str(row[6])),
+            bool(row[7]),
+            approval,
         )
 
     @staticmethod

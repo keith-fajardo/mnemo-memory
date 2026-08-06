@@ -66,6 +66,8 @@ from mnemo_memory.packages.domain import (
     TaskActivityEventExpiration,
     TaskActivityEventPurge,
     TaskActivityEventRetentionTarget,
+    TeamKnowledgeSourceApproval,
+    TeamKnowledgeSourceStatus,
     knowledge_search_tokens,
 )
 from mnemo_memory.packages.domain.dbt_manifest import (
@@ -526,6 +528,24 @@ class KnowledgeImportRepositoryError(KnowledgeDocumentRepositoryError):
 
 class KnowledgeImportConflict(KnowledgeImportRepositoryError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class TeamKnowledgeSourceApprovalResult:
+    approval: TeamKnowledgeSourceApproval
+    idempotent: bool
+
+
+class TeamKnowledgeGovernanceRepository(Protocol):
+    """Team-only content-free source review and approval boundary."""
+
+    def list_team_knowledge_sources(
+        self, scope: MemoryScope, *, limit: int = 100
+    ) -> tuple[TeamKnowledgeSourceStatus, ...]: ...
+
+    def approve_team_knowledge_source(
+        self, approval: TeamKnowledgeSourceApproval
+    ) -> TeamKnowledgeSourceApprovalResult: ...
 
 
 @dataclass(frozen=True, slots=True)

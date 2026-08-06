@@ -218,6 +218,7 @@ from .team import (
     WorkspaceMembership,
     WorkspaceRole,
 )
+from .team_knowledge import TeamKnowledgeSourceApproval, TeamKnowledgeSourceStatus
 
 __all__ = [
     "APPROVED_EVENT_EXPORT_FORMAT",
@@ -383,6 +384,8 @@ __all__ = [
     "TaskId",
     "TeamAuditAction",
     "TeamAuditEvent",
+    "TeamKnowledgeSourceApproval",
+    "TeamKnowledgeSourceStatus",
     "TeamProject",
     "TeamProjectVisibility",
     "TeamWorkspace",

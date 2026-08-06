@@ -194,23 +194,30 @@ than its source, a private-project viewer reads a note or embedding, or a delete
 revision, link, or vector projection.
 
 **Required controls:** Every team knowledge row carries exact workspace, project, owner, and
-visibility. PostgreSQL applies forced RLS before current/historical document selection and before
-any write or row lock. Composite foreign keys and fixed-search-path trigger functions reject
-cross-scope revisions, sections, links, tombstones, and embeddings. Only bounded authorized current
-revisions enter literal or vector ranking. Deletion writes its minimal scoped tombstone before
-removing the immutable chain; sections, links, and pgvector rows cascade in the same transaction.
-Secret policy runs before persistence, and note content remains untrusted evidence.
+visibility. The source records its authenticated creator and each immutable revision records its
+authenticated author; legacy rows expose false authentication flags rather than inventing actor
+evidence. PostgreSQL applies forced RLS before current/historical document selection
+and before any write or row lock. Composite foreign keys and fixed-search-path trigger functions
+reject cross-scope revisions, sections, links, tombstones, embeddings, and approvals. A new source
+is excluded from content, procedure, skill, and vector retrieval until a maintainer, administrator,
+or owner with the dedicated approval OAuth scope approves its stable identity against the exact
+current revision. Approval remains valid
+across later predecessor-checked revisions; competing corrections cannot both advance the current
+pointer. Only bounded authorized approved sources enter literal or vector ranking. Deletion writes
+its minimal scoped tombstone before removing the immutable chain; sections, links, and pgvector rows
+cascade in the same transaction. Secret policy runs before persistence, and note content remains
+untrusted evidence.
 
 **Verification:** A real non-owner/non-`BYPASSRLS` PostgreSQL suite covers private-project denial,
-foreign project/workspace scopes, unauthorized tombstone attempts, current-only retrieval,
-pgvector round trips, stale/secret batch rollback, and direct post-deletion counts for every
-content-bearing table. An injected v1-to-v2 migration failure must preserve the v1 ledger and
-authority state.
+foreign project/workspace scopes, unauthorized tombstone and approval attempts, pending-source
+exclusion, exact approval retry, stale expected revisions, stable ownership, revision authorship,
+competing corrections, current-only retrieval, pgvector round trips, stale/secret batch rollback,
+and direct post-deletion counts for every content-bearing table. Injected migration failures
+preserve the prior ledger and authority state.
 
-**Residual risk:** The database enforces scope and role permissions but does not decide the full
-shared-source ownership and approval workflow. Until the authenticated service binds verified
-identity and implements source governance, the PostgreSQL knowledge adapter is not exposed as team
-mode. Backups and user-controlled exports can retain deleted data and remain later operations work.
+**Residual risk:** Source approval establishes reviewed source trust, not the truth of every
+sentence. Mnemo does not automatically merge corrections or infer prose contradictions. Backups
+and user-controlled exports can retain deleted data and remain later operations work.
 
 ### Cross-tenant team checkpoint history and lifecycle races
 

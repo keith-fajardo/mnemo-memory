@@ -34,6 +34,12 @@ class _Port:
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "save_checkpoint"}
 
+    def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "list_knowledge_sources"}
+
+    def approve_knowledge_source(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "approve_knowledge_source"}
+
 
 class _Factory:
     def __init__(self) -> None:
@@ -122,6 +128,35 @@ def test_missing_authentication_fails_before_repository_composition() -> None:
     assert factory.calls == []
 
 
+def test_source_approval_requires_a_dedicated_oauth_scope_before_composition() -> None:
+    principal, workspace = OwnerId.new(), WorkspaceId.new()
+    factory = _Factory()
+    context_only = AccessToken(
+        token="opaque",
+        client_id="client",
+        scopes=["mnemo:context"],
+        subject=str(principal),
+    )
+    request: dict[str, object] = {"workspace_id": str(workspace)}
+
+    with pytest.raises(ValueError, match="MNEMO_SCOPE_REQUIRED"):
+        AuthenticatedTeamMcpPort(
+            factory, access_token_loader=lambda: context_only
+        ).approve_knowledge_source(request)
+    assert factory.calls == []
+
+    approver = AccessToken(
+        token="opaque",
+        client_id="client",
+        scopes=["mnemo:context", "mnemo:knowledge:approve"],
+        subject=str(principal),
+    )
+    assert AuthenticatedTeamMcpPort(
+        factory, access_token_loader=lambda: approver
+    ).approve_knowledge_source(request) == {"operation": "approve_knowledge_source"}
+    assert factory.calls == [(principal, workspace)]
+
+
 def test_pinned_jwt_verifier_accepts_only_exact_signed_oauth_claims(
     jwt_keys: tuple[str, str],
 ) -> None:
@@ -196,6 +231,15 @@ def test_streamable_http_route_requires_bearer_authentication(
     assert authenticated.status_code != 401
     assert server.settings.host == "127.0.0.1"
     assert server.settings.stateless_http is True
+    assert set(server._tool_manager._tools) == {
+        "get_context",
+        "list_skills",
+        "get_skill",
+        "explain_context",
+        "save_checkpoint",
+        "list_knowledge_sources",
+        "approve_knowledge_source",
+    }
 
 
 def _new_key_pair() -> tuple[str, str]:

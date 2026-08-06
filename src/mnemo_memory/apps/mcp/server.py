@@ -8,7 +8,7 @@ import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Protocol, cast
 
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
@@ -53,9 +53,16 @@ SERVER_VERSION = "0.1.0"
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
 
 
+class TeamKnowledgeMcpPort(Protocol):
+    def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]: ...
+
+    def approve_knowledge_source(self, request: dict[str, object]) -> dict[str, object]: ...
+
+
 def create_server(
     port: McpContextPort,
     *,
+    team_knowledge_port: TeamKnowledgeMcpPort | None = None,
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
     host: str = "127.0.0.1",
@@ -497,7 +504,70 @@ def create_server(
             }
         )
 
-    for name in ("get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"):
+    if team_knowledge_port is not None:
+
+        @server.tool(
+            name="list_knowledge_sources",
+            description=(
+                "List bounded content-free ownership, current revision, and approval status for "
+                "team knowledge sources in one exact project scope."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True, destructiveHint=False, openWorldHint=False
+            ),
+        )
+        def list_knowledge_sources(
+            owner_id: Annotated[str, Field(min_length=36, max_length=36)],
+            workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
+            project_id: Annotated[str, Field(min_length=36, max_length=36)],
+            visibility: Annotated[str, Field(pattern="^(owner|workspace|project)$")],
+            limit: Annotated[int, Field(ge=1, le=100)] = 100,
+        ) -> dict[str, object]:
+            return team_knowledge_port.list_knowledge_sources(
+                {
+                    "owner_id": owner_id,
+                    "workspace_id": workspace_id,
+                    "project_id": project_id,
+                    "visibility": visibility,
+                    "limit": limit,
+                }
+            )
+
+        @server.tool(
+            name="approve_knowledge_source",
+            description=(
+                "Approve one exact current team knowledge source. The authenticated caller must "
+                "be a project maintainer, workspace administrator, or workspace owner."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False, destructiveHint=False, openWorldHint=False
+            ),
+        )
+        def approve_knowledge_source(
+            owner_id: Annotated[str, Field(min_length=36, max_length=36)],
+            workspace_id: Annotated[str, Field(min_length=36, max_length=36)],
+            project_id: Annotated[str, Field(min_length=36, max_length=36)],
+            visibility: Annotated[str, Field(pattern="^(owner|workspace|project)$")],
+            document_id: Annotated[str, Field(min_length=36, max_length=36)],
+            expected_revision_id: Annotated[str, Field(min_length=36, max_length=36)],
+            source_action_key: Annotated[str, Field(min_length=1, max_length=256)],
+        ) -> dict[str, object]:
+            return team_knowledge_port.approve_knowledge_source(
+                {
+                    "owner_id": owner_id,
+                    "workspace_id": workspace_id,
+                    "project_id": project_id,
+                    "visibility": visibility,
+                    "document_id": document_id,
+                    "expected_revision_id": expected_revision_id,
+                    "source_action_key": source_action_key,
+                }
+            )
+
+    names = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
+    if team_knowledge_port is not None:
+        names.extend(("list_knowledge_sources", "approve_knowledge_source"))
+    for name in names:
         tool = server._tool_manager._tools[name]
         tool.parameters["additionalProperties"] = False
         tool.fn_metadata.arg_model.model_config["extra"] = "forbid"

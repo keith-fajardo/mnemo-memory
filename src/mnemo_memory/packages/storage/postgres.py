@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 20
+POSTGRES_TEAM_SCHEMA_VERSION = 21
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -62,6 +62,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (18, "0018_team_checkpoint_expiry.sql"),
     (19, "0019_team_checkpoint_deletions.sql"),
     (20, "0020_team_checkpoint_deletion_import.sql"),
+    (21, "0021_team_knowledge_governance.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -230,6 +231,9 @@ class PostgreSQLTeamMigrationRunner:
                 f"mnemo_team.knowledge_document_tombstones TO {role}",
                 "GRANT SELECT, INSERT, UPDATE, DELETE ON "
                 f"mnemo_team.knowledge_section_embeddings TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.knowledge_source_approvals TO {role}",
+                "GRANT EXECUTE ON FUNCTION "
+                f"mnemo_team.can_approve_knowledge_source(uuid, uuid) TO {role}",
                 f"GRANT SELECT, INSERT, UPDATE ON mnemo_team.checkpoint_aggregates TO {role}",
                 f"GRANT DELETE ON mnemo_team.checkpoint_aggregates TO {role}",
                 f"GRANT SELECT, INSERT, DELETE ON mnemo_team.checkpoint_revisions TO {role}",

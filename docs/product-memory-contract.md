@@ -91,8 +91,20 @@ accepted mutation commits with one deterministic delivery job. A correction pres
 supersedes the target, and transfers an active pin through immutable actions. A retraction records
 bounded governance provenance, releases the pin, and erases the target summary, source key, and
 fact evidence in the same transaction. Exact retries are idempotent; competing target, identity,
-source-key, or action-key reuse fails. This storage boundary does not authenticate actors or decide
-shared-source ownership, approval authority, or conflicting team corrections.
+source-key, or action-key reuse fails. This episodic storage boundary remains separate from team
+knowledge governance.
+
+The authenticated team knowledge composition records the verified creating principal as immutable
+source owner and the verified contributor on every immutable revision. New sources are excluded
+from content retrieval until a project maintainer, workspace administrator, or workspace owner
+approves the stable source against its exact current revision. Approval is immutable and idempotent
+for one caller key, also requires the `mnemo:knowledge:approve` OAuth scope, remains valid across
+later predecessor-checked revisions, and cannot bypass deterministic secret controls. Competing
+corrections that name the same predecessor cannot both
+become current; Mnemo performs no automatic merge or semantic contradiction inference. Bounded
+source-status output contains no note content.
+Pre-v21 rows retain the prior scope owner only as an explicitly unauthenticated legacy attribution;
+Mnemo does not manufacture historical creator or author evidence.
 
 Team extracted episodic candidates remain inactive PostgreSQL records until one explicit verified
 user review approves them. Each bounded batch contains at most four contiguous proposals from one

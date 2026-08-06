@@ -138,6 +138,14 @@ from .knowledge_transfer import (
 )
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
+from .team_knowledge import (
+    ApproveTeamKnowledgeSource,
+    TeamKnowledgeGovernanceApplicationError,
+    TeamKnowledgeGovernanceApplicationService,
+    TeamKnowledgeGovernanceConflict,
+    TeamKnowledgeGovernanceInvalidScope,
+    TeamKnowledgeGovernanceStorageFailure,
+)
 from .uninstalls import (
     PersonalUninstallError,
     PersonalUninstallResult,
@@ -152,6 +160,7 @@ from .upgrades import (
 
 __all__ = [
     "AbandonCheckpoint",
+    "ApproveTeamKnowledgeSource",
     "ApprovedEpisodicEventGovernanceView",
     "ApprovedEpisodicEventPinView",
     "ApprovedEpisodicEventView",
@@ -273,6 +282,11 @@ __all__ = [
     "SetApprovedEpisodicEventPin",
     "SourceFreshnessQueryResult",
     "SynchronizeKnowledgeDocuments",
+    "TeamKnowledgeGovernanceApplicationError",
+    "TeamKnowledgeGovernanceApplicationService",
+    "TeamKnowledgeGovernanceConflict",
+    "TeamKnowledgeGovernanceInvalidScope",
+    "TeamKnowledgeGovernanceStorageFailure",
     "TestCoverageQueryResult",
     "build_checkpoint_runtime",
     "build_lifecycle_service",

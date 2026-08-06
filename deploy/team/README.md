@@ -75,6 +75,24 @@ After start:
 Stop the supervisor process to stop the service. The service retains no bearer or refresh token;
 stopping it does not modify team data.
 
+## Team knowledge source governance
+
+New shared knowledge is intentionally pending: its text, links, procedures, skills, and embeddings
+do not enter `get_context` until an authorized reviewer approves the source. Use
+`list_knowledge_sources` with the exact owner, workspace, project, and visibility to inspect bounded
+content-free status. It returns the relative path, current revision, immutable source owner,
+current revision author, explicit authentication flags for both attributions, and approval
+metadata; it never returns note content. Pre-v21 rows show false attribution flags because their
+historical actors cannot be reconstructed.
+
+A project maintainer, workspace administrator, or workspace owner can call
+`approve_knowledge_source` with the exact `document_id`, current `expected_revision_id`, and a unique
+caller-controlled `source_action_key`; its bearer token must also carry
+`mnemo:knowledge:approve`. Exact retry is idempotent. A stale revision, reused key,
+contributor/viewer role, foreign scope, or deleted source fails closed. Approval follows the stable
+source identity through later conflict-checked revisions; two corrections based on the same
+revision cannot both commit.
+
 ## Password and public-key rotation
 
 Create the replacement file beside the old file with its final permissions, then atomically rename
