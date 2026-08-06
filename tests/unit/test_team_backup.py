@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,14 +16,21 @@ from mnemo_memory.packages.application import (
     TeamDatabaseInventory,
 )
 from mnemo_memory.packages.domain import (
+    TEAM_BACKUP_FORMAT_V1,
     TeamBackupManifest,
     TeamBackupTableCount,
 )
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 COUNTS = (
+    TeamBackupTableCount("checkpoint_deletions", 0),
+    TeamBackupTableCount("knowledge_document_tombstones", 0),
     TeamBackupTableCount("schema_migrations", 21),
     TeamBackupTableCount("workspaces", 2),
+)
+ERASURES = (
+    TeamBackupTableCount("checkpoint_deletions", 0),
+    TeamBackupTableCount("knowledge_document_tombstones", 0),
 )
 
 
@@ -31,7 +38,7 @@ class _BackupPort:
     source_database = "mnemo_live"
 
     def __init__(self) -> None:
-        self.inventory_value = TeamDatabaseInventory(21, COUNTS)
+        self.inventory_value = TeamDatabaseInventory(21, COUNTS, ERASURES)
         self.empty_targets: list[str] = []
         self.restored_targets: list[str] = []
 
@@ -64,6 +71,7 @@ def test_manifest_is_strict_digest_bound_and_round_trips() -> None:
         artifact_digest=digest,
         size_bytes=6,
         table_counts=COUNTS,
+        erasure_counts=ERASURES,
     )
 
     assert TeamBackupManifest.from_json(manifest.canonical_json()) == manifest
@@ -71,6 +79,14 @@ def test_manifest_is_strict_digest_bound_and_round_trips() -> None:
         replace(manifest, size_bytes=7)
     with pytest.raises(ValueError, match="inventory"):
         replace(manifest, table_counts=tuple(reversed(COUNTS)))
+    with pytest.raises(ValueError, match="identity"):
+        replace(
+            manifest,
+            erasure_counts=(
+                TeamBackupTableCount("checkpoint_deletions", 1),
+                TeamBackupTableCount("knowledge_document_tombstones", 0),
+            ),
+        )
 
 
 def test_backup_is_private_atomic_and_restore_drill_verifies_inventory(tmp_path: Path) -> None:
@@ -93,7 +109,7 @@ def test_backup_is_private_atomic_and_restore_drill_verifies_inventory(tmp_path:
     restored = service.restore_drill(backup.manifest_path, target_database="mnemo_restore_drill")
 
     assert restored.schema_version == 21
-    assert restored.table_count == 2 and restored.row_count == 23
+    assert restored.table_count == 4 and restored.row_count == 23
     assert restored.duration_ms == 125
     assert port.empty_targets == ["mnemo_restore_drill"]
     assert port.restored_targets == ["mnemo_restore_drill"]
@@ -116,9 +132,12 @@ def test_restore_rejects_live_nonempty_tampered_and_mismatched_targets(tmp_path:
     port.inventory_value = TeamDatabaseInventory(
         21,
         (
+            TeamBackupTableCount("checkpoint_deletions", 0),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
             TeamBackupTableCount("schema_migrations", 21),
             TeamBackupTableCount("workspaces", 3),
         ),
+        ERASURES,
     )
     with pytest.raises(TeamBackupError, match="VERIFICATION_FAILED"):
         service.restore_drill(second.manifest_path, target_database="mismatched_target")
@@ -181,3 +200,124 @@ def test_backup_preserves_a_destination_created_during_publication(
     published = tuple(directory.glob("*.dump"))
     assert len(published) == 1 and published[0].read_bytes() == collision
     assert not tuple(directory.glob("*.json"))
+
+
+def test_prune_deleted_removes_only_backups_predating_an_erasure(tmp_path: Path) -> None:
+    directory = tmp_path.resolve() / "backups"
+    port = _BackupPort()
+    before = TeamBackupService(port, clock=lambda: NOW).create(directory)
+    port.inventory_value = TeamDatabaseInventory(
+        21,
+        COUNTS,
+        (
+            TeamBackupTableCount("checkpoint_deletions", 1),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
+        ),
+    )
+    after = TeamBackupService(port, clock=lambda: NOW + timedelta(seconds=1)).create(directory)
+
+    result = TeamBackupService(port).prune_deleted(directory)
+
+    assert result.backups_removed == 1 and result.files_removed == 2
+    assert result.bytes_removed > before.manifest.size_bytes
+    assert not before.artifact_path.exists() and not before.manifest_path.exists()
+    assert after.artifact_path.is_file() and after.manifest_path.is_file()
+    assert TeamBackupService(port).prune_deleted(directory).backups_removed == 0
+
+
+def test_prune_deleted_cleans_an_interrupted_v1_backup(tmp_path: Path) -> None:
+    directory = tmp_path.resolve() / "backups"
+    port = _BackupPort()
+    backup = TeamBackupService(port, clock=lambda: NOW).create(directory)
+    value = backup.manifest.to_dict()
+    value["format_version"] = TEAM_BACKUP_FORMAT_V1
+    value.pop("erasure_counts")
+    value["backup_id"] = str(
+        TeamBackupManifest.identity(
+            backup.manifest.created_at,
+            backup.manifest.artifact_digest,
+            backup.manifest.size_bytes,
+        )
+    )
+    backup.manifest_path.write_text(
+        TeamBackupManifest.from_dict(value).canonical_json(), encoding="utf-8"
+    )
+    backup.artifact_path.unlink()
+    port.inventory_value = TeamDatabaseInventory(
+        21,
+        COUNTS,
+        (
+            TeamBackupTableCount("checkpoint_deletions", 1),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
+        ),
+    )
+
+    result = TeamBackupService(port).prune_deleted(directory)
+
+    assert result.backups_removed == 1 and result.files_removed == 1
+    assert not backup.manifest_path.exists()
+
+
+def test_prune_deleted_fails_before_removing_a_valid_stale_backup(tmp_path: Path) -> None:
+    directory = tmp_path.resolve() / "backups"
+    port = _BackupPort()
+    stale = TeamBackupService(port, clock=lambda: NOW).create(directory)
+    port.inventory_value = TeamDatabaseInventory(
+        21,
+        COUNTS,
+        (
+            TeamBackupTableCount("checkpoint_deletions", 1),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
+        ),
+    )
+    invalid = directory / ("mnemo-team-v21-20260806T120001000000Z-" + "0" * 64 + ".dump.json")
+    invalid.write_text("{}", encoding="utf-8")
+    invalid.chmod(0o600)
+
+    with pytest.raises(TeamBackupError, match="BACKUP_INVALID"):
+        TeamBackupService(port).prune_deleted(directory)
+
+    assert stale.artifact_path.is_file() and stale.manifest_path.is_file()
+
+
+def test_prune_deleted_rejects_symlink_manifest_and_regressed_erasure_state(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path.resolve() / "backups"
+    port = _BackupPort()
+    port.inventory_value = TeamDatabaseInventory(
+        21,
+        COUNTS,
+        (
+            TeamBackupTableCount("checkpoint_deletions", 1),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
+        ),
+    )
+    backup = TeamBackupService(port, clock=lambda: NOW).create(directory)
+    port.inventory_value = TeamDatabaseInventory(21, COUNTS, ERASURES)
+
+    with pytest.raises(TeamBackupError, match="DELETION_STATE_INVALID"):
+        TeamBackupService(port).prune_deleted(directory)
+
+    port.inventory_value = TeamDatabaseInventory(
+        21,
+        COUNTS,
+        (
+            TeamBackupTableCount("checkpoint_deletions", 1),
+            TeamBackupTableCount("knowledge_document_tombstones", 0),
+        ),
+    )
+    outside = tmp_path / "outside.json"
+    outside.write_text(backup.manifest.canonical_json(), encoding="utf-8")
+    outside.chmod(0o600)
+    linked = directory / ("mnemo-team-v21-20260806T120002000000Z-" + "1" * 64 + ".dump.json")
+    linked.symlink_to(outside)
+    with pytest.raises(TeamBackupError, match="BACKUP_INVALID"):
+        TeamBackupService(port).prune_deleted(directory)
+
+    linked.unlink()
+    directory.chmod(0o755)
+    with pytest.raises(TeamBackupError, match="DIRECTORY_UNSAFE"):
+        TeamBackupService(port).prune_deleted(directory)
+
+    assert backup.artifact_path.is_file() and backup.manifest_path.is_file()

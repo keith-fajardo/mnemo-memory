@@ -218,7 +218,12 @@ from .team import (
     WorkspaceMembership,
     WorkspaceRole,
 )
-from .team_backup import TEAM_BACKUP_FORMAT, TeamBackupManifest, TeamBackupTableCount
+from .team_backup import (
+    TEAM_BACKUP_FORMAT,
+    TEAM_BACKUP_FORMAT_V1,
+    TeamBackupManifest,
+    TeamBackupTableCount,
+)
 from .team_knowledge import TeamKnowledgeSourceApproval, TeamKnowledgeSourceStatus
 
 __all__ = [
@@ -228,6 +233,7 @@ __all__ = [
     "EPISODIC_EXPORT_FORMAT",
     "KNOWLEDGE_EXPORT_FORMAT",
     "TEAM_BACKUP_FORMAT",
+    "TEAM_BACKUP_FORMAT_V1",
     "ActiveEpisodicMemory",
     "AgentId",
     "ApprovedEpisodicEvent",

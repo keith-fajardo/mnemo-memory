@@ -139,6 +139,7 @@ from .knowledge_transfer import (
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
 from .team_backups import (
+    TeamBackupDeletionResult,
     TeamBackupError,
     TeamBackupResult,
     TeamBackupService,
@@ -290,6 +291,7 @@ __all__ = [
     "SetApprovedEpisodicEventPin",
     "SourceFreshnessQueryResult",
     "SynchronizeKnowledgeDocuments",
+    "TeamBackupDeletionResult",
     "TeamBackupError",
     "TeamBackupResult",
     "TeamBackupService",

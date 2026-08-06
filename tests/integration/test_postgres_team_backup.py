@@ -73,6 +73,128 @@ def _local_command(arguments: Sequence[str], environment: Mapping[str, str]) -> 
     return NativeCommandResult(completed.returncode, completed.stdout)
 
 
+def _create_deletable_knowledge(
+    host: str, port: int, database: str, admin_user: str
+) -> tuple[str, str, str, str, str]:
+    owner_id = str(uuid4())
+    workspace_id = str(uuid4())
+    project_id = str(uuid4())
+    document_id = str(uuid4())
+    revision_id = str(uuid4())
+    digest = "sha256:" + "a" * 64
+    connection = pg8000.dbapi.connect(
+        host=host, port=port, database=database, user=admin_user, timeout=5
+    )
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'contribute', true)",
+            (owner_id, workspace_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.workspaces(workspace_id, owner_id, created_at) "
+            "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CURRENT_TIMESTAMP)",
+            (workspace_id, owner_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.workspace_memberships"
+            "(workspace_id, principal_id, role, status) "
+            "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), 'owner', 'active')",
+            (workspace_id, owner_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.projects"
+            "(workspace_id, project_id, owner_id, visibility) "
+            "VALUES (CAST(%s AS uuid), CAST(%s AS uuid), CAST(%s AS uuid), 'private')",
+            (workspace_id, project_id, owner_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.knowledge_document_sources"
+            "(workspace_id, project_id, owner_id, visibility, document_id, relative_path, "
+            "content_digest, current_revision_id, is_deleted, created_at, source_owner_id, "
+            "source_owner_authenticated) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), 'project', CAST(%s AS uuid), 'private/deletable.md', %s, "
+            "NULL, false, CURRENT_TIMESTAMP, CAST(%s AS uuid), true)",
+            (workspace_id, project_id, owner_id, document_id, digest, owner_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.knowledge_document_revisions"
+            "(workspace_id, project_id, owner_id, visibility, revision_id, document_id, "
+            "revision_number, predecessor_revision_id, source_kind, relative_path, "
+            "content_digest, title, frontmatter_json, created_at, authored_by_id, "
+            "author_authenticated) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), 'project', CAST(%s AS uuid), CAST(%s AS uuid), 1, NULL, "
+            "'markdown', 'private/deletable.md', %s, 'Sensitive backup payload', "
+            "CAST('{}' AS jsonb), CURRENT_TIMESTAMP, CAST(%s AS uuid), true)",
+            (workspace_id, project_id, owner_id, revision_id, document_id, digest, owner_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.knowledge_document_sections"
+            "(workspace_id, project_id, owner_id, visibility, revision_id, section_index, "
+            "heading, heading_level, content) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), 'project', CAST(%s AS uuid), 0, 'Secret', 1, "
+            "'payload removed after backup')",
+            (workspace_id, project_id, owner_id, revision_id),
+        )
+        cursor.execute(
+            "UPDATE mnemo_team.knowledge_document_sources SET current_revision_id = "
+            "CAST(%s AS uuid) WHERE workspace_id = CAST(%s AS uuid) "
+            "AND document_id = CAST(%s AS uuid)",
+            (revision_id, workspace_id, document_id),
+        )
+        connection.commit()
+        return workspace_id, project_id, owner_id, document_id, digest
+    finally:
+        cursor.close()
+        connection.close()
+
+
+def _delete_knowledge(
+    host: str,
+    port: int,
+    database: str,
+    admin_user: str,
+    identity: tuple[str, str, str, str, str],
+) -> None:
+    workspace_id, project_id, owner_id, document_id, digest = identity
+    connection = pg8000.dbapi.connect(
+        host=host, port=port, database=database, user=admin_user, timeout=5
+    )
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', 'contribute', true)",
+            (owner_id, workspace_id),
+        )
+        cursor.execute(
+            "UPDATE mnemo_team.knowledge_document_sources SET current_revision_id = NULL, "
+            "is_deleted = true, deleted_at = CURRENT_TIMESTAMP "
+            "WHERE workspace_id = CAST(%s AS uuid) AND document_id = CAST(%s AS uuid)",
+            (workspace_id, document_id),
+        )
+        cursor.execute(
+            "INSERT INTO mnemo_team.knowledge_document_tombstones"
+            "(workspace_id, project_id, owner_id, visibility, document_id, relative_path, "
+            "content_digest, deleted_at) VALUES (CAST(%s AS uuid), CAST(%s AS uuid), "
+            "CAST(%s AS uuid), 'project', CAST(%s AS uuid), 'private/deletable.md', %s, "
+            "CURRENT_TIMESTAMP)",
+            (workspace_id, project_id, owner_id, document_id, digest),
+        )
+        cursor.execute(
+            "DELETE FROM mnemo_team.knowledge_document_revisions "
+            "WHERE workspace_id = CAST(%s AS uuid) AND document_id = CAST(%s AS uuid)",
+            (workspace_id, document_id),
+        )
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
+
+
 def test_real_team_backup_restores_exact_schema_ledger_and_table_counts(tmp_path: Path) -> None:
     settings = _settings()
     if settings is None:
@@ -111,6 +233,7 @@ def test_real_team_backup_restores_exact_schema_ledger_and_table_counts(tmp_path
             "CREATE EXTENSION IF NOT EXISTS vector",
             database=target_database,
         )
+        deletion_identity = _create_deletable_knowledge(host, port, source_database, admin_user)
         adapter = PostgreSQLNativeBackupAdapter(
             PostgreSQLBackupToolConfig(
                 host,
@@ -131,6 +254,14 @@ def test_real_team_backup_restores_exact_schema_ledger_and_table_counts(tmp_path
         assert restored.schema_version == POSTGRES_TEAM_SCHEMA_VERSION
         assert restored.table_count == len(backup.manifest.table_counts)
         assert restored.row_count == sum(item.row_count for item in backup.manifest.table_counts)
+        _delete_knowledge(host, port, source_database, admin_user, deletion_identity)
+        current = service.create((tmp_path / "team-backups").resolve())
+
+        pruned = service.prune_deleted((tmp_path / "team-backups").resolve())
+
+        assert pruned.backups_removed == 1 and pruned.files_removed == 2
+        assert not backup.artifact_path.exists() and not backup.manifest_path.exists()
+        assert current.artifact_path.is_file() and current.manifest_path.is_file()
     finally:
         for database in (target_database, source_database):
             _admin(

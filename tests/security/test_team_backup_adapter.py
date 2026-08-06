@@ -32,17 +32,36 @@ class _Cursor:
             return (self.superuser, self.bypass_rls)
         if "pg_export_snapshot" in self.operation:
             return ("00000003-0000001A-1",)
-        if 'count(*) FROM mnemo_team."schema_migrations"' in self.operation:
-            return (21,)
-        if 'count(*) FROM mnemo_team."workspaces"' in self.operation:
-            return (2,)
+        if "count(*) FROM mnemo_team" in self.operation:
+            if '"schema_migrations"' in self.operation:
+                return (21,)
+            if '"workspaces"' in self.operation:
+                return (2,)
+            return (0,)
         return None
 
     def fetchall(self) -> Sequence[Sequence[object]]:
         if "SELECT version" in self.operation:
             return tuple((value,) for value in range(1, 22))
         if "pg_catalog.pg_tables" in self.operation:
-            return (("schema_migrations",), ("workspaces",))
+            return tuple(
+                (name,)
+                for name in (
+                    "approved_episodic_event_governance",
+                    "checkpoint_deletions",
+                    "episodic_memory_deletions",
+                    "episodic_memory_expirations",
+                    "episodic_memory_governance",
+                    "episodic_memory_purges",
+                    "imported_knowledge_deletions",
+                    "knowledge_document_tombstones",
+                    "schema_migrations",
+                    "task_activity_event_deletions",
+                    "task_activity_event_expirations",
+                    "task_activity_event_purges",
+                    "workspaces",
+                )
+            )
         return ()
 
     def close(self) -> None:
@@ -119,7 +138,12 @@ def test_native_backup_uses_exported_snapshot_tls_passfile_and_sanitized_command
     adapter.validate_archive(archive)
 
     assert inventory.schema_version == 21
-    assert tuple(item.row_count for item in inventory.table_counts) == (21, 2)
+    assert (
+        next(item.row_count for item in inventory.table_counts if item.table_name == "workspaces")
+        == 2
+    )
+    assert len(inventory.erasure_counts) == 11
+    assert not any(item.row_count for item in inventory.erasure_counts)
     assert connection.committed and not connection.rolled_back
     assert passfile_seen
     assert not any(path.name.startswith(".mnemo-pgpass") for path in tmp_path.iterdir())

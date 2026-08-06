@@ -21,6 +21,48 @@ from mnemo_memory.packages.storage import PostgreSQLConnection
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _TABLE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+_ERASURE_QUERIES = (
+    (
+        "approved_episodic_event_governance",
+        "SELECT count(*) FROM mnemo_team.approved_episodic_event_governance "
+        "WHERE action_kind = 'retracted'",
+    ),
+    ("checkpoint_deletions", "SELECT count(*) FROM mnemo_team.checkpoint_deletions"),
+    (
+        "episodic_memory_deletions",
+        "SELECT count(*) FROM mnemo_team.episodic_memory_deletions",
+    ),
+    (
+        "episodic_memory_expirations",
+        "SELECT count(*) FROM mnemo_team.episodic_memory_expirations",
+    ),
+    (
+        "episodic_memory_governance",
+        "SELECT count(*) FROM mnemo_team.episodic_memory_governance "
+        "WHERE action_kind = 'retracted'",
+    ),
+    ("episodic_memory_purges", "SELECT count(*) FROM mnemo_team.episodic_memory_purges"),
+    (
+        "imported_knowledge_deletions",
+        "SELECT count(*) FROM mnemo_team.imported_knowledge_deletions",
+    ),
+    (
+        "knowledge_document_tombstones",
+        "SELECT count(*) FROM mnemo_team.knowledge_document_tombstones",
+    ),
+    (
+        "task_activity_event_deletions",
+        "SELECT count(*) FROM mnemo_team.task_activity_event_deletions",
+    ),
+    (
+        "task_activity_event_expirations",
+        "SELECT count(*) FROM mnemo_team.task_activity_event_expirations",
+    ),
+    (
+        "task_activity_event_purges",
+        "SELECT count(*) FROM mnemo_team.task_activity_event_purges",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +278,18 @@ class PostgreSQLNativeBackupAdapter:
             if row is None:
                 raise TeamBackupError("MNEMO_TEAM_BACKUP_FAILED")
             counts.append(TeamBackupTableCount(name, int(str(row[0]))))
-        return TeamDatabaseInventory(versions[-1], tuple(counts))
+        erasures: list[TeamBackupTableCount] = []
+        for name, query in _ERASURE_QUERIES:
+            if name not in names:
+                continue
+            typed.execute(query)
+            row = typed.fetchone()
+            if row is None:
+                raise TeamBackupError("MNEMO_TEAM_BACKUP_FAILED")
+            erasures.append(TeamBackupTableCount(name, int(str(row[0]))))
+        if len(erasures) != len(_ERASURE_QUERIES):
+            raise TeamBackupError("MNEMO_TEAM_BACKUP_FAILED")
+        return TeamDatabaseInventory(versions[-1], tuple(counts), tuple(erasures))
 
     def _write_passfile(self, path: Path, database: str) -> None:
         value = ":".join(

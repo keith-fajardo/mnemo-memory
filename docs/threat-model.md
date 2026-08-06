@@ -928,10 +928,18 @@ authority, live/nonempty target rejection, and inventory mismatch. The mandatory
 PostgreSQL test executes real version-17.10 `pg_dump`/`pg_restore`, restores every `mnemo_team`
 table, and compares the full schema ledger and row counts.
 
+Version-2 manifests also bind counts for every monotonic erasure ledger, using filtered counts for
+governance tables that also contain corrections. Explicit reconciliation obtains one current
+whole-team inventory, rejects a count regression, validates every bounded strict-name candidate,
+then removes each stale archive before its manifest with directory fsync between steps. A retry can
+remove an orphaned stale manifest without recreating payload. Version-1 manifests are conservatively
+stale after any erasure. Current archives remain byte-identical; malformed, substituted, unsafe, or
+symlinked candidates fail before a valid archive is removed.
+
 **Residual risk:** The archive contains sensitive team payload and relies on operator-provided
-encrypted storage, access control, retention, and off-host custody. Scheduled backups, key
-management, and deletion-triggered rotation or expiry are not implemented; a retained backup can
-therefore contain data deleted later from the live database.
+encrypted storage, access control, retention, and off-host custody. Reconciliation is explicit and
+directory-scoped. Mnemo cannot discover or recall external copies, and automatic schedules, remote
+object-store lifecycle integration, and encryption-key destruction remain unimplemented.
 
 Personal SQLite backups are likewise user-controlled sensitive copies. Backup creation rejects an
 absent/corrupt source, unsafe backup-directory symlinks, validation failures, and destination

@@ -2629,6 +2629,47 @@ and installed-package workflow verification. No Python dependency, schedule, rem
 encryption-key manager, retention pruning, deletion-triggered backup rotation, quota, or dashboard
 was added.
 
+#### Issue 21AE — Team backup deletion propagation — Complete
+
+The current bounded issue adds an explicit operator reconciliation command for backups retained in
+one Mnemo-managed private directory. The PostgreSQL adapter must compare each verified manifest's
+monotonic erasure-ledger table counts with one current authorized database inventory. A backup that
+predates any knowledge, checkpoint, approved-event, task-event, episodic-memory, or retention purge
+must have its archive deleted before its manifest so an interruption cannot leave an apparently
+valid payload-bearing backup. Current backups remain byte-identical.
+
+The operation must use the dedicated backup role and verified database transport, scan only a
+bounded set of strict Mnemo manifest names, reject symlinks and unsafe permissions, never follow an
+artifact path outside the selected directory, and return only removed file/byte counts. Exact
+retry must be safe, and malformed or unverified candidates must fail closed without deleting a
+valid archive. This issue adds no automatic scheduler, arbitrary retention-age policy, remote
+object-store deletion, external-copy recall, encryption-key manager, quota, or dashboard.
+
+Implemented `mnemo-memory-team-admin prune-deleted` over version-2 backup manifests. Each new
+manifest binds a sorted snapshot count for all eleven monotonic erasure ledgers; the two mixed
+governance tables count retractions only, so corrections do not invalidate a recovery point. The
+explicit command validates a bounded private directory and every strict-name manifest/archive,
+loads one current whole-team inventory through the dedicated backup role, rejects ledger
+regression, and removes only backups whose erasure watermark is stale. Version-1 manifests remain
+readable and are conservatively stale after any erasure.
+
+Deletion is archive-first with directory fsync before manifest deletion and a second fsync. Exact
+retry safely removes an orphaned stale manifest, current backups remain byte-identical, and a
+malformed candidate, substituted digest, symlink, unsafe permission, missing current archive, or
+regressed database blocks valid deletion. Results contain only removed backup, file, and byte
+counts. ADR 0039, ADR 0038, the product contract, deployment runbook, and threat model record the
+managed-directory guarantee and the unresolved external-copy boundary.
+
+Focused tests cover exact stale/current selection, filtered erasure inventory, v1 compatibility,
+interruption retry, invalid candidates, symlinks, unsafe permissions, ledger regression, and
+unchanged current bytes. The mandatory real-PostgreSQL drill backs up live knowledge payload,
+tombstones and physically erases it, creates a post-erasure recovery point, removes only the old
+payload-bearing archive, and retains the current archive. The complete repository gate passes with
+910 default tests plus 23 mandatory real-PostgreSQL tests, strict typing for 253 source files,
+dependency/provenance validation for 94 entries, architecture validation for 140 product Python
+files, schema validation, and installed-package workflow verification. No dependency, scheduler,
+age-based retention policy, remote store, key manager, quota, or dashboard was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

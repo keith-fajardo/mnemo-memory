@@ -267,7 +267,17 @@ per-table counts. Restore drills accept only a matching private archive, reject 
 and any target already containing `mnemo_team`, restore transactionally into an explicitly
 provisioned database, and require exact migration-ledger and table-count parity before success.
 The target must already contain the approved `vector` extension. Backup at-rest encryption,
-custody, retention, scheduling, and deletion propagation remain explicit operator/release gates.
+custody, retention, scheduling, and external-copy deletion propagation remain explicit
+operator/release gates.
+
+Team backup manifests version 2 also bind the snapshot count of every monotonic canonical erasure
+ledger, including filtered retraction records. An explicit reconciliation compares those counts
+with one current whole-team inventory. Any managed backup predating an erasure is deleted
+archive-first and manifest-second with durable directory synchronization; current backups remain
+unchanged, retries are safe, and a regressed ledger or unverified candidate fails closed before
+valid deletion. Version-1 backups are conservatively obsolete after any erasure. This guarantee
+applies only to directories explicitly submitted to Mnemo; external copies remain the operator's
+responsibility and must be disclosed by retention policy.
 
 ## Evidence requirements
 

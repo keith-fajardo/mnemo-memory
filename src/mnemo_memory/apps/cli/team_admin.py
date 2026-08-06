@@ -128,16 +128,20 @@ def main(arguments: Sequence[str] | None = None) -> None:
     restore = subcommands.add_parser("restore-drill")
     restore.add_argument("--manifest", type=Path, required=True)
     restore.add_argument("--target-database", required=True)
+    prune = subcommands.add_parser("prune-deleted")
+    prune.add_argument("--backup-dir", type=Path, required=True)
     parsed = parser.parse_args(arguments)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         service = build_team_backup_service(TeamBackupRuntimeConfig.from_environment(os.environ))
         if parsed.command == "backup":
             payload = service.create(parsed.output_dir).to_dict()
-        else:
+        elif parsed.command == "restore-drill":
             payload = service.restore_drill(
                 parsed.manifest, target_database=parsed.target_database
             ).to_dict()
+        else:
+            payload = service.prune_deleted(parsed.backup_dir).to_dict()
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     except (TeamAdminConfigurationError, TeamBackupError) as error:
         logging.error("%s", error)

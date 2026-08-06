@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from mnemo_memory.packages.domain import (
+    TEAM_BACKUP_FORMAT_V1,
     TeamBackupManifest,
     TeamBackupTableCount,
 )
@@ -27,6 +29,7 @@ class TeamBackupError(RuntimeError):
 class TeamDatabaseInventory:
     schema_version: int
     table_counts: tuple[TeamBackupTableCount, ...]
+    erasure_counts: tuple[TeamBackupTableCount, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -39,6 +42,16 @@ class TeamDatabaseInventory:
         if not counts or counts != tuple(sorted(counts)):
             raise ValueError("team database inventory is invalid")
         object.__setattr__(self, "table_counts", counts)
+        erasures = tuple(self.erasure_counts)
+        if (
+            erasures != tuple(sorted(erasures))
+            or len({item.table_name for item in erasures}) != len(erasures)
+            or any(
+                item.table_name not in {count.table_name for count in counts} for item in erasures
+            )
+        ):
+            raise ValueError("team database erasure inventory is invalid")
+        object.__setattr__(self, "erasure_counts", erasures)
 
 
 class TeamDatabaseBackupPort(Protocol):
@@ -95,6 +108,20 @@ class TeamRestoreDrillResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class TeamBackupDeletionResult:
+    backups_removed: int
+    files_removed: int
+    bytes_removed: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "backups_removed": self.backups_removed,
+            "files_removed": self.files_removed,
+            "bytes_removed": self.bytes_removed,
+        }
+
+
 class TeamBackupService:
     def __init__(
         self,
@@ -148,6 +175,7 @@ class TeamBackupService:
                 artifact_digest=digest,
                 size_bytes=size,
                 table_counts=inventory.table_counts,
+                erasure_counts=inventory.erasure_counts,
             )
             _write_private_file(manifest_temporary, manifest.canonical_json().encode("utf-8"))
             _publish_without_overwrite(temporary, artifact)
@@ -214,6 +242,58 @@ class TeamBackupService:
         except (OSError, ValueError) as error:
             raise TeamBackupError("MNEMO_TEAM_RESTORE_FAILED") from error
 
+    def prune_deleted(self, backup_directory: Path) -> TeamBackupDeletionResult:
+        directory = _existing_private_directory(backup_directory)
+        manifests = _backup_manifests(directory)
+        try:
+            current = self._port.inventory(self._port.source_database)
+            candidates: list[tuple[Path, Path | None, int]] = []
+            for manifest_path in manifests:
+                manifest = _read_manifest(manifest_path)
+                if manifest_path.name != f"{manifest.artifact_name}.json":
+                    raise TeamBackupError("MNEMO_TEAM_BACKUP_INVALID")
+                stale = _predates_erasure(manifest, current)
+                artifact = manifest_path.parent / manifest.artifact_name
+                if artifact.exists() or artifact.is_symlink():
+                    _require_private_regular_file(artifact)
+                    if (
+                        artifact.stat().st_size != manifest.size_bytes
+                        or _file_digest(artifact) != manifest.artifact_digest
+                    ):
+                        raise TeamBackupError("MNEMO_TEAM_BACKUP_INVALID")
+                    self._port.validate_archive(artifact)
+                    artifact_value: Path | None = artifact
+                elif stale:
+                    artifact_value = None
+                else:
+                    raise TeamBackupError("MNEMO_TEAM_BACKUP_INVALID")
+                if stale:
+                    candidates.append(
+                        (
+                            manifest_path,
+                            artifact_value,
+                            manifest_path.stat().st_size
+                            + (0 if artifact_value is None else manifest.size_bytes),
+                        )
+                    )
+
+            removed_files = 0
+            removed_bytes = 0
+            for manifest_path, candidate_artifact, size in candidates:
+                if candidate_artifact is not None:
+                    candidate_artifact.unlink()
+                    removed_files += 1
+                    _fsync_directory(directory)
+                manifest_path.unlink()
+                removed_files += 1
+                removed_bytes += size
+                _fsync_directory(directory)
+            return TeamBackupDeletionResult(len(candidates), removed_files, removed_bytes)
+        except TeamBackupError:
+            raise
+        except (OSError, ValueError) as error:
+            raise TeamBackupError("MNEMO_TEAM_BACKUP_DELETION_FAILED") from error
+
 
 def _private_directory(path: Path) -> Path:
     if not isinstance(path, Path) or not path.is_absolute() or path.is_symlink():
@@ -226,6 +306,54 @@ def _private_directory(path: Path) -> Path:
         return path
     except OSError as error:
         raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE") from error
+
+
+def _existing_private_directory(path: Path) -> Path:
+    if not isinstance(path, Path) or not path.is_absolute() or path.is_symlink():
+        raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE")
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise OSError
+        return path
+    except OSError as error:
+        raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE") from error
+
+
+_BACKUP_MANIFEST_NAME = re.compile(
+    r"^mnemo-team-v[1-9][0-9]*-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{64}\.dump\.json$"
+)
+
+
+def _backup_manifests(directory: Path) -> tuple[Path, ...]:
+    try:
+        manifests: list[Path] = []
+        for count, path in enumerate(directory.iterdir(), start=1):
+            if count > 4_096:
+                raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE")
+            if _BACKUP_MANIFEST_NAME.fullmatch(path.name):
+                manifests.append(path)
+                if len(manifests) > 1_000:
+                    raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE")
+        return tuple(sorted(manifests))
+    except OSError as error:
+        raise TeamBackupError("MNEMO_TEAM_BACKUP_DIRECTORY_UNSAFE") from error
+
+
+def _predates_erasure(manifest: TeamBackupManifest, current: TeamDatabaseInventory) -> bool:
+    if current.schema_version < manifest.schema_version:
+        raise TeamBackupError("MNEMO_TEAM_BACKUP_DELETION_STATE_INVALID")
+    current_counts = {item.table_name: item.row_count for item in current.erasure_counts}
+    if manifest.format_version == TEAM_BACKUP_FORMAT_V1:
+        return any(current_counts.values())
+    backup_counts = {item.table_name: item.row_count for item in manifest.erasure_counts}
+    if any(current_counts.get(name, 0) < count for name, count in backup_counts.items()):
+        raise TeamBackupError("MNEMO_TEAM_BACKUP_DELETION_STATE_INVALID")
+    return any(count > backup_counts.get(name, 0) for name, count in current_counts.items())
 
 
 def _read_manifest(path: Path) -> TeamBackupManifest:

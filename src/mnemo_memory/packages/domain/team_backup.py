@@ -12,7 +12,8 @@ from uuid import UUID, uuid5
 
 from .identifiers import EventId
 
-TEAM_BACKUP_FORMAT = "mnemo.team-backup.v1"
+TEAM_BACKUP_FORMAT_V1 = "mnemo.team-backup.v1"
+TEAM_BACKUP_FORMAT = "mnemo.team-backup.v2"
 _BACKUP_NAMESPACE = UUID("713eef93-161a-4482-a25c-f8db5ffbd220")
 _TABLE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -53,9 +54,10 @@ class TeamBackupManifest:
     artifact_digest: str
     size_bytes: int
     table_counts: tuple[TeamBackupTableCount, ...]
+    erasure_counts: tuple[TeamBackupTableCount, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.format_version != TEAM_BACKUP_FORMAT:
+        if self.format_version not in {TEAM_BACKUP_FORMAT_V1, TEAM_BACKUP_FORMAT}:
             raise ValueError("team backup format is unsupported")
         if not isinstance(self.backup_id, EventId):
             raise TypeError("team backup identity is invalid")
@@ -96,7 +98,32 @@ class TeamBackupManifest:
         ):
             raise ValueError("team backup table inventory is invalid")
         object.__setattr__(self, "table_counts", counts)
-        if self.backup_id != self.identity(self.created_at, self.artifact_digest, self.size_bytes):
+        erasures = tuple(self.erasure_counts)
+        if (
+            erasures != tuple(sorted(erasures))
+            or len({item.table_name for item in erasures}) != len(erasures)
+            or (self.format_version == TEAM_BACKUP_FORMAT and not erasures)
+            or (self.format_version == TEAM_BACKUP_FORMAT_V1 and erasures)
+            or any(
+                item.table_name not in {count.table_name for count in counts} for item in erasures
+            )
+        ):
+            raise ValueError("team backup erasure inventory is invalid")
+        object.__setattr__(self, "erasure_counts", erasures)
+        expected_identity = (
+            self.identity(self.created_at, self.artifact_digest, self.size_bytes)
+            if self.format_version == TEAM_BACKUP_FORMAT_V1
+            else self.version_two_identity(
+                self.created_at,
+                self.schema_version,
+                self.artifact_name,
+                self.artifact_digest,
+                self.size_bytes,
+                self.table_counts,
+                self.erasure_counts,
+            )
+        )
+        if self.backup_id != expected_identity:
             raise ValueError("team backup identity is invalid")
 
     @staticmethod
@@ -104,6 +131,31 @@ class TeamBackupManifest:
         return EventId(
             uuid5(_BACKUP_NAMESPACE, f"{created_at.isoformat()}:{artifact_digest}:{size_bytes}")
         )
+
+    @staticmethod
+    def version_two_identity(
+        created_at: datetime,
+        schema_version: int,
+        artifact_name: str,
+        artifact_digest: str,
+        size_bytes: int,
+        table_counts: tuple[TeamBackupTableCount, ...],
+        erasure_counts: tuple[TeamBackupTableCount, ...],
+    ) -> EventId:
+        content = json.dumps(
+            {
+                "created_at": created_at.isoformat(),
+                "schema_version": schema_version,
+                "artifact_name": artifact_name,
+                "artifact_digest": artifact_digest,
+                "size_bytes": size_bytes,
+                "table_counts": [item.to_dict() for item in table_counts],
+                "erasure_counts": [item.to_dict() for item in erasure_counts],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return EventId(uuid5(_BACKUP_NAMESPACE, content))
 
     @classmethod
     def create(
@@ -115,20 +167,30 @@ class TeamBackupManifest:
         artifact_digest: str,
         size_bytes: int,
         table_counts: tuple[TeamBackupTableCount, ...],
+        erasure_counts: tuple[TeamBackupTableCount, ...],
     ) -> Self:
         return cls(
             TEAM_BACKUP_FORMAT,
-            cls.identity(created_at, artifact_digest, size_bytes),
+            cls.version_two_identity(
+                created_at,
+                schema_version,
+                artifact_name,
+                artifact_digest,
+                size_bytes,
+                table_counts,
+                erasure_counts,
+            ),
             created_at,
             schema_version,
             artifact_name,
             artifact_digest,
             size_bytes,
             table_counts,
+            erasure_counts,
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "format_version": self.format_version,
             "backup_id": str(self.backup_id),
             "created_at": self.created_at.isoformat(),
@@ -138,6 +200,9 @@ class TeamBackupManifest:
             "size_bytes": self.size_bytes,
             "table_counts": [item.to_dict() for item in self.table_counts],
         }
+        if self.format_version == TEAM_BACKUP_FORMAT:
+            value["erasure_counts"] = [item.to_dict() for item in self.erasure_counts]
+        return value
 
     def canonical_json(self) -> str:
         return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -154,13 +219,21 @@ class TeamBackupManifest:
             "size_bytes",
             "table_counts",
         }
+        format_version = str(value.get("format_version"))
+        if format_version == TEAM_BACKUP_FORMAT:
+            expected.add("erasure_counts")
         if set(value) != expected or not isinstance(value["table_counts"], list):
             raise ValueError("team backup manifest fields are invalid")
         counts = value["table_counts"]
         if any(not isinstance(item, Mapping) for item in counts):
             raise TypeError("team backup table counts are invalid")
+        raw_erasures = value.get("erasure_counts", [])
+        if not isinstance(raw_erasures, list) or any(
+            not isinstance(item, Mapping) for item in raw_erasures
+        ):
+            raise TypeError("team backup erasure counts are invalid")
         return cls(
-            str(value["format_version"]),
+            format_version,
             EventId.from_string(str(value["backup_id"])),
             datetime.fromisoformat(str(value["created_at"])),
             value["schema_version"],  # type: ignore[arg-type]
@@ -168,6 +241,7 @@ class TeamBackupManifest:
             str(value["artifact_digest"]),
             value["size_bytes"],  # type: ignore[arg-type]
             tuple(TeamBackupTableCount.from_dict(item) for item in counts),
+            tuple(TeamBackupTableCount.from_dict(item) for item in raw_erasures),
         )
 
     @classmethod

@@ -118,7 +118,27 @@ live or a nonempty target, restores with `--single-transaction`, and succeeds on
 migration ledger and every table count match. The JSON result contains only backup identity,
 target database, schema/table/row counts, and bounded duration. Drop the isolated drill database
 after recording the result. A successful drill proves database recovery, not deletion propagation
-into retained backups; that remains a release gate.
+into external copies.
+
+After a canonical deletion or retention purge, reconcile every backup directory controlled by
+Mnemo before considering the deletion complete:
+
+```bash
+mnemo-memory-team-admin prune-deleted --backup-dir /srv/mnemo/backups
+```
+
+Version-2 manifests record the exact count of each monotonic erasure ledger at snapshot time. The
+command compares those counts with one current database inventory and removes every older archive
+before its manifest, fsyncing the directory between steps. This makes interruption and exact retry
+safe: an orphaned stale manifest is removed on retry, while a current backup is unchanged. Version-1
+manifests are conservatively removed after any recorded erasure because they lack the exact
+watermark. A regressed ledger, malformed or substituted manifest/archive, unsafe permission,
+symlink, or more than the bounded directory entries fails closed before a valid archive is deleted.
+The result contains only removed backup, file, and byte counts.
+
+Run this command separately for every local directory under Mnemo's control. Mnemo cannot discover
+or recall archives copied to another directory, object store, removable medium, or third party;
+operators must propagate deletion through those systems under their own retention policy.
 
 ## Team knowledge source governance
 
