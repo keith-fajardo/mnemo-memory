@@ -1969,6 +1969,49 @@ files, schema validation, and the isolated installed-package MCP workflow. No mi
 dependency was added. No export file writer, import, broader category export, backup propagation,
 remote service, OAuth, quota, dashboard, source governance, or usable team mode was added.
 
+#### Issue 21N — PostgreSQL team source-structure projection parity — Complete
+
+The current bounded issue implements the existing `SourceStructureRepository` contract for
+PostgreSQL. Immutable project-scoped source snapshots, privacy-safe relative file paths/digests,
+symbols, resolved/unresolved edges, activation history, and last-sync status must commit atomically
+behind forced RLS. Exact digest replay reactivates the existing snapshot idempotently; changed
+identity or invalid graph state fails closed. Reads and bounded deterministic symbol selection must
+authorize before ranking, preserve explicit activation order, survive restart, and reveal no source
+text, comments, docstrings, absolute paths, or environment values. Real-database tests must cover
+contract parity, atomic rollback, migration rollback, runtime privileges, restart durability, and
+cross-tenant/private-project denial.
+
+This issue does not add checkpoint source observations, dbt projections, filesystem scanning in a
+service, a worker/scheduler, personal import, remote service, OAuth, backup, quota, dashboard,
+source approval governance, or usable team mode.
+
+Implemented PostgreSQL schema version 11 and `PostgreSQLSourceStructureRepository` for the existing
+rebuildable source projection contract. Snapshot, safe relative-file fingerprint, symbol, edge,
+activation, and sync-status rows repeat exact project scope and force RLS. Composite foreign keys
+bind every child to its snapshot and every resolved edge to same-snapshot symbols. The projection
+stores no source body, comment, docstring, absolute path, environment value, embedding, or model
+output.
+
+One project-keyed advisory transaction lock serializes complete projection storage and activation.
+New artifacts insert atomically; exact scoped digest replay reuses the immutable snapshot and
+reactivates it only when needed. Explicit append-only activations—not UUID ordering—define history
+and transitions. A fixed-search-path trigger prevents immutable-field updates or active-state
+changes that do not follow the newest activation. Runtime update access is column-limited to active
+state and last-sync time. Exact reads, bounded literal symbol matching, module/path selection,
+symbol lookup, and forward/reverse adjacency authorize in PostgreSQL before deterministic ranking.
+
+ADR 0022, the product contract, and threat model document the rebuildable/no-source-text boundary,
+authorization, activation serialization, and forward-only recovery. Real PostgreSQL tests prove
+atomic v10-to-v11 rollback/retry, exact replay, two activations and reactivation, transition/history
+order, sync state, file/symbol/edge parity, bounded search and graph frontiers, conflicting identity
+rollback, restart durability, foreign-project/private-viewer denial, immutable-column privileges,
+and trigger rejection of an unrecorded active change. The complete repository gate passes with 826
+default tests plus 15 mandatory real-PostgreSQL tests, strict typing for 217 source files,
+dependency/provenance validation for 93 entries, architecture validation for 117 product Python
+files, schema validation, and the isolated installed-package MCP workflow. No dependency was added.
+No checkpoint source observation, dbt projection, filesystem service, worker, import, remote
+service, OAuth, backup, quota, dashboard, source governance, or usable team mode was added.
+
 ### Personal checkpoint inspection — Complete
 
 The current approved slice adds one read-only local CLI inspection path for the active durable

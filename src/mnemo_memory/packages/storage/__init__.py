@@ -113,6 +113,7 @@ from .postgres_candidates import PostgreSQLEpisodicMemoryRepository
 from .postgres_checkpoints import PostgreSQLCheckpointRepository
 from .postgres_events import PostgreSQLEventOutboxRepository, PostgreSQLTaskActivityEventRepository
 from .postgres_knowledge import PostgreSQLKnowledgeDocumentRepository
+from .postgres_source_structure import PostgreSQLSourceStructureRepository
 from .reference import (
     ReferenceApprovedEpisodicEventRepository,
     ReferenceCheckpointLifecycleEventRepository,
@@ -227,6 +228,7 @@ __all__ = [
     "PostgreSQLEpisodicMemoryRepository",
     "PostgreSQLEventOutboxRepository",
     "PostgreSQLKnowledgeDocumentRepository",
+    "PostgreSQLSourceStructureRepository",
     "PostgreSQLTaskActivityEventRepository",
     "PostgreSQLTeamControlPlaneRepository",
     "PostgreSQLTeamMigrationError",

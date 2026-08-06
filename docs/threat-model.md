@@ -406,6 +406,31 @@ Personal-to-team import, backup/export deletion propagation, checkpoint/approved
 structural export parity, authenticated remote transport, and user-visible export audit remain
 separate issues.
 
+### Cross-tenant source projection and repository-content retention
+
+**Scenario:** A source snapshot is written into another project, child rows substitute a different
+scope, active-state races fork history, a private viewer enumerates paths or symbols, lexical search
+ranks unauthorized rows, or the structural index retains source bodies, secrets, or absolute local
+paths.
+
+**Required controls:** Source artifacts require one bound exact project scope. Snapshot, file,
+symbol, edge, activation, and sync rows repeat that scope and force RLS. Composite foreign keys bind
+children and resolved edges to the same snapshot. One project-specific transaction lock serializes
+store/activation, a partial uniqueness constraint permits one active snapshot, and a fixed-search-
+path trigger admits active-state changes only after the latest matching activation. Runtime update
+privileges are column-limited. Persisted file data is restricted to safe relative paths and SHA-256
+digests; symbol and edge rows contain structural identities only. Authorized bounded database
+selection precedes deterministic lexical ranking.
+
+**Verification:** Real PostgreSQL tests cover immutable snapshot replay, atomic conflicting-identity
+rollback, activation/reactivation history, restart durability, bounded search and graph frontiers,
+foreign-project/private-viewer denial, runtime privileges, and trigger rejection of an unrecorded
+active-state change. Migration failure from v10 leaves no source table.
+
+**Residual risk:** The adapter does not scan a filesystem or authenticate a remote caller, and no
+worker schedules refresh. dbt parity, checkpoint source observation, source approval governance,
+deletion/export/import of structural projections, and backup propagation remain separate issues.
+
 ### Prompt injection through retrieved content
 
 **Scenario:** A note, source comment, checkpoint, dbt description, or tool output instructs an

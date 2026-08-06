@@ -115,6 +115,15 @@ an unauthorized or foreign task yields the same valid empty bundle shape without
 or identities. The operation returns data only and does not persist an export file or authorize a
 later import.
 
+Team source structure uses the same rebuildable projection contract as personal mode. PostgreSQL
+stores immutable exact-project snapshot digests and counts, privacy-safe relative file paths and
+content digests, symbol identities, static edges, explicit activation history, and last-sync time
+behind forced RLS. It stores no source body, comment, docstring, absolute path, environment value,
+embedding, or inferred relationship. Exact digest replay reuses the existing snapshot, activation
+order—not UUID order—defines transitions, and bounded authorized literal symbol selection reuses the
+backend-independent deterministic rank. The adapter accepts an already parsed artifact; filesystem
+discovery, refresh scheduling, and checkpoint co-observation remain separate operations.
+
 ## Source-authority order
 
 The default order, from highest to lowest authority, is:

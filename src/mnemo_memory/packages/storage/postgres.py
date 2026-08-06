@@ -40,7 +40,7 @@ from .team import (
     TeamMutationResult,
 )
 
-POSTGRES_TEAM_SCHEMA_VERSION = 10
+POSTGRES_TEAM_SCHEMA_VERSION = 11
 _POSTGRES_TEAM_MIGRATIONS = (
     (1, "0001_team_control_plane.sql"),
     (2, "0002_team_knowledge.sql"),
@@ -52,6 +52,7 @@ _POSTGRES_TEAM_MIGRATIONS = (
     (8, "0008_team_episodic_retention.sql"),
     (9, "0009_team_task_activity_retention.sql"),
     (10, "0010_team_episodic_deletions.sql"),
+    (11, "0011_team_source_structure.sql"),
 )
 _ROLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
@@ -238,6 +239,15 @@ class PostgreSQLTeamMigrationRunner:
                 f"GRANT SELECT, INSERT ON mnemo_team.task_activity_event_purges TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.task_activity_event_deletions TO {role}",
                 f"GRANT SELECT, INSERT ON mnemo_team.episodic_memory_deletions TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_structure_snapshots TO {role}",
+                f"GRANT UPDATE (is_active) ON mnemo_team.source_structure_snapshots TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_structure_files TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_structure_symbols TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_structure_edges TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_snapshot_activations TO {role}",
+                f"GRANT SELECT, INSERT ON mnemo_team.source_structure_sync_status TO {role}",
+                f"GRANT UPDATE (last_synced_at) ON "
+                f"mnemo_team.source_structure_sync_status TO {role}",
             )
             for statement in statements:
                 cursor.execute(statement)

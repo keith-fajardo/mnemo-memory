@@ -27,6 +27,15 @@ from mnemo_memory.packages.domain import (
     CheckpointRevision,
     CheckpointRevisionId,
     CheckpointStatus,
+    CodeEdge,
+    CodeEdgeKind,
+    CodeFile,
+    CodeSnapshot,
+    CodeSnapshotId,
+    CodeStructureArtifact,
+    CodeSymbol,
+    CodeSymbolId,
+    CodeSymbolKind,
     EpisodicCandidateReviewAction,
     EpisodicCandidateReviewDecision,
     EpisodicExportBundle,
@@ -111,6 +120,7 @@ from mnemo_memory.packages.storage import (
     PostgreSQLEpisodicMemoryRepository,
     PostgreSQLEventOutboxRepository,
     PostgreSQLKnowledgeDocumentRepository,
+    PostgreSQLSourceStructureRepository,
     PostgreSQLTaskActivityEventRepository,
     PostgreSQLTeamControlPlaneRepository,
     PostgreSQLTeamMigrationError,
@@ -143,6 +153,8 @@ from mnemo_memory.packages.storage.contracts import (
     EpisodicMemoryReviewConflict,
     EpisodicMemoryReviewNotFound,
     EpisodicMemoryReviewRejected,
+    SourceIndexStorageFailure,
+    SourceSnapshotNotFound,
 )
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -390,6 +402,14 @@ def test_postgres_migration_is_packaged_restrictive_and_rolls_back(
     assert deletion_sql.count("FORCE ROW LEVEL SECURITY") == 2
     assert "CREATE OR REPLACE FUNCTION mnemo_team.ensure_episodic_payload_purge()" in deletion_sql
     assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in deletion_sql
+    source_sql = (
+        resources.files("mnemo_memory")
+        .joinpath("resources", "postgres_migrations", "0011_team_source_structure.sql")
+        .read_text(encoding="utf-8")
+    )
+    assert source_sql.count("FORCE ROW LEVEL SECURITY") == 6
+    assert "source snapshot immutable fields cannot change" in source_sql
+    assert "REVOKE ALL ON ALL TABLES IN SCHEMA mnemo_team FROM PUBLIC" in source_sql
 
     suffix = uuid4().hex[:12]
     database = f"mnemo_rollback_{suffix}"
@@ -696,6 +716,42 @@ def test_team_data_migrations_upgrade_atomically(
         finally:
             cursor.close()
             connection.close()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                resources.files("mnemo_memory")
+                .joinpath("resources", "postgres_migrations", "0010_team_episodic_deletions.sql")
+                .read_text(encoding="utf-8")
+            )
+            connection.commit()
+        finally:
+            cursor.close()
+            connection.close()
+        with pytest.raises(PostgreSQLTeamMigrationError, match="injected"):
+            PostgreSQLTeamMigrationRunner(factory, fail_migration_at=11).migrate()
+        connection = factory()
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT version FROM mnemo_team.schema_migrations ORDER BY version")
+            assert tuple(int(str(row[0])) for row in cursor.fetchall()) == (
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+            )
+            cursor.execute("SELECT to_regclass('mnemo_team.source_structure_snapshots')")
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+        finally:
+            cursor.close()
+            connection.close()
         assert PostgreSQLTeamMigrationRunner(factory).migrate() == POSTGRES_TEAM_SCHEMA_VERSION
         connection = factory()
         cursor = connection.cursor()
@@ -712,6 +768,7 @@ def test_team_data_migrations_upgrade_atomically(
                 8,
                 9,
                 10,
+                11,
             )
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
             assert cursor.fetchone() is not None
@@ -2874,6 +2931,203 @@ def test_postgres_episodic_export_is_complete_stable_and_scoped(
     )
     with pytest.raises(EpisodicExportStorageFailure):
         EpisodicExportService(unavailable).export(scope, exported_at=exported_at)
+
+
+def _source_structure_artifact(scope: MemoryScope, seed: int) -> CodeStructureArtifact:
+    snapshot_id = CodeSnapshotId.new()
+    module_id = CodeSymbolId.new()
+    function_id = CodeSymbolId.new()
+    files = (CodeFile(snapshot_id, f"src/module_{seed}.py", "sha256:" + f"{seed:x}" * 64),)
+    symbols = (
+        CodeSymbol(
+            snapshot_id,
+            module_id,
+            f"src/module_{seed}.py",
+            f"src.module_{seed}",
+            CodeSymbolKind.MODULE,
+            1,
+        ),
+        CodeSymbol(
+            snapshot_id,
+            function_id,
+            f"src/module_{seed}.py",
+            f"src.module_{seed}.reconcile",
+            CodeSymbolKind.FUNCTION,
+            3,
+        ),
+    )
+    edges = (
+        CodeEdge(
+            snapshot_id,
+            module_id,
+            f"src.module_{seed}.reconcile",
+            CodeEdgeKind.DEFINES,
+            function_id,
+        ),
+    )
+    return CodeStructureArtifact(
+        CodeSnapshot(
+            snapshot_id,
+            scope,
+            "sha256:" + f"{seed + 8:x}" * 64,
+            len(files),
+            len(symbols),
+            len(edges),
+        ),
+        symbols,
+        edges,
+        files,
+    )
+
+
+def test_postgres_source_structure_is_atomic_searchable_and_scoped(
+    postgres_harness: PostgreSQLHarness,
+) -> None:
+    control, workspace, _ = _create_workspace(postgres_harness)
+    project = TeamProject(
+        workspace.workspace_id,
+        ProjectId.new(),
+        workspace.owner_id,
+        TeamProjectVisibility.PRIVATE,
+    )
+    control.create_project(
+        project,
+        _audit(
+            workspace.workspace_id,
+            workspace.owner_id,
+            TeamAuditAction.PROJECT_CREATED,
+            project_id=project.project_id,
+        ),
+    )
+    scope = MemoryScope(
+        workspace.owner_id,
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        workspace.workspace_id,
+        project.project_id,
+    )
+    repository = PostgreSQLSourceStructureRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    first = _source_structure_artifact(scope, 1)
+    first_result = repository.store_and_activate(first)
+    assert not first_result.idempotent and first_result.snapshot == first.snapshot
+    assert repository.store_and_activate(first).idempotent
+    assert repository.get_active_snapshot(scope) == first.snapshot
+    assert repository.get_snapshot(scope, first.snapshot.snapshot_id) == first.snapshot
+    assert repository.iter_files(scope, first.snapshot.snapshot_id) == first.files
+    assert (
+        repository.get_file(scope, first.snapshot.snapshot_id, first.files[0].relative_path)
+        == first.files[0]
+    )
+    assert repository.iter_symbols(scope, first.snapshot.snapshot_id) == first.symbols
+    assert repository.iter_edges(scope, first.snapshot.snapshot_id) == first.edges
+    assert repository.find_symbols(scope, first.snapshot.snapshot_id, "reconcile", limit=10) == (
+        first.symbols[1],
+    )
+    assert repository.module_symbols_for_paths(
+        scope, first.snapshot.snapshot_id, (first.files[0].relative_path,)
+    ) == (first.symbols[0],)
+    assert repository.symbols_by_ids(
+        scope, first.snapshot.snapshot_id, (first.symbols[1].symbol_id,)
+    ) == (first.symbols[1],)
+    assert (
+        repository.edges_from_symbols(
+            scope, first.snapshot.snapshot_id, (first.symbols[0].symbol_id,)
+        )
+        == first.edges
+    )
+    assert (
+        repository.edges_to_symbols(
+            scope, first.snapshot.snapshot_id, (first.symbols[1].symbol_id,)
+        )
+        == first.edges
+    )
+    assert repository.last_sync_at(scope) is not None
+    assert repository.latest_transition(scope) is None
+    assert repository.list_activation_history(scope) == (first.snapshot,)
+
+    second = _source_structure_artifact(scope, 2)
+    assert not repository.store_and_activate(second).idempotent
+    assert repository.get_active_snapshot(scope) == second.snapshot
+    assert repository.latest_transition(scope) == (first.snapshot, second.snapshot)
+    assert repository.list_activation_history(scope) == (second.snapshot, first.snapshot)
+
+    conflicting_snapshot = replace(
+        second.snapshot,
+        source_digest="sha256:" + "c" * 64,
+    )
+    with pytest.raises(SourceIndexStorageFailure):
+        repository.store_and_activate(replace(second, snapshot=conflicting_snapshot))
+    assert repository.get_active_snapshot(scope) == second.snapshot
+
+    reactivated = repository.store_and_activate(first)
+    assert reactivated.idempotent and reactivated.snapshot == first.snapshot
+    assert repository.get_active_snapshot(scope) == first.snapshot
+    assert repository.latest_transition(scope) == (second.snapshot, first.snapshot)
+    assert repository.list_activation_history(scope) == (
+        first.snapshot,
+        second.snapshot,
+        first.snapshot,
+    )
+
+    restarted = PostgreSQLSourceStructureRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=workspace.owner_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert restarted.get_active_snapshot(scope) == first.snapshot
+    assert restarted.iter_symbols(scope, first.snapshot.snapshot_id) == first.symbols
+    foreign_scope = replace(scope, project_id=ProjectId.new())
+    assert restarted.get_active_snapshot(foreign_scope) is None
+    with pytest.raises(SourceSnapshotNotFound):
+        restarted.get_snapshot(foreign_scope, first.snapshot.snapshot_id)
+
+    viewer_id = OwnerId.new()
+    _add_workspace_member(control, workspace, viewer_id, WorkspaceRole.VIEWER)
+    viewer = PostgreSQLSourceStructureRepository(
+        postgres_harness.runtime_factory(),
+        principal_id=viewer_id,
+        workspace_id=workspace.workspace_id,
+    )
+    assert viewer.get_active_snapshot(scope) is None
+    with pytest.raises(SourceIndexStorageFailure):
+        viewer.store_and_activate(_source_structure_artifact(scope, 3))
+
+    connection = postgres_harness.runtime_factory()()
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT has_column_privilege(current_user, "
+            "'mnemo_team.source_structure_snapshots', 'source_digest', 'UPDATE'), "
+            "has_column_privilege(current_user, "
+            "'mnemo_team.source_structure_snapshots', 'is_active', 'UPDATE'), "
+            "has_table_privilege(current_user, "
+            "'mnemo_team.source_structure_snapshots', 'DELETE')"
+        )
+        assert tuple(cursor.fetchone() or ()) == (False, True, False)
+        cursor.execute(
+            "SELECT set_config('mnemo.principal_id', %s, true), "
+            "set_config('mnemo.workspace_id', %s, true), "
+            "set_config('mnemo.operation', %s, true)",
+            (
+                str(workspace.owner_id),
+                str(workspace.workspace_id),
+                TeamOperation.CONTRIBUTE.value,
+            ),
+        )
+        with pytest.raises(pg8000.dbapi.DatabaseError):
+            cursor.execute(
+                "UPDATE mnemo_team.source_structure_snapshots SET is_active = false WHERE "
+                "workspace_id = CAST(%s AS uuid) AND snapshot_id = CAST(%s AS uuid)",
+                (str(workspace.workspace_id), str(first.snapshot.snapshot_id)),
+            )
+    finally:
+        connection.rollback()
+        cursor.close()
+        connection.close()
 
 
 def _database_authorized(
