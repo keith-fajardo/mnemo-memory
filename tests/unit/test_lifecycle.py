@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,21 @@ def test_cli_help_explains_the_user_facing_workflow() -> None:
     assert "Show bounded saved structural changes" in memory.output
     assert "Enable Mnemo for this dbt project; no UUIDs are needed normally." in dbt.output
     assert "Run exact dbt arguments with safe Mnemo pre/post manifest hooks." in dbt.output
+
+
+def test_cli_version_reports_the_installed_distribution_version() -> None:
+    result = CliRunner().invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.output == (f"mnemo-memory {distribution_version('mnemo-unified-context')}\n")
+
+
+def test_cli_help_lists_the_version_option() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--version" in result.output
+    assert "Show the installed Mnemo version and exit." in result.output
 
 
 def test_configuration_is_strict_loopback_only_and_path_safe(tmp_path: Path) -> None:

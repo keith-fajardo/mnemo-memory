@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
+from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 from typing import cast
 from uuid import UUID, uuid4, uuid5
@@ -164,6 +165,27 @@ app = typer.Typer(
     add_completion=False,
     help="Local-first durable task checkpoints and dbt lineage context.",
 )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"mnemo-memory {distribution_version('mnemo-unified-context')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed Mnemo version and exit.",
+    ),
+) -> None:
+    """Handle root-level CLI options."""
+
+
 mcp_app = typer.Typer(no_args_is_help=True, help="Run the local MCP server.")
 app.add_typer(mcp_app, name="mcp", help="Run the local MCP server.")
 connect_app = typer.Typer(no_args_is_help=True, help="Register Mnemo with an AI coding client.")

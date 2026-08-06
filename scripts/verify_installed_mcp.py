@@ -393,6 +393,14 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
         launcher = tool_bin / "mnemo-memory"
         if not launcher.is_file():
             raise InstalledWorkflowError("uv tool install did not create mnemo-memory")
+        version_result = _run(
+            (str(launcher), "--version"),
+            cwd=work,
+            environment=install_environment,
+        )
+        expected_version = f"mnemo-memory {DISTRIBUTION_VERSION}"
+        if version_result.stdout.strip() != expected_version:
+            raise InstalledWorkflowError("installed mnemo-memory reported an unexpected version")
         team_launcher = tool_bin / "mnemo-memory-team"
         if not team_launcher.is_file():
             raise InstalledWorkflowError("uv tool install did not create mnemo-memory-team")

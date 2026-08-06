@@ -3940,3 +3940,20 @@ built artifacts passed the release verifier with these SHA-256 digests:
 Publication remains an operational action performed from the committed revision by the existing
 protected PyPI workflow; the workflow performs its own clean build, exact-bundle hash checks,
 trusted publication, provenance verification, and installed-package smoke test.
+
+### Installed CLI version reporting — Complete
+
+This bounded usability issue adds a standard eager `mnemo-memory --version` root option backed by
+the installed `mnemo-unified-context` distribution metadata. It adds focused CLI coverage and an
+installed-wheel smoke assertion. It does not change package dependencies, storage, schema, policy,
+MCP tools, client registration, or runtime services. User installation documentation remains
+pinned to the immutable production `0.1.0a4` release and must add this option only with the next
+versioned publication that contains it.
+
+The option exits successfully with `mnemo-memory 0.1.0a4`, is listed in root help, and is exercised
+through both focused Typer tests and the isolated installed-wheel verification. The focused
+lifecycle suite passes with 33 tests, focused formatting and lint pass, `git diff --check` passes,
+and the first complete repository gate passes with 944 tests, 27 expected skips, the 26-test real
+PostgreSQL suite with one expected load-test skip, schema validation, dependency/provenance
+validation for 94 entries, architecture validation for 144 product Python files, and installed
+package verification.
