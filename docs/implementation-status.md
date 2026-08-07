@@ -3977,3 +3977,10 @@ with these SHA-256 digests:
 
 Publication remains an operational action performed from the committed revision by the existing
 protected workflow, which rebuilds and verifies its own exact artifact bundle before upload.
+
+The first production workflow attempt correctly stopped before artifact construction or upload
+because GitHub's forced ANSI coloring split the styled `--version` token in the raw help-test
+output. The CLI behavior was unaffected. The release test now removes terminal styling before
+asserting the user-visible help text. The exact forced-color regression and the complete repository
+gate both pass after the correction (`944 passed`, `27 skipped`; PostgreSQL integration `26 passed`,
+`1 skipped`).

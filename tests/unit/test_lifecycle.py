@@ -6,6 +6,7 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 import pytest
+from click import unstyle
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -95,10 +96,11 @@ def test_cli_version_reports_the_installed_distribution_version() -> None:
 
 def test_cli_help_lists_the_version_option() -> None:
     result = CliRunner().invoke(app, ["--help"])
+    output = unstyle(result.output)
 
     assert result.exit_code == 0
-    assert "--version" in result.output
-    assert "Show the installed Mnemo version and exit." in result.output
+    assert "--version" in output
+    assert "Show the installed Mnemo version and exit." in output
 
 
 def test_configuration_is_strict_loopback_only_and_path_safe(tmp_path: Path) -> None:
