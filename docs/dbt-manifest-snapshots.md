@@ -56,9 +56,11 @@ come from the selected manifest snapshot; an optional latest status comes only f
 `run_results.json` projection for that same snapshot. Missing results are not passes, and no tests
 does not trigger transitive inference.
 A `dbt_selector` request intersects exact resource-type, package, and tag fields over enabled nodes
-in the selected snapshot. At least one field is required, results are capped at 100 before context
-rendering, and no match stays a scoped omission. Mnemo does not parse or execute dbt selector
-strings.
+in the selected snapshot. At least one field is required. A broad resource-type-only MCP request
+returns one manifest-level count and snapshot by default; explicit MCP node samples are capped at
+eight, while the application service retains its internal 100-node bound for reviewed non-MCP
+callers. Unknown selector fields fail instead of being ignored, and no match stays a scoped
+omission for node-returning queries. Mnemo does not parse or execute dbt selector strings.
 Observed source freshness is a separate immutable `sources.json` v3 projection attached to the
 same exact manifest snapshot. `dbt_freshness` selects one exact source ID or unambiguous source
 file and returns the persisted dbt status, observation timestamps, age, thresholds, and execution

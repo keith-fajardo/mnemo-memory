@@ -29,6 +29,8 @@ install, or treating all installed software as privileged code.
 - **I want the short product overview:** return to the [README](../README.md).
 - **I want to understand what is saved:** read
   [Does Mnemo remember an entire codebase?](#does-mnemo-remember-an-entire-codebase).
+- **I want to remember what I was working on:** use
+  [Recap a previous session](#recap-a-previous-session).
 - **I want to correct or remove memory:** use
   [Review, correct, and forget memory](managing-memory.md).
 - **I use Codex or Claude Code:** use the
@@ -44,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a7
+uv tool install mnemo-unified-context==0.1.0a8
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -71,6 +73,37 @@ mnemo scan
 
 The command initializes or reuses the local profile, needs no UUIDs, and never runs dbt or other
 project code when the manifest is absent.
+
+## Recap a previous session
+
+Mnemo can turn saved task handoffs into a short, cited activity recap. Run this inside an enabled
+project:
+
+```bash
+mnemo recap
+```
+
+That returns the newest checkpoint handoff—the last state the agent explicitly saved. It includes
+the objective, completed work, current state, next work, decisions, failures, and blockers that
+were actually recorded, followed by the checkpoint and revision IDs.
+
+For a recent window, either spelling works:
+
+```bash
+mnemo recap --days 3
+mnemo recap --3days
+```
+
+Day windows may be 1 through 90 days. Mnemo checks only this project's stable private task scope,
+reads at most 50 lifecycle records, keeps the newest revision for each checkpoint, returns at most
+eight handoffs, and stops at a 1,300-token budget. If more fits the date range, the output says that
+bounded items were omitted.
+
+In Codex or Claude Code you can ask, “Mnemo recap what I worked on for the past 3 days.” The
+automatic project hook recognizes the literal recap request and supplies the same evidence to the
+agent. This is retrieval, not new memory creation: the prompt is transient, Mnemo makes no model
+call, and it does not scan files or replay chats, commands, source bodies, tool output, or private
+reasoning. If a session ended without a checkpoint, Mnemo truthfully cannot reconstruct it.
 
 ## Does Mnemo remember an entire codebase?
 
@@ -212,12 +245,17 @@ Mnemo still returns the bounded lesson as historical episodic evidence, with the
 revision and evidence references.
 
 When there is no recent transition, Mnemo still gives the fresh session a small **source overview**:
-the cited immutable snapshot ID, counts of indexed files/symbols/relationships, and a deterministic
-sample of saved relative files, modules, and declarations. It is a compact map of the registered repository, not a
-copy of its source code. The packet never includes source bodies, chat prompts, terminal output, or
-absolute local paths. A budget-constrained packet says exactly what it omitted rather than silently
-altering structural identities. The overview also reports how many file/module/declaration
-identities remain outside its bounded sample.
+one cited graph projection containing the immutable snapshot ID, exact indexed counts, component
+counts, bounded relative-file/module/declaration identities, and bounded static relationships. It
+is a compact map of the registered repository, not a copy of its source code. Mnemo never sends the
+whole graph as dozens of separate facts. The packet never includes source bodies, chat prompts,
+terminal output, or absolute local paths. It says exactly how many component, file, module,
+declaration, and relationship records remain outside its bounded sample.
+
+A literal architecture question such as “What are the main components of this repository and how
+do they connect?” selects that graph overview automatically and does not search project notes. A
+targeted implementation question instead selects matching saved symbols and nearby static edges,
+allowing the agent to read only the relevant files when source-level detail is actually needed.
 
 At session start, Mnemo has just refreshed the snapshot it attaches, so that attached source map
 is explicitly labeled **current** for the captured digest. Later manual requests still require
@@ -298,10 +336,12 @@ resource, plus their latest persisted `run_results.json` status when one is avai
 run result stays unobserved rather than being treated as a pass, and no attached tests produces a
 bounded omission rather than inferred coverage.
 
-For a small manifest inventory, request `dbt_selector` with one or more exact
-`resource_type`, `package_name`, or `tag` filters. Mnemo intersects the supplied fields, returns
-enabled nodes in stable unique-ID order, and caps the result before packet rendering. This is a
-structured Mnemo query, not dbt selector-string syntax, so it never executes selector expressions.
+For a manifest inventory, request `dbt_selector` with one or more exact `resource_type`,
+`package_name`, or `tag` filters. A broad question such as “can you see the dbt models?” returns one
+small cited fact with the exact enabled-model count and snapshot, rather than a list of every node.
+Exact package/tag queries can return stable node records, and `include_nodes: true` opts into a
+sample capped at eight. This is a structured Mnemo query, not dbt selector-string syntax: unknown
+`select`, `limit`, or `path` fields fail and Mnemo never executes selector expressions.
 
 To review a dbt transition, request `dbt_changes`. With no snapshot IDs it compares the latest two
 explicit manifest activations; advanced callers may provide both `before_snapshot_id` and
@@ -789,6 +829,11 @@ If automatic task memory is already enabled for this repository, Mnemo reuses it
 identity. That is what lets one later `get_context` request safely combine the checkpoint's
 explanation of **why** a reconciliation changed with dbt's verified evidence of **what** is
 upstream or downstream—without asking you to manage scopes or UUIDs.
+
+Simple architecture questions use aggregates before records. For example, asking whether Mnemo can
+see the dbt models should take one retrieval and return the saved manifest's exact enabled-model
+count and snapshot. It should not scan `models/`, parse an oversized tool-result file, page through
+selectors, or create a checkpoint for that read-only answer.
 
 To use ordinary `dbt` commands with Mnemo’s local pre/post handling, choose one one-time shell
 setup. For zsh, add this line to your own `~/.zshrc`:

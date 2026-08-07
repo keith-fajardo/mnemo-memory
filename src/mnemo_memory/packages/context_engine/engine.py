@@ -11,7 +11,9 @@ from enum import StrEnum
 from typing import Protocol
 
 from mnemo_memory.packages.application.unified_context import (
+    ContextCheckpointRecapQuery,
     ContextDbtSelectorQuery,
+    ContextSourceOverviewQuery,
     GetUnifiedContext,
 )
 from mnemo_memory.packages.domain import (
@@ -39,6 +41,7 @@ from mnemo_memory.packages.storage import (
 from .selection import finalize_context_packet
 
 _WORD = re.compile(r"[a-z0-9_./:-]+")
+_RECAP_DAYS = re.compile(r"\b([1-9][0-9]?)\s*days?\b", re.IGNORECASE)
 _QUESTION_TERMS = frozenset(
     {
         "a",
@@ -103,15 +106,29 @@ class DeterministicContextPlanner:
     """Classify bounded input without a model call or authority-bearing inference."""
 
     _EPISODIC_TERMS = frozenset(
-        {"before", "decision", "failed", "failure", "lesson", "outcome", "previous", "resume"}
+        {
+            "before",
+            "decision",
+            "failed",
+            "failure",
+            "lesson",
+            "outcome",
+            "previous",
+            "recap",
+            "resume",
+        }
     )
     _KNOWLEDGE_TERMS = frozenset(
         {"adr", "document", "knowledge", "meeting", "note", "notes", "obsidian"}
     )
     _STRUCTURAL_TERMS = frozenset(
         {
+            "architecture",
+            "codebase",
             "code",
             "class",
+            "component",
+            "components",
             "dbt",
             "defined",
             "dependency",
@@ -125,6 +142,9 @@ class DeterministicContextPlanner:
             "located",
             "model",
             "module",
+            "repository",
+            "relationship",
+            "relationships",
             "schema",
             "source",
             "symbol",
@@ -142,6 +162,10 @@ class DeterministicContextPlanner:
         if request.scope.level is ScopeLevel.TASK:
             categories.add(RetrievalCategory.EPISODIC)
             reasons.append("complete task scope permits authorization-first episodic retrieval")
+        if request.checkpoint_recap is not None:
+            intents.add(QueryIntent.PRIOR_WORK)
+            categories.add(RetrievalCategory.EPISODIC)
+            reasons.append("an explicit recap selected saved checkpoint handoffs")
 
         if request.knowledge_query is not None or request.semantic_knowledge_query is not None:
             intents.add(QueryIntent.PERSONAL_KNOWLEDGE)
@@ -336,6 +360,10 @@ def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnif
     knowledge_query = request.knowledge_query
     source_query = request.source_query
     dbt_selector = request.dbt_selector
+    source_overview = request.source_overview
+    checkpoint_recap = request.checkpoint_recap
+    if checkpoint_recap is None:
+        checkpoint_recap = _recap_query(query)
     if (
         RetrievalCategory.KNOWLEDGE in plan.categories
         and knowledge_query is None
@@ -344,13 +372,25 @@ def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnif
         knowledge_query = query
     if RetrievalCategory.STRUCTURAL in plan.categories and not _has_structural_query(request):
         if _is_dbt_model_overview(query):
-            dbt_selector = ContextDbtSelectorQuery(resource_type="model", maximum_nodes=32)
+            dbt_selector = ContextDbtSelectorQuery(
+                resource_type="model", maximum_nodes=1, include_nodes=False
+            )
+        elif _is_source_architecture_overview(query):
+            source_overview = ContextSourceOverviewQuery(
+                maximum_files=8,
+                maximum_modules=8,
+                maximum_declarations=8,
+                maximum_components=12,
+                maximum_relationships=12,
+            )
         else:
             source_query = _source_identity_query(query)
     if (
         knowledge_query == request.knowledge_query
         and source_query == request.source_query
         and dbt_selector == request.dbt_selector
+        and checkpoint_recap == request.checkpoint_recap
+        and source_overview == request.source_overview
     ):
         return request
     return replace(
@@ -358,12 +398,31 @@ def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnif
         knowledge_query=knowledge_query,
         source_query=source_query,
         dbt_selector=dbt_selector,
+        checkpoint_recap=checkpoint_recap,
+        source_overview=source_overview,
     )
 
 
 def _is_dbt_model_overview(query: str) -> bool:
     terms = _query_terms(query)
     return "dbt" in terms and "models" in terms
+
+
+def _is_source_architecture_overview(query: str) -> bool:
+    terms = _query_terms(query)
+    return bool(terms & {"architecture", "components"}) and bool(
+        terms & {"codebase", "repository", "source"}
+    )
+
+
+def _recap_query(query: str) -> ContextCheckpointRecapQuery | None:
+    if "recap" not in _query_terms(query):
+        return None
+    matched = _RECAP_DAYS.search(query)
+    if matched is None:
+        return ContextCheckpointRecapQuery()
+    days = int(matched.group(1))
+    return ContextCheckpointRecapQuery(days=days) if days <= 90 else None
 
 
 def _has_structural_query(request: GetUnifiedContext) -> bool:

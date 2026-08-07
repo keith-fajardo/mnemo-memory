@@ -6,7 +6,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: pypi-mnemo-unified-context-0.1.0a7
+  group: pypi-mnemo-unified-context-0.1.0a8
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
           import tomllib
           project = tomllib.load(open("pyproject.toml", "rb"))["project"]
           assert project["name"] == "mnemo-unified-context"
-          assert project["version"] == "0.1.0a7"
+          assert project["version"] == "0.1.0a8"
           PY
           uv run python scripts/verify_release_artifacts.py \
             --source-root . \
@@ -84,8 +84,8 @@ jobs:
       - name: Build and inspect source-independent artifacts
         run: |
           set -euxo pipefail
-          wheel="mnemo_unified_context-0.1.0a7-py3-none-any.whl"
-          sdist="mnemo_unified_context-0.1.0a7.tar.gz"
+          wheel="mnemo_unified_context-0.1.0a8-py3-none-any.whl"
+          sdist="mnemo_unified_context-0.1.0a8.tar.gz"
           fail() { echo "::error::$1"; exit 1; }
           require_file() { test -f "$1" || fail "required file is missing: $1"; }
 
@@ -135,7 +135,7 @@ jobs:
         # actions/upload-artifact v4.6.2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: mnemo-unified-context-0.1.0a7
+          name: mnemo-unified-context-0.1.0a8
           path: release/
           if-no-files-found: error
           retention-days: 3
@@ -153,7 +153,7 @@ jobs:
         # actions/download-artifact v4.3.0
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: mnemo-unified-context-0.1.0a7
+          name: mnemo-unified-context-0.1.0a8
           path: release
 
       - name: Verify bundle and OIDC availability
@@ -165,12 +165,12 @@ jobs:
           test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
           test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0
           test -f release/SHA256SUMS
-          test -f release/mnemo_unified_context-0.1.0a7-py3-none-any.whl
-          test -f release/mnemo_unified_context-0.1.0a7.tar.gz
+          test -f release/mnemo_unified_context-0.1.0a8-py3-none-any.whl
+          test -f release/mnemo_unified_context-0.1.0a8.tar.gz
           (cd release && sha256sum --check SHA256SUMS)
           mkdir publish-release
-          cp release/mnemo_unified_context-0.1.0a7-py3-none-any.whl publish-release/
-          cp release/mnemo_unified_context-0.1.0a7.tar.gz publish-release/
+          cp release/mnemo_unified_context-0.1.0a8-py3-none-any.whl publish-release/
+          cp release/mnemo_unified_context-0.1.0a8.tar.gz publish-release/
           test "$(find publish-release -type f | wc -l | tr -d ' ')" = 2
 
       - name: Sign and publish only exact verified artifacts through PyPI OIDC
@@ -210,7 +210,7 @@ jobs:
         # actions/download-artifact v4.3.0
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: mnemo-unified-context-0.1.0a7
+          name: mnemo-unified-context-0.1.0a8
           path: release
 
       - name: Verify PyPI metadata, hashes, and uploaded wheel
@@ -220,12 +220,12 @@ jobs:
           test "$(find release -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
           test "$(find release -mindepth 1 -type d | wc -l | tr -d ' ')" = 0
           test -f release/SHA256SUMS
-          test -f release/mnemo_unified_context-0.1.0a7-py3-none-any.whl
-          test -f release/mnemo_unified_context-0.1.0a7.tar.gz
+          test -f release/mnemo_unified_context-0.1.0a8-py3-none-any.whl
+          test -f release/mnemo_unified_context-0.1.0a8.tar.gz
           (cd release && sha256sum --check SHA256SUMS)
           python scripts/verify_testpypi_release.py \
             --registry-name PyPI \
-            --metadata-url https://pypi.org/pypi/mnemo-unified-context/0.1.0a7/json \
+            --metadata-url https://pypi.org/pypi/mnemo-unified-context/0.1.0a8/json \
             --provenance-base-url https://pypi.org/integrity \
             --expected-repository keith-fajardo/mnemo-memory \
             --expected-workflow publish-pypi.yml \
@@ -237,7 +237,7 @@ jobs:
           work="$(mktemp -d)"
           uv venv "$work/venv" --python 3.12
           uv pip install --python "$work/venv/bin/python" --index-url https://pypi.org/simple/ \
-            downloaded-release/mnemo_unified_context-0.1.0a7-py3-none-any.whl
+            downloaded-release/mnemo_unified_context-0.1.0a8-py3-none-any.whl
           (cd "$work" && "$work/venv/bin/mnemo-memory" --help)
           (cd "$work" && "$work/venv/bin/mnemo-memory" init --data-dir "$work/Mnemo Data Δ")
           "$work/venv/bin/python" - <<'PY'

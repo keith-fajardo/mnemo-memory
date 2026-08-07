@@ -84,6 +84,56 @@ class CheckpointEvidenceReferenceInput(BaseModel):
     verification_status: Annotated[str, Field(min_length=1)]
 
 
+class DbtSelectorInput(BaseModel):
+    """Public bounded selector shape; broad inventories default to an aggregate only."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    resource_type: Annotated[str | None, Field(default=None, min_length=1, max_length=256)] = None
+    package_name: Annotated[str | None, Field(default=None, min_length=1, max_length=256)] = None
+    tag: Annotated[str | None, Field(default=None, min_length=1, max_length=256)] = None
+    maximum_nodes: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=8,
+            description="Maximum node records when include_nodes is true; not an inventory count.",
+        ),
+    ] = 8
+    include_nodes: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "Include bounded node records. A broad resource_type-only inventory defaults "
+                "to one exact aggregate; package/tag intersections retain node records."
+            ),
+        ),
+    ] = None
+    snapshot_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None
+    current_content_digest: Annotated[
+        str | None, Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    require_current: bool = False
+
+
+class SourceOverviewInput(BaseModel):
+    """Strict compact source-graph overview input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    maximum_files: Annotated[int, Field(ge=1, le=32)] = 12
+    maximum_modules: Annotated[int, Field(ge=1, le=32)] = 12
+    maximum_declarations: Annotated[int, Field(ge=1, le=64)] = 24
+    maximum_components: Annotated[int, Field(ge=1, le=32)] = 12
+    maximum_relationships: Annotated[int, Field(ge=1, le=32)] = 12
+    snapshot_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None
+    current_source_digest: Annotated[
+        str | None, Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    ] = None
+    require_current: bool = False
+
+
 class TeamKnowledgeMcpPort(Protocol):
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]: ...
 
@@ -118,8 +168,13 @@ def create_server(
         name="get_context",
         description=(
             "Return a bounded context packet. In an auto-memory-enabled project, omit all five "
-            "scope IDs to use that registered project's stable internal scope. Optionally return "
-            "an agent-readable rendering beside the unchanged canonical packet."
+            "scope IDs to use that registered project's stable internal scope. For a natural "
+            "language inventory question, use query with at most 1,300 total tokens and omit "
+            "render_for. A broad dbt resource_type selector returns one exact aggregate unless "
+            "include_nodes is explicitly true. Never send selector syntax, path, select, or limit "
+            "inside dbt_selector. Set recap_days to 0 for the latest saved handoff or 1-90 for "
+            "recent checkpoint activity. Optionally return an agent-readable rendering beside the "
+            "unchanged canonical packet only when that duplicate representation is required."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     )
@@ -146,9 +201,30 @@ def create_server(
                 ),
             ),
         ] = None,
+        recap_days: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=0,
+                le=90,
+                description=(
+                    "Optional checkpoint recap. Use 0 for the latest saved handoff (the previous "
+                    "session) or 1-90 for a bounded recent-day window."
+                ),
+            ),
+        ] = None,
         dbt_lineage: Annotated[dict[str, object] | None, Field(default=None)] = None,
         dbt_test_coverage: Annotated[dict[str, object] | None, Field(default=None)] = None,
-        dbt_selector: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        dbt_selector: Annotated[
+            SkipValidation[DbtSelectorInput] | None,
+            Field(
+                default=None,
+                description=(
+                    "Exact manifest fields. Broad resource_type-only requests return a compact "
+                    "count and snapshot by default; set include_nodes only for a bounded sample."
+                ),
+            ),
+        ] = None,
         dbt_freshness: Annotated[dict[str, object] | None, Field(default=None)] = None,
         dbt_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_query: Annotated[
@@ -228,7 +304,16 @@ def create_server(
         ] = None,
         source_impact: Annotated[dict[str, object] | None, Field(default=None)] = None,
         source_changes: Annotated[dict[str, object] | None, Field(default=None)] = None,
-        source_overview: Annotated[dict[str, object] | None, Field(default=None)] = None,
+        source_overview: Annotated[
+            SkipValidation[SourceOverviewInput] | None,
+            Field(
+                default=None,
+                description=(
+                    "Return one compact, provenance-bearing projection of the saved source graph: "
+                    "exact counts plus bounded components, files, symbols, and relationships."
+                ),
+            ),
+        ] = None,
         include_lifecycle_events: Annotated[
             bool,
             Field(
@@ -253,12 +338,23 @@ def create_server(
                 pattern="^(codex|claude-code)$",
                 description=(
                     "Optionally return the unchanged canonical packet beside a deterministic "
-                    "client-labeled rendering for Codex or Claude Code."
+                    "client-labeled rendering for Codex or Claude Code. This duplicates the "
+                    "packet, so omit it for normal MCP retrieval."
                 ),
             ),
         ] = None,
         active_task_checkpoint_tokens: Annotated[int, Field(ge=0, le=8_000)] = 600,
-        total_tokens: Annotated[int, Field(ge=0, le=8_000)] = 5700,
+        total_tokens: Annotated[
+            int,
+            Field(
+                ge=0,
+                le=8_000,
+                description=(
+                    "Hard packet budget. Use at most 1,300 for normal questions; larger values "
+                    "are for explicitly requested deep structural analysis."
+                ),
+            ),
+        ] = 5700,
     ) -> dict[str, object]:
         canonical = port.get_context(
             {
@@ -269,6 +365,7 @@ def create_server(
                 "task_id": task_id,
                 "checkpoint_id": checkpoint_id,
                 "query": query,
+                "recap_days": recap_days,
                 "dbt_lineage": dbt_lineage,
                 "dbt_test_coverage": dbt_test_coverage,
                 "dbt_selector": dbt_selector,

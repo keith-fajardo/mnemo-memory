@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,7 @@ from mnemo_memory.packages.application import (
     GetActiveManifestStatus,
     GetApprovedEpisodicEventRecord,
     GetCheckpointContext,
+    GetCheckpointRecap,
     GetDbtSupplementalArtifacts,
     IngestCatalog,
     IngestManifest,
@@ -358,7 +360,33 @@ def _automatic_prompt_context_attachment(
     """Retrieve a small scoped packet from one transient prompt without persisting the prompt."""
     if not prompt.strip() or len(prompt) > 512:
         return None
+    recap_request = re.search(r"\brecap\b", prompt, flags=re.IGNORECASE) is not None
+    prompt_terms = frozenset(re.findall(r"[a-z0-9_./:-]+", prompt.casefold()))
+    architecture_request = bool(prompt_terms & {"architecture", "components"}) and bool(
+        prompt_terms & {"codebase", "repository", "source"}
+    )
     try:
+        prompt_budget = _automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET)
+        if recap_request:
+            prompt_budget = ContextBudget(
+                active_task_checkpoint=prompt_budget.active_task_checkpoint,
+                episodic_memories=1_000,
+                knowledge=0,
+                structural=0,
+                skills_and_procedures=0,
+                provenance_and_conflicts=0,
+                total_limit=prompt_budget.total_limit,
+            )
+        elif architecture_request:
+            prompt_budget = ContextBudget(
+                active_task_checkpoint=0,
+                episodic_memories=0,
+                knowledge=0,
+                structural=1_000,
+                skills_and_procedures=0,
+                provenance_and_conflicts=300,
+                total_limit=prompt_budget.total_limit,
+            )
         with build_checkpoint_runtime(
             resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
         ) as runtime:
@@ -381,11 +409,11 @@ def _automatic_prompt_context_attachment(
             request = GetUnifiedContext(
                 scope,
                 query=prompt,
-                budget=_automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET),
+                budget=prompt_budget,
                 include_lifecycle_events=True,
                 include_approved_events=True,
-                knowledge_query=prompt,
-                semantic_knowledge_query=prompt,
+                knowledge_query=None if recap_request or architecture_request else prompt,
+                semantic_knowledge_query=None if recap_request or architecture_request else prompt,
             )
             try:
                 packet = service.get_context(request)
@@ -405,10 +433,10 @@ def _automatic_prompt_context_attachment(
                     GetUnifiedContext(
                         scope,
                         query=prompt,
-                        budget=_automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET),
+                        budget=prompt_budget,
                         include_lifecycle_events=True,
                         include_approved_events=True,
-                        knowledge_query=prompt,
+                        knowledge_query=None if recap_request or architecture_request else prompt,
                     )
                 )
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
@@ -1537,6 +1565,79 @@ def _memory_event_runtime(
     if binding is None:
         raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
     return binding, build_checkpoint_runtime(config)
+
+
+def _render_recap_item(value: dict[str, object]) -> None:
+    typer.echo(f"\n{value['occurred_at']} — {value['task_objective']}")
+    typer.echo(f"State: {value['current_state']}")
+    for heading, key in (
+        ("Completed", "completed_work"),
+        ("Next", "remaining_work"),
+        ("Decisions", "decisions"),
+        ("Failures", "failures"),
+        ("Blockers", "blockers"),
+    ):
+        entries = value.get(key, [])
+        if isinstance(entries, list) and entries:
+            typer.echo(f"{heading}:")
+            for entry in entries:
+                typer.echo(f"  - {entry}")
+    typer.echo(
+        "Source: checkpoint "
+        f"{value['checkpoint_id']} revision {value['revision_id']} "
+        f"({value['event_kind']})"
+    )
+
+
+@app.command(
+    "recap",
+    help="Recap the previous saved session or a bounded recent-day window.",
+)
+def recap(
+    days: int | None = typer.Option(None, "--days", min=1, max=90),
+    three_days: bool = typer.Option(
+        False,
+        "--3days",
+        help="Shorthand for --days 3.",
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Render only explicit, evidence-backed checkpoint handoffs for this project."""
+    if three_days and days is not None:
+        raise typer.BadParameter("use either --days or --3days, not both")
+    selected_days = 3 if three_days else days
+    try:
+        binding, runtime_value = _memory_event_runtime(project_dir, data_dir)
+        with runtime_value as opened:
+            result = opened.checkpoint_service.get_recap(
+                GetCheckpointRecap(
+                    binding.checkpoint_scope,
+                    days=selected_days,
+                    maximum_checkpoints=8,
+                    token_budget=1_300,
+                )
+            )
+    except (
+        AutomaticMemoryBindingError,
+        CheckpointApplicationError,
+        LocalRuntimeError,
+        OSError,
+        typer.BadParameter,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_RECAP_UNAVAILABLE") from error
+
+    period = "previous saved session" if selected_days is None else f"past {selected_days} days"
+    typer.echo(f"Mnemo recap — {period}")
+    if not result.items:
+        typer.echo("No saved checkpoint activity was found for this project and period.")
+    for item in result.items:
+        parsed = json.loads(item.content)
+        if isinstance(parsed, dict):
+            _render_recap_item(parsed)
+    if result.omissions:
+        typer.echo(f"\nNote: {len(result.omissions)} additional item(s) were omitted by bounds.")
 
 
 @memory_app.command("events", help="List this enabled project's approved episodic facts.")

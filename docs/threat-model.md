@@ -401,6 +401,31 @@ the owned disconnect/disable paths. Client policy still controls whether attache
 tools are used, and Mnemo cannot force a model to prefer saved structure over its built-in
 filesystem tools.
 
+### Broad or cross-project checkpoint recap
+
+**Scenario:** A recap request reads another project or task, replays an unbounded checkpoint
+history, duplicates the active handoff, or treats unsaved chats and tool payloads as remembered
+work. A large date window could also amplify old checkpoint content into an oversized agent prompt.
+
+**Required controls:** Resolve the registered project's stable exact task scope before reading any
+lifecycle event. Read at most 50 newest scoped events, accept only a 1-90 day window (or the newest
+handoff sentinel), retain only the newest revision per checkpoint, cap the result at eight
+checkpoints, and apply both episodic and total packet budgets before return. Construct every item
+from an immutable checkpoint revision and its evidence, cite that revision, suppress an item already
+present as the active checkpoint, and never read transcripts, prompts, commands, source bodies,
+tool payloads, or model reasoning. Keep natural-language selection transient and deterministic.
+
+**Verification:** Application and SQLite-backed CLI tests cover latest-handoff and cutoff behavior,
+immutable revision provenance, project registration, and empty cross-scope results. MCP tests cover
+the closed 0-90 input bound and sanitized rejection. Planner and automatic-hook tests prove that a
+literal recap selects only checkpoint history, remains within 1,300 tokens, and does not trigger
+source or knowledge retrieval.
+
+**Residual risk:** A recap can only summarize checkpoints that an agent actually saved, and its
+quality depends on those explicit handoffs. Same-OS-user compromise remains within the documented
+personal SQLite boundary; team retrieval still relies on its authenticated service and forced-RLS
+composition.
+
 ### Cross-tenant team event delivery and lease races
 
 **Scenario:** A worker claims another task's event, two workers process one attempt, an unauthorized
@@ -857,6 +882,50 @@ declared-budget mismatch, oversize input, and read-only MCP annotation tests.
 **Residual risk:** Without a signed packet or server-held request record, explanation cannot prove
 origin. The current local tool makes no such claim; any future authenticity feature needs a
 separate threat review and key-management design.
+
+### MCP inventory and source-graph amplification
+
+**Scenario:** An agent turns a simple dbt visibility or count question into an oversized selector,
+invents unsupported paging fields, requests both canonical and rendered copies, writes overflow
+results to files, retries the same ineffective filter, and triggers unrelated shell/checkpoint
+work.
+
+The same failure can occur for ordinary source structure when a broad architecture question skips
+the saved graph, or when a source overview expands into separately cited file/symbol facts whose
+transport duplication exceeds the client limit. Retrying the same prose as larger lexical queries
+can then return no matches and encourage a repository scan.
+
+**Required controls:** Broad resource-type-only selectors return one exact manifest-derived
+aggregate by default. MCP node samples require explicit intent and are capped at eight independently
+of the larger application-service bound. The public nested selector schema forbids unknown fields,
+and the durable boundary repeats that validation with payload-free errors. Tool descriptions direct
+normal natural-language questions to a 1,300-token-or-smaller packet and disclose that
+`render_for` duplicates the canonical representation. Inventory facts retain exact snapshot and
+manifest-level evidence without returning manifest bodies.
+
+Generic architecture intent routes to one source-graph overview item. The projection is capped at
+800 estimated content tokens regardless of a larger outer request and contains only exact counts
+plus bounded components, relative paths, symbols, and resolved or explicitly unresolved static
+relationships. Every record is derived after exact project authorization from one immutable
+snapshot; one snapshot evidence reference and one provenance notice replace per-node transport
+duplication. The public nested schema forbids unknown overview fields, and automatic architecture
+retrieval disables unrelated knowledge and semantic search inside the unchanged 1,300-token total.
+
+**Verification:** The demonstrated `select`/`limit` payload fails without echoing its value. A real
+stdio call with the maximum outer token budget and duplicate Claude rendering still returns one
+inventory item below 150 declared tokens and below 12,000 serialized characters. Automatic prompt
+retrieval returns the same aggregate without node records.
+
+Generic regressions reproduce the natural architecture wording and the explicit empty
+`source_overview` request. They require one structural item, positive content-derived token
+accounting, exact snapshot provenance, a packet below 1,300 declared tokens and 12,000 serialized
+characters, and no knowledge result.
+
+**Residual risk:** An agent can still issue repeated valid calls or explicitly request a bounded
+node sample or valid source query. Client behavior is not an authorization boundary; server-side
+limits keep each result bounded, and team deployments additionally require rate limits. Static
+graphs cannot prove dynamic dispatch or runtime behavior, so agents still read narrowly selected
+source before making a change.
 
 ### Poisoned memories
 

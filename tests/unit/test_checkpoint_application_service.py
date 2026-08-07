@@ -30,6 +30,7 @@ from mnemo_memory.packages.application import (
     GetApprovedEpisodicEventRecord,
     GetCheckpoint,
     GetCheckpointContext,
+    GetCheckpointRecap,
     ListApprovedEpisodicEventRecords,
     RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
@@ -192,6 +193,60 @@ def test_optional_lifecycle_history_is_bounded_and_provenance_bearing() -> None:
     ]
     assert all(item.evidence_references for item in history.episodic_memories)
     assert len(history.provenance) == 3
+
+
+def test_recap_returns_latest_handoff_or_recent_checkpoint_window() -> None:
+    repository = ReferenceCheckpointRepository()
+    ticks = iter(
+        (
+            NOW - timedelta(days=5),
+            NOW - timedelta(days=5) + timedelta(minutes=1),
+            NOW - timedelta(days=1),
+            NOW - timedelta(days=1) + timedelta(minutes=1),
+            NOW,
+        )
+    )
+    target = CheckpointApplicationService(
+        repository,
+        clock=lambda: next(ticks),
+        event_repository=repository.events,
+        approved_event_repository=repository.approved_events,
+    )
+    scope_value = scope()
+    old = target.create(CreateCheckpoint(scope_value, content(suffix="old"), (evidence(),)))
+    target.complete(
+        CompleteCheckpoint(
+            scope_value,
+            old.aggregate.checkpoint_id,
+            old.revision.revision_id,
+            content(complete=True, suffix="old"),
+            (evidence(),),
+        )
+    )
+    recent = target.create(CreateCheckpoint(scope_value, content(suffix="recent"), (evidence(),)))
+    recent_complete = target.complete(
+        CompleteCheckpoint(
+            scope_value,
+            recent.aggregate.checkpoint_id,
+            recent.revision.revision_id,
+            content(complete=True, suffix="recent"),
+            (evidence(),),
+        )
+    )
+
+    latest = target.get_recap(GetCheckpointRecap(scope_value, token_budget=2_000))
+    window = target.get_recap(GetCheckpointRecap(scope_value, days=3, token_budget=2_000))
+
+    assert len(latest.items) == len(window.items) == 1
+    latest_value = json.loads(latest.items[0].content)
+    assert latest_value["completed_work"] == ["completed recent"]
+    assert latest_value["recap_days"] is None
+    assert json.loads(window.items[0].content)["recap_days"] == 3
+    assert latest.provenance[0].source_reference.endswith(
+        f"/{recent_complete.revision.revision_id}"
+    )
+    assert latest.items[0].evidence_references
+    assert target.get_recap(GetCheckpointRecap(scope(), token_budget=2_000)).items == ()
 
 
 def test_explicit_approved_events_are_idempotent_evidenced_and_opt_in() -> None:

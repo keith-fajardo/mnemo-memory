@@ -31,7 +31,7 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a7
+uv tool install mnemo-unified-context==0.1.0a8
 mnemo --help
 mnemo init
 ```
@@ -182,6 +182,22 @@ This lets the next Codex or Claude session see both the handoff’s reason for t
 syntax-proven code that may depend on it, without the agent having to remember a second
 `get_context` request.
 
+### Ask for a previous-session recap
+
+From an enabled repository, `mnemo recap` prints the newest saved handoff. `mnemo recap --days 3`
+and `mnemo recap --3days` select a bounded three-day window. You can ask the connected agent the
+same thing in natural language, for example:
+
+> Mnemo recap what I worked on for the past 3 days.
+
+The prompt hook routes that literal request to checkpoint history without a source or knowledge
+search. The MCP equivalent is `get_context` with `recap_days: 0` for the newest handoff or a value
+from 1 through 90 for a day window. Results contain at most eight newest-per-checkpoint handoffs
+selected from at most 50 same-task lifecycle events and must fit the packet's existing episodic and
+total-token budgets. If the newest handoff is already the active checkpoint, it appears only once.
+Each returned recap item cites the exact immutable checkpoint revision; unsaved conversation is not
+invented.
+
 For code orientation, the agent can include a `source_query` (a symbol or relative-path fragment)
 in `get_context`. Mnemo returns matching structural facts plus declared module imports and explicit
 syntactic calls, each tied to the exact local snapshot. If an import has exactly one saved target,
@@ -189,6 +205,12 @@ its returned relationship identifies that module too; duplicate candidates are d
 unresolved. It does not return source text,
 chat history, or guessed calls. Like a dbt snapshot, an active source snapshot is not silently
 presented as proof that the working tree is current; its currentness is explicit.
+
+For a broad repository/codebase architecture question, the existing natural-language `query`
+routes to one compact saved-graph overview instead. It returns bounded component, file, module,
+declaration, and relationship samples with exact snapshot counts and provenance. The client should
+not request `source_overview` repeatedly or parse an overflow file; one response is the complete
+bounded overview, and omitted counts disclose the rest of the graph.
 
 ### Manual fallback
 
@@ -220,10 +242,12 @@ For direct dbt test coverage, the agent uses `dbt_test_coverage` with one exact 
 resource and includes the latest saved run status when available. It never treats a missing test
 result as success or infers transitive or column-level coverage.
 
-For an exact manifest inventory, the agent can send `dbt_selector` with a resource type, package,
-tag, or their intersection. Results are enabled manifest nodes in stable order with snapshot and
-node evidence. Mnemo does not evaluate dbt selector strings or expand the selected nodes through
-the graph.
+For a manifest inventory, the agent can send `dbt_selector` with a resource type, package, tag, or
+their intersection. A broad resource-type-only question returns one cited aggregate with the exact
+enabled-node count and snapshot; it does not replay node records. Package/tag intersections retain
+stable bounded node results, and `include_nodes: true` requests at most eight records as a sample.
+Unknown fields such as `select`, `limit`, or `path` fail instead of silently producing the same
+slice. Mnemo does not evaluate dbt selector strings or expand selected nodes through the graph.
 
 For observed source freshness, the agent sends `dbt_freshness` with one exact source `unique_id`
 or unambiguous manifest file. Mnemo returns only the persisted dbt-reported `sources.json` status,

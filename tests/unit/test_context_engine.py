@@ -10,7 +10,9 @@ from typing import cast
 import pytest
 
 from mnemo_memory.packages.application.unified_context import (
+    ContextCheckpointRecapQuery,
     ContextDbtSelectorQuery,
+    ContextSourceOverviewQuery,
     GetUnifiedContext,
 )
 from mnemo_memory.packages.context_engine import (
@@ -241,7 +243,9 @@ def test_dbt_model_overview_query_routes_to_the_authoritative_manifest() -> None
     engine.get_context(GetUnifiedContext(scope, query="can you see all the dbt models here?"))
 
     routed = assembler.requests[0]
-    assert routed.dbt_selector == ContextDbtSelectorQuery(resource_type="model", maximum_nodes=32)
+    assert routed.dbt_selector == ContextDbtSelectorQuery(
+        resource_type="model", maximum_nodes=1, include_nodes=False
+    )
     assert routed.source_query is None
 
     engine.get_context(GetUnifiedContext(scope, query="show notes about oauth"))
@@ -265,6 +269,46 @@ def test_dbt_model_overview_query_routes_to_the_authoritative_manifest() -> None
     explicit = assembler.requests[3]
     assert explicit.source_query == "explicit_symbol"
     assert explicit.knowledge_query == "explicit note"
+
+
+def test_source_architecture_query_routes_to_one_compact_graph_overview() -> None:
+    scope = _scope()
+    assembler = EmptyAssembler()
+    engine = UnifiedContextEngine(assembler, ScopedMemoryRepository(scope, ()))
+
+    engine.get_context(
+        GetUnifiedContext(
+            scope,
+            query="Can you see the architecture of this repository and its main components?",
+        )
+    )
+
+    routed = assembler.requests[0]
+    assert routed.source_overview == ContextSourceOverviewQuery(
+        maximum_files=8,
+        maximum_modules=8,
+        maximum_declarations=8,
+        maximum_components=12,
+        maximum_relationships=12,
+    )
+    assert routed.source_query is None
+    assert routed.knowledge_query is None
+
+
+def test_recap_query_routes_to_checkpoint_history_without_unrelated_search() -> None:
+    scope = _scope()
+    assembler = EmptyAssembler()
+    engine = UnifiedContextEngine(assembler, ScopedMemoryRepository(scope, ()))
+
+    engine.get_context(GetUnifiedContext(scope, query="mnemo recap"))
+    engine.get_context(GetUnifiedContext(scope, query="recap my past 3days"))
+
+    latest, window = assembler.requests
+    assert latest.checkpoint_recap == ContextCheckpointRecapQuery()
+    assert window.checkpoint_recap == ContextCheckpointRecapQuery(days=3)
+    for request in (latest, window):
+        assert request.source_query is None
+        assert request.knowledge_query is None
 
 
 def test_engine_authorizes_before_scoring_and_returns_ranked_cited_memories() -> None:

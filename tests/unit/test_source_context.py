@@ -1294,18 +1294,20 @@ def test_source_overview_is_scoped_deterministic_bounded_and_provenance_bearing(
     overview = next(
         item for item in first.structural_items if item.item_id.startswith("source-overview:")
     )
-    assert '"kind":"source_snapshot_overview"' in overview.content
-    assert '"file_count":2' in overview.content
-    assert '"currentness":"current"' in overview.content
+    assert len(first.structural_items) == 1
+    value = json.loads(overview.content)
+    assert value["kind"] == "source_architecture_overview"
+    assert value["file_count"] == 2
+    assert value["currentness"] == "current"
+    assert value["files"] == ["app.py", "helpers.py"]
+    assert value["components"]
+    assert value["modules"]
+    assert any(item["symbol"].endswith(".run") for item in value["declarations"])
+    assert value["relationships"]
     assert str(root) not in overview.content
     assert overview.evidence_references[0].content_hash == stored.snapshot.source_digest
-    file_item = next(
-        item for item in first.structural_items if item.item_id.startswith("source-file:")
-    )
-    assert '"kind":"source_file"' in file_item.content
-    assert '"path":"app.py"' in file_item.content
-    assert file_item.evidence_references[0].content_hash.startswith("sha256:")
-    assert any(item.item_id.startswith("source:") for item in first.structural_items)
+    assert overview.token_estimate == (len(overview.content) + 3) // 4
+    assert len(json.dumps(first.to_dict())) < 12_000
     assert all(item.evidence_references for item in first.structural_items)
     assert all(str(root) not in item.content for item in first.structural_items)
 
@@ -1390,9 +1392,13 @@ def test_source_overview_currentness_and_budget_omissions_are_explicit(tmp_path:
         {"maximum_modules": 0},
         {"maximum_files": 0},
         {"maximum_declarations": 0},
+        {"maximum_components": 0},
+        {"maximum_relationships": 0},
         {"maximum_modules": 33},
         {"maximum_files": 33},
         {"maximum_declarations": 65},
+        {"maximum_components": 33},
+        {"maximum_relationships": 33},
         {"current_source_digest": "not-a-digest"},
     ),
 )
@@ -1445,12 +1451,13 @@ def test_source_overview_includes_file_only_inputs_without_claiming_structure(
         )
     )
 
-    file_item = next(
-        item for item in packet.structural_items if item.item_id.startswith("source-file:")
-    )
-    assert '"path":"models/orders.sql"' in file_item.content
-    assert not any(item.item_id.startswith("source:") for item in packet.structural_items)
-    assert "select 1" not in file_item.content
+    assert len(packet.structural_items) == 1
+    overview = json.loads(packet.structural_items[0].content)
+    assert overview["files"] == ["models/orders.sql"]
+    assert overview["modules"] == []
+    assert overview["declarations"] == []
+    assert overview["relationships"] == []
+    assert "select 1" not in packet.structural_items[0].content
 
 
 def test_source_overview_discloses_bounded_sample_counts(tmp_path: Path) -> None:

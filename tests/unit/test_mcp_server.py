@@ -123,6 +123,8 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         "save_checkpoint",
     ]
     assert tools[0].annotations is not None and tools[0].annotations.readOnlyHint is True
+    recap_schema = tools[0].inputSchema["properties"]["recap_days"]
+    assert any(candidate.get("maximum") == 90 for candidate in recap_schema["anyOf"])
     assert tools[1].annotations is not None and tools[1].annotations.readOnlyHint is True
     assert tools[2].annotations is not None and tools[2].annotations.readOnlyHint is True
     assert tools[3].annotations is not None and tools[3].annotations.readOnlyHint is True
@@ -170,8 +172,42 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "source_impact" in tools[0].inputSchema["properties"]
     assert "source_changes" in tools[0].inputSchema["properties"]
     assert "source_overview" in tools[0].inputSchema["properties"]
+    source_overview = next(
+        candidate
+        for candidate in tools[0].inputSchema["properties"]["source_overview"]["anyOf"]
+        if candidate.get("type") == "object"
+    )
+    assert source_overview["additionalProperties"] is False
+    assert set(source_overview["properties"]) == {
+        "maximum_files",
+        "maximum_modules",
+        "maximum_declarations",
+        "maximum_components",
+        "maximum_relationships",
+        "snapshot_id",
+        "current_source_digest",
+        "require_current",
+    }
+    assert source_overview["properties"]["maximum_relationships"]["maximum"] == 32
     assert "dbt_test_coverage" in tools[0].inputSchema["properties"]
     assert "dbt_selector" in tools[0].inputSchema["properties"]
+    dbt_selector = next(
+        candidate
+        for candidate in tools[0].inputSchema["properties"]["dbt_selector"]["anyOf"]
+        if candidate.get("type") == "object"
+    )
+    assert dbt_selector["additionalProperties"] is False
+    assert set(dbt_selector["properties"]) == {
+        "resource_type",
+        "package_name",
+        "tag",
+        "maximum_nodes",
+        "include_nodes",
+        "snapshot_id",
+        "current_content_digest",
+        "require_current",
+    }
+    assert dbt_selector["properties"]["maximum_nodes"]["maximum"] == 8
     assert "dbt_freshness" in tools[0].inputSchema["properties"]
     assert "dbt_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
@@ -385,6 +421,38 @@ def test_durable_port_returns_opt_in_scoped_lifecycle_history(tmp_path: Path) ->
     assert all(item.evidence_references for item in packet.episodic_memories)
 
 
+def test_durable_port_returns_bounded_previous_session_recap(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "recap")) as runtime:
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            context_service=UnifiedContextService(runtime.checkpoint_service, None),
+        )
+        created = port.save_checkpoint(save_payload())
+        completed = port.save_checkpoint(
+            save_payload(
+                "complete",
+                checkpoint_id=created["checkpoint_id"],
+                expected_revision_id=created["checkpoint_revision_id"],
+                current_state="complete",
+                remaining_work=[],
+            )
+        )
+        packet = ContextPacket.from_dict(
+            port.get_context(context_payload(recap_days=0, total_tokens=1_300))
+        )
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(context_payload(recap_days=91))
+
+    assert packet.active_task_checkpoint is None
+    assert len(packet.episodic_memories) == 1
+    value = json.loads(packet.episodic_memories[0].content)
+    assert value["query_kind"] == "checkpoint_recap"
+    assert value["revision_id"] == completed["checkpoint_revision_id"]
+    assert value["recap_days"] is None
+    assert packet.declared_total_tokens < 300
+    assert packet.episodic_memories[0].evidence_references
+
+
 def test_durable_port_records_and_returns_explicit_approved_episodic_fact(tmp_path: Path) -> None:
     with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "approved event")) as runtime:
         port = DurableMcpContextPort(runtime.checkpoint_service)
@@ -573,7 +641,6 @@ def test_durable_port_returns_scoped_source_impact_context(tmp_path: Path) -> No
                 )
             )
         )
-
     assert any('"symbol":"core"' in item.content for item in packet.structural_items)
     assert any('"symbol":"service"' in item.content for item in packet.structural_items)
     assert all('"currentness":"current"' in item.content for item in packet.structural_items)
@@ -602,26 +669,27 @@ def test_durable_port_returns_bounded_scoped_source_overview(tmp_path: Path) -> 
             runtime.checkpoint_service,
             UnifiedContextService(runtime.checkpoint_service, None, repository),
         )
-        packet = ContextPacket.from_dict(
-            port.get_context(
-                context_payload(
-                    source_overview={
-                        "maximum_modules": 1,
-                        "maximum_declarations": 1,
-                        "current_source_digest": stored.snapshot.source_digest,
-                        "require_current": True,
-                    }
-                )
+        payload = port.get_context(
+            context_payload(
+                source_overview={
+                    "maximum_modules": 1,
+                    "maximum_declarations": 1,
+                    "current_source_digest": stored.snapshot.source_digest,
+                    "require_current": True,
+                }
             )
         )
+        packet = ContextPacket.from_dict(payload)
 
     overview = next(
         item for item in packet.structural_items if item.item_id.startswith("source-overview:")
     )
-    assert '"kind":"source_snapshot_overview"' in overview.content
+    assert len(packet.structural_items) == 1
+    assert '"kind":"source_architecture_overview"' in overview.content
     assert '"currentness":"current"' in overview.content
     assert str(project) not in overview.content
     assert overview.evidence_references
+    assert len(json.dumps(payload)) < 12_000
 
 
 def test_durable_port_returns_latest_scoped_source_change_context(tmp_path: Path) -> None:
@@ -693,6 +761,9 @@ def test_durable_port_rejects_a_non_object_source_overview(tmp_path: Path) -> No
         port = DurableMcpContextPort(runtime.checkpoint_service)
         with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
             port.get_context(context_payload(source_overview="not-an-object"))
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT") as rejected:
+            port.get_context(context_payload(source_overview={"select": "private-marker"}))
+        assert "private-marker" not in str(rejected.value)
 
 
 def test_durable_port_resolves_an_exact_dbt_manifest_file_for_lineage(tmp_path: Path) -> None:
@@ -1063,14 +1134,14 @@ def test_durable_port_returns_exact_bounded_dbt_selector_matches(tmp_path: Path)
     )
     with build_checkpoint_runtime(config, dbt_parser=DbtManifestParser()) as runtime:
         assert runtime.dbt_manifest_service is not None
-        runtime.dbt_manifest_service.ingest(
+        snapshot = runtime.dbt_manifest_service.ingest(
             IngestManifest(
                 project_scope,
                 DBT_FIXTURE.read_bytes(),
                 "tests/fixtures/dbt/manifest-v12.json",
                 datetime(2026, 8, 5, tzinfo=UTC),
             )
-        )
+        ).snapshot
         port = DurableMcpContextPort(
             runtime.checkpoint_service,
             UnifiedContextService(runtime.checkpoint_service, runtime.dbt_manifest_service),
@@ -1087,6 +1158,24 @@ def test_durable_port_returns_exact_bounded_dbt_selector_matches(tmp_path: Path)
                 )
             )
         )
+        inventory = ContextPacket.from_dict(
+            port.get_context(
+                context_payload(
+                    dbt_selector={"resource_type": "model"},
+                    total_tokens=8_000,
+                )
+            )
+        )
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.get_context(
+                context_payload(
+                    dbt_selector={
+                        "resource_type": "model",
+                        "select": "resource_type:model",
+                        "limit": 500,
+                    }
+                )
+            )
 
     values = [json.loads(item.content) for item in packet.structural_items]
     assert [value["node_unique_id"] for value in values] == [
@@ -1095,6 +1184,19 @@ def test_durable_port_returns_exact_bounded_dbt_selector_matches(tmp_path: Path)
     ]
     assert all(value["query_kind"] == "selector" for value in values)
     assert any(omission.item_id == "dbt-selector" for omission in packet.omissions)
+    assert len(inventory.structural_items) == 1
+    inventory_value = json.loads(inventory.structural_items[0].content)
+    assert inventory_value == {
+        "currentness": "unknown",
+        "filters": {"resource_type": "model"},
+        "matched_node_count": 7,
+        "node_records_included": False,
+        "project_name": "mnemo_analytics",
+        "query_kind": "selector_inventory",
+        "snapshot_id": str(snapshot.snapshot_id),
+    }
+    assert inventory.declared_total_tokens < 150
+    assert len(json.dumps(inventory.to_dict())) < 8_000
 
 
 def test_durable_port_returns_observed_dbt_source_freshness(tmp_path: Path) -> None:
@@ -1252,6 +1354,71 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 
 
+def test_real_stdio_dbt_inventory_is_one_small_strict_result(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    project = tmp_path / "dbt project"
+    project.mkdir()
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    with build_checkpoint_runtime(
+        LocalConfig.defaults(data), dbt_parser=DbtManifestParser()
+    ) as runtime:
+        assert runtime.dbt_manifest_service is not None
+        snapshot = runtime.dbt_manifest_service.ingest(
+            IngestManifest(
+                binding.scope,
+                DBT_FIXTURE.read_bytes(),
+                "tests/fixtures/dbt/manifest-v12.json",
+                datetime(2026, 8, 7, tzinfo=UTC),
+            )
+        ).snapshot
+
+    async def exercise() -> None:
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "mnemo_memory.apps.mcp.server", "--data-dir", str(data)],
+            cwd=project,
+        )
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            invalid = await session.call_tool(
+                "get_context",
+                {
+                    "dbt_selector": {
+                        "resource_type": "model",
+                        "select": "resource_type:model",
+                        "limit": 500,
+                    },
+                    "total_tokens": 8_000,
+                    "render_for": "claude-code",
+                },
+            )
+            assert invalid.isError is True
+            assert "resource_type:model" not in "".join(
+                item.text for item in invalid.content if hasattr(item, "text")
+            )
+
+            result = await session.call_tool(
+                "get_context",
+                {
+                    "dbt_selector": {"resource_type": "model"},
+                    "total_tokens": 8_000,
+                    "render_for": "claude-code",
+                },
+            )
+            assert result.isError is False
+            payload = result.structuredContent or {}
+            packet = ContextPacket.from_dict(payload["context_packet"])
+            assert packet.declared_total_tokens < 150
+            assert len(packet.structural_items) == 1
+            inventory = json.loads(packet.structural_items[0].content)
+            assert inventory["matched_node_count"] == 7
+            assert inventory["snapshot_id"] == str(snapshot.snapshot_id)
+            assert inventory["node_records_included"] is False
+            assert len(json.dumps(payload)) < 12_000
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+
+
 def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments(
     tmp_path: Path,
 ) -> None:
@@ -1298,6 +1465,28 @@ def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments
                 and '"symbol":"src.current_service.CurrentService"' in item.content
                 for item in structural_packet.structural_items
             )
+            overview = await session.call_tool(
+                "get_context",
+                {
+                    "source_overview": {},
+                    "active_task_checkpoint_tokens": 0,
+                    "total_tokens": 8_000,
+                },
+            )
+            assert overview.isError is False
+            overview_payload = overview.structuredContent or {}
+            overview_packet = ContextPacket.from_dict(overview_payload)
+            graph_items = tuple(
+                item
+                for item in overview_packet.structural_items
+                if item.item_id.startswith("source-overview:")
+            )
+            assert len(graph_items) == 1
+            assert graph_items[0].token_estimate > 0
+            assert graph_items[0].token_estimate <= 800
+            assert len(json.dumps(overview_payload)) < 12_000
+            text_payload = "".join(item.text for item in overview.content if hasattr(item, "text"))
+            assert len(text_payload) < 12_000
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 

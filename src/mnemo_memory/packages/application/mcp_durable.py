@@ -30,6 +30,7 @@ from mnemo_memory.packages.application.checkpoints import (
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
+    ContextCheckpointRecapQuery,
     ContextDbtChangesQuery,
     ContextDbtCodeExcerptQuery,
     ContextDbtFreshnessQuery,
@@ -137,6 +138,7 @@ class DurableMcpContextPort:
             source_changes = request.get("source_changes")
             source_overview = request.get("source_overview")
             query = request.get("query")
+            recap_days = request.get("recap_days")
             knowledge_query = request.get("knowledge_query")
             semantic_knowledge_query = request.get("semantic_knowledge_query")
             procedure_tags = request.get("procedure_tags", [])
@@ -153,6 +155,17 @@ class DurableMcpContextPort:
                 raise ValueError("source_query must be a string")
             if query is not None and not isinstance(query, str):
                 raise ValueError("query must be a string")
+            if recap_days is not None and (
+                not isinstance(recap_days, int)
+                or isinstance(recap_days, bool)
+                or not 0 <= recap_days <= 90
+            ):
+                raise ValueError("recap_days must be between 0 and 90")
+            checkpoint_recap = (
+                None
+                if recap_days is None
+                else ContextCheckpointRecapQuery(days=None if recap_days == 0 else recap_days)
+            )
             if knowledge_query is not None and not isinstance(knowledge_query, str):
                 raise ValueError("knowledge_query must be a string")
             if semantic_knowledge_query is not None and not isinstance(
@@ -193,6 +206,35 @@ class DurableMcpContextPort:
                 raise ValueError("source_changes.relative_path must be a string")
             if source_overview is not None and not isinstance(source_overview, Mapping):
                 raise ValueError("source_overview must be an object")
+            if source_overview is not None:
+                allowed_source_overview_fields = {
+                    "maximum_files",
+                    "maximum_modules",
+                    "maximum_declarations",
+                    "maximum_components",
+                    "maximum_relationships",
+                    "snapshot_id",
+                    "current_source_digest",
+                    "require_current",
+                }
+                if set(source_overview) - allowed_source_overview_fields:
+                    raise ValueError("source_overview contains unknown fields")
+                for field_name, default in (
+                    ("maximum_files", 12),
+                    ("maximum_modules", 12),
+                    ("maximum_declarations", 24),
+                    ("maximum_components", 12),
+                    ("maximum_relationships", 12),
+                ):
+                    _integer(source_overview.get(field_name, default))
+                source_overview_digest = source_overview.get("current_source_digest")
+                if source_overview_digest is not None and not isinstance(
+                    source_overview_digest, str
+                ):
+                    raise ValueError("source_overview.current_source_digest must be a string")
+                source_overview_require_current = source_overview.get("require_current", False)
+                if not isinstance(source_overview_require_current, bool):
+                    raise ValueError("source_overview.require_current must be a boolean")
             if test_coverage is not None and not isinstance(test_coverage, Mapping):
                 raise ValueError("dbt_test_coverage must be an object")
             if dbt_selector is not None and not isinstance(dbt_selector, Mapping):
@@ -264,9 +306,13 @@ class DurableMcpContextPort:
                 None
                 if source_overview is None
                 else ContextSourceOverviewQuery(
-                    maximum_files=int(source_overview.get("maximum_files", 12)),
-                    maximum_modules=int(source_overview.get("maximum_modules", 12)),
-                    maximum_declarations=int(source_overview.get("maximum_declarations", 24)),
+                    maximum_files=_integer(source_overview.get("maximum_files", 12)),
+                    maximum_modules=_integer(source_overview.get("maximum_modules", 12)),
+                    maximum_declarations=_integer(source_overview.get("maximum_declarations", 24)),
+                    maximum_components=_integer(source_overview.get("maximum_components", 12)),
+                    maximum_relationships=_integer(
+                        source_overview.get("maximum_relationships", 12)
+                    ),
                     snapshot_id=_optional_id(source_overview, "snapshot_id", CodeSnapshotId),
                     current_source_digest=source_overview.get("current_source_digest")
                     if isinstance(source_overview.get("current_source_digest"), str)
@@ -282,6 +328,7 @@ class DurableMcpContextPort:
                 or dbt_changes is not None
                 or source_query is not None
                 or query is not None
+                or checkpoint_recap is not None
                 or impact is not None
                 or changes is not None
                 or overview is not None
@@ -307,6 +354,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            checkpoint_recap=checkpoint_recap,
                             source_query=source_query,
                             budget=budget,
                             source_impact=impact,
@@ -342,6 +390,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            checkpoint_recap=checkpoint_recap,
                             dbt_changes=changes_query,
                             source_query=source_query,
                             budget=budget,
@@ -382,6 +431,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            checkpoint_recap=checkpoint_recap,
                             dbt_freshness=freshness_query,
                             source_query=source_query,
                             budget=budget,
@@ -399,31 +449,65 @@ class DurableMcpContextPort:
                         )
                     ).to_dict()
                 if dbt_selector is not None:
+                    allowed_selector_fields = {
+                        "resource_type",
+                        "package_name",
+                        "tag",
+                        "maximum_nodes",
+                        "include_nodes",
+                        "snapshot_id",
+                        "current_content_digest",
+                        "require_current",
+                    }
+                    if set(dbt_selector) - allowed_selector_fields:
+                        raise ValueError("dbt_selector contains unknown fields")
                     for field_name in ("resource_type", "package_name", "tag"):
                         value = dbt_selector.get(field_name)
                         if value is not None and not isinstance(value, str):
                             raise ValueError(f"dbt_selector.{field_name} must be a string")
+                    maximum_nodes = _integer(dbt_selector.get("maximum_nodes", 8))
+                    if not 1 <= maximum_nodes <= 8:
+                        raise ValueError("dbt_selector.maximum_nodes must be between 1 and 8")
+                    include_nodes_value = dbt_selector.get("include_nodes")
+                    if include_nodes_value is not None and not isinstance(
+                        include_nodes_value, bool
+                    ):
+                        raise ValueError("dbt_selector.include_nodes must be a boolean")
+                    require_current = dbt_selector.get("require_current", False)
+                    if not isinstance(require_current, bool):
+                        raise ValueError("dbt_selector.require_current must be a boolean")
+                    current_content_digest = dbt_selector.get("current_content_digest")
+                    if current_content_digest is not None and not isinstance(
+                        current_content_digest, str
+                    ):
+                        raise ValueError("dbt_selector.current_content_digest must be a string")
+                    include_nodes = (
+                        include_nodes_value
+                        if isinstance(include_nodes_value, bool)
+                        else dbt_selector.get("package_name") is not None
+                        or dbt_selector.get("tag") is not None
+                    )
                     selector_query = ContextDbtSelectorQuery(
-                        cast(str, dbt_selector["resource_type"])
+                        resource_type=cast(str, dbt_selector["resource_type"])
                         if "resource_type" in dbt_selector
                         else None,
-                        cast(str, dbt_selector["package_name"])
+                        package_name=cast(str, dbt_selector["package_name"])
                         if "package_name" in dbt_selector
                         else None,
-                        cast(str, dbt_selector["tag"]) if "tag" in dbt_selector else None,
-                        int(dbt_selector.get("maximum_nodes", 32)),
-                        _optional_id(dbt_selector, "snapshot_id", DbtSnapshotId),
-                        dbt_selector.get("current_content_digest")
-                        if isinstance(dbt_selector.get("current_content_digest"), str)
-                        else None,
-                        self._resolve_current_dbt_source_state(scope),
-                        bool(dbt_selector.get("require_current", False)),
+                        tag=cast(str, dbt_selector["tag"]) if "tag" in dbt_selector else None,
+                        maximum_nodes=1 if not include_nodes else maximum_nodes,
+                        snapshot_id=_optional_id(dbt_selector, "snapshot_id", DbtSnapshotId),
+                        current_content_digest=current_content_digest,
+                        current_source_state=self._resolve_current_dbt_source_state(scope),
+                        require_current=require_current,
+                        include_nodes=include_nodes,
                     )
                     return self._context_service.get_context(
                         GetUnifiedContext(
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            checkpoint_recap=checkpoint_recap,
                             dbt_selector=selector_query,
                             source_query=source_query,
                             budget=budget,
@@ -465,6 +549,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            checkpoint_recap=checkpoint_recap,
                             dbt_test_coverage=coverage_query,
                             source_query=source_query,
                             budget=budget,
@@ -535,6 +620,7 @@ class DurableMcpContextPort:
                         scope=scope,
                         checkpoint_id=checkpoint,
                         query=query,
+                        checkpoint_recap=checkpoint_recap,
                         lineage=dbt_query,
                         source_query=source_query,
                         budget=budget,
@@ -557,6 +643,7 @@ class DurableMcpContextPort:
                         scope=scope,
                         checkpoint_id=checkpoint,
                         query=query,
+                        checkpoint_recap=checkpoint_recap,
                         budget=budget,
                         include_lifecycle_events=include_lifecycle_events,
                         include_approved_events=include_approved_events,

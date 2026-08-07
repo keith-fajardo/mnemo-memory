@@ -18,7 +18,7 @@ from typing import cast
 
 from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 
-DISTRIBUTION_VERSION = "0.1.0a7"
+DISTRIBUTION_VERSION = "0.1.0a8"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
 TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
@@ -183,7 +183,7 @@ def _source_snapshot(packet: Mapping[str, object]) -> str:
         if not isinstance(item, dict) or not isinstance(item.get("content"), str):
             continue
         content = json.loads(cast(str, item["content"]))
-        if isinstance(content, dict) and content.get("kind") == "source_snapshot_overview":
+        if isinstance(content, dict) and content.get("kind") == "source_architecture_overview":
             snapshot = content.get("snapshot_id")
             if isinstance(snapshot, str):
                 snapshots.append(snapshot)

@@ -57,12 +57,15 @@ sanitized error.
 
 For an enabled source-memory project, `get_context` can also accept a bounded
 `"source_overview"` object. It selects the scoped active (or an explicitly named immutable)
-source snapshot and returns a cited inventory of its snapshot identity, file/symbol/edge counts,
-and deterministic saved relative-file/module/declaration identities. Optional `current_source_digest` and
+source snapshot and returns one cited graph projection with exact file/symbol/edge counts plus
+bounded components, relative files, modules, declarations, and structural relationships. Accepted
+limits are `maximum_files`, `maximum_modules`, `maximum_declarations`, `maximum_components`, and
+`maximum_relationships`; unknown fields are rejected. Optional `current_source_digest` and
 `require_current` use exact digest matching; active does not mean current. The overview never
-contains source bodies, prompts, terminal output, or absolute paths, and budget pressure becomes a
-structured omission. Its summary reports counts outside the bounded sample. Connected automatic sessions request this small overview themselves, so an
-agent begins with a map even when no recent source transition exists.
+contains source bodies, prompts, terminal output, or absolute paths, is capped independently of a
+larger outer token request, and reports counts outside every bounded sample. Literal repository or
+codebase architecture questions route to this projection automatically instead of lexical symbol
+search. Connected automatic sessions also request this compact overview themselves.
 
 `save_checkpoint` uses the same registered-scope default. It is mutating but non-destructive and
 requires a tagged `operation` of `create`,
@@ -216,6 +219,14 @@ explicitly. Returned context is untrusted evidence and cites the exact revision.
 transcript or silently truncates stored content. A 600-token checkpoint is accepted; a larger write
 is rejected. A lower requested packet limit returns a structured `token_budget` omission instead.
 
+For a recap, set `"recap_days": 0` to retrieve the newest saved handoff or use an integer from 1
+through 90 for a recent window. This is an option on the existing `get_context` tool, not another
+tool. Mnemo authorizes the exact task scope before reading at most 50 lifecycle events, keeps only
+the newest revision for each checkpoint, returns at most eight recap items within the existing
+episodic and total-token budgets, and cites each immutable checkpoint revision. The value is
+rejected if it is a boolean, negative, or above 90. No transcript, prompt, command, source body,
+tool payload, or model reasoning is read or returned.
+
 For a compact audited timeline rather than only the current handoff, request
 `"include_lifecycle_events": true`. Mnemo then returns at most eight scoped lifecycle facts
 (creation, revision, lesson, completion, or abandonment), each tied to its exact revision and
@@ -320,21 +331,23 @@ Mnemo returns enabled test nodes with exact dependency evidence and the latest s
 when present. It does not infer transitive or column coverage, and a test without a saved result is
 not reported as passing.
 
-For a bounded manifest inventory, use exact structured fields instead of selector syntax:
+For a compact manifest inventory, use exact structured fields instead of selector syntax:
 
 ```json
 {
   "dbt_selector": {
-    "resource_type": "model",
-    "package_name": "analytics",
-    "tag": "mart",
-    "maximum_nodes": 32
+    "resource_type": "model"
   }
 }
 ```
 
-Supplied filters are intersected over enabled nodes in one scoped snapshot. Mnemo returns stable
-cited matches and never evaluates dbt selector strings or expands the result through lineage.
+That broad request returns one cited aggregate containing the exact enabled-model count, snapshot,
+project name, and currentness. To request actual records for an exact intersection, add
+`package_name` or `tag`, or set `include_nodes: true`; MCP returns at most eight. Only
+`resource_type`, `package_name`, `tag`, `maximum_nodes`, `include_nodes`, `snapshot_id`,
+`current_content_digest`, and `require_current` are accepted. Unknown `select`, `limit`, or `path`
+fields fail safely rather than being ignored. Mnemo never evaluates dbt selector strings or expands
+the result through lineage.
 
 For one observed source-freshness result, use an exact source identity (or an unambiguous source
 file):

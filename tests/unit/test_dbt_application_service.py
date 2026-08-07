@@ -558,6 +558,7 @@ def test_manifest_selector_intersects_exact_filters_with_stable_bounds_and_scope
         "model.mnemo_analytics.dim_customers",
         "model.mnemo_analytics.fct_orders",
     ]
+    assert result.matched_node_count == 3
     assert result.truncated is True
     assert all(node.evidence for node in result.nodes)
     assert item.query_selector(QueryManifestSelector(value, package_name="missing")).nodes == ()

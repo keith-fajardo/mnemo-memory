@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
@@ -70,6 +70,7 @@ _ACTIVE_CHECKPOINT_PRODUCER = "mnemo-application/0.1.0"
 _Result = TypeVar("_Result")
 _MAX_HISTORICAL_LESSON_REVISIONS = 16
 _MAX_HISTORICAL_LESSONS = 16
+_MAX_RECAP_EVENTS = 50
 
 
 class CheckpointApplicationError(Exception):
@@ -272,6 +273,43 @@ class GetCheckpointContext:
             or not 1 <= self.maximum_approved_events <= 16
         ):
             raise ValueError("maximum_approved_events must be between 1 and 16")
+
+
+@dataclass(frozen=True, slots=True)
+class GetCheckpointRecap:
+    """Request previous-session or bounded recent checkpoint activity."""
+
+    scope: MemoryScope
+    days: int | None = None
+    maximum_checkpoints: int = 8
+    token_budget: int = 800
+
+    def __post_init__(self) -> None:
+        if self.days is not None and (
+            not isinstance(self.days, int)
+            or isinstance(self.days, bool)
+            or not 1 <= self.days <= 90
+        ):
+            raise ValueError("recap days must be between 1 and 90")
+        if (
+            not isinstance(self.maximum_checkpoints, int)
+            or isinstance(self.maximum_checkpoints, bool)
+            or not 1 <= self.maximum_checkpoints <= 16
+        ):
+            raise ValueError("recap checkpoint limit must be between 1 and 16")
+        if (
+            not isinstance(self.token_budget, int)
+            or isinstance(self.token_budget, bool)
+            or not 0 <= self.token_budget <= 8_000
+        ):
+            raise ValueError("recap token budget must be between 0 and 8000")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointRecap:
+    items: tuple[ContextItem, ...]
+    provenance: tuple[ProvenanceNotice, ...]
+    omissions: tuple[OmissionNotice, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -778,6 +816,128 @@ class CheckpointApplicationService:
                 )
             )
         return CheckpointView(aggregate, revision)
+
+    def get_recap(self, query: GetCheckpointRecap) -> CheckpointRecap:
+        """Return cited checkpoint handoffs without replaying transcripts or tool payloads."""
+        self._validate_scope(query.scope)
+        if self._event_repository is None:
+            return CheckpointRecap(
+                (),
+                (),
+                (
+                    OmissionNotice(
+                        "checkpoint-recap",
+                        OmissionReason.LOWER_RANK,
+                        "checkpoint lifecycle history is unavailable",
+                    ),
+                ),
+            )
+        try:
+            page = self._event_repository.list_events(query.scope, limit=_MAX_RECAP_EVENTS)
+        except EpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "checkpoint recap storage is unavailable"
+            ) from error
+
+        cutoff = None if query.days is None else self._now() - timedelta(days=query.days)
+        selected: list[CheckpointLifecycleEvent] = []
+        seen: set[CheckpointId] = set()
+        reached_cutoff = False
+        for event in page.items:
+            if cutoff is not None and event.occurred_at < cutoff:
+                reached_cutoff = True
+                break
+            if event.checkpoint_id in seen:
+                continue
+            selected.append(event)
+            seen.add(event.checkpoint_id)
+            if query.days is None or len(selected) >= query.maximum_checkpoints:
+                break
+
+        items: list[ContextItem] = []
+        provenance: list[ProvenanceNotice] = []
+        omissions: list[OmissionNotice] = []
+        remaining = query.token_budget
+        for event in selected:
+            try:
+                revision = self._repository.get_revision(
+                    query.scope,
+                    event.checkpoint_id,
+                    revision_id=event.revision_id,
+                )
+            except (CheckpointNotFound, RepositoryStorageFailure) as error:
+                raise CheckpointApplicationStorageFailure(
+                    "checkpoint recap storage is unavailable"
+                ) from error
+            content = json.dumps(
+                {
+                    "blockers": list(revision.content.blockers),
+                    "checkpoint_id": str(event.checkpoint_id),
+                    "completed_work": list(revision.content.completed_work),
+                    "current_state": revision.content.current_state,
+                    "decisions": list(revision.content.decisions),
+                    "event_kind": event.kind.value,
+                    "failures": list(revision.content.failures),
+                    "occurred_at": event.occurred_at.isoformat(),
+                    "query_kind": "checkpoint_recap",
+                    "recap_days": query.days,
+                    "remaining_work": list(revision.content.remaining_work),
+                    "revision_id": str(event.revision_id),
+                    "revision_number": event.revision_number,
+                    "task_objective": revision.content.task_objective,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            tokens = (len(content) + 3) // 4
+            item_id = f"checkpoint-recap:{event.checkpoint_id}:revision:{event.revision_id}"
+            if tokens > remaining:
+                omissions.append(
+                    OmissionNotice(
+                        item_id,
+                        OmissionReason.TOKEN_BUDGET,
+                        "checkpoint recap exceeds the remaining recap budget",
+                    )
+                )
+                continue
+            item = ContextItem(
+                item_id=item_id,
+                item_type=ContextItemType.EPISODIC_MEMORY,
+                source_scope=query.scope,
+                content=content,
+                content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+                token_estimate=tokens,
+                evidence_references=revision.evidence_references,
+                source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+                sensitivity=Sensitivity.NORMAL,
+                validity=ValidityState.UNKNOWN,
+                ranking=None,
+                conflict_state=ConflictState.NONE,
+                observed_at=event.occurred_at,
+            )
+            items.append(item)
+            provenance.append(
+                ProvenanceNotice(
+                    provenance_id=f"provenance:{item_id}",
+                    item_id=item_id,
+                    source_reference=(
+                        f"mnemo:checkpoint/{event.checkpoint_id}/revision/{event.revision_id}"
+                    ),
+                    source_digest=hashlib.sha256(content.encode()).hexdigest(),
+                    evidence_references=revision.evidence_references,
+                )
+            )
+            remaining -= tokens
+
+        if query.days is not None and not reached_cutoff and page.next_offset is not None:
+            omissions.append(
+                OmissionNotice(
+                    "checkpoint-recap:remaining",
+                    OmissionReason.LOWER_RANK,
+                    "checkpoint recap reached its 50-event authorization-first read bound",
+                )
+            )
+        return CheckpointRecap(tuple(items), tuple(provenance), tuple(omissions))
 
     def get_context(self, query: GetCheckpointContext) -> ContextPacket:
         self._validate_scope(query.scope)

@@ -312,6 +312,7 @@ class QueryManifestSelector:
 class ManifestSelectorQueryResult:
     snapshot: DbtManifestSnapshot
     nodes: tuple[DbtManifestNode, ...]
+    matched_node_count: int
     truncated: bool
     currentness: ArtifactCurrentness
     currentness_reason: str
@@ -724,6 +725,7 @@ class DbtManifestApplicationService:
         return ManifestSelectorQueryResult(
             snapshot,
             matched[: query.maximum_nodes],
+            len(matched),
             len(matched) > query.maximum_nodes,
             currentness,
             currentness_reason,

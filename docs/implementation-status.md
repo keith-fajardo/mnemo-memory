@@ -4105,3 +4105,132 @@ The complete gate passes (`955 passed`, `27 skipped`; PostgreSQL integration `26
 `1 skipped`) with formatting, lint, typing, schema, dependency provenance, architecture, and
 installed-package verification. The release remains unpublished until the committed revision is
 pushed and the protected production workflow succeeds.
+
+### Compact dbt inventory awareness — Complete
+
+A live Claude Code workflow demonstrated that the broad question “can you see the dbt models?”
+could expand into an 8,000-token `get_context` request, duplicate canonical and rendered packets,
+persist oversized results to files, retry ignored selector fields, invoke shell parsing, and then
+trigger a checkpoint reminder for an otherwise read-only question. This bounded defect issue must
+make one saved-manifest retrieval sufficient for dbt inventory awareness.
+
+Acceptance requires an evidence-backed aggregate containing the exact matched model count,
+snapshot identity, currentness, and bounded sample metadata; strict MCP selector input that rejects
+unknown fields instead of silently ignoring agent-invented `select`, `limit`, or `path` keys; and a
+small broad-selector node cap so a visibility/count request cannot expand into dozens of full node
+records. Existing exact package/tag selection, lineage, authorization-first scope, provenance, and
+explicit larger structural workflows must remain intact. The focused regression must cover the
+demonstrated request and real stdio schema/size behavior, followed by the complete repository gate.
+
+Broad resource-type-only selection now returns one manifest-level aggregate with the exact enabled
+match count, project name, snapshot, currentness, and immutable artifact evidence. Automatic dbt
+model-overview routing requests only that aggregate. Exact package/tag queries retain bounded node
+records, while an explicit MCP node sample is capped at eight. The MCP schema publishes every
+accepted nested field and forbids extras; the durable boundary independently rejects unknown or
+malformed values with a payload-free error. Tool guidance identifies the normal 1,300-token budget
+and warns that `render_for` duplicates the canonical representation.
+
+The focused dbt/application/context/automatic-memory/MCP suites pass (`117 passed`). A real stdio
+regression reproduces the demonstrated 8,000-token Claude request: the invented `select` and
+`limit` fields fail without echo, while the valid broad inventory returns one item below 150
+declared tokens and below 12,000 serialized characters even with duplicate rendering. The complete
+`npm run check` gate passes (`956 passed`, `27 skipped`; PostgreSQL integration `26 passed`,
+`1 skipped`) with formatting, lint, strict typing, schema, dependency provenance, architecture,
+and installed-package verification. No schema migration, dependency, authorization, scope,
+retention, model call, network request, or new MCP tool was added.
+
+An isolated scan of the real `he-dbt-bi` checkout activated its existing manifest without changing
+the user's normal Mnemo profile. The exact demonstrated prompt injected one 230-character aggregate
+reporting 103 models from dbt snapshot `e540e7d7-b5f2-4974-92cd-456f36d71c3b`. A fresh Claude
+process with repository and file tools disabled answered from that aggregate in one turn, made no
+tool call, and emitted 107 output tokens.
+
+### Previous-session and bounded recent recap — Complete
+
+The approved user-facing issue adds `mnemo recap` for the latest saved project handoff plus
+`mnemo recap --days N` and the requested `mnemo recap --3days` shorthand for a recent window.
+The same deterministic request must work conversationally through the existing `get_context` tool
+and automatic prompt hook. Recap input is limited to 90 days; selection is authorization-first,
+project/task scoped, bounded to 50 lifecycle events, eight newest checkpoint handoffs, and the
+existing context token budget. Each item must cite its immutable checkpoint revision. Mnemo must
+not replay transcripts, commands, source bodies, tool payloads, or model reasoning, and must not
+make a model call.
+
+Acceptance requires exact previous-session semantics (the newest saved handoff), an inclusive
+recent-day cutoff with newest-per-checkpoint deduplication, readable CLI output, MCP schema and
+sanitized validation, natural-language routing without unrelated source or knowledge search,
+automatic-hook retrieval within 1,300 tokens, active-checkpoint duplicate suppression, focused
+tests, documentation, and the complete repository gate. This issue adds no schema migration,
+dependency, new MCP tool, model route, network surface, capture source, retention change, or team
+behavior.
+
+Implemented one storage-neutral recap query over the existing immutable checkpoint lifecycle
+ledger. It authorizes the exact task scope first, reads no more than 50 descending events, applies
+an optional 1-90 day cutoff, keeps the newest event for at most eight checkpoints, retrieves those
+exact revisions, and spends only the supplied recap token budget. Every recap item includes the
+saved objective, state, completed/remaining work, decisions, failures, blockers, timestamp, event
+kind, checkpoint/revision IDs, and original evidence. Unified context suppresses a recap revision
+already present as the active checkpoint.
+
+The primary CLI renders `mnemo recap`, `mnemo recap --days 3`, and `mnemo recap --3days` as readable
+project activity with exact revision provenance. Existing MCP `get_context` now accepts
+`recap_days: 0..90`; zero means the latest saved handoff. Literal natural-language recap prompts
+route only to checkpoint history. The automatic hook shifts category allocation—not the existing
+1,300-token total—toward episodic evidence for recap prompts and performs no knowledge, semantic,
+or source search.
+
+Focused application, CLI, planner, MCP, and automatic-hook verification passes (`125 passed`). The
+real `mnemo recap --3days` command returned this repository's two saved handoffs. A fresh Claude
+process with repository tools disabled answered the same natural-language request from the inline
+attachment in one turn, with zero tool calls or permission denials. The complete `npm run check`
+gate passes (`962 passed`, `27 skipped`; PostgreSQL integration `26 passed`, `1 skipped`) with
+formatting, lint, strict typing for 264 files, schema, dependency provenance, architecture, and
+installed-package verification. No schema migration, dependency, new MCP tool, model call, network
+surface, capture source, retention change, or team behavior was added.
+
+### Compact generic source-graph awareness — Complete
+
+A fresh Claude process in this non-dbt repository demonstrated that a broad architecture question
+ignored the saved structural graph and scanned files. An explicit `source_overview` then returned
+87,763 client-visible characters, after which the agent retried multiple query budgets and
+incorrectly concluded that no saved structure existed. The active snapshot was present; the
+failure is in generic routing and projection, not ingestion.
+
+This bounded defect issue must route literal repository/codebase architecture and component
+questions to one compact, provenance-bearing graph projection. That projection must contain exact
+snapshot counts plus bounded component, file, module, declaration, and resolved or explicitly
+unresolved relationship
+samples in one token-accounted structural item. Automatic prompt retrieval must not perform
+knowledge or semantic search for that intent. Focused and real-client-shaped regressions must keep
+the packet below 1,300 declared tokens and 12,000 serialized characters, with no repository scan,
+model call, schema migration, dependency, new MCP tool, or dbt behavior change.
+
+Broad architecture intent now routes deterministically to `source_overview` rather than lexical
+symbol search. Automatic prompt retrieval allocates structure-only space inside the unchanged
+1,300-token total and performs no checkpoint, episodic, knowledge, semantic, or procedure search
+for that intent. Exact implementation questions retain the existing symbol/path lookup and bounded
+static-edge navigation.
+
+The overview is now one snapshot-cited structural item rather than separate file and declaration
+items. It carries exact file/symbol/edge counts, deterministic component aggregates, bounded
+relative files/modules/declarations, and bounded component relationships derived from the saved
+graph. Unresolved static imports remain explicitly unresolved rather than disappearing or becoming
+guessed links. Its content is independently capped at 800 estimated tokens even when the caller
+requests an 8,000-token outer packet; every sample has explicit selected/omitted counts. The strict
+MCP overview schema rejects unknown fields, and the durable boundary repeats validation with a
+payload-free error.
+
+The focused source/context/MCP/automatic suites pass (`140 passed`). The real stdio regression uses
+an empty overview selector with an 8,000-token outer allowance and proves one positive-token graph
+item below the 800-token content cap and both MCP representations below 12,000 characters. The
+complete repository gate passes (`968 passed`, `27 skipped`; PostgreSQL integration `26 passed`,
+`1 skipped`) with formatting, lint, strict typing for 264 files, schema, dependency provenance,
+architecture, and installed-package verification. No source body, schema migration, dependency,
+new tool, model call, network request, dbt behavior, authorization rule, or persistence contract was
+added.
+
+The installed-checkout acceptance test refreshed snapshot
+`54c8fbdc-9ad6-5f5d-8e78-9381513780f0` with 339 files, 4,948 symbols, and 29,573 static
+relationships. A fresh Claude process with every tool disabled answered the generic architecture
+question from that snapshot in one turn and 420 output tokens. It performed no repository scan,
+MCP retrieval retry, or shell/file call.

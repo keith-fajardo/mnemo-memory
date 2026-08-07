@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Protocol, cast
 from uuid import UUID, uuid5
@@ -12,6 +12,7 @@ from uuid import UUID, uuid5
 from mnemo_memory.packages.application.checkpoints import (
     CheckpointApplicationService,
     GetCheckpointContext,
+    GetCheckpointRecap,
 )
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationError,
@@ -19,6 +20,7 @@ from mnemo_memory.packages.application.dbt import (
     DbtManifestApplicationService,
     GetDbtSupplementalArtifacts,
     LineageDirection,
+    ManifestSelectorQueryResult,
     QueryLineage,
     QueryManifestChanges,
     QueryManifestSelector,
@@ -47,6 +49,7 @@ from mnemo_memory.packages.domain import (
     CurrentKnowledgeDocumentSection,
     DbtFreshnessThreshold,
     DbtManifestNode,
+    DbtManifestSnapshot,
     DbtNodeId,
     DbtSnapshotId,
     EvidenceId,
@@ -189,6 +192,7 @@ class ContextDbtSelectorQuery:
     current_content_digest: str | None = None
     current_source_state: SourceStateFingerprint | None = None
     require_current: bool = False
+    include_nodes: bool = True
 
     def __post_init__(self) -> None:
         if self.resource_type is None and self.package_name is None and self.tag is None:
@@ -199,6 +203,8 @@ class ContextDbtSelectorQuery:
                 raise ValueError(f"dbt selector {field_name} must be a bounded non-empty string")
         if not 1 <= self.maximum_nodes <= 100:
             raise ValueError("dbt selector node limit must be between 1 and 100")
+        if not isinstance(self.include_nodes, bool):
+            raise TypeError("dbt selector include_nodes must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,14 +344,29 @@ class ContextSourceOverviewQuery:
     maximum_files: int = 12
     maximum_modules: int = 12
     maximum_declarations: int = 24
+    maximum_components: int = 12
+    maximum_relationships: int = 12
     snapshot_id: CodeSnapshotId | None = None
     current_source_digest: str | None = None
     require_current: bool = False
 
     def __post_init__(self) -> None:
-        if self.maximum_files < 1 or self.maximum_modules < 1 or self.maximum_declarations < 1:
+        limits = (
+            self.maximum_files,
+            self.maximum_modules,
+            self.maximum_declarations,
+            self.maximum_components,
+            self.maximum_relationships,
+        )
+        if any(value < 1 for value in limits):
             raise ValueError("source overview limits must be positive")
-        if self.maximum_files > 32 or self.maximum_modules > 32 or self.maximum_declarations > 64:
+        if (
+            self.maximum_files > 32
+            or self.maximum_modules > 32
+            or self.maximum_declarations > 64
+            or self.maximum_components > 32
+            or self.maximum_relationships > 32
+        ):
             raise ValueError("source overview limits exceed bounded inventory")
         if self.current_source_digest is not None and (
             not self.current_source_digest.startswith("sha256:")
@@ -388,6 +409,28 @@ class ContextCheckpointSourceImpact:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextCheckpointRecapQuery:
+    """Retrieve the latest saved handoff or recent bounded checkpoint activity."""
+
+    days: int | None = None
+    maximum_checkpoints: int = 8
+
+    def __post_init__(self) -> None:
+        if self.days is not None and (
+            not isinstance(self.days, int)
+            or isinstance(self.days, bool)
+            or not 1 <= self.days <= 90
+        ):
+            raise ValueError("recap days must be between 1 and 90")
+        if (
+            not isinstance(self.maximum_checkpoints, int)
+            or isinstance(self.maximum_checkpoints, bool)
+            or not 1 <= self.maximum_checkpoints <= 16
+        ):
+            raise ValueError("recap checkpoint limit must be between 1 and 16")
+
+
+@dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
     checkpoint_id: object | None = None
@@ -398,6 +441,7 @@ class GetUnifiedContext:
     source_changes: ContextSourceChangeQuery | None = None
     source_overview: ContextSourceOverviewQuery | None = None
     checkpoint_source_impact: ContextCheckpointSourceImpact | None = None
+    checkpoint_recap: ContextCheckpointRecapQuery | None = None
     knowledge_query: str | None = None
     semantic_knowledge_query: str | None = None
     include_checkpoint_file_knowledge: bool = False
@@ -495,6 +539,7 @@ class UnifiedContextService:
                 request.include_approved_events,
             )
         )
+        packet = self._with_checkpoint_recap(packet, request)
         packet = self._with_checkpoint_source_observation(packet, request)
         packet = self._with_requested_knowledge(packet, request)
         packet = self._with_requested_procedures(packet, request)
@@ -528,6 +573,47 @@ class UnifiedContextService:
         if request.dbt_changes is not None:
             return self._with_dbt_changes(packet, request)
         return self._with_requested_source_facts(packet, request)
+
+    def _with_checkpoint_recap(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        if request.checkpoint_recap is None:
+            return packet
+        remaining = min(
+            max(
+                0,
+                request.budget.episodic_memories
+                - sum(item.token_estimate for item in packet.episodic_memories),
+            ),
+            max(0, request.budget.total_limit - packet.declared_total_tokens),
+        )
+        recap = self._checkpoints.get_recap(
+            GetCheckpointRecap(
+                request.scope,
+                request.checkpoint_recap.days,
+                request.checkpoint_recap.maximum_checkpoints,
+                remaining,
+            )
+        )
+        active_id = (
+            None if packet.active_task_checkpoint is None else packet.active_task_checkpoint.item_id
+        )
+        items = tuple(
+            item
+            for item in recap.items
+            if active_id != item.item_id.replace("checkpoint-recap:", "checkpoint:", 1)
+        )
+        item_ids = {item.item_id for item in items}
+        provenance = tuple(notice for notice in recap.provenance if notice.item_id in item_ids)
+        return replace(
+            packet,
+            declared_total_tokens=(
+                packet.declared_total_tokens + sum(item.token_estimate for item in items)
+            ),
+            episodic_memories=(*packet.episodic_memories, *items),
+            provenance=(*packet.provenance, *provenance),
+            omissions=(*packet.omissions, *recap.omissions),
+        )
 
     def _with_requested_skills(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -1340,6 +1426,8 @@ class UnifiedContextService:
                 ),
                 request,
             )
+        if not query.include_nodes:
+            return self._with_dbt_selector_inventory(packet, request, result)
         if not result.nodes:
             return self._with_requested_source_facts(
                 _with_omission(
@@ -1437,6 +1525,97 @@ class UnifiedContextService:
             skills_and_procedures=packet.skills_and_procedures,
             provenance=tuple(notices),
             omissions=omissions,
+            conflicts=packet.conflicts,
+        )
+        return self._with_requested_source_facts(result_packet, request)
+
+    def _with_dbt_selector_inventory(
+        self,
+        packet: ContextPacket,
+        request: GetUnifiedContext,
+        result: ManifestSelectorQueryResult,
+    ) -> ContextPacket:
+        """Attach one exact aggregate instead of expanding a broad manifest inventory."""
+        query = request.dbt_selector
+        assert query is not None
+        content = json.dumps(
+            {
+                "currentness": result.currentness.value,
+                "filters": {
+                    key: value
+                    for key, value in (
+                        ("package_name", query.package_name),
+                        ("resource_type", query.resource_type),
+                        ("tag", query.tag),
+                    )
+                    if value is not None
+                },
+                "matched_node_count": result.matched_node_count,
+                "node_records_included": False,
+                "project_name": result.snapshot.metadata.project_name,
+                "query_kind": "selector_inventory",
+                "snapshot_id": str(result.snapshot.snapshot_id),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tokens = (len(content) + 3) // 4
+        remaining = min(
+            request.budget.structural
+            - sum(item.token_estimate for item in packet.structural_items),
+            request.budget.total_limit - packet.declared_total_tokens,
+        )
+        if tokens > remaining:
+            return self._with_requested_source_facts(
+                _with_omission(
+                    packet,
+                    "dbt-selector-inventory",
+                    OmissionReason.TOKEN_BUDGET,
+                    "dbt selector inventory exceeds context budget",
+                ),
+                request,
+            )
+        evidence = _dbt_snapshot_evidence(result.snapshot)
+        item = ContextItem(
+            item_id=f"dbt-selector-inventory:{result.snapshot.snapshot_id}",
+            item_type=ContextItemType.STRUCTURAL_FACT,
+            source_scope=request.scope,
+            content=content,
+            content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+            token_estimate=tokens,
+            evidence_references=(evidence,),
+            source_trust=SourceTrustClass.CURRENT_STRUCTURAL,
+            sensitivity=Sensitivity.NORMAL,
+            validity=ValidityState(result.currentness.value),
+            ranking=None,
+            conflict_state=ConflictState.NONE,
+            observed_at=result.snapshot.metadata.ingested_at,
+        )
+        notice = ProvenanceNotice(
+            f"provenance:{item.item_id}",
+            item.item_id,
+            f"mnemo:dbt/snapshot/{result.snapshot.snapshot_id}/selector-inventory",
+            hashlib.sha256(content.encode()).hexdigest(),
+            (evidence,),
+        )
+        result_packet = ContextPacket(
+            packet.schema_version,
+            packet.request_id,
+            packet.owner_scope,
+            packet.query_id,
+            packet.task_id,
+            packet.created_at,
+            packet.expires_at,
+            packet.declared_total_tokens + tokens,
+            packet.budget,
+            packet.producer_version,
+            active_task_checkpoint=packet.active_task_checkpoint,
+            episodic_memories=packet.episodic_memories,
+            knowledge_items=packet.knowledge_items,
+            structural_items=(*packet.structural_items, item),
+            skills_and_procedures=packet.skills_and_procedures,
+            provenance=(*packet.provenance, notice),
+            omissions=packet.omissions,
             conflicts=packet.conflicts,
         )
         return self._with_requested_source_facts(result_packet, request)
@@ -1931,12 +2110,12 @@ class UnifiedContextService:
                 OmissionReason.STALE,
                 "source snapshot is not proven current",
             )
-        files = tuple(
+        all_files = tuple(
             sorted(
                 self._source.iter_files(scope, snapshot.snapshot_id),
                 key=lambda item: item.relative_path,
             )
-        )[: query.maximum_files]
+        )
         all_symbols = tuple(
             sorted(
                 self._source.iter_symbols(scope, snapshot.snapshot_id),
@@ -1948,72 +2127,22 @@ class UnifiedContextService:
                 ),
             )
         )
-        modules = tuple(item for item in all_symbols if item.kind is CodeSymbolKind.MODULE)[
-            : query.maximum_modules
-        ]
-        declarations = tuple(
-            item for item in all_symbols if item.kind is not CodeSymbolKind.MODULE
-        )[: query.maximum_declarations]
-        packet = _with_source_overview_summary(
+        all_edges = tuple(
+            sorted(
+                self._source.iter_edges(scope, snapshot.snapshot_id),
+                key=_source_edge_key,
+            )
+        )
+        return _with_source_overview_summary(
             packet,
             request.scope,
             snapshot,
             currentness,
-            len(files),
-            len(modules),
-            len(declarations),
-            snapshot.file_count - len(files),
-            sum(item.kind is CodeSymbolKind.MODULE for item in all_symbols) - len(modules),
-            sum(item.kind is not CodeSymbolKind.MODULE for item in all_symbols) - len(declarations),
+            all_files,
+            all_symbols,
+            all_edges,
+            query,
         )
-        if not packet.structural_items or not any(
-            item.item_id == f"source-overview:{snapshot.snapshot_id}"
-            for item in packet.structural_items
-        ):
-            return packet
-        prior_source_item_ids = {
-            item.item_id for item in packet.structural_items if item.item_id.startswith("source:")
-        }
-        prior_file_item_ids = {
-            item.item_id
-            for item in packet.structural_items
-            if item.item_id.startswith("source-file:")
-        }
-        result = _append_source_file_items(
-            packet,
-            request.scope,
-            snapshot,
-            files,
-            currentness=currentness,
-        )
-        result = _append_source_items(
-            result,
-            request.scope,
-            snapshot,
-            (*modules, *declarations),
-            (),
-            {item.relative_path: item for item in modules},
-            currentness=currentness,
-        )
-        requested_symbol_count = len(modules) + len(declarations)
-        rendered_symbol_count = sum(
-            1
-            for item in result.structural_items
-            if item.item_id.startswith("source:") and item.item_id not in prior_source_item_ids
-        )
-        rendered_file_count = sum(
-            1
-            for item in result.structural_items
-            if item.item_id.startswith("source-file:") and item.item_id not in prior_file_item_ids
-        )
-        if rendered_symbol_count < requested_symbol_count or rendered_file_count < len(files):
-            return _with_omission(
-                result,
-                "source-overview-items",
-                OmissionReason.TOKEN_BUDGET,
-                "source overview inventory exceeds remaining structural budget",
-            )
-        return result
 
     def _with_source_facts(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -2557,7 +2686,26 @@ def _checkpoint_reference_from_context_item(
 
 
 _SOURCE_EVIDENCE_NAMESPACE = UUID("55ee8cf3-d751-4bda-860e-a2452c270b98")
+_SOURCE_OVERVIEW_MAX_TOKENS = 800
 _KNOWLEDGE_EVIDENCE_NAMESPACE = UUID("6b2c7437-752e-4d43-8b19-5156e50120fb")
+_DBT_EVIDENCE_NAMESPACE = UUID("ae8fe37f-a8c5-4942-994b-7d514d139060")
+
+
+def _dbt_snapshot_evidence(snapshot: DbtManifestSnapshot) -> EvidenceReference:
+    """Cite the immutable manifest as a whole for an aggregate derived from all its nodes."""
+    digest = snapshot.metadata.content_digest
+    reference = f"manifest:{digest}"
+    return EvidenceReference(
+        EvidenceId(uuid5(_DBT_EVIDENCE_NAMESPACE, f"evidence:{reference}")),
+        SourceId(uuid5(_DBT_EVIDENCE_NAMESPACE, f"source:{digest}")),
+        EvidenceSourceType.DBT_ARTIFACT,
+        SourceTrustClass.CURRENT_STRUCTURAL,
+        reference,
+        f"sha256:{digest}",
+        EvidenceLocation(snapshot.metadata.source_identity),
+        snapshot.metadata.ingested_at,
+        VerificationStatus.VERIFIED,
+    )
 
 
 def _exact_scoped_source_file(
@@ -3075,42 +3223,107 @@ def _with_source_overview_summary(
     task_scope: MemoryScope,
     snapshot: CodeSnapshot,
     currentness: ValidityState,
-    selected_file_count: int,
-    selected_module_count: int,
-    selected_declaration_count: int,
-    omitted_file_count: int,
-    omitted_module_count: int,
-    omitted_declaration_count: int,
+    files: tuple[CodeFile, ...],
+    symbols: tuple[CodeSymbol, ...],
+    edges: tuple[CodeEdge, ...],
+    query: ContextSourceOverviewQuery,
 ) -> ContextPacket:
-    """Attach a bounded snapshot-level inventory before individual declaration facts.
+    """Attach one compact projection of the persisted source graph.
 
-    The summary deliberately carries only counts and immutable snapshot identity.  It gives an
-    automatic session a reliable answer to "what has been indexed?" without retaining source
-    text, a project root, or an inferred runtime relationship.
+    MCP clients may expose a canonical packet both as text and structured content. Returning one
+    graph projection instead of dozens of individually cited facts keeps that transport-level
+    duplication bounded while preserving exact snapshot provenance and useful navigation hints.
     """
-    content = json.dumps(
+    modules = [
+        {"path": item.relative_path, "symbol": item.qualified_name}
+        for item in symbols
+        if item.kind is CodeSymbolKind.MODULE
+    ][: query.maximum_modules]
+    declarations = [
         {
-            "currentness": currentness.value,
-            "edge_count": snapshot.edge_count,
-            "file_count": snapshot.file_count,
-            "kind": "source_snapshot_overview",
-            "omitted_declaration_count": omitted_declaration_count,
-            "omitted_file_count": omitted_file_count,
-            "omitted_module_count": omitted_module_count,
-            "selected_declaration_count": selected_declaration_count,
-            "selected_file_count": selected_file_count,
-            "selected_module_count": selected_module_count,
-            "snapshot_id": str(snapshot.snapshot_id),
-            "symbol_count": snapshot.symbol_count,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    tokens = (len(content) + 3) // 4
+            "kind": item.kind.value,
+            "line": item.line,
+            "path": item.relative_path,
+            "symbol": item.qualified_name,
+        }
+        for item in symbols
+        if item.kind is not CodeSymbolKind.MODULE
+    ][: query.maximum_declarations]
+    file_paths = [item.relative_path for item in files[: query.maximum_files]]
+    component_candidates = _source_components(files, symbols)
+    components = [
+        {"file_count": file_count, "path": path, "symbol_count": symbol_count}
+        for path, file_count, symbol_count in component_candidates[: query.maximum_components]
+    ]
+    relationship_candidates = _source_component_relationships(symbols, edges)
+    relationships = [
+        {
+            "count": count,
+            "relationship": relationship,
+            "resolved": resolved,
+            "source_component": source_component,
+            "target": target,
+            "target_component": target if resolved else None,
+        }
+        for source_component, target, relationship, resolved, count in relationship_candidates[
+            : query.maximum_relationships
+        ]
+    ]
     remaining = min(
         packet.budget.structural - sum(item.token_estimate for item in packet.structural_items),
         packet.budget.total_limit - packet.declared_total_tokens,
+        _SOURCE_OVERVIEW_MAX_TOKENS,
     )
+
+    def render() -> str:
+        module_count = sum(item.kind is CodeSymbolKind.MODULE for item in symbols)
+        declaration_count = len(symbols) - module_count
+        return json.dumps(
+            {
+                "component_count": len(component_candidates),
+                "components": components,
+                "currentness": currentness.value,
+                "declarations": declarations,
+                "edge_count": snapshot.edge_count,
+                "file_count": snapshot.file_count,
+                "files": file_paths,
+                "kind": "source_architecture_overview",
+                "module_count": module_count,
+                "modules": modules,
+                "omitted_component_count": len(component_candidates) - len(components),
+                "omitted_declaration_count": declaration_count - len(declarations),
+                "omitted_file_count": snapshot.file_count - len(file_paths),
+                "omitted_module_count": module_count - len(modules),
+                "omitted_relationship_count": len(relationship_candidates) - len(relationships),
+                "relationships": relationships,
+                "selected_component_count": len(components),
+                "selected_declaration_count": len(declarations),
+                "selected_file_count": len(file_paths),
+                "selected_module_count": len(modules),
+                "selected_relationship_count": len(relationships),
+                "snapshot_id": str(snapshot.snapshot_id),
+                "symbol_count": snapshot.symbol_count,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    content = render()
+    tokens = (len(content) + 3) // 4
+    while tokens > remaining:
+        for values in (declarations, modules, file_paths, relationships, components):
+            if values:
+                values.pop()
+                break
+        else:
+            return _with_omission(
+                packet,
+                "source-overview",
+                OmissionReason.TOKEN_BUDGET,
+                "source overview summary exceeds remaining structural budget",
+            )
+        content = render()
+        tokens = (len(content) + 3) // 4
     if tokens > remaining:
         return _with_omission(
             packet,
@@ -3160,6 +3373,68 @@ def _with_source_overview_summary(
         provenance=(*packet.provenance, notice),
         omissions=packet.omissions,
         conflicts=packet.conflicts,
+    )
+
+
+def _source_component_path(relative_path: str) -> str:
+    directories = PurePosixPath(relative_path).parts[:-1]
+    if not directories:
+        return "."
+    if directories[0] in {"src", "lib", "app"}:
+        return "/".join(directories[: min(3, len(directories))])
+    if directories[0] in {"apps", "connectors", "packages", "services", "test", "tests"}:
+        return "/".join(directories[: min(2, len(directories))])
+    return directories[0]
+
+
+def _source_components(
+    files: tuple[CodeFile, ...], symbols: tuple[CodeSymbol, ...]
+) -> tuple[tuple[str, int, int], ...]:
+    file_counts: dict[str, int] = {}
+    symbol_counts: dict[str, int] = {}
+    for source_file in files:
+        component = _source_component_path(source_file.relative_path)
+        file_counts[component] = file_counts.get(component, 0) + 1
+    for symbol in symbols:
+        component = _source_component_path(symbol.relative_path)
+        symbol_counts[component] = symbol_counts.get(component, 0) + 1
+    return tuple(
+        sorted(
+            (
+                (component, file_counts.get(component, 0), symbol_counts.get(component, 0))
+                for component in file_counts.keys() | symbol_counts.keys()
+            ),
+            key=lambda item: (-item[1], -item[2], item[0]),
+        )
+    )
+
+
+def _source_component_relationships(
+    symbols: tuple[CodeSymbol, ...], edges: tuple[CodeEdge, ...]
+) -> tuple[tuple[str, str, str, bool, int], ...]:
+    components = {item.symbol_id: _source_component_path(item.relative_path) for item in symbols}
+    counts: dict[tuple[str, str, str, bool], int] = {}
+    for edge in edges:
+        source_component = components.get(edge.source_symbol_id)
+        target_component = (
+            None if edge.target_symbol_id is None else components.get(edge.target_symbol_id)
+        )
+        if source_component is None:
+            continue
+        resolved = target_component is not None
+        key = (
+            source_component,
+            target_component if target_component is not None else edge.target,
+            edge.kind.value,
+            resolved,
+        )
+        counts[key] = counts.get(key, 0) + 1
+    return tuple(
+        (*key, count)
+        for key, count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
     )
 
 

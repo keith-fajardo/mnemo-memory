@@ -94,7 +94,7 @@ The PyPI distribution is `mnemo-unified-context`; the primary installed command 
 `mnemo-memory` remains a compatibility alias for existing scripts and client registrations.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a7
+uv tool install mnemo-unified-context==0.1.0a8
 mnemo --version
 mnemo init
 
@@ -159,6 +159,26 @@ persist that prompt.
 If no checkpoint was saved, Mnemo does not pretend it remembers the missing conversation. It can
 still provide an enabled project's current structural overview and an honest handoff-needed
 reminder.
+
+### Ask what you were working on
+
+From an enabled project, ask for the latest saved handoff or a recent window:
+
+```bash
+mnemo recap
+mnemo recap --days 3
+mnemo recap --3days  # shorthand for --days 3
+```
+
+`mnemo recap` means “show the newest saved checkpoint from my previous agent session.” A day
+window returns the newest handoff for each checkpoint in that period, newest first. Mnemo reads at
+most 50 scoped lifecycle events, returns at most eight handoffs within a 1,300-token budget, and
+cites every checkpoint and revision. It does not reconstruct unsaved chats, terminal commands, or
+model reasoning.
+
+You can also ask a connected agent, “Mnemo recap what I worked on for the past 3 days.” The
+automatic hook selects the same bounded checkpoint evidence, and the agent can phrase it
+conversationally without Mnemo making another model call or scanning the repository.
 
 ## What Mnemo remembers
 
@@ -225,6 +245,13 @@ mnemo memory refresh
 Structural memory is a navigation aid, not a substitute for reading the exact code before changing
 it. Unsupported, dynamic, ambiguous, or oversized relationships are omitted rather than guessed.
 
+Ask a connected agent, “What are the main components of this repository and how do they connect?”
+Mnemo answers from one compact projection of the saved graph: exact snapshot counts, bounded
+component/file/symbol samples, and resolved or explicitly unresolved structural relationships with
+provenance. It does not dump the graph into the prompt. For a targeted implementation question,
+Mnemo returns the matching symbols, paths, and nearby static edges so the agent can open only the
+few relevant source files.
+
 ### dbt intelligence
 
 Scan one dbt repository once, or use the existing advanced dbt commands directly:
@@ -238,6 +265,11 @@ mnemo dbt status
 The scan detects the exact `dbt_project.yml` marker and ingests an existing manifest. The optional
 dbt wrapper can regenerate and refresh verified manifest context after successful dbt commands.
 See the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
+
+A simple question such as “can you see the dbt models?” uses one compact manifest inventory fact:
+the exact enabled-model count, snapshot ID, project name, and currentness. It does not enumerate
+model files or run shell commands. Individual model records stay opt-in and bounded for questions
+that actually need names, tags, tests, lineage, or impact.
 
 ### Repository notes and Obsidian
 

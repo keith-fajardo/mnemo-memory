@@ -6,6 +6,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
@@ -38,6 +39,7 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
 from mnemo_memory.packages.application.checkpoints import (
     CheckpointView,
+    CompleteCheckpoint,
     CreateCheckpoint,
     ReviseCheckpoint,
 )
@@ -742,11 +744,103 @@ def test_automatic_prompt_context_attaches_bounded_authoritative_dbt_models(
     packet = json.loads(attached)
     assert packet["declared_total_tokens"] <= 1_300
     structural = [json.loads(item["content"]) for item in packet["structural_items"]]
-    selected_models = [item for item in structural if item.get("query_kind") == "selector"]
-    assert selected_models
-    assert {item["resource_type"] for item in selected_models} == {"model"}
-    assert {item["snapshot_id"] for item in selected_models} == {str(ingested.snapshot.snapshot_id)}
-    assert all(item["relative_file"] for item in selected_models)
+    inventories = [item for item in structural if item.get("query_kind") == "selector_inventory"]
+    assert inventories == [
+        {
+            "currentness": "unknown",
+            "filters": {"resource_type": "model"},
+            "matched_node_count": 7,
+            "node_records_included": False,
+            "project_name": "mnemo_analytics",
+            "query_kind": "selector_inventory",
+            "snapshot_id": str(ingested.snapshot.snapshot_id),
+        }
+    ]
+    assert all(item.get("query_kind") != "selector" for item in structural)
+
+
+def test_automatic_prompt_context_attaches_one_compact_source_architecture_graph(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "python repo"
+    (project / "src" / "api").mkdir(parents=True)
+    (project / "src" / "domain").mkdir(parents=True)
+    (project / "src" / "api" / "routes.ts").write_text(
+        "import { Order } from '../domain/orders';\n"
+        "export function createOrder() { return new Order(); }\n",
+        encoding="utf-8",
+    )
+    (project / "src" / "domain" / "orders.ts").write_text(
+        "export class Order {}\n",
+        encoding="utf-8",
+    )
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    source = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
+    source.migrate()
+    stored = source.store_and_activate(
+        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
+    )
+
+    attached = cli._automatic_prompt_context_attachment(
+        data,
+        binding.checkpoint_scope,
+        "Can you see the architecture of this repository and its main components?",
+    )
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["declared_total_tokens"] <= 1_300
+    assert packet["knowledge_items"] == []
+    assert len(packet["structural_items"]) == 1
+    overview = json.loads(packet["structural_items"][0]["content"])
+    assert overview["kind"] == "source_architecture_overview"
+    assert overview["snapshot_id"] == str(stored.snapshot.snapshot_id)
+    assert overview["components"]
+    assert overview["relationships"]
+    assert len(attached) < 12_000
+
+
+def test_automatic_prompt_context_attaches_only_bounded_checkpoint_recap(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    created = _create_test_handoff(data, binding, objective="Finish compact dbt inventory.")
+    with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
+        runtime.checkpoint_service.complete(
+            CompleteCheckpoint(
+                binding.checkpoint_scope,
+                created.aggregate.checkpoint_id,
+                created.revision.revision_id,
+                replace(
+                    created.revision.content,
+                    current_state="The inventory fix is complete.",
+                    remaining_work=(),
+                ),
+                created.revision.evidence_references,
+            )
+        )
+
+    attached = cli._automatic_prompt_context_attachment(
+        data,
+        binding.checkpoint_scope,
+        "mnemo recap what I worked on for the past 3days",
+    )
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["declared_total_tokens"] <= 1_300
+    assert packet["active_task_checkpoint"] is None
+    assert packet["knowledge_items"] == packet["structural_items"] == []
+    assert len(packet["episodic_memories"]) == 1
+    recap = json.loads(packet["episodic_memories"][0]["content"])
+    assert recap["query_kind"] == "checkpoint_recap"
+    assert recap["recap_days"] == 3
+    assert recap["task_objective"] == "Finish compact dbt inventory."
+    assert packet["episodic_memories"][0]["evidence_references"]
 
 
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
@@ -1275,10 +1369,11 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
         if item["item_id"].startswith("source-overview:")
     )
     summary = json.loads(overview["content"])
-    assert summary["kind"] == "source_snapshot_overview"
+    assert summary["kind"] == "source_architecture_overview"
     assert summary["file_count"] == 1
     assert summary["currentness"] == "current"
-    assert any(item["item_id"].startswith("source-file:") for item in packet["structural_items"])
+    assert summary["files"] == ["service.py"]
+    assert len(packet["structural_items"]) == 1
     assert packet["declared_total_tokens"] <= 1_750
     assert "return True" not in attached
     assert str(project) not in attached
