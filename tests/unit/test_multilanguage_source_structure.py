@@ -18,6 +18,7 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.project_index import (
     SourceStructureError,
+    SourceStructureLimits,
     SourceStructureParser,
     SourceStructureParseRequest,
 )
@@ -110,6 +111,25 @@ def test_multi_language_parser_rejects_invalid_supported_syntax(
 
     with pytest.raises(SourceStructureError, match=error):
         SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+
+
+def test_parser_excludes_generated_target_artifacts_before_file_size_limits(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dbt-project"
+    models = root / "models"
+    target = root / "target"
+    models.mkdir(parents=True)
+    target.mkdir()
+    (models / "orders.sql").write_text("select 1\n", encoding="utf-8")
+    oversized = b"x" * (SourceStructureLimits().max_file_bytes + 1)
+    for filename in ("catalog.json", "index.html", "manifest.json"):
+        (target / filename).write_bytes(oversized)
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+
+    assert artifact.snapshot.file_count == 1
+    assert [item.relative_path for item in artifact.files] == ["models/orders.sql"]
 
 
 def test_parser_can_be_restricted_to_a_supported_language(tmp_path: Path) -> None:

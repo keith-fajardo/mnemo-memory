@@ -47,7 +47,11 @@ from mnemo_memory.packages.domain import (
     SourceTrustClass,
     VerificationStatus,
 )
-from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
+from mnemo_memory.packages.project_index import (
+    SourceStructureLimits,
+    SourceStructureParser,
+    SourceStructureParseRequest,
+)
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 
 
@@ -817,6 +821,9 @@ def test_memory_refresh_creates_new_snapshot_then_is_idempotent(tmp_path: Path) 
     project.mkdir()
     (project / ".git").mkdir()
     (project / "core.py").write_text("def calculate():\n    return 1\n")
+    target = project / "target"
+    target.mkdir()
+    (target / "manifest.json").write_bytes(b"x" * (SourceStructureLimits().max_file_bytes + 1))
     data_dir = tmp_path / "memory"
     config = LocalConfig.defaults(data_dir)
     LocalMemoryProjectBindingStore(config.data_directory).enable(project)
@@ -839,6 +846,7 @@ def test_memory_refresh_creates_new_snapshot_then_is_idempotent(tmp_path: Path) 
     assert second_value["idempotent"] is True
     assert second_value["previous_snapshot_id"] == first_value["snapshot_id"]
     assert first_value["currentness"] == "unknown_after_refresh"
+    assert first_value["files"] == 1
 
 
 def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> None:

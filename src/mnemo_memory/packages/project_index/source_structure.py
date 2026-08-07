@@ -55,6 +55,7 @@ _SKIP_DIRECTORIES: Final = frozenset(
         "build",
         "dist",
         "node_modules",
+        "target",
     }
 )
 # These are intentionally file-only inputs. Mnemo fingerprints their safe relative paths and bytes

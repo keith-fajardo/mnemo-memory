@@ -3984,3 +3984,24 @@ output. The CLI behavior was unaffected. The release test now removes terminal s
 asserting the user-visible help text. The exact forced-color regression and the complete repository
 gate both pass after the correction (`944 passed`, `27 skipped`; PostgreSQL integration `26 passed`,
 `1 skipped`).
+
+### Generated dbt target source-refresh isolation — Complete
+
+This bounded defect fix prevents the general source-structure projection from scanning conventional
+generated `target/` directories. A real dbt repository exposed the failure with `catalog.json`,
+`index.html`, and `manifest.json` artifacts above the existing one-megabyte per-file safety limit;
+the first oversized artifact caused `mnemo-memory memory refresh` to stop with
+`MNEMO_SOURCE_REFRESH_UNAVAILABLE` even though authoritative dbt ingestion was already healthy.
+
+The dedicated dbt artifact path is unchanged: `dbt enable` and wrapped dbt commands still ingest
+the manifest, catalog, run results, and freshness evidence into the authoritative dbt projection.
+Only the independent general source scanner now treats `target/` like the existing generated
+`build`, `dist`, and `node_modules` exclusions. Parser and public-CLI regressions prove that
+oversized generated dbt artifacts are excluded before file-size enforcement while real source
+files remain indexed and repeated refreshes remain idempotent.
+
+The focused regression suite passes with 13 tests. The complete `npm run check` gate passes with
+945 tests and 27 expected skips, the 26-test real PostgreSQL suite with one expected load-test
+skip, schema validation, dependency/provenance validation for 94 entries, architecture validation
+for 144 product Python files, and installed-package verification. No dependency, schema, policy,
+storage contract, dbt parser, MCP tool, or client-registration behavior changed.
