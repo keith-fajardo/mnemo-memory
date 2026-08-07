@@ -1,11 +1,11 @@
 # Python packaging
 
 Mnemo Memory is built as a Python 3.12 package with the `uv_build` backend. The import namespace
-is `mnemo_memory`; the installed command is `mnemo-memory`. The latter intentionally avoids the
-existing, unrelated `mnemo` executable.
+is `mnemo_memory`; the primary installed command is `mnemo`, with `mnemo-memory` retained as a
+compatibility alias.
 
 The permanent distribution name is `mnemo-unified-context`. Its import namespace remains
-`mnemo_memory` and its installed executable remains `mnemo-memory`.
+`mnemo_memory` and it installs both command aliases through the same CLI entry point.
 
 Build source-independent artifacts with:
 
@@ -19,13 +19,13 @@ directory. The normal data-directory precedence and SQLite migration behavior ar
 
 For development use `uv sync --locked`. For an isolated local artifact test use
 `uv pip install --python <venv>/bin/python dist/<artifact>.whl` from a temporary directory, then
-run `mnemo-memory --help` and initialize with an explicit temporary `--data-dir`.
+run `mnemo --help` and initialize with an explicit temporary `--data-dir`.
 
 Issue 13B verification builds both the wheel and sdist with `uv build --no-sources`, installs each
 outside the checkout, and exercises the installed stdio MCP server with the official MCP Python
 client. It also uses `uv tool install` with an isolated tool directory and temporary Codex/Claude
 homes. These checks use only synthetic fixtures and isolated Mnemo data; they neither inspect nor
-modify real client configuration or `/opt/homebrew/bin/mnemo`.
+modify real client configuration.
 
 Publishing is intentionally a separate gate. TestPyPI requires a user-approved permanent name
 and valid Trusted Publishing configuration (or an explicitly configured secure alternative).
@@ -36,7 +36,7 @@ without rebuilding them.
 
 The public source repository is [keith-fajardo/mnemo-memory](https://github.com/keith-fajardo/mnemo-memory).
 The approved distribution name is `mnemo-unified-context`; the import namespace remains
-`mnemo_memory` and the installed command remains `mnemo-memory`.
+`mnemo_memory`, the primary installed command is `mnemo`, and `mnemo-memory` remains compatible.
 
 ## TestPyPI Trusted Publishing setup
 

@@ -10,7 +10,10 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from mnemo_memory.packages.application.unified_context import GetUnifiedContext
+from mnemo_memory.packages.application.unified_context import (
+    ContextDbtSelectorQuery,
+    GetUnifiedContext,
+)
 from mnemo_memory.packages.domain import (
     ActiveEpisodicMemory,
     ConflictState,
@@ -332,6 +335,7 @@ def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnif
         return request
     knowledge_query = request.knowledge_query
     source_query = request.source_query
+    dbt_selector = request.dbt_selector
     if (
         RetrievalCategory.KNOWLEDGE in plan.categories
         and knowledge_query is None
@@ -339,10 +343,27 @@ def _planned_request(request: GetUnifiedContext, plan: RetrievalPlan) -> GetUnif
     ):
         knowledge_query = query
     if RetrievalCategory.STRUCTURAL in plan.categories and not _has_structural_query(request):
-        source_query = _source_identity_query(query)
-    if knowledge_query == request.knowledge_query and source_query == request.source_query:
+        if _is_dbt_model_overview(query):
+            dbt_selector = ContextDbtSelectorQuery(resource_type="model", maximum_nodes=32)
+        else:
+            source_query = _source_identity_query(query)
+    if (
+        knowledge_query == request.knowledge_query
+        and source_query == request.source_query
+        and dbt_selector == request.dbt_selector
+    ):
         return request
-    return replace(request, knowledge_query=knowledge_query, source_query=source_query)
+    return replace(
+        request,
+        knowledge_query=knowledge_query,
+        source_query=source_query,
+        dbt_selector=dbt_selector,
+    )
+
+
+def _is_dbt_model_overview(query: str) -> bool:
+    terms = _query_terms(query)
+    return "dbt" in terms and "models" in terms
 
 
 def _has_structural_query(request: GetUnifiedContext) -> bool:

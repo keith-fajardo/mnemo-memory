@@ -802,7 +802,20 @@ def _evidence(request: Mapping[str, object]) -> tuple[EvidenceReference, ...]:
         raise CheckpointApplicationMissingProvenance("checkpoint evidence is required")
     if not all(isinstance(item, Mapping) for item in value):
         raise ValueError("evidence_references must contain objects")
-    return tuple(EvidenceReference.from_dict(item) for item in value)
+    normalized: list[Mapping[str, object]] = []
+    for item in value:
+        reference = dict(item)
+        location = reference.get("location")
+        if isinstance(location, Mapping) and set(location) == {"uri"}:
+            reference["location"] = {
+                "uri": location["uri"],
+                "start_line": None,
+                "start_column": None,
+                "end_line": None,
+                "end_column": None,
+            }
+        normalized.append(reference)
+    return tuple(EvidenceReference.from_dict(item) for item in normalized)
 
 
 def _strings(request: Mapping[str, object], name: str) -> tuple[str, ...]:

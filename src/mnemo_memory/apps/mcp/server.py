@@ -14,7 +14,7 @@ from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
@@ -54,6 +54,34 @@ from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceState
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
+
+
+class CheckpointEvidenceLocationInput(BaseModel):
+    """Public MCP input shape for an immutable evidence location."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    uri: Annotated[str, Field(min_length=1)]
+    start_line: int | None = None
+    start_column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+
+
+class CheckpointEvidenceReferenceInput(BaseModel):
+    """Public MCP input shape for one checkpoint evidence reference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    evidence_id: Annotated[str, Field(min_length=36, max_length=36)]
+    source_id: Annotated[str, Field(min_length=36, max_length=36)]
+    source_type: Annotated[str, Field(min_length=1)]
+    trust_class: Annotated[str, Field(min_length=1)]
+    immutable_source_ref: Annotated[str, Field(min_length=1)]
+    content_hash: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    location: CheckpointEvidenceLocationInput
+    observed_at: Annotated[str, Field(min_length=1)]
+    verification_status: Annotated[str, Field(min_length=1)]
 
 
 class TeamKnowledgeMcpPort(Protocol):
@@ -415,13 +443,15 @@ def create_server(
             ),
         ] = None,
         evidence_references: Annotated[
-            list[dict[str, object]] | None,
+            list[SkipValidation[CheckpointEvidenceReferenceInput]] | None,
             Field(
                 default=None,
                 min_length=1,
                 max_length=64,
                 description=(
-                    "Required evidence for every save; lesson evidence IDs must be retained here."
+                    "Required evidence for every save; lesson evidence IDs must be retained here. "
+                    "A location requires uri. Omit all four source-span coordinates when unknown, "
+                    "or provide start_line, start_column, end_line, and end_column together."
                 ),
             ),
         ] = None,
@@ -487,6 +517,8 @@ def create_server(
                 "task_id": task_id,
                 "task_objective": task_objective,
                 "current_state": current_state,
+                # Nested evidence is validated by the canonical durable boundary so malformed
+                # values receive Mnemo's payload-free error instead of Pydantic's value echo.
                 "evidence_references": evidence_references,
                 "token_estimate": token_estimate,
                 "checkpoint_id": checkpoint_id,

@@ -18,7 +18,7 @@ from typing import cast
 
 from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 
-DISTRIBUTION_VERSION = "0.1.0a6"
+DISTRIBUTION_VERSION = "0.1.0a7"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
 TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
@@ -257,8 +257,6 @@ def _exercise_registration(
             str(launcher),
             "connect",
             "codex",
-            "--auto-memory",
-            "--yes",
             "--json",
             "--project-dir",
             str(project_directory),
@@ -393,6 +391,9 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
         launcher = tool_bin / "mnemo-memory"
         if not launcher.is_file():
             raise InstalledWorkflowError("uv tool install did not create mnemo-memory")
+        short_launcher = tool_bin / "mnemo"
+        if not short_launcher.is_file():
+            raise InstalledWorkflowError("uv tool install did not create mnemo")
         version_result = _run(
             (str(launcher), "--version"),
             cwd=work,
@@ -401,6 +402,13 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
         expected_version = f"mnemo-memory {DISTRIBUTION_VERSION}"
         if version_result.stdout.strip() != expected_version:
             raise InstalledWorkflowError("installed mnemo-memory reported an unexpected version")
+        short_version_result = _run(
+            (str(short_launcher), "--version"),
+            cwd=work,
+            environment=install_environment,
+        )
+        if short_version_result.stdout.strip() != f"mnemo {DISTRIBUTION_VERSION}":
+            raise InstalledWorkflowError("installed mnemo reported an unexpected version")
         team_launcher = tool_bin / "mnemo-memory-team"
         if not team_launcher.is_file():
             raise InstalledWorkflowError("uv tool install did not create mnemo-memory-team")

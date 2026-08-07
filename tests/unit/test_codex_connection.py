@@ -212,15 +212,16 @@ class FakeManager:
 @pytest.mark.parametrize(
     ("command", "input_value", "expected_exit", "connect_calls", "disconnect_calls"),
     [
-        (["connect", "codex"], "y\n", 0, 1, 0),
-        (["connect", "codex"], "n\n", 1, 0, 0),
+        (["connect", "codex"], "", 0, 1, 0),
+        (["connect", "codex", "--confirm"], "y\n", 0, 1, 0),
+        (["connect", "codex", "--confirm"], "n\n", 1, 0, 0),
         (["disconnect", "codex"], "y\n", 0, 0, 1),
         (["disconnect", "codex"], "n\n", 1, 0, 0),
         (["connect", "codex", "--yes"], "", 0, 1, 0),
         (["disconnect", "codex", "--yes"], "", 0, 0, 1),
         (["connect", "codex", "--dry-run"], "", 0, 1, 0),
         (["connect", "codex", "--check"], "", 0, 0, 0),
-        (["connect", "codex"], "", 1, 0, 0),
+        (["connect", "codex", "--confirm"], "", 1, 0, 0),
     ],
 )
 def test_confirmation_flow_is_bounded_and_deterministic(
@@ -233,10 +234,54 @@ def test_confirmation_flow_is_bounded_and_deterministic(
 ) -> None:
     manager = FakeManager()
     monkeypatch.setattr(cli, "_codex_manager", lambda: manager)
+    monkeypatch.setattr(
+        cli,
+        "_enable_automatic_task_memory",
+        lambda client, project_dir, data_dir: {"automatic_memory": True},
+    )
     result = CliRunner().invoke(cli.app, command, input=input_value)
     assert result.exit_code == expected_exit
     assert manager.connect_calls == connect_calls
     assert manager.disconnect_calls == disconnect_calls
+
+
+def test_codex_connection_enables_automatic_memory_by_default_with_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeManager()
+    enabled: list[str] = []
+    monkeypatch.setattr(cli, "_codex_manager", lambda: manager)
+
+    def enable(client: str, project_dir: object, data_dir: object) -> dict[str, object]:
+        enabled.append(client)
+        return {"automatic_memory": True}
+
+    monkeypatch.setattr(
+        cli,
+        "_enable_automatic_task_memory",
+        enable,
+    )
+    runner = CliRunner()
+
+    default = runner.invoke(cli.app, ["connect", "codex"])
+    disabled = runner.invoke(cli.app, ["connect", "codex", "--auto-memory-disable"])
+
+    assert default.exit_code == 0, default.output
+    assert disabled.exit_code == 0, disabled.output
+    assert enabled == ["codex"]
+
+
+def test_codex_default_confirmation_discloses_automatic_project_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeManager()
+    monkeypatch.setattr(cli, "_codex_manager", lambda: manager)
+
+    result = CliRunner().invoke(cli.app, ["connect", "codex", "--confirm"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "enable automatic task memory for this project" in result.output
+    assert manager.connect_calls == 0
 
 
 def test_codex_discovery_validates_launcher_before_external_client(

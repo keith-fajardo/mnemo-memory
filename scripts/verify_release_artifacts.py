@@ -13,7 +13,7 @@ from email.policy import default
 from pathlib import Path, PurePosixPath
 
 DISTRIBUTION_NAME = "mnemo-unified-context"
-DISTRIBUTION_VERSION = "0.1.0a6"
+DISTRIBUTION_VERSION = "0.1.0a7"
 REQUIRED_MIGRATIONS = (
     "0001_initial.sql",
     "0002_checkpoint_aggregate_revisions.sql",
@@ -164,6 +164,11 @@ def verify_wheel(path: Path) -> None:
             )
         parser = configparser.ConfigParser()
         parser.read_string(archive.read(entry_points[0]).decode("utf-8"))
+        short_command = parser.get("console_scripts", "mnemo", fallback=None)
+        if short_command != "mnemo_memory.cli:main":
+            raise ArtifactVerificationError(
+                "wheel console entry point mnemo must target mnemo_memory.cli:main"
+            )
         command = parser.get("console_scripts", "mnemo-memory", fallback=None)
         if command != "mnemo_memory.cli:main":
             raise ArtifactVerificationError(

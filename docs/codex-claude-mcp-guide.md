@@ -31,20 +31,20 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a6
-mnemo-memory --help
-mnemo-memory init
+uv tool install mnemo-unified-context==0.1.0a7
+mnemo --help
+mnemo init
 ```
 
 `init` creates or opens Mnemo’s local data directory. It does **not** automatically index every
-source file or make a chat durable. For normal use, enable automatic task memory while connecting
-from the project directory. This one opt-in creates a local project binding, indexes a bounded
-source-structure map, and installs lifecycle reminders:
+source file or make a chat durable. For normal use, connect from the project directory. Confirming
+that connection enables automatic task memory by default, creates a local project binding, indexes
+a bounded source-structure map, and installs lifecycle reminders:
 
 ```bash
-mnemo-memory connect codex --auto-memory
+mnemo connect codex
 # or
-mnemo-memory connect claude-code --auto-memory
+mnemo connect claude-code
 ```
 
 This creates a private local project binding; you never enter scope UUIDs. At a new session, the
@@ -71,15 +71,17 @@ fresh Claude Code session, or the reverse.
 Prerequisite: the `codex` CLI is installed and on your `PATH`.
 
 ```bash
-mnemo-memory connect codex --auto-memory
+mnemo connect codex
 ```
 
-Confirm the prompt. For a non-interactive or CI preview:
+The command runs immediately. For preview, explicit confirmation, status, or an MCP-only
+connection:
 
 ```bash
-mnemo-memory connect codex --dry-run
-mnemo-memory connect codex --yes
-mnemo-memory connect codex --check
+mnemo connect codex --dry-run
+mnemo connect codex --confirm
+mnemo connect codex --check
+mnemo connect codex --auto-memory-disable  # MCP only
 ```
 
 Mnemo asks Codex to register an MCP server named `mnemo-memory` using the absolute installed
@@ -102,7 +104,7 @@ Restart Codex after registration. In a coding session, it can then discover `sav
 To remove only Mnemo’s owned registration:
 
 ```bash
-mnemo-memory disconnect codex
+mnemo disconnect codex
 ```
 
 ## Connect Claude Code
@@ -110,15 +112,16 @@ mnemo-memory disconnect codex
 Prerequisite: the `claude` CLI is installed and on your `PATH`.
 
 ```bash
-mnemo-memory connect claude-code --auto-memory
+mnemo connect claude-code
 ```
 
-The same safe controls are available:
+The same controls are available:
 
 ```bash
-mnemo-memory connect claude-code --dry-run
-mnemo-memory connect claude-code --yes
-mnemo-memory connect claude-code --check
+mnemo connect claude-code --dry-run
+mnemo connect claude-code --confirm
+mnemo connect claude-code --check
+mnemo connect claude-code --auto-memory-disable  # MCP only
 ```
 
 Mnemo registers `mnemo-memory` in Claude Code’s **user** MCP scope. It does not write a project
@@ -133,7 +136,7 @@ Restart Claude Code after registration; `/mcp` can show its MCP status. Remove M
 registration without affecting Codex or unrelated Claude entries:
 
 ```bash
-mnemo-memory disconnect claude-code
+mnemo disconnect claude-code
 ```
 
 ## Connect both clients
@@ -141,8 +144,8 @@ mnemo-memory disconnect claude-code
 You can and often should connect both:
 
 ```bash
-mnemo-memory connect codex
-mnemo-memory connect claude-code
+mnemo connect codex
+mnemo connect claude-code
 ```
 
 These are two independent client registrations pointing to the same local `mnemo-memory` command.
@@ -153,7 +156,7 @@ scope. Disconnecting one client does not disconnect the other or delete saved Mn
 
 ### Normal mode: automatic handoffs
 
-After connecting with `--auto-memory`, work normally. Mnemo’s lifecycle hook attaches the bounded
+After confirming the default connection, work normally. Mnemo’s lifecycle hook attaches the bounded
 saved checkpoint, lessons, and approved facts at a new session, then prompts the agent to
 `save_checkpoint` before it stops meaningful work. The user does not need to remember a separate
 “save this” instruction. Codex asks you to review/trust local hooks once through `/hooks`; restart
@@ -162,7 +165,11 @@ either client after changing its hook configuration.
 The automatic mode remembers task handoffs and creates a private static source-structure snapshot
 for the enabled project: modules, imports, declarations, and explicit syntactic calls. The local
 release supports Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, C, C++, C#, Java, and PHP.
-Mnemo does not claim an unproven runtime call graph.
+Mnemo does not claim an unproven runtime call graph. A short prompt that explicitly asks about
+plural dbt models receives a bounded selector result from the registered authoritative manifest,
+including snapshot provenance. The prompt remains transient, the total automatic prompt packet
+keeps its existing 1,300-token ceiling, and the result may state that additional models were
+omitted rather than enumerating an unbounded manifest.
 
 At a fresh session, Mnemo also shows bounded added/removed/modified relative files, declarations,
 and resolved relationships from the most recent proved structural transition. It is a cue to investigate a
@@ -230,9 +237,9 @@ one project’s checkpoint from being exposed to another project. They are **not
 directory or dbt manifest.
 
 For the normal personal workflow, you do not create or paste any UUIDs: run
-`mnemo-memory connect codex --auto-memory` or
-`mnemo-memory connect claude-code --auto-memory` from the repository once. Mnemo creates a private
-machine-local project binding and reuses its stable scope on later sessions. `mnemo-memory dbt
+`mnemo connect codex` or
+`mnemo connect claude-code` from the repository once. Mnemo creates a private
+machine-local project binding and reuses its stable scope on later sessions. `mnemo dbt
 enable` does the same for a dbt repository and reuses the automatic-memory project scope when both
 are enabled for that canonical directory.
 
@@ -257,13 +264,13 @@ valid call can continue in the same server session.
 
 | Symptom | What to check |
 | --- | --- |
-| `mnemo-memory` is not found | Install with `uv tool install mnemo-unified-context` and ensure uv’s tool directory is on `PATH`. |
+| `mnemo` is not found | Install with `uv tool install mnemo-unified-context` and ensure uv’s tool directory is on `PATH`. The compatibility alias is `mnemo-memory`. |
 | `MNEMO_CODEX_NOT_INSTALLED` or `MNEMO_CLAUDE_NOT_INSTALLED` | Install the relevant client CLI first; Mnemo never installs it for you. |
 | A fresh client cannot find a checkpoint | Ensure both sessions use the same absolute `MNEMO_DATA_DIR` and the same scope; confirm the earlier agent actually saved a checkpoint. |
 | The wrong project’s context is requested | Use the correct scope. Mnemo intentionally returns the same not-found result as for an unknown checkpoint. |
 | The data directory is unavailable | Fix the explicit directory or remove the bad `MNEMO_DATA_DIR`; Mnemo will not silently switch to another database. |
 | The installed launcher moved | Run the relevant `disconnect` command, then connect it again so the client stores the new absolute path. |
 
-For a guided terminal explanation, run `mnemo-memory agent` (or `mnemo-memory guide`). It is safe
+For a guided terminal explanation, run `mnemo agent` (or `mnemo guide`). It is safe
 by default: it explains the chosen store and prints client commands; it does not initialize a store
 unless you confirm or pass `--initialize`, and it never registers a client itself.

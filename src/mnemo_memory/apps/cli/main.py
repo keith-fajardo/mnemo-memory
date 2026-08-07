@@ -169,7 +169,8 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"mnemo-memory {distribution_version('mnemo-unified-context')}")
+        command = "mnemo" if Path(sys.argv[0]).name == "mnemo" else "mnemo-memory"
+        typer.echo(f"{command} {distribution_version('mnemo-unified-context')}")
         raise typer.Exit()
 
 
@@ -242,7 +243,7 @@ _AUTOMATIC_PROMPT_CONTEXT_BUDGET = ContextBudget(
     active_task_checkpoint=600,
     episodic_memories=200,
     knowledge=500,
-    structural=0,
+    structural=400,
     skills_and_procedures=0,
     provenance_and_conflicts=0,
     total_limit=1_300,
@@ -358,7 +359,9 @@ def _automatic_prompt_context_attachment(
     if not prompt.strip() or len(prompt) > 512:
         return None
     try:
-        with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+        with build_checkpoint_runtime(
+            resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
+        ) as runtime:
             assert runtime.knowledge_document_repository is not None
             semantic = LocalSemanticKnowledgeRetriever(
                 runtime.knowledge_document_repository,
@@ -414,6 +417,7 @@ def _automatic_prompt_context_attachment(
         packet.active_task_checkpoint is None
         and not packet.episodic_memories
         and not packet.knowledge_items
+        and not packet.structural_items
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -509,11 +513,11 @@ def _has_source_diff_entries(value: dict[str, object]) -> bool:
 
 def _guide_client_commands(choice: str) -> tuple[str, ...]:
     commands = {
-        "codex": ("mnemo-memory connect codex --auto-memory",),
-        "claude-code": ("mnemo-memory connect claude-code --auto-memory",),
+        "codex": ("mnemo connect codex",),
+        "claude-code": ("mnemo connect claude-code",),
         "both": (
-            "mnemo-memory connect codex --auto-memory",
-            "mnemo-memory connect claude-code --auto-memory",
+            "mnemo connect codex",
+            "mnemo connect claude-code",
         ),
         "later": (),
     }
@@ -551,9 +555,7 @@ def _run_setup_guide(data_dir: Path | None, *, initialize: bool, non_interactive
     if should_initialize:
         _show(_service(data_dir).initialize())
     elif not initialized:
-        typer.echo(
-            "Next step: run mnemo-memory init (or rerun this guide and confirm initialization)."
-        )
+        typer.echo("Next step: run mnemo init (or rerun this guide and confirm initialization).")
 
     typer.echo("\nTo make the two MCP tools available, register one or both clients:")
     if non_interactive:
@@ -564,21 +566,17 @@ def _run_setup_guide(data_dir: Path | None, *, initialize: bool, non_interactive
         ).strip()
     commands = _guide_client_commands(choice)
     if commands:
-        typer.echo(
-            "Run the following command(s) when you are ready. Add --auto-memory to enable "
-            "automatic task handoffs for the current project:"
-        )
+        typer.echo("Run the following command(s) when you are ready:")
         for command in commands:
             typer.echo(f"  {command}")
     else:
-        typer.echo("Client registration deferred. You can return with mnemo-memory guide.")
+        typer.echo("Client registration deferred. You can return with mnemo guide.")
     typer.echo(
         "\nWith automatic task memory enabled, Mnemo prompts the agent to retrieve context "
         "at a fresh session and save a bounded handoff before work stops."
     )
     typer.echo(
-        "Optional dbt lineage: from a dbt project, run mnemo-memory dbt enable once. "
-        "No UUIDs are needed."
+        "Optional dbt lineage: from a dbt project, run mnemo dbt enable once. No UUIDs are needed."
     )
 
 
@@ -887,12 +885,18 @@ def _ingest_existing_manifest(
         observed_at = datetime.now(UTC)
         with _dbt_runtime(resolve_local_config(data_directory)) as runtime:
             assert runtime.dbt_manifest_service is not None
+            active = runtime.dbt_manifest_service.get_active_status(
+                GetActiveManifestStatus(binding.scope)
+            )
             stored = runtime.dbt_manifest_service.ingest(
                 IngestManifest(
                     binding.scope,
                     manifest.read_bytes(),
                     "manifest.json",
                     observed_at,
+                    expected_active_snapshot_id=(
+                        None if active.snapshot is None else active.snapshot.snapshot_id
+                    ),
                     source_state=DbtGitStateObserver().observe(binding.project_root),
                 )
             )
@@ -1151,7 +1155,7 @@ def dbt_status(
             unenabled = {
                 "enabled": False,
                 "active": False,
-                "instruction": "mnemo-memory dbt enable",
+                "instruction": "mnemo dbt enable",
             }
             _show(unenabled) if json_output else typer.echo(json.dumps(unenabled, sort_keys=True))
             return
@@ -1271,7 +1275,7 @@ def dbt_exec(
         )
         if setup_required:
             typer.echo(
-                "Mnemo skipped dbt memory for this project. Run: mnemo-memory dbt enable",
+                "Mnemo skipped dbt memory for this project. Run: mnemo dbt enable",
                 err=True,
             )
         else:
@@ -1282,10 +1286,10 @@ def dbt_exec(
 @dbt_app.command("shell-hook", help="Print opt-in shell code that routes dbt through Mnemo.")
 def dbt_shell_hook(shell: str = typer.Argument(...)) -> None:
     if shell in {"zsh", "bash"}:
-        typer.echo('dbt() { command mnemo-memory dbt exec -- "$@"; }')
+        typer.echo('dbt() { command mnemo dbt exec -- "$@"; }')
         return
     if shell == "fish":
-        typer.echo("function dbt\n    command mnemo-memory dbt exec -- $argv\nend")
+        typer.echo("function dbt\n    command mnemo dbt exec -- $argv\nend")
         return
     raise typer.BadParameter("supported shells: zsh, bash, fish")
 
@@ -1324,6 +1328,61 @@ def _installed_launcher() -> Path:
     return Path(launcher).resolve()
 
 
+def _scan_project(project_dir: Path, data_dir: Path | None) -> dict[str, object]:
+    """Bind and refresh one local project, including an exact dbt project when present."""
+    config = resolve_local_config(data_dir)
+    _service(data_dir).initialize()
+    root = find_memory_project_root(project_dir)
+    dbt_store = LocalDbtProjectBindingStore(config.data_directory)
+    dbt_binding = dbt_store.get(root) if (root / "dbt_project.yml").is_file() else None
+    binding = LocalMemoryProjectBindingStore(config.data_directory).enable(
+        root,
+        project_scope=None if dbt_binding is None else dbt_binding.scope,
+    )
+    dbt_result: dict[str, object] = {"detected": False}
+    if (binding.project_root / "dbt_project.yml").is_file():
+        if dbt_binding is None:
+            dbt_binding = DbtProjectBinding(binding.project_root, binding.scope)
+            dbt_store.set(dbt_binding)
+        elif dbt_binding.scope != binding.scope:
+            raise AutomaticMemoryBindingError("MNEMO_MEMORY_PROJECT_SCOPE_CONFLICT")
+        manifest_status, ingested, supplemental = _ingest_existing_manifest(
+            config.data_directory, dbt_binding
+        )
+        dbt_result = {
+            "detected": True,
+            "project_root": str(dbt_binding.project_root),
+            "registered": True,
+            "existing_manifest": manifest_status,
+            "ingested": ingested,
+            **supplemental,
+        }
+
+    source_repository = SQLiteSourceStructureRepository(
+        config.database_path, base_directory=config.data_directory
+    )
+    source_repository.migrate()
+    previous = source_repository.get_active_snapshot(binding.scope)
+    source_result = source_repository.store_and_activate(
+        SourceStructureParser().parse(
+            SourceStructureParseRequest(binding.scope, binding.project_root)
+        )
+    )
+    return {
+        "project_root": str(binding.project_root),
+        "source_structure": {
+            "indexed": True,
+            "snapshot_id": str(source_result.snapshot.snapshot_id),
+            "previous_snapshot_id": None if previous is None else str(previous.snapshot_id),
+            "files": source_result.snapshot.file_count,
+            "symbols": source_result.snapshot.symbol_count,
+            "relationships": source_result.snapshot.edge_count,
+            "idempotent": source_result.idempotent,
+        },
+        "dbt": dbt_result,
+    }
+
+
 def _enable_automatic_task_memory(
     client: str, project_dir: Path, data_dir: Path | None
 ) -> dict[str, object]:
@@ -1333,44 +1392,14 @@ def _enable_automatic_task_memory(
     typed_client = cast(ClientName, client)
     try:
         config = resolve_local_config(data_dir)
-        _service(data_dir).initialize()
-        dbt_scope: MemoryScope | None = None
-        try:
-            dbt_binding = LocalDbtProjectBindingStore(config.data_directory).get(project_dir)
-            if dbt_binding is not None and dbt_binding.project_root == find_memory_project_root(
-                project_dir
-            ):
-                dbt_scope = dbt_binding.scope
-        except DbtProjectBindingError:
-            # Non-dbt repositories have no dbt binding to align with.
-            pass
-        binding = LocalMemoryProjectBindingStore(config.data_directory).enable(
-            project_dir, project_scope=dbt_scope
-        )
-        source_repository = SQLiteSourceStructureRepository(
-            config.database_path, base_directory=config.data_directory
-        )
-        source_repository.migrate()
-        source_result = source_repository.store_and_activate(
-            SourceStructureParser().parse(
-                SourceStructureParseRequest(binding.scope, binding.project_root)
-            )
-        )
+        scan_result = _scan_project(project_dir, data_dir)
         changed = enable_client_hooks(
             typed_client, _installed_launcher(), client_home(typed_client), config.data_directory
         )
         return {
             "automatic_memory": True,
-            "project_root": str(binding.project_root),
             "hook_configuration_changed": changed,
-            "source_structure": {
-                "indexed": True,
-                "snapshot_id": str(source_result.snapshot.snapshot_id),
-                "files": source_result.snapshot.file_count,
-                "symbols": source_result.snapshot.symbol_count,
-                "relationships": source_result.snapshot.edge_count,
-                "idempotent": source_result.idempotent,
-            },
+            **scan_result,
         }
     except (AutomaticMemoryBindingError, AutomaticMemoryClientConfigError, ValueError) as error:
         raise typer.BadParameter("MNEMO_MEMORY_ENABLE_FAILED") from error
@@ -2121,6 +2150,22 @@ def memory_changes(
     )
 
 
+@app.command(
+    "scan",
+    help="Register and refresh a local project, including dbt artifacts when detected.",
+)
+def scan_project(
+    project_dir: Path = typer.Argument(Path(".")),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Provide one no-UUID command for initial and repeated local project scans."""
+    try:
+        result = _scan_project(project_dir, data_dir)
+    except (AutomaticMemoryBindingError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SCAN_FAILED") from error
+    _show({"scanned": True, **result})
+
+
 @memory_app.command(
     "refresh", help="Rebuild the enabled project's static source-structure snapshot."
 )
@@ -2213,12 +2258,13 @@ def automatic_memory_hook(
 def connect_codex(
     check: bool = typer.Option(False, "--check"),
     dry_run: bool = typer.Option(False, "--dry-run"),
-    yes: bool = typer.Option(False, "--yes"),
+    confirm: bool = typer.Option(False, "--confirm", help="Ask before changing client config."),
+    yes: bool = typer.Option(False, "--yes", hidden=True),
     json_output: bool = typer.Option(False, "--json"),
     auto_memory: bool = typer.Option(
-        False,
-        "--auto-memory",
-        help="Also enable automatic task handoffs for the current project.",
+        True,
+        "--auto-memory/--auto-memory-disable",
+        help="Enable automatic project memory by default; disable for an MCP-only connection.",
     ),
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -2230,7 +2276,7 @@ def connect_codex(
     prompt = "Register Mnemo with Codex"
     if auto_memory:
         prompt += " and enable automatic task memory for this project"
-    if not yes and not dry_run and not typer.confirm(f"{prompt}?"):
+    if confirm and not yes and not dry_run and not typer.confirm(f"{prompt}?"):
         raise typer.Abort()
     result = manager.connect(dry_run=dry_run)
     if auto_memory and not dry_run:
@@ -2242,13 +2288,14 @@ def connect_codex(
     "claude-code", help="Register the installed Mnemo MCP launcher with Claude Code."
 )
 def connect_claude_code(
-    check: bool = False,
-    dry_run: bool = False,
-    yes: bool = False,
+    check: bool = typer.Option(False, "--check"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    confirm: bool = typer.Option(False, "--confirm", help="Ask before changing client config."),
+    yes: bool = typer.Option(False, "--yes", hidden=True),
     auto_memory: bool = typer.Option(
-        False,
-        "--auto-memory",
-        help="Also enable automatic task handoffs for the current project.",
+        True,
+        "--auto-memory/--auto-memory-disable",
+        help="Enable automatic project memory by default; disable for an MCP-only connection.",
     ),
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -2260,7 +2307,7 @@ def connect_claude_code(
     prompt = "Register Mnemo with Claude Code"
     if auto_memory:
         prompt += " and enable automatic task memory for this project"
-    if not yes and not dry_run and not typer.confirm(f"{prompt}?"):
+    if confirm and not yes and not dry_run and not typer.confirm(f"{prompt}?"):
         raise typer.Abort()
     result = manager.connect(dry_run=dry_run)
     if auto_memory and not dry_run:

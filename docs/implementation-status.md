@@ -4026,3 +4026,82 @@ with these SHA-256 digests:
 Publication remains an operational action performed from the committed revision by the existing
 protected PyPI OIDC workflow, which rebuilds and verifies its own exact artifact bundle before
 upload and independently verifies the live PyPI files afterward.
+
+### Automatic dbt structural awareness and shorthand onboarding — Complete
+
+The demonstrated Claude Code VS Code workflow had a connected Mnemo MCP server and an active dbt
+projection, but prompt-time automatic retrieval selected knowledge and generic source identity
+only; the client therefore fell back to scanning SQL files. Automatic retrieval now routes a short,
+explicit request about dbt models to the authoritative saved dbt projection. It attaches at most 32
+model summaries within a 400-token structural allocation inside the unchanged 1,300-token automatic
+context budget, with snapshot provenance and truncation metadata. Selection remains deterministic,
+scope-first, prompt-transient, and fail-open: it adds no model call, stores no prompt text, never
+enumerates an unbounded manifest, and does not change explicit MCP query behavior.
+
+The primary executable is now the shorter `mnemo`, while `mnemo-memory` remains a compatible alias.
+`mnemo connect codex` and `mnemo connect claude-code` now act on the current directory and enable
+automatic project memory by default. `--dry-run`, optional `--confirm`, `--check`, advanced
+`--project-dir`, and the inverse `--auto-memory-disable` retain explicit control; the former `--yes`
+spelling remains accepted but hidden for script compatibility. The new `mnemo scan` command refreshes
+bounded repository structure, detects only the canonical `dbt_project.yml` marker, reuses or creates
+the matching registered scope, and ingests an existing `target/manifest.json` idempotently. If the
+manifest is absent it reports that state and never executes dbt or other project code. `mnemo dbt
+enable` remains available for explicit dbt setup.
+
+README/PyPI copy, user and MCP guides, client connection guides, dbt wrapper documentation, threat
+model, package verification, and installed-command smoke checks now describe and enforce the short
+default workflow. The real cross-client evaluator also invokes the default connection commands
+from its isolated project, preventing an unrelated checkout scan. The focused regression suites
+pass (`148 passed`), including automatic structural retrieval, repeated scan idempotence,
+default/disabled connection behavior, both aliases, and release artifact entry points. The complete
+gate passes (`954 passed`, `27 skipped`; PostgreSQL integration
+`26 passed`, `1 skipped`) with formatting, lint, typing, dependency provenance, architecture, schema,
+and installed-package verification. This change adds no schema, dependency, model call, network
+request, or new MCP tool.
+
+### URI-only checkpoint evidence locations — Complete
+
+The demonstrated `save_checkpoint` call supplied a valid immutable evidence URI but omitted four
+unknown source-span coordinates. The MCP schema represented each evidence reference as a generic
+object, while the downstream canonical parser required those coordinate keys to be present with
+explicit `null` values. The sanitized adapter error therefore reported only `MNEMO_INVALID_INPUT`.
+This bounded follow-up must make URI-only locations valid, continue rejecting unknown fields and
+partially supplied spans, publish the nested evidence shape in the MCP input schema, retain
+sanitized errors, and add no persistence, authorization, scope, or dependency change.
+
+The checkpoint tool now publishes strict nested evidence-reference and location schemas: `uri` is
+required, the four source-span coordinates are optional as a group, unknown nested properties are
+disallowed, IDs are bounded, and content hashes advertise their lowercase SHA-256 shape. Runtime
+nested validation remains behind Mnemo's canonical durable boundary because FastMCP/Pydantic's
+pre-dispatch validation error can echo rejected input values. That boundary canonicalizes only an
+exact URI-only location to four explicit `null` coordinates; partial spans, unknown fields,
+malformed values, and conflicting evidence still fail before persistence with a payload-free code.
+
+The focused MCP suite passes (`30 passed`), including schema inspection, direct durable parsing,
+real stdio URI-only persistence, partial-span and unknown-field rejection, and proof that a rejected
+private marker is not returned. The complete gate passes (`955 passed`, `27 skipped`; PostgreSQL
+integration `26 passed`, `1 skipped`) with formatting, lint, typing, schema, dependency provenance,
+architecture, and installed-package verification. Documentation now shows the concise URI-only
+input. This fix adds no storage migration, dependency, authorization or scope change, model call,
+network request, or new MCP tool.
+
+### PyPI 0.1.0a7 structural-awareness and evidence-input release candidate — Complete
+
+The approved release packages the completed automatic dbt structural retrieval, `mnemo` shorthand
+and default automatic onboarding, `mnemo scan`, generated-target isolation, and URI-only checkpoint
+evidence fix as `0.1.0a7`. The package metadata, lockfile, signed production and TestPyPI workflow
+filenames, release verifiers, tests, and installation documentation must agree on that exact
+version. Publication remains restricted to the protected production PyPI OIDC workflow, which must
+rebuild and verify the committed revision and confirm the live PyPI files after upload.
+
+The coordinated version, workflow-YAML, lockfile, CLI-version, and focused release suite pass
+(`141 passed`). Independently built source-independent artifacts pass the release verifier with
+these SHA-256 digests:
+
+- wheel: `3e07a767561b44d1852bff043f68d0d6984afc825bf72d6e5d79cb5ac706f1e3`
+- source distribution: `9b60431a289cc659a4b79ead7c13d1f2de40f190b0161a9c9ae0a7845dda8cb1`
+
+The complete gate passes (`955 passed`, `27 skipped`; PostgreSQL integration `26 passed`,
+`1 skipped`) with formatting, lint, typing, schema, dependency provenance, architecture, and
+installed-package verification. The release remains unpublished until the committed revision is
+pushed and the protected production workflow succeeds.

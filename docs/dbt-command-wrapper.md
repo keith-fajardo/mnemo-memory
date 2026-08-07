@@ -29,7 +29,7 @@ remains the result you see and the prior Mnemo snapshot stays active.
 For zsh, put this one line in your own `~/.zshrc`:
 
 ```bash
-eval "$(mnemo-memory dbt shell-hook zsh)"
+eval "$(mnemo dbt shell-hook zsh)"
 ```
 
 For the current shell only, run the same line once in the terminal. It defines a `dbt()` function
@@ -42,7 +42,7 @@ From the dbt repository, enable Mnemo once. The root must contain `dbt_project.y
 
 ```bash
 cd /absolute/path/to/your-dbt-project
-mnemo-memory dbt enable
+mnemo dbt enable
 ```
 
 `enable` initializes the personal Mnemo profile if necessary, creates private stable identities,
@@ -55,8 +55,8 @@ with restrictive permissions. It stores the path-to-scope mapping only; it does 
 Check or remove the binding at any time:
 
 ```bash
-mnemo-memory dbt status
-mnemo-memory dbt disable
+mnemo dbt status
+mnemo dbt disable
 ```
 
 After those two one-time steps, keep using dbt normally:
@@ -71,7 +71,7 @@ The function forwards those exact arguments safely. Mnemo honors both `--project
 The explicit form is for CI, Codex, Claude Code, or a shell where you do not load the function:
 
 ```bash
-mnemo-memory dbt exec -- run -s orders+
+mnemo dbt exec -- run -s orders+
 ```
 
 By default it resolves dbt in this order:
@@ -82,7 +82,7 @@ By default it resolves dbt in this order:
 
 Mnemo refuses a relative configured executable and refuses recursion back into its own wrapper.
 
-Remove the profile line, start a new shell, or run `mnemo-memory dbt disable` to return to the
+Remove the profile line, start a new shell, or run `mnemo dbt disable` to return to the
 explicit workflow; none of these actions delete prior immutable snapshots.
 
 ## Before and after behavior
@@ -129,12 +129,12 @@ exit code always wins over Mnemo’s strict status.
 
 | What you see | What to do |
 | --- | --- |
-| Mnemo says the project is not enabled | Run `mnemo-memory dbt enable` from that dbt repository. dbt still ran normally. |
+| Mnemo says the project is not enabled | Run `mnemo dbt enable` from that dbt repository. dbt still ran normally. |
 | `MNEMO_COMMAND_NOT_FOUND` | Install dbt or provide `--dbt-executable` with an absolute executable path. |
 | Manifest is unavailable | Check dbt’s target path and confirm the command generates `manifest.json`. Mnemo keeps the old snapshot. |
 | Snapshot conflict | Another process activated a newer manifest first. Re-run dbt/Mnemo against the current project state; Mnemo never overwrites the winner. |
-| Want no wrapping | Do not load the shell hook, or remove its one line from your shell profile. Manual `mnemo-memory dbt ingest` remains available. |
+| Want no wrapping | Do not load the shell hook, or remove its one line from your shell profile. Manual `mnemo dbt ingest` remains available. |
 
-Manual `mnemo-memory dbt ingest` and `mnemo-memory dbt status` remain supported. The wrapper does
+Manual `mnemo dbt ingest` and `mnemo dbt status` remain supported. The wrapper does
 not add an MCP tool; the MCP inventory is `get_context`, `list_skills`, `get_skill`,
 `explain_context`, and `save_checkpoint`.

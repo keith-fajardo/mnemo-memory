@@ -1,6 +1,6 @@
 [project]
 name = "mnemo-unified-context"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -33,6 +33,7 @@ dependencies = [
 ]
 
 [project.scripts]
+mnemo = "mnemo_memory.cli:main"
 mnemo-memory = "mnemo_memory.cli:main"
 mnemo-memory-team = "mnemo_memory.apps.mcp.team_runtime:main"
 mnemo-memory-team-admin = "mnemo_memory.apps.cli.team_admin:main"

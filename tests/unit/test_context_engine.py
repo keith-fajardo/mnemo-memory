@@ -9,7 +9,10 @@ from typing import cast
 
 import pytest
 
-from mnemo_memory.packages.application.unified_context import GetUnifiedContext
+from mnemo_memory.packages.application.unified_context import (
+    ContextDbtSelectorQuery,
+    GetUnifiedContext,
+)
 from mnemo_memory.packages.context_engine import (
     DeterministicContextPlanner,
     QueryIntent,
@@ -228,6 +231,18 @@ def test_general_query_routes_only_to_existing_authorized_lexical_categories() -
     assert routed.knowledge_query == "oauth callback"
     assert routed.semantic_knowledge_query is None
     assert routed.source_query == "oauth callback"
+
+
+def test_dbt_model_overview_query_routes_to_the_authoritative_manifest() -> None:
+    scope = _scope()
+    assembler = EmptyAssembler()
+    engine = UnifiedContextEngine(assembler, ScopedMemoryRepository(scope, ()))
+
+    engine.get_context(GetUnifiedContext(scope, query="can you see all the dbt models here?"))
+
+    routed = assembler.requests[0]
+    assert routed.dbt_selector == ContextDbtSelectorQuery(resource_type="model", maximum_nodes=32)
+    assert routed.source_query is None
 
     engine.get_context(GetUnifiedContext(scope, query="show notes about oauth"))
     knowledge_only = assembler.requests[1]

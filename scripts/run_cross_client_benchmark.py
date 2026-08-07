@@ -71,11 +71,12 @@ def _register(
             "PATH": f"{launcher.parent}{os.pathsep}{environment.get('PATH', '')}",
         }
     )
-    # Use Mnemo's actual connection command; its discovered `mnemo-memory` is the launcher above.
+    # Use Mnemo's actual shorthand workflow from the isolated project; its discovered
+    # `mnemo-memory` MCP launcher is the executable above.
     for client in ("codex", "claude-code"):
         result = subprocess.run(
-            [sys.executable, "-m", "mnemo_memory.cli", "connect", client, "--yes"],
-            cwd=ROOT,
+            [sys.executable, "-m", "mnemo_memory.cli", "connect", client],
+            cwd=project,
             env=environment,
             check=False,
             capture_output=True,

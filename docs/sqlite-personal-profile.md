@@ -12,7 +12,7 @@ parsers, preserving nominal IDs and rejecting unknown states.
 
 ## Verified backups
 
-`mnemo-memory backup` opens the configured live database read-only and uses SQLite's backup API so
+`mnemo backup` opens the configured live database read-only and uses SQLite's backup API so
 committed WAL state is represented coherently without copying a possibly changing file directly.
 The candidate copy is created with mode 0600 under a mode-0700 `backups` directory, then checked
 with `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and the `schema_migrations` maximum. Only

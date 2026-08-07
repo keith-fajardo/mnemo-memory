@@ -63,7 +63,7 @@ def exercise(command: Path, work_directory: Path, manifest: Path) -> None:
 
     shell_hook = _run(str(command), "dbt", "shell-hook", "zsh", cwd=work_directory)
     _require_success(shell_hook, "dbt shell-hook")
-    if shell_hook.stdout.strip() != 'dbt() { command mnemo-memory dbt exec -- "$@"; }':
+    if shell_hook.stdout.strip() != 'dbt() { command mnemo dbt exec -- "$@"; }':
         raise InstalledDbtWrapperVerificationError("dbt shell-hook did not return the safe wrapper")
 
     fake_dbt = work_directory / "fake dbt.py"

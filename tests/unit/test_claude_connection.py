@@ -187,15 +187,16 @@ class FakeClaudeManager:
 @pytest.mark.parametrize(
     ("command", "input_value", "exit_code", "adds", "removes", "output"),
     [
-        (["connect", "claude-code"], "y\n", 0, 1, 0, "connected"),
-        (["connect", "claude-code"], "n\n", 1, 0, 0, "Aborted"),
+        (["connect", "claude-code"], "", 0, 1, 0, "connected"),
+        (["connect", "claude-code", "--confirm"], "y\n", 0, 1, 0, "connected"),
+        (["connect", "claude-code", "--confirm"], "n\n", 1, 0, 0, "Aborted"),
         (["disconnect", "claude-code"], "y\n", 0, 0, 1, "disconnected"),
         (["disconnect", "claude-code"], "n\n", 1, 0, 0, "Aborted"),
         (["connect", "claude-code", "--yes"], "", 0, 1, 0, "connected"),
         (["disconnect", "claude-code", "--yes"], "", 0, 0, 1, "disconnected"),
         (["connect", "claude-code", "--dry-run"], "", 0, 1, 0, "dry-run"),
         (["connect", "claude-code", "--check"], "", 0, 0, 0, "connected"),
-        (["connect", "claude-code"], "", 1, 0, 0, "Aborted"),
+        (["connect", "claude-code", "--confirm"], "", 1, 0, 0, "Aborted"),
         (["disconnect", "claude-code"], "", 1, 0, 0, "Aborted"),
     ],
 )
@@ -210,10 +211,57 @@ def test_claude_cli_confirmation_matrix_is_bounded(
 ) -> None:
     manager = FakeClaudeManager(existing={"owned": True})
     monkeypatch.setattr(cli, "_claude_manager", lambda: manager)
+    monkeypatch.setattr(
+        cli,
+        "_enable_automatic_task_memory",
+        lambda client, project_dir, data_dir: {"automatic_memory": True},
+    )
     result = CliRunner().invoke(cli.app, command, input=input_value)
     assert result.exit_code == exit_code
     assert output in result.output
     assert manager.adds == adds and manager.removes == removes
+
+
+def test_claude_connection_enables_automatic_memory_by_default_with_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeClaudeManager()
+    enabled: list[str] = []
+    monkeypatch.setattr(cli, "_claude_manager", lambda: manager)
+
+    def enable(client: str, project_dir: object, data_dir: object) -> dict[str, object]:
+        enabled.append(client)
+        return {"automatic_memory": True}
+
+    monkeypatch.setattr(
+        cli,
+        "_enable_automatic_task_memory",
+        enable,
+    )
+    runner = CliRunner()
+
+    default = runner.invoke(cli.app, ["connect", "claude-code"])
+    disabled = runner.invoke(
+        cli.app,
+        ["connect", "claude-code", "--auto-memory-disable"],
+    )
+
+    assert default.exit_code == 0, default.output
+    assert disabled.exit_code == 0, disabled.output
+    assert enabled == ["claude-code"]
+
+
+def test_claude_default_confirmation_discloses_automatic_project_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeClaudeManager()
+    monkeypatch.setattr(cli, "_claude_manager", lambda: manager)
+
+    result = CliRunner().invoke(cli.app, ["connect", "claude-code", "--confirm"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "enable automatic task memory for this project" in result.output
+    assert manager.adds == 0
 
 
 def test_claude_discovery_validates_launcher_before_external_client(

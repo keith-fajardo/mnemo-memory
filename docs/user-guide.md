@@ -44,26 +44,41 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a6
-mnemo-memory --version
-mnemo-memory init
+uv tool install mnemo-unified-context==0.1.0a7
+mnemo --version
+mnemo init
 cd /path/to/your/project
-mnemo-memory connect codex --auto-memory --yes --project-dir .
+mnemo connect codex
 ```
+
+`mnemo` is the primary shorthand; the longer `mnemo-memory` command remains an equivalent
+compatibility alias.
 
 Use `claude-code` instead of `codex`, or run both connection commands, when appropriate. The
 connection registers the installed launcher and creates one private local binding and static source
 snapshot for that canonical project. A fresh MCP process started inside the project can then call
 `get_context` without UUID arguments; before any checkpoint has been saved, it truthfully returns
 no active checkpoint. You repeat only the connection step for another repository. Mnemo never
-changes the client's configured model endpoint.
+changes the client's configured model endpoint. The same connection detects an exact
+`dbt_project.yml`, registers that dbt project with the shared private scope, and ingests an existing
+`target/manifest.json` when available.
+
+To create or refresh the same local indexes without changing a client connection, run:
+
+```bash
+mnemo scan
+```
+
+The command initializes or reuses the local profile, needs no UUIDs, and never runs dbt or other
+project code when the manifest is absent.
 
 ## Does Mnemo remember an entire codebase?
 
-`mnemo-memory init` only creates your private local store; it does not guess which directory you
+`mnemo init` only creates your private local store; it does not guess which directory you
 want remembered. From a repository you care about, the recommended one-time command is
-`mnemo-memory connect codex --auto-memory` or
-`mnemo-memory connect claude-code --auto-memory`. It creates a local project binding, records a
+`mnemo connect codex` or
+`mnemo connect claude-code`. Running the connection enables automatic memory by default,
+creates a local project binding, records a
 private static structure snapshot of supported source files, and installs the client reminders. It
 does not store a copy of source text or send code anywhere.
 
@@ -133,12 +148,13 @@ returns the file contents or turns a configuration file into guessed symbols or 
 You can inspect the same proven static impact map yourself from an enabled repository:
 
 ```bash
-mnemo-memory memory impact package.module_name
-mnemo-memory memory impact package.module_name --direction dependencies
-mnemo-memory memory impact package.module_name --direct
-mnemo-memory memory impact --path src/billing/reconcile.py
-mnemo-memory memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
-mnemo-memory memory refresh
+mnemo scan
+mnemo memory impact package.module_name
+mnemo memory impact package.module_name --direction dependencies
+mnemo memory impact package.module_name --direct
+mnemo memory impact --path src/billing/reconcile.py
+mnemo memory changes --from SNAPSHOT_ID --to SNAPSHOT_ID
+mnemo memory refresh
 ```
 
 The result lists only saved internal relationships that Mnemo can prove from syntax, along with
@@ -155,7 +171,9 @@ that supplies that same digest is labeled
 `memory impact --path` is the safer form when you know the changed file: Mnemo starts from every
 saved declaration in that exact relative path and never falls back to a same-named file elsewhere.
 `memory changes` compares saved structural identities only: it never stores or prints source text.
-Run `memory refresh` after edits when you are not using an automatic client lifecycle hook. With
+Use `mnemo scan` for a simple register-or-refresh workflow, or the narrower
+`memory refresh` after edits when the project is already enabled and you are not using an automatic
+client lifecycle hook. With
 automatic memory enabled, Mnemo refreshes at MCP startup, session start, after a checkpoint save,
 and before an unsaved changed session is stopped. It rebuilds the bounded structural snapshot from
 current local syntax and preserves the previous snapshot for comparison.
@@ -169,7 +187,7 @@ recorded lesson remains the evidence for **why** a change was made.
 You can inspect that same safe history yourself:
 
 ```bash
-mnemo-memory memory changes --path models/orders.sql --history-limit 4
+mnemo memory changes --path models/orders.sql --history-limit 4
 ```
 
 The path is relative to the enabled repository. Mnemo rejects absolute paths and parent traversal,
@@ -302,10 +320,10 @@ omission while the lineage result remains usable.
 
 For example, to use Mnemo while working on this Mnemo repository:
 
-1. Install Mnemo and run `mnemo-memory agent` once to initialize and connect your client.
+1. Install Mnemo and run `mnemo agent` once to initialize and connect your client.
 2. Ask your connected Claude Code or Codex agent to work on a concrete task in this repository.
 3. Connect with automatic task memory once in this repository:
-   `mnemo-memory connect codex --auto-memory` (or `claude-code`). Mnemo then attaches the compact
+   `mnemo connect codex` (or `claude-code`). Mnemo then attaches the compact
    saved handoff at session start and prompts the agent to save one when work stops or compacts.
 4. In a fresh client session, continue normally. Ask for `get_context` only when the task needs
    additional named source or dbt facts beyond the attached handoff.
@@ -318,7 +336,7 @@ To inspect the same bounded active handoff yourself without starting an MCP clie
 the explicitly enabled repository:
 
 ```bash
-mnemo-memory memory inspect
+mnemo memory inspect
 ```
 
 The command prints the canonical context packet, including the exact immutable checkpoint revision
@@ -331,7 +349,7 @@ notes, call a model, or broaden retrieval to another project.
 After installing, run:
 
 ```bash
-mnemo-memory agent
+mnemo agent
 ```
 
 The guide explains the steps in your terminal, can initialize your local store after confirmation,
@@ -343,7 +361,7 @@ change a client registration without your confirmation, or inspect your source c
 Before changing the installed Mnemo version manually, create a verified SQLite recovery point:
 
 ```bash
-mnemo-memory backup
+mnemo backup
 ```
 
 The JSON result gives the backup path, exact schema version, UTC creation time, byte count, and
@@ -357,8 +375,8 @@ retraction do not remove user-held backups.
 For an installation managed by uv or pipx, perform the backup and package upgrade as one command:
 
 ```bash
-mnemo-memory upgrade
-mnemo-memory --version
+mnemo upgrade
+mnemo --version
 ```
 
 Mnemo accepts exactly one ownership marker in its running isolated environment and resolves only
@@ -376,7 +394,7 @@ For a uv- or pipx-owned installation, remove the application while retaining eve
 memory and in-place backup with:
 
 ```bash
-mnemo-memory uninstall --yes
+mnemo uninstall --yes
 ```
 
 Mnemo stops the local service, removes only its exactly owned Codex and Claude Code MCP entries and
@@ -387,7 +405,7 @@ configuration-file edits. Package-manager output is discarded.
 Data removal is a separate irreversible choice:
 
 ```bash
-mnemo-memory uninstall --delete-data --yes
+mnemo uninstall --delete-data --yes
 ```
 
 That form is accepted only for the exact configured directory containing a regular matching Mnemo
@@ -400,7 +418,7 @@ under your control and cannot be recalled by Mnemo.
 When setup or storage is unhealthy, create a support artifact with:
 
 ```bash
-mnemo-memory diagnostics
+mnemo diagnostics
 ```
 
 The command remains available for an absent or corrupt database and publishes one mode-0600 ZIP
@@ -412,7 +430,7 @@ source fact, evidence reference, query, job, identifier, path, environment value
 subprocess output, and exception detail. Inspect the manifest before sharing it; operating-system
 and runtime versions are intentionally present.
 
-After you connect a supported client with `--auto-memory`, you do **not** need to repeat a custom
+After you confirm the default connection for a supported client, you do **not** need to repeat a custom
 memory rule in every `CLAUDE.md` or `AGENTS.md`. Mnemo provides a private session-start context:
 the bounded saved checkpoint, lessons, and approved decision/failure/tool-outcome facts. It also
 tells the agent to treat that material as evidence rather than instructions, and how to ask for
@@ -427,14 +445,14 @@ addition to the full checkpoint. You can review those facts from the enabled rep
 MCP client:
 
 ```bash
-mnemo-memory memory events
-mnemo-memory memory event inspect EVENT_ID
+mnemo memory events
+mnemo memory event inspect EVENT_ID
 ```
 
 If a fact is wrong, append a same-kind immutable replacement while preserving the correction link:
 
 ```bash
-mnemo-memory memory event correct EVENT_ID \
+mnemo memory event correct EVENT_ID \
   --summary "Corrected factual summary" \
   --reason "Why the retained fact was wrong" \
   --yes
@@ -443,7 +461,7 @@ mnemo-memory memory event correct EVENT_ID \
 If the fact should no longer be retained, retract it:
 
 ```bash
-mnemo-memory memory event retract EVENT_ID \
+mnemo memory event retract EVENT_ID \
   --reason "Why this fact is being withdrawn" \
   --yes
 ```
@@ -466,7 +484,7 @@ Calling `get_context` with no scope fields is therefore valid there; supplying o
 is rejected rather than mixed with another project's identity.
 
 There is one additional timely cue: when the agent has edited a project file, Mnemo adds a short
-memory reminder before the next user turn. With your explicit `--auto-memory` consent, Mnemo may
+memory reminder before the next user turn. With your explicit connection confirmation, Mnemo may
 use at most 512 characters of that prompt transiently to select already-saved, same-project memory.
 It never writes the prompt to its database, hook state, or logs. The reminder stops only after
 Mnemo verifies that the scoped checkpoint revision actually changed—not merely because a tool name
@@ -476,15 +494,15 @@ making you maintain a parallel instruction file.
 The short manual equivalent is:
 
 ```bash
-mnemo-memory init
-mnemo-memory connect claude-code --auto-memory  # or: mnemo-memory connect codex --auto-memory
+mnemo init
+mnemo connect claude-code  # or: mnemo connect codex
 ```
 
 You can connect both clients. They share saved handoffs when they use the same Mnemo data directory.
 
 ### Your repository notes are refreshed safely too
 
-The same explicit `--auto-memory` opt-in also keeps bounded Markdown notes inside that enabled
+The same confirmed automatic-memory connection also keeps bounded Markdown notes inside that enabled
 repository current. This is useful for a repository's `README.md`, `docs/`, architecture notes, or
 decision records: a later agent can ask Mnemo for a relevant note section instead of rereading the
 whole documentation tree. Mnemo refreshes only at a session/work boundary, not on every keystroke.
@@ -510,8 +528,8 @@ the project you already enabled:
 
 ```bash
 uv tool install "mnemo-unified-context[semantic]"
-mnemo-memory memory semantic index
-mnemo-memory memory semantic search "billing variance"
+mnemo memory semantic index
+mnemo memory semantic search "billing variance"
 ```
 
 This is an explicit personal-machine choice. The first index can download public embedding-model
@@ -656,7 +674,7 @@ If your personal notes are in an Obsidian vault outside the repository, make tha
 visible choice after project auto-memory is already enabled:
 
 ```bash
-mnemo-memory memory vault enable "/path/to/My Obsidian Vault"
+mnemo memory vault enable "/path/to/My Obsidian Vault"
 ```
 
 Mnemo requires the vault's `.obsidian` marker and gives it a generated local source prefix, so a
@@ -665,8 +683,8 @@ only bounded Markdown under that one vault, skips the `.obsidian` configuration 
 symlinks, and never turns note text into instructions. Check or remove the binding with:
 
 ```bash
-mnemo-memory memory vault status
-mnemo-memory memory vault disable
+mnemo memory vault status
+mnemo memory vault disable
 ```
 
 Disabling first performs an atomic knowledge sync that removes the vault's retained
@@ -678,7 +696,7 @@ project checkpoint, structural memory, and repository documentation remain.
 
 ### Check setup in the local dashboard
 
-Run `mnemo-memory start`, then open `http://127.0.0.1:8765/`. The loopback-only dashboard shows
+Run `mnemo start`, then open `http://127.0.0.1:8765/`. The loopback-only dashboard shows
 whether the store is initialized, whether Codex or Claude Code owns the Mnemo registration, whether
 the current project is enabled, and bounded source/dbt/knowledge index counts with honest freshness
 and last-sync state. It also shows content-free pending, processing, and failed event-job counts.
@@ -701,7 +719,7 @@ memory, a session start expires active checkpoints whose last canonical write is
 days old; reading a checkpoint never renews it, and expiry preserves its audit history. Restart the
 MCP process after other settings changes; existing extracted episodic records keep their original
 retention schedules. Run
-`mnemo-memory stop` when you no longer want the local web process.
+`mnemo stop` when you no longer want the local web process.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),
@@ -753,16 +771,19 @@ an old transcript.
 This part is only for dbt projects. It gives a later agent verified answers to questions such as
 “what is upstream of this model?” and “what breaks downstream?”
 
-From a dbt repository, enable Mnemo once:
+From a dbt repository, scan it once:
 
 ```bash
 cd /path/to/dbt-project
-mnemo-memory dbt enable
+mnemo scan
 ```
 
 You do not need to provide owner, workspace, or project IDs. Mnemo creates private stable personal
-identities and keeps the project binding locally. It never derives an identity from your path or
-manifest, and it does not edit `dbt_project.yml`, `profiles.yml`, or credentials.
+identities and keeps the project binding locally. The exact `dbt_project.yml` marker identifies the
+dbt project root; Mnemo never derives an authorization identity from that path or manifest, and it
+does not edit `dbt_project.yml`, `profiles.yml`, or credentials. An existing
+`target/manifest.json` is ingested. If it is absent, the scan reports that fact without executing
+dbt; `mnemo dbt exec -- parse` can generate and ingest it explicitly.
 
 If automatic task memory is already enabled for this repository, Mnemo reuses its private project
 identity. That is what lets one later `get_context` request safely combine the checkpoint's
@@ -773,7 +794,7 @@ To use ordinary `dbt` commands with Mnemo’s local pre/post handling, choose on
 setup. For zsh, add this line to your own `~/.zshrc`:
 
 ```bash
-eval "$(mnemo-memory dbt shell-hook zsh)"
+eval "$(mnemo dbt shell-hook zsh)"
 ```
 
 Open a new terminal afterward. Then your everyday command remains unchanged:
@@ -791,11 +812,11 @@ exact `dbt_freshness` request returns one observed source-freshness status with 
 thresholds, and evidence. Raw artifacts, comments, statistics, messages, adapter responses,
 database errors, compiled SQL, filters, and environment values are not retained. If the project is
 not enabled, dbt still runs normally; Mnemo prints one
-reminder to run `mnemo-memory dbt enable` and does nothing else. For CI or agent scripts, use the
+reminder to run `mnemo dbt enable` and does nothing else. For CI or agent scripts, use the
 explicit equivalent:
 
 ```bash
-mnemo-memory dbt exec -- run --select orders+
+mnemo dbt exec -- run --select orders+
 ```
 
 Successful wrapped ingestion also observes bounded local Git state: full HEAD ID, dirty boolean,
@@ -817,7 +838,7 @@ evidence stays unknown. The request cannot supply or override a raw Git fingerpr
 
 ## When something is not working
 
-Run `mnemo-memory status` for the local store and `mnemo-memory dbt status` inside an enabled dbt
+Run `mnemo status` for the local store and `mnemo dbt status` inside an enabled dbt
 repository. For an explanation of the MCP connection, see the
 [Codex and Claude Code guide](codex-claude-mcp-guide.md). For the full dbt wrapper behavior,
 including strict mode and how to disable it, see the [dbt wrapper guide](dbt-command-wrapper.md).

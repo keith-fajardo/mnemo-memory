@@ -372,6 +372,35 @@ suite exercises scope-first due discovery behind forced RLS.
 deletion; backups and external exports require their own propagation policy. Team scheduling waits
 for the authenticated remote service and its operational controls.
 
+### Unintended automatic memory during client connection
+
+**Scenario:** A user expects an MCP-only client registration but the default connection also
+registers the current project, scans bounded local structure, and installs lifecycle hooks that use
+short prompts transiently for retrieval.
+
+**Required controls:** Invoking `mnemo connect codex` or `mnemo connect claude-code` is the explicit
+user action that enables both client registration and automatic project memory. `--dry-run`
+previews the client operation, `--confirm` adds an interactive review, and
+`--auto-memory-disable` requests MCP-only registration. The current directory is only a local
+locator for a persisted private scope; it is never authorization evidence. Automatic scans retain
+structural identities rather than source bodies, dbt detection requires the exact
+`dbt_project.yml` marker, an existing manifest is read through the authoritative parser, and a
+missing manifest never causes project code to execute. Prompt retrieval remains bounded,
+same-project, transient, non-persistent, and fail open.
+
+**Verification:** Codex and Claude connection tests cover the immediate automatic default, optional
+interactive confirmation, legacy non-interactive compatibility, dry-run/check behavior, and
+explicit opt-out. Scan
+tests cover shared-scope dbt registration, existing-manifest ingestion, repeat idempotency, and
+bounded source refresh. Automatic-context tests prove that a dbt-model prompt selects cited
+manifest structure within the existing total prompt budget.
+
+**Residual risk:** A user may invoke `connect` without first reading help and not expect project
+scanning or lifecycle hooks. The command remains local, bounded, fail open, and reversible through
+the owned disconnect/disable paths. Client policy still controls whether attached context or MCP
+tools are used, and Mnemo cannot force a model to prefer saved structure over its built-in
+filesystem tools.
+
 ### Cross-tenant team event delivery and lease races
 
 **Scenario:** A worker claims another task's event, two workers process one attempt, an unauthorized
@@ -730,7 +759,7 @@ arguments. Focused failure-isolation coverage rejects an oversized source file w
 snapshot or raising through the refresh boundary.
 
 **Residual risk:** A long-lived process still relies on automatic lifecycle refreshes or explicit
-`mnemo-memory memory refresh` after later edits; freshness remains unknown without comparable source
+`mnemo scan` after later edits; freshness remains unknown without comparable source
 digest evidence.
 
 ### Cross-tenant checkpoint/source co-observation
@@ -949,13 +978,18 @@ and idempotency; deterministic schema, policy, consent, and evidence validation;
 destructive or authority-changing writes; audit metadata without sensitive payloads. Personal CLI
 governance resolves only an enabled canonical project binding, requires confirmation, and uses a
 deterministic action key so retry cannot create a second replacement or tombstone.
+The checkpoint MCP schema publishes the complete nested evidence-reference shape. A URI-only
+location is normalized to the canonical four-null-coordinate form before domain validation;
+partially supplied spans, unknown fields, malformed identifiers, and invalid digests still fail
+before persistence, and sanitized errors do not echo the evidence payload.
 The local dashboard applies the same exact binding and deterministic evidence rule, and rejects a
 correction, retraction, pin, or unpin unless its request has the exact same-loopback origin and
 operation-specific intent header. Pinning changes bounded retrieval priority only; it cannot widen
 scope, bypass source authority, or keep a retracted payload active.
 
 **Verification:** Read-only annotation tests, confused-deputy cases, replay tests, malformed scope,
-stale consent, injection-triggered writes, and mutation authorization matrices.
+stale consent, injection-triggered writes, mutation authorization matrices, typed evidence-schema
+inspection, real stdio URI-only persistence, and partial-span and unknown-field rejection.
 
 **Residual risk:** A compromised authorized client can act as the user; minimize capabilities and
 make writes inspectable and reversible where possible.

@@ -3,7 +3,7 @@
 Mnemo exposes one local stdio MCP server, `mnemo-local` version `0.1.0`:
 
 ```sh
-mnemo-memory mcp serve --stdio
+mnemo mcp serve --stdio
 ```
 
 It resolves the same durable personal data directory as the local lifecycle commands. Use an
@@ -13,7 +13,8 @@ or transcript capture.
 
 ## Tools
 
-Exactly five tools are exposed. Inside a repository enabled with `--auto-memory`, `get_context`,
+Exactly five tools are exposed. Inside a repository enabled by the default connection,
+`get_context`,
 `list_skills`, and `get_skill` may
 omit all scope fields: the local MCP process resolves the repository's registered stable scope from
 its working directory. Users and agents must not guess UUIDs. Advanced callers may instead provide
@@ -69,6 +70,12 @@ requires a tagged `operation` of `create`,
 valid evidence references. `create`, `revise`, `complete`, and `abandon` require the complete
 canonical checkpoint payload. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
 `expected_revision_id`; `abandon` also requires a nonblank `reason`.
+
+Each evidence reference has a typed MCP input shape. Its `location` always requires a nonblank
+`uri`. When no exact source span is known, submit only `{"uri": "..."}`; Mnemo canonicalizes the
+four omitted coordinates to `null` before validation and persistence. When a span is known, provide
+all four of `start_line`, `start_column`, `end_line`, and `end_column`. Partial spans and unknown
+location fields are rejected without returning the submitted payload.
 
 For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up to 16 canonical
 `lessons`. Each lesson has a nonblank `trigger`, `mistaken_assumption`, `correction`, and
@@ -151,7 +158,7 @@ tool or capture an agent's private reasoning automatically.
     "source_type": "checkpoint", "trust_class": "user_authored",
     "immutable_source_ref": "synthetic://example",
     "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "location": {"uri": "fixture://example", "start_line": null, "start_column": null, "end_line": null, "end_column": null},
+    "location": {"uri": "fixture://example"},
     "observed_at": "2026-08-02T14:00:00+00:00", "verification_status": "verified"
   }],
   "lessons": [{
@@ -251,7 +258,7 @@ stores that fingerprint, not the file body. A transition involving a pre-fingerp
 snapshot reports that file-level history is unavailable instead of guessing.
 
 For an older audit, provide **both** `before_snapshot_id` and `after_snapshot_id` inside
-`source_changes`. Get their IDs from `mnemo-memory memory history`. Mnemo requires both IDs to be
+`source_changes`. Get their IDs from `mnemo memory history`. Mnemo requires both IDs to be
 in the same explicit project scope and returns the selected immutable difference; one ID alone or
 an ID from another project is rejected without disclosing whether it exists.
 

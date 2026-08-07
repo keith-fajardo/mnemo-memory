@@ -350,8 +350,8 @@ def test_dbt_wrapper_docs_forward_only_the_arguments_after_dbt() -> None:
     """The explicit wrapper already chooses dbt; users must not pass it twice."""
     guide = Path("docs/command-wrapper.md").read_text(encoding="utf-8")
 
-    assert "mnemo-memory dbt exec -- dbt " not in guide
-    assert "mnemo-memory dbt exec -- run --select orders+" in guide
+    assert "mnemo dbt exec -- dbt " not in guide
+    assert "mnemo dbt exec -- run --select orders+" in guide
 
 
 def test_interactive_guide_explains_explicit_memory_and_requires_confirmation(
@@ -363,8 +363,8 @@ def test_interactive_guide_explains_explicit_memory_and_requires_confirmation(
     assert result.exit_code == 0
     assert "explicit task checkpoints, not an automatic chat or directory history" in result.output
     assert "Store status: not initialized" in result.output
-    assert "mnemo-memory connect codex" in result.output
-    assert "mnemo-memory connect claude-code" in result.output
+    assert "mnemo connect codex" in result.output
+    assert "mnemo connect claude-code" in result.output
     assert not data_dir.exists()
 
 
@@ -373,8 +373,8 @@ def test_non_interactive_guide_never_initializes_or_registers_clients(tmp_path: 
     result = CliRunner().invoke(app, ["guide", "--data-dir", str(data_dir), "--non-interactive"])
 
     assert result.exit_code == 0
-    assert "mnemo-memory connect codex" in result.output
-    assert "mnemo-memory connect claude-code" in result.output
+    assert "mnemo connect codex" in result.output
+    assert "mnemo connect claude-code" in result.output
     assert not data_dir.exists()
 
 
@@ -879,9 +879,7 @@ def test_dbt_configure_shell_hook_and_exec_activate_manifest(tmp_path: Path) -> 
         ],
     )
     assert configured.exit_code == 0, configured.output
-    assert (
-        "command mnemo-memory dbt exec" in runner.invoke(app, ["dbt", "shell-hook", "zsh"]).output
-    )
+    assert "command mnemo dbt exec" in runner.invoke(app, ["dbt", "shell-hook", "zsh"]).output
 
     fixture = Path("tests/fixtures/dbt/manifest-v12.json").resolve()
     fake = tmp_path / "fake dbt.py"
@@ -1100,7 +1098,7 @@ def test_dbt_enable_uses_private_stable_personal_ids_and_optional_existing_manif
     disabled_status = runner.invoke(
         app, ["dbt", "status", "--project-dir", str(project), "--data-dir", str(data_dir)]
     )
-    assert json.loads(disabled_status.output)["instruction"] == "mnemo-memory dbt enable"
+    assert json.loads(disabled_status.output)["instruction"] == "mnemo dbt enable"
 
 
 def test_dbt_enable_reuses_automatic_memory_project_scope_for_unified_context(
@@ -1153,7 +1151,7 @@ def test_unenabled_dbt_project_runs_normally_and_reports_one_setup_instruction(
     )
 
     assert result.exit_code == 0, result.output
-    assert result.output.count("mnemo-memory dbt enable") == 1
+    assert result.output.count("mnemo dbt enable") == 1
     assert "MNEMO_DBT_MANIFEST_ACTIVATED" not in result.output
     assert not data_dir.exists()
 

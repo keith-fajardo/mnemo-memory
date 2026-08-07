@@ -24,23 +24,23 @@ and deleting one kind of context does not silently delete the others.
 From an enabled project, inspect the current task handoff and its provenance:
 
 ```bash
-mnemo-memory memory inspect
+mnemo memory inspect
 ```
 
 List independently approved facts:
 
 ```bash
-mnemo-memory memory events
-mnemo-memory memory event inspect EVENT_ID
+mnemo memory events
+mnemo memory event inspect EVENT_ID
 ```
 
 The local dashboard offers the same project-scoped approved-fact view:
 
 ```bash
-mnemo-memory start
+mnemo start
 ```
 
-Open `http://127.0.0.1:8765/`. Stop it with `mnemo-memory stop`.
+Open `http://127.0.0.1:8765/`. Stop it with `mnemo stop`.
 
 ## Update a task handoff
 
@@ -86,7 +86,7 @@ outside the full checkpoint.
 Correct a wrong fact by appending a same-kind replacement:
 
 ```bash
-mnemo-memory memory event correct EVENT_ID \
+mnemo memory event correct EVENT_ID \
   --summary "Corrected factual summary" \
   --reason "Why the retained fact was wrong" \
   --yes
@@ -95,7 +95,7 @@ mnemo-memory memory event correct EVENT_ID \
 Retract a fact that should no longer retain its payload:
 
 ```bash
-mnemo-memory memory event retract EVENT_ID \
+mnemo memory event retract EVENT_ID \
   --reason "Why this fact is being withdrawn" \
   --yes
 ```
@@ -118,7 +118,7 @@ Automatic memory refreshes enabled repository notes at session and work boundari
 project's structure explicitly after changes, run:
 
 ```bash
-mnemo-memory memory refresh
+mnemo scan
 ```
 
 Old and deleted note bodies are removed from the current full-text and optional semantic search
@@ -130,8 +130,8 @@ Editing or deleting a note in the vault updates Mnemo at its next vault sync. To
 entire vault and remove its retained content-bearing revisions:
 
 ```bash
-mnemo-memory memory vault status
-mnemo-memory memory vault disable
+mnemo memory vault status
+mnemo memory vault disable
 ```
 
 Disable performs the content-removal sync before deleting the binding. If reconciliation fails,
@@ -144,15 +144,15 @@ Source and dbt indexes are projections, not durable user-authored memories. Refr
 underlying repository or manifest changes:
 
 ```bash
-mnemo-memory memory refresh
-mnemo-memory dbt status
+mnemo scan
+mnemo dbt status
 ```
 
 Disabling dbt wrapping stops future automatic ingestion but does not claim to delete earlier
 snapshots:
 
 ```bash
-mnemo-memory dbt disable
+mnemo dbt disable
 ```
 
 Structural context should always cite its immutable snapshot and state whether currentness is
@@ -178,14 +178,14 @@ deletion propagation; see the [Team guide](team-guide.md).
 Remove only Mnemo's automatic task-memory hooks:
 
 ```bash
-mnemo-memory memory disable
+mnemo memory disable
 ```
 
 Or disconnect one client registration:
 
 ```bash
-mnemo-memory disconnect codex
-mnemo-memory disconnect claude-code
+mnemo disconnect codex
+mnemo disconnect claude-code
 ```
 
 Both actions preserve saved Mnemo data. Disconnecting one client does not affect the other.
@@ -196,20 +196,20 @@ Normal uninstall removes the uv- or pipx-owned application, exact Mnemo-owned cl
 and hooks while preserving the configured data directory:
 
 ```bash
-mnemo-memory uninstall --yes
+mnemo uninstall --yes
 ```
 
 To erase that recognized local data directory as part of uninstall, use the deliberately separate
 destructive form:
 
 ```bash
-mnemo-memory uninstall --delete-data --yes
+mnemo uninstall --delete-data --yes
 ```
 
 Create a backup first only if you intend to keep a recovery copy:
 
 ```bash
-mnemo-memory backup
+mnemo backup
 ```
 
 A backup contains the same private data as the live store. Mnemo cannot erase a backup, export,
@@ -225,4 +225,3 @@ control. Delete those copies according to your own retention policy.
   vault.
 - **Remove the entire personal store:** use the explicit `--delete-data` uninstall path and manage
   every external backup or export separately.
-

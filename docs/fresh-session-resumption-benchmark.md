@@ -85,8 +85,8 @@ npm run eval:cross-client -- --json
 ```
 
 The command creates temporary `CODEX_HOME`, `HOME`, project, launcher, and Mnemo data directories
-(including spaces and Unicode), registers `mnemo-memory` through `mnemo connect codex --yes` and
-`mnemo connect claude-code --yes`, then reads each stored launcher back before starting it. It never
+(including spaces and Unicode), registers `mnemo-memory` through `mnemo connect codex` and
+`mnemo connect claude-code`, then reads each stored launcher back before starting it. It never
 uses a real client configuration, API key, login, interactive agent session, or model request.
 
 It proves Codex-to-Claude and Claude-to-Codex retrieval of the same durable, evidenced checkpoint,

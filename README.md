@@ -90,30 +90,43 @@ See the [fresh-session benchmark](docs/fresh-session-resumption-benchmark.md) an
 
 ## Install and connect in five minutes
 
-The PyPI distribution is `mnemo-unified-context`; the installed command is `mnemo-memory`.
+The PyPI distribution is `mnemo-unified-context`; the primary installed command is `mnemo`.
+`mnemo-memory` remains a compatibility alias for existing scripts and client registrations.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a6
-mnemo-memory --version
-mnemo-memory init
+uv tool install mnemo-unified-context==0.1.0a7
+mnemo --version
+mnemo init
 
 cd /path/to/your/project
-mnemo-memory connect codex --auto-memory --yes --project-dir .
+mnemo connect codex
 ```
 
 For Claude Code, use:
 
 ```bash
-mnemo-memory connect claude-code --auto-memory --yes --project-dir .
+mnemo connect claude-code
 ```
 
 You can run both connection commands. Restart the connected client after registration. Repeat only
-the connection step for another repository.
+the connection step for another repository. Running the connection enables automatic project
+memory and scans the current directory by default. Use `--dry-run` to preview, `--confirm` to ask
+before changing client configuration, `--project-dir` for another directory, or
+`--auto-memory-disable` for an MCP-only connection. If you only want to create or refresh the local
+project index, use:
+
+```bash
+mnemo scan
+```
+
+`scan` needs no UUIDs. It refreshes the source-structure snapshot and, when the project root has
+the canonical `dbt_project.yml`, registers the same project scope and ingests an existing
+`target/manifest.json`. It reports a missing manifest without running dbt or other project code.
 
 If you prefer a guided explanation, run:
 
 ```bash
-mnemo-memory agent
+mnemo agent
 ```
 
 This is a local deterministic setup guide, not another model or autonomous agent.
@@ -121,14 +134,14 @@ This is a local deterministic setup guide, not another model or autonomous agent
 Check the connection at any time:
 
 ```bash
-mnemo-memory status
-mnemo-memory connect codex --check
-mnemo-memory connect claude-code --check
+mnemo status
+mnemo connect codex --check
+mnemo connect claude-code --check
 ```
 
 ## How everyday use works
 
-After connecting with `--auto-memory`, work normally.
+After connecting, work normally.
 
 1. At a fresh supported-client session, Mnemo attaches a bounded saved handoff and relevant
    same-project context.
@@ -181,12 +194,12 @@ The right action depends on what you want to change:
 | --- | --- |
 | Update task progress | Ask the connected agent to revise the active Mnemo checkpoint. |
 | Preserve a mistake as a lesson | Ask the agent to record the correction and its evidence. |
-| Correct an approved fact | `mnemo-memory memory event correct EVENT_ID ...` |
-| Remove an approved fact's retained payload | `mnemo-memory memory event retract EVENT_ID ...` |
+| Correct an approved fact | `mnemo memory event correct EVENT_ID ...` |
+| Remove an approved fact's retained payload | `mnemo memory event retract EVENT_ID ...` |
 | Update repository knowledge | Edit or delete the Markdown source; the next sync makes only the current revision searchable. |
-| Stop using an Obsidian vault | `mnemo-memory memory vault disable` |
-| Stop automatic hooks | `mnemo-memory memory disable` or disconnect the client. Saved data remains. |
-| Erase the recognized local Mnemo data directory | `mnemo-memory uninstall --delete-data --yes` |
+| Stop using an Obsidian vault | `mnemo memory vault disable` |
+| Stop automatic hooks | `mnemo memory disable` or disconnect the client. Saved data remains. |
+| Erase the recognized local Mnemo data directory | `mnemo uninstall --delete-data --yes` |
 
 Expiry can remove an old checkpoint from active retrieval while preserving its audit history.
 Exports and user-held backups are separate copies: Mnemo cannot recall or erase a copy that you
@@ -202,10 +215,11 @@ Automatic memory creates a private static structure snapshot and refreshes it at
 boundaries. Inspect it directly with:
 
 ```bash
-mnemo-memory memory history
-mnemo-memory memory changes
-mnemo-memory memory impact --path src/example.py
-mnemo-memory memory refresh
+mnemo scan
+mnemo memory history
+mnemo memory changes
+mnemo memory impact --path src/example.py
+mnemo memory refresh
 ```
 
 Structural memory is a navigation aid, not a substitute for reading the exact code before changing
@@ -213,16 +227,17 @@ it. Unsupported, dynamic, ambiguous, or oversized relationships are omitted rath
 
 ### dbt intelligence
 
-Enable one dbt repository once:
+Scan one dbt repository once, or use the existing advanced dbt commands directly:
 
 ```bash
 cd /path/to/dbt-project
-mnemo-memory dbt enable
-mnemo-memory dbt status
+mnemo scan
+mnemo dbt status
 ```
 
-The optional dbt wrapper can refresh verified manifest context after successful dbt commands. See
-the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
+The scan detects the exact `dbt_project.yml` marker and ingests an existing manifest. The optional
+dbt wrapper can regenerate and refresh verified manifest context after successful dbt commands.
+See the [dbt command wrapper guide](docs/dbt-command-wrapper.md).
 
 ### Repository notes and Obsidian
 
@@ -230,8 +245,8 @@ Enabled repository Markdown is refreshed at safe work boundaries and selected in
 sections. To add one Obsidian vault:
 
 ```bash
-mnemo-memory memory vault enable "/path/to/My Obsidian Vault"
-mnemo-memory memory vault status
+mnemo memory vault enable "/path/to/My Obsidian Vault"
+mnemo memory vault status
 ```
 
 Mnemo treats returned notes as untrusted evidence, never as instructions. Optional semantic note
@@ -257,22 +272,22 @@ See [Team mode in everyday terms](docs/team-guide.md) before planning a team dep
 - Mnemo failure does not prevent Codex or Claude Code from continuing without Mnemo context.
 - Mnemo never changes the client's model, credentials, endpoint, or network permissions.
 
-Start the optional loopback dashboard with `mnemo-memory start`, open
-`http://127.0.0.1:8765/`, and stop it with `mnemo-memory stop`.
+Start the optional loopback dashboard with `mnemo start`, open
+`http://127.0.0.1:8765/`, and stop it with `mnemo stop`.
 
 ## Installation lifecycle
 
 Create a verified local backup before a manual package change:
 
 ```bash
-mnemo-memory backup
+mnemo backup
 ```
 
 For uv- or pipx-managed installs:
 
 ```bash
-mnemo-memory upgrade
-mnemo-memory uninstall --yes
+mnemo upgrade
+mnemo uninstall --yes
 ```
 
 Normal uninstall preserves the configured data directory and backups. Permanent local data erasure

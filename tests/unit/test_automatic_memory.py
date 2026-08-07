@@ -716,6 +716,39 @@ def test_automatic_prompt_context_selects_scoped_markdown_with_material_token_sa
     assert packet["declared_total_tokens"] * 2 < raw_markdown_tokens
 
 
+def test_automatic_prompt_context_attaches_bounded_authoritative_dbt_models(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "dbt repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    repository = SQLiteCheckpointRepository(data / "mnemo.sqlite3")
+    repository.migrate()
+    ingested = DbtManifestApplicationService(repository, DbtManifestParser()).ingest(
+        IngestManifest(
+            binding.scope,
+            DBT_FIXTURE.read_bytes(),
+            "tests/fixtures/dbt/manifest-v12.json",
+            datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    )
+
+    attached = cli._automatic_prompt_context_attachment(
+        data, binding.checkpoint_scope, "can you see all the dbt models here?"
+    )
+
+    assert attached is not None
+    packet = json.loads(attached)
+    assert packet["declared_total_tokens"] <= 1_300
+    structural = [json.loads(item["content"]) for item in packet["structural_items"]]
+    selected_models = [item for item in structural if item.get("query_kind") == "selector"]
+    assert selected_models
+    assert {item["resource_type"] for item in selected_models} == {"model"}
+    assert {item["snapshot_id"] for item in selected_models} == {str(ingested.snapshot.snapshot_id)}
+    assert all(item["relative_file"] for item in selected_models)
+
+
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
     tmp_path: Path,
 ) -> None:
@@ -2046,9 +2079,54 @@ def test_automatic_enable_reuses_an_existing_dbt_scope(
     )
 
     assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["dbt"]["detected"] is True
+    assert payload["dbt"]["existing_manifest"] == "unavailable"
+    assert payload["dbt"]["ingested"] is False
     automatic = LocalMemoryProjectBindingStore(data).get(project)
     assert automatic is not None
     assert automatic.scope == expected
+
+
+def test_scan_registers_detected_dbt_project_and_ingests_existing_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "dbt project"
+    target = project / "target"
+    target.mkdir(parents=True)
+    project.joinpath("dbt_project.yml").write_text("name: synthetic\n", encoding="utf-8")
+    target.joinpath("manifest.json").write_bytes(DBT_FIXTURE.read_bytes())
+    data = tmp_path / "data"
+    runner = CliRunner()
+    monkeypatch.chdir(project)
+
+    first = runner.invoke(
+        cli.app,
+        ["scan", "--data-dir", str(data)],
+    )
+
+    assert first.exit_code == 0, first.output
+    first_payload = json.loads(first.output)
+    assert first_payload["scanned"] is True
+    assert first_payload["source_structure"]["indexed"] is True
+    assert first_payload["dbt"]["detected"] is True
+    assert first_payload["dbt"]["registered"] is True
+    assert first_payload["dbt"]["existing_manifest"] == "activated"
+    assert first_payload["dbt"]["ingested"] is True
+    automatic = LocalMemoryProjectBindingStore(data).get(project)
+    dbt = LocalDbtProjectBindingStore(data).get(project)
+    assert automatic is not None and dbt is not None
+    assert automatic.scope == dbt.scope
+
+    second = runner.invoke(
+        cli.app,
+        ["scan", "--data-dir", str(data)],
+    )
+
+    assert second.exit_code == 0, second.output
+    second_payload = json.loads(second.output)
+    assert second_payload["source_structure"]["idempotent"] is True
+    assert second_payload["dbt"]["existing_manifest"] == "unchanged"
 
 
 def test_dbt_binding_scope_lookup_fails_closed_when_local_paths_are_ambiguous(

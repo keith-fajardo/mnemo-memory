@@ -136,6 +136,34 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         in tools[4].inputSchema["properties"]["operation"]["description"]
     )
     assert "exactly one" in tools[4].inputSchema["properties"]["lessons"]["description"]
+    evidence_schema = tools[4].inputSchema["properties"]["evidence_references"]
+    evidence_array = next(
+        candidate for candidate in evidence_schema["anyOf"] if candidate.get("type") == "array"
+    )
+    evidence_reference = evidence_array["items"]
+    assert evidence_reference["title"] == "CheckpointEvidenceReferenceInput"
+    assert set(evidence_reference["required"]) == {
+        "evidence_id",
+        "source_id",
+        "source_type",
+        "trust_class",
+        "immutable_source_ref",
+        "content_hash",
+        "location",
+        "observed_at",
+        "verification_status",
+    }
+    location = tools[4].inputSchema["$defs"]["CheckpointEvidenceLocationInput"]
+    assert location["required"] == ["uri"]
+    assert location["additionalProperties"] is False
+    assert evidence_reference["additionalProperties"] is False
+    assert set(location["properties"]) == {
+        "uri",
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column",
+    }
     assert "source_query" in tools[0].inputSchema["properties"]
     assert "query" in tools[0].inputSchema["properties"]
     assert "knowledge_query" in tools[0].inputSchema["properties"]
@@ -258,6 +286,42 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_accepts_uri_only_evidence_but_rejects_partial_spans(
+    tmp_path: Path,
+) -> None:
+    uri_only = {**EVIDENCE, "location": {"uri": "fixture://uri-only"}}
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "uri-only")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+
+        created = port.save_checkpoint(save_payload(evidence_references=[uri_only]))
+
+        assert created["persistence"] == "durable"
+        partial_span = {
+            **EVIDENCE,
+            "evidence_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "location": {"uri": "fixture://partial", "start_line": 1},
+        }
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.save_checkpoint(
+                save_payload(
+                    task_id="99999999-9999-4999-8999-999999999999",
+                    evidence_references=[partial_span],
+                )
+            )
+        unknown_location = {
+            **EVIDENCE,
+            "evidence_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "location": {"uri": "fixture://unknown", "excerpt": "must not be accepted"},
+        }
+        with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+            port.save_checkpoint(
+                save_payload(
+                    task_id="88888888-8888-4888-8888-888888888888",
+                    evidence_references=[unknown_location],
+                )
+            )
 
 
 def test_durable_port_resolves_omitted_scope_only_from_registered_default(tmp_path: Path) -> None:
@@ -1114,7 +1178,14 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
                 "explain_context",
                 "save_checkpoint",
             ]
-            created = await session.call_tool("save_checkpoint", save_payload())
+            created = await session.call_tool(
+                "save_checkpoint",
+                save_payload(
+                    evidence_references=[
+                        {**EVIDENCE, "location": {"uri": "fixture://stdio-uri-only"}}
+                    ]
+                ),
+            )
             assert created.isError is False
             result = created.structuredContent or {}
             context = await session.call_tool("get_context", IDS)
@@ -1157,6 +1228,24 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
             assert unsupported_rendering.isError is True
             invalid = await session.call_tool("save_checkpoint", {"operation": "invalid"})
             assert invalid.isError is True
+            private_marker = "must-not-echo-evidence-location"
+            invalid_evidence = await session.call_tool(
+                "save_checkpoint",
+                save_payload(
+                    task_id="99999999-9999-4999-8999-999999999999",
+                    evidence_references=[
+                        {
+                            **EVIDENCE,
+                            "location": {
+                                "uri": "fixture://invalid",
+                                "unexpected": private_marker,
+                            },
+                        }
+                    ],
+                ),
+            )
+            assert invalid_evidence.isError is True
+            assert private_marker not in str(invalid_evidence.content)
             still_valid = await session.call_tool("get_context", IDS)
             assert still_valid.isError is False
 
