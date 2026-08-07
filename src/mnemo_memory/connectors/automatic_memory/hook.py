@@ -134,15 +134,27 @@ class AutomaticMemoryHook:
                 # with the structural state it describes. This remains fail-open and never reads
                 # tool bodies/output or source text into hook state.
                 self._refresh_project_knowledge(binding)
-                self._refresh_source_structure(binding)
+                refreshed = self._refresh_source_structure(binding)
+                git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
                 _SessionStateStore(self.data_directory).save(
                     session_id,
                     dirty=False,
                     saved=True,
                     checkpoint_marker=current_marker,
+                    git_source_digest=git_source_digest,
+                    git_clean_commit_id=git_clean_commit_id,
                 )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
+                if (
+                    tool_name == "Bash"
+                    and not state.dirty
+                    and self._git_proves_no_mutation(binding, state)
+                ):
+                    # Shell tools can be read-only. Bypass the checkpoint reminder only when a
+                    # trusted clean Git observation from the session refresh still matches the
+                    # same clean commit. The hook never inspects command text or tool output.
+                    return {}
                 marker = (
                     state.checkpoint_marker
                     if state.dirty
@@ -153,19 +165,24 @@ class AutomaticMemoryHook:
                     dirty=True,
                     saved=False,
                     checkpoint_marker=marker,
+                    git_source_digest=state.git_source_digest,
+                    git_clean_commit_id=state.git_clean_commit_id,
                 )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
         if event_name == "SessionStart":
             self._expire_due_checkpoints(binding)
+            self._refresh_project_knowledge(binding)
+            refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
+            git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
             _SessionStateStore(self.data_directory).save(
                 session_id,
                 dirty=False,
                 saved=False,
                 checkpoint_marker=self._current_checkpoint_marker(binding.checkpoint_scope),
+                git_source_digest=git_source_digest,
+                git_clean_commit_id=git_clean_commit_id,
             )
-            self._refresh_project_knowledge(binding)
-            refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
             return self._context_output(
                 _resume_instruction(
                     binding.checkpoint_scope.to_dict(),
@@ -362,6 +379,22 @@ class AutomaticMemoryHook:
             GitObservationStore(self.data_directory).put(binding.scope, observation)
         return observation
 
+    def _git_proves_no_mutation(self, binding: MemoryProjectBinding, state: _SessionState) -> bool:
+        """Return true only when a shell call left a previously clean Git project unchanged."""
+        if state.git_source_digest is None or state.git_clean_commit_id is None:
+            return False
+        try:
+            after = (self.git_observer or GitSourceObserver()).observe(
+                binding.project_root, state.git_source_digest
+            )
+            return (
+                after is not None
+                and not after.dirty
+                and after.commit_id == state.git_clean_commit_id
+            )
+        except (OSError, ValueError, RuntimeError):
+            return False
+
     def _refresh_project_knowledge(self, binding: MemoryProjectBinding) -> None:
         """Call the app-composed refresher without letting a knowledge failure block a client."""
         if self.knowledge_refresher is None:
@@ -516,6 +549,8 @@ class _SessionState:
     dirty: bool = False
     saved: bool = False
     checkpoint_marker: str | None = None
+    git_source_digest: str | None = None
+    git_clean_commit_id: str | None = None
 
 
 class _SessionStateStore:
@@ -533,10 +568,17 @@ class _SessionStateStore:
         if not isinstance(value, dict):
             return _SessionState()
         marker = value.get("checkpoint_marker")
+        git_source_digest = value.get("git_source_digest")
+        git_clean_commit_id = value.get("git_clean_commit_id")
+        if not _valid_git_baseline(git_source_digest, git_clean_commit_id):
+            git_source_digest = None
+            git_clean_commit_id = None
         return _SessionState(
             value.get("dirty") is True,
             value.get("saved") is True,
             marker if isinstance(marker, str) and len(marker) <= 80 else None,
+            git_source_digest,
+            git_clean_commit_id,
         )
 
     def save(
@@ -546,15 +588,21 @@ class _SessionStateStore:
         dirty: bool,
         saved: bool,
         checkpoint_marker: str | None = None,
+        git_source_digest: str | None = None,
+        git_clean_commit_id: str | None = None,
     ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
                 values = self._read()
-                values[session_id] = {
+                session: dict[str, object] = {
                     "dirty": dirty,
                     "saved": saved,
                     "checkpoint_marker": checkpoint_marker,
                 }
+                if _valid_git_baseline(git_source_digest, git_clean_commit_id):
+                    session["git_source_digest"] = git_source_digest
+                    session["git_clean_commit_id"] = git_clean_commit_id
+                values[session_id] = session
                 # Bounded state avoids making lifecycle metadata a long-term activity log.
                 if len(values) > 128:
                     values = {session_id: values[session_id]}
@@ -672,6 +720,24 @@ def _handoff_scope_key(scope: MemoryScope) -> str:
     return sha256(
         json.dumps(scope.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _clean_git_baseline(refreshed: _SourceRefresh) -> tuple[str | None, str | None]:
+    observation = refreshed.git_observation
+    if observation is None or observation.dirty or observation.commit_id is None:
+        return None, None
+    return observation.source_digest, observation.commit_id
+
+
+def _valid_git_baseline(source_digest: object, commit_id: object) -> bool:
+    return (
+        isinstance(source_digest, str)
+        and source_digest.startswith("sha256:")
+        and len(source_digest) == 71
+        and isinstance(commit_id, str)
+        and len(commit_id) in {40, 64}
+        and all(character in "0123456789abcdef" for character in commit_id)
+    )
 
 
 def _resume_instruction(

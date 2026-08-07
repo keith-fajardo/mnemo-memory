@@ -4234,3 +4234,52 @@ The installed-checkout acceptance test refreshed snapshot
 relationships. A fresh Claude process with every tool disabled answered the generic architecture
 question from that snapshot in one turn and 420 output tokens. It performed no repository scan,
 MCP retrieval retry, or shell/file call.
+
+### Read-only shell checkpoint false positives — Complete
+
+A demonstrated dbt inventory question used a shell-backed read, after which the automatic Stop
+hook treated the session as mutated, required a full checkpoint, and left the agent unable to end
+a trivial read-only task cleanly. This bounded defect issue must suppress that reminder only when
+Mnemo has a prior clean Git observation and a post-tool observation proves the project remains
+clean at the same commit. Missing Git evidence, a dirty working tree, a changed commit, and
+explicit edit/write tools must remain checkpoint-required. The hook must not inspect or retain
+command text, tool output, source bodies, paths, diffs, or status payloads. This issue adds no
+schema migration, dependency, MCP tool, authorization change, model call, or network behavior.
+
+The hook now stores the clean, full-commit Git observation and active source digest in the current
+session's private content-free lifecycle marker. A second fixed, shell-free Git probe must prove the
+same commit and a still-clean working tree before Mnemo leaves the session unchanged. Every
+unavailable, dirty, or changed observation falls back to the existing checkpoint-required path;
+explicit edit/write tools remain unchanged. Command text and output are neither inspected nor
+persisted.
+
+Focused automatic-memory and Git-observation verification passes (`66 passed`), covering a clean
+same-commit shell read, clean-to-dirty work, missing Git evidence, initially dirty state, command
+privacy, Stop behavior, and explicit edits. A real clean temporary Git checkout reproduced the
+client lifecycle—SessionStart, shell-backed read, Stop—and returned no checkpoint block. The
+complete gate passes (`972 passed`, `27 skipped`; PostgreSQL `26 passed`, `1 skipped`) with
+formatting, lint, strict typing for 264 files, schema, dependency provenance, architecture, and
+installed-package verification. The threat model records that same-commit cleanliness proves only
+the versioned project state, not ignored-file or external-system side effects.
+
+### PyPI 0.1.0a9 read-only shell checkpoint release candidate — Complete
+
+This approved release packages only the completed read-only shell checkpoint false-positive fix
+as the next immutable prerelease. Package metadata, lockfile, installation guidance, workflow
+artifact names, release verifiers, and release tests must agree on `0.1.0a9`. Publication remains
+restricted to the protected production PyPI OIDC workflow, which must rebuild and verify the
+committed revision, publish only its checksum-bound wheel and source distribution, and verify the
+live PyPI artifacts after upload.
+
+The focused automatic-memory and release suite passes (`115 passed`). Independently built
+source-independent artifacts pass the release verifier with these SHA-256 digests:
+
+- wheel: `d999e24211ca568505fbcd26983f2df25e954a5fba7c0e519d5c248d8f52105e`
+- source distribution: `2f911960ba3797f966eebf93d185b6debc9a422314f4aafed2f33c495d9f781a`
+
+The complete gate passes (`972 passed`, `27 skipped`; PostgreSQL `26 passed`, `1 skipped`) with
+formatting, lint, strict typing for 264 files, schema, dependency provenance, architecture, and
+installed-package verification. Workflow YAML parsing and the final diff whitespace check pass.
+The separately observed invalid PreCompact response and proposed token analytics remain outside
+this bounded release. Publication still requires the committed revision to be pushed and the
+protected production workflow to succeed.

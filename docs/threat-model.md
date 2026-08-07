@@ -927,6 +927,30 @@ limits keep each result bounded, and team deployments additionally require rate 
 graphs cannot prove dynamic dispatch or runtime behavior, so agents still read narrowly selected
 source before making a change.
 
+### False checkpoint suppression after shell-backed reads
+
+**Scenario:** Treating every shell tool call as a project mutation forces a trivial read-only task
+through the Stop checkpoint flow. Conversely, trusting a command label, command text, or agent
+claim could suppress a required handoff after a real project mutation.
+
+**Required controls:** A shell call bypasses the mutation marker only when the already-scoped
+session refresh recorded a full commit ID with a clean Git working tree and a second fixed,
+shell-free Git probe returns the same full commit ID and another clean working tree. The comparison
+uses only commit identity and the dirty boolean attached to the active source digest. It never
+reads or retains command text, tool output, status paths, diffs, source bodies, remotes, or commit
+messages. Missing source or Git state, observer failure, initial dirtiness, later dirtiness, and a
+changed commit all fail closed to the existing checkpoint reminder. Explicit edit/write tools do
+not use this exception.
+
+**Verification:** Hook regressions cover a clean same-commit read, clean-to-dirty shell work,
+missing Git evidence, initially dirty Git state, Stop behavior, absence of command text in private
+state, and the existing explicit-edit checkpoint path.
+
+**Residual risk:** Git cannot expose an ignored-file or external-system side effect. The exception
+therefore proves only that the versioned project remains clean at the same commit; agents remain
+responsible for explicitly checkpointing important external tool outcomes. A future broader
+side-effect classifier requires a separate threat review and cannot rely on model inference.
+
 ### Poisoned memories
 
 **Scenario:** Incorrect assistant claims, malicious source content, repeated low-trust assertions,

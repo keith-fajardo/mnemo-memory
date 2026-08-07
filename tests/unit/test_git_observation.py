@@ -6,6 +6,8 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from mnemo_memory.connectors.automatic_memory.git_observation import (
     GitObservationStore,
     GitSourceObserver,
@@ -128,3 +130,136 @@ def test_automatic_hook_attaches_git_state_without_source_or_status_output(tmp_p
     assert "service.py" not in context
     assert "return 1" not in context
     assert str(project) not in context
+
+
+def test_clean_git_observation_proves_read_only_shell_needs_no_checkpoint(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    commit = "e" * 40
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        git_observer=GitSourceObserver(
+            _runner(
+                {
+                    ("rev-parse", "--is-inside-work-tree"): "true",
+                    ("rev-parse", "--verify", "HEAD"): commit,
+                    ("rev-parse", "--verify", "HEAD^"): None,
+                    ("status", "--porcelain=v1", "-z"): "",
+                }
+            )
+        ),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    result = hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "private read-only command"},
+        }
+    )
+
+    assert result == {}
+    assert hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)}) == {}
+    state = (data / "automatic-memory-session-state.json").read_text(encoding="utf-8")
+    assert '"dirty":false' in state
+    assert "private read-only command" not in state
+    assert not (data / "automatic-memory-handoff-state.json").exists()
+
+
+def test_shell_with_changed_git_state_still_requires_checkpoint(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    commit = "f" * 40
+    status_calls = 0
+
+    def changing_runner(arguments: tuple[str, ...], root: Path) -> str | None:
+        nonlocal status_calls
+        assert root == project.resolve()
+        if arguments == ("rev-parse", "--is-inside-work-tree"):
+            return "true"
+        if arguments == ("rev-parse", "--verify", "HEAD"):
+            return commit
+        if arguments == ("rev-parse", "--verify", "HEAD^"):
+            return None
+        if arguments == ("status", "--porcelain=v1", "-z"):
+            status_calls += 1
+            return "" if status_calls == 1 else " M private.py\0"
+        return None
+
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        git_observer=GitSourceObserver(changing_runner),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    assert (
+        hook.handle(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "s1",
+                "cwd": str(project),
+                "tool_name": "Bash",
+            }
+        )
+        == {}
+    )
+    stop = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
+
+    assert stop["decision"] == "block"
+    assert "save_checkpoint" in str(stop)
+
+
+@pytest.mark.parametrize(
+    ("status", "case"),
+    ((None, "missing Git evidence"), (" M existing.py\0", "initially dirty Git state")),
+)
+def test_shell_without_a_clean_git_baseline_still_requires_checkpoint(
+    tmp_path: Path, status: str | None, case: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    commit = "1" * 40
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        git_observer=GitSourceObserver(
+            _runner(
+                {
+                    ("rev-parse", "--is-inside-work-tree"): "true",
+                    ("rev-parse", "--verify", "HEAD"): commit,
+                    ("rev-parse", "--verify", "HEAD^"): None,
+                    ("status", "--porcelain=v1", "-z"): status,
+                }
+            )
+        ),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": case, "cwd": str(project)})
+
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": case,
+            "cwd": str(project),
+            "tool_name": "Bash",
+        }
+    )
+    stop = hook.handle({"hook_event_name": "Stop", "session_id": case, "cwd": str(project)})
+
+    assert stop["decision"] == "block"
+    assert "save_checkpoint" in str(stop)

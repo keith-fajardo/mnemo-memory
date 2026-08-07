@@ -17,9 +17,9 @@ from typing import Protocol, cast
 from urllib.parse import quote
 
 DISTRIBUTION_NAME = "mnemo-unified-context"
-DISTRIBUTION_VERSION = "0.1.0a8"
-WHEEL_FILENAME = "mnemo_unified_context-0.1.0a8-py3-none-any.whl"
-SDIST_FILENAME = "mnemo_unified_context-0.1.0a8.tar.gz"
+DISTRIBUTION_VERSION = "0.1.0a9"
+WHEEL_FILENAME = "mnemo_unified_context-0.1.0a9-py3-none-any.whl"
+SDIST_FILENAME = "mnemo_unified_context-0.1.0a9.tar.gz"
 EXPECTED_FILENAMES = frozenset({WHEEL_FILENAME, SDIST_FILENAME})
 PYPI_PUBLISH_PREDICATE = "https://docs.pypi.org/attestations/publish/v1"
 
@@ -338,7 +338,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--download-dir", type=Path, required=True)
     parser.add_argument(
         "--metadata-url",
-        default="https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a8/json",
+        default="https://test.pypi.org/pypi/mnemo-unified-context/0.1.0a9/json",
     )
     parser.add_argument("--registry-name", default="TestPyPI")
     parser.add_argument("--provenance-base-url", default="https://test.pypi.org/integrity")

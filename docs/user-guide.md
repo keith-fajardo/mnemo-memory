@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a8
+uv tool install mnemo-unified-context==0.1.0a9
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -768,7 +768,15 @@ automatically. This automatic attachment has a 1,750-token total budget and happ
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
 needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw
-conversation or source body. The manual fallback is:
+conversation or source body.
+
+Shell-backed reads do not create a checkpoint obligation when Mnemo observed the Git project clean
+at session refresh and a second fixed, shell-free Git probe proves it is still clean at the same
+commit after the tool returns. Mnemo does not inspect the command or its output. If Git evidence is
+missing, the project was already dirty, the commit or working tree changed, or the agent used an
+explicit edit/write tool, the hook remains conservative and asks for the handoff.
+
+The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
 > exact next action. If you corrected an analysis mistake, also save its trigger, mistaken
