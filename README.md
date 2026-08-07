@@ -93,7 +93,7 @@ See the [fresh-session benchmark](docs/fresh-session-resumption-benchmark.md) an
 The PyPI distribution is `mnemo-unified-context`; the installed command is `mnemo-memory`.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a5
+uv tool install mnemo-unified-context==0.1.0a6
 mnemo-memory --version
 mnemo-memory init
 

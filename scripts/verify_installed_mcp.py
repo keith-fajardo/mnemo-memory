@@ -18,7 +18,7 @@ from typing import cast
 
 from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 
-DISTRIBUTION_VERSION = "0.1.0a5"
+DISTRIBUTION_VERSION = "0.1.0a6"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
 TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]

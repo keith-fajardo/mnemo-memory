@@ -4005,3 +4005,24 @@ The focused regression suite passes with 13 tests. The complete `npm run check` 
 skip, schema validation, dependency/provenance validation for 94 entries, architecture validation
 for 144 product Python files, and installed-package verification. No dependency, schema, policy,
 storage contract, dbt parser, MCP tool, or client-registration behavior changed.
+
+### PyPI 0.1.0a6 generated-target refresh release candidate — Complete
+
+This bounded release issue packages the completed generated `target/` source-refresh isolation fix
+in the next immutable PyPI prerelease. It updates active package, lockfile, workflow, verifier,
+test, and installation references to `0.1.0a6`. It adds no runtime behavior beyond the completed
+fix and no dependency, schema, policy, storage contract, MCP tool, client registration, or dbt
+artifact-ingestion change.
+
+The release candidate passes the focused source-refresh, CLI-version, workflow, and artifact suite
+(`31 passed`), direct `mnemo-memory --version` verification, both workflow YAML parsers,
+`git diff --check`, and the complete `npm run check` gate (`945 passed`, `27 skipped`; PostgreSQL
+integration `26 passed`, `1 skipped`). The independently built artifacts pass the release verifier
+with these SHA-256 digests:
+
+- wheel: `51edbb8823f891e306b2077d2d82486b02e1059594cab51ac3dcac9f833c8cce`
+- source distribution: `75cbfa28e4ccc1fc86131dc2f29efe34279c0bb659d0b10f3a8da2a4c71f299b`
+
+Publication remains an operational action performed from the committed revision by the existing
+protected PyPI OIDC workflow, which rebuilds and verifies its own exact artifact bundle before
+upload and independently verifies the live PyPI files afterward.

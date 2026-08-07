@@ -44,7 +44,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a5
+uv tool install mnemo-unified-context==0.1.0a6
 mnemo-memory --version
 mnemo-memory init
 cd /path/to/your/project
