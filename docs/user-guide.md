@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a11
+uv tool install mnemo-unified-context==0.1.0a12
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -422,9 +422,11 @@ mnemo --version
 Mnemo accepts exactly one ownership marker in its running isolated environment and resolves only
 that manager executable. It publishes a verified backup before stopping a running local service or
 invoking the installer. Because an exact installation constraint remains pinned during a normal
-uv upgrade, Mnemo asks the owning manager to force-install the unpinned package name. The uv route
-explicitly allows prereleases; the pipx route supplies pip's prerelease flag. Mnemo reads the exact
-managed distribution version before and after the operation.
+uv upgrade, Mnemo asks the owning manager to force-install and upgrade from the open Mnemo
+requirement `mnemo-unified-context>=0.1.0a0`. The uv route refreshes index metadata and allows
+prereleases only for that explicit first-party requirement; it does not opt transitive dependencies
+into prereleases. Pipx receives the same open Mnemo requirement without a global prerelease flag.
+Mnemo reads the exact managed distribution version before and after the operation.
 The result is `upgraded` only when those versions differ and `already_current` when the manager
 successfully resolves the same version; both results include `before_version`, `after_version`, and
 `changed`. On success it runs the upgraded CLI's initialization to apply and validate migrations,

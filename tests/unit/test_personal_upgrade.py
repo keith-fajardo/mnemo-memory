@@ -167,9 +167,10 @@ def test_uv_upgrade_backs_up_first_validates_with_new_cli_and_preserves_stopped_
             "tool",
             "install",
             "--force",
+            "--upgrade",
             "--prerelease",
-            "allow",
-            "mnemo-unified-context",
+            "explicit",
+            "mnemo-unified-context>=0.1.0a0",
         ),
         (
             str(tmp_path / "python"),
@@ -212,8 +213,7 @@ def test_pipx_upgrade_stops_then_restores_a_running_service(tmp_path: Path) -> N
         "install",
         "--force",
         "--upgrade",
-        "--pip-args=--pre",
-        "mnemo-unified-context",
+        "mnemo-unified-context>=0.1.0a0",
     )
     assert cast(tuple[str, ...], log[-1])[3] == "start"
 

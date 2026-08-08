@@ -19,6 +19,7 @@ from .backups import PersonalBackupError, PersonalBackupResult, PersonalBackupSe
 from .config import LocalConfig
 
 _PACKAGE_NAME = "mnemo-unified-context"
+_PACKAGE_UPGRADE_REQUIREMENT = f"{_PACKAGE_NAME}>=0.1.0a0"
 _SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.!+_-]{0,63}\Z")
 
 
@@ -205,17 +206,17 @@ class PersonalUpgradeService:
                 "tool",
                 "install",
                 "--force",
+                "--upgrade",
                 "--prerelease",
-                "allow",
-                _PACKAGE_NAME,
+                "explicit",
+                _PACKAGE_UPGRADE_REQUIREMENT,
             )
         return (
             str(executable),
             "install",
             "--force",
             "--upgrade",
-            "--pip-args=--pre",
-            _PACKAGE_NAME,
+            _PACKAGE_UPGRADE_REQUIREMENT,
         )
 
     def _installed_version(self) -> str:

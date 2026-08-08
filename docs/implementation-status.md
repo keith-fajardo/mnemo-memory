@@ -4405,15 +4405,17 @@ reconnecting must upgrade exact owned legacy timeout values without duplicating 
 changing unrelated hooks. The prompt-time local diagnostics route must still return without
 opening the normal retrieval runtime.
 
-The self-upgrader must replace an exact pinned receipt with an unpinned package request through the
-owning manager, explicitly allow prereleases through supported uv and pipx arguments,
+The self-upgrader must replace an exact pinned receipt with an open first-party package request
+through the owning manager, refresh stale package metadata without allowing prerelease transitive
+dependencies,
 read the installed distribution version before and after the package-manager operation, and report
 `upgraded` only when the version actually changes; an unchanged successful resolution reports
 `already_current`. Version validation must expose no installer output or environment data and all
 existing backup, stop, validation, restart, and fail-open boundaries remain intact.
 
 Acceptance requires focused route, hook, telemetry, upgrade, privacy, and CLI tests; updated user
-and threat-model guidance; the complete repository gate; an immutable `0.1.0a11` release; a clean
+and threat-model guidance; the complete repository gate; an immutable corrective `0.1.0a12`
+release; a clean
 commit and push; protected production PyPI publication; and live artifact and installed-version
 verification. This issue adds no dependency, schema migration, MCP tool, model call, network
 surface, automatic repository mutation, authorization change, or retained prompt/tool payload.
@@ -4428,7 +4430,7 @@ delivery cost, and hit state; the prompt and recommendation content are not reta
 
 Exact Mnemo-owned Codex and Claude Code hook entries now use 300 seconds and existing owned values
 are upgraded in place. The backup-gated self-upgrader replaces exact pinned receipts through an
-unpinned force-install owned by uv or pipx, explicitly permits prereleases, reads a bounded version
+open first-party force-install owned by uv or pipx and reads a bounded version
 from the exact managed Python before and after installation, and distinguishes `upgraded` from
 `already_current`. Installer output remains discarded and existing service recovery behavior is
 preserved.
@@ -4438,11 +4440,25 @@ passed`). The complete `npm run check` gate passes (`990 passed`, `27 skipped`; 
 passed`, `1 skipped`) with formatting, lint, strict typing for 269 files, schema validation,
 dependency/provenance validation for 94 registered entries, architecture validation for 147
 product Python files, and installed-package verification. Both workflow YAML files parse.
-Independently built source-independent `0.1.0a11` artifacts pass the release verifier with these
-pre-publication SHA-256 digests:
+Release commit `80ce5403bb0284e86a021437c7e21e48cc7d3b49` and protected workflow run
+`31245247290` successfully published `0.1.0a11`, but immediate local acceptance exposed two defects
+in its uv command. Removing the exact receipt pin without `--upgrade` reused cached index metadata
+and reinstalled `0.1.0a10`; adding `--upgrade` reached `0.1.0a11` but the global `allow` prerelease
+policy also selected beta transitive dependencies. Therefore `0.1.0a11` does not complete this
+issue and must not be represented as the verified self-upgrade release.
 
-- wheel: `c1e46fcc862e697ae4ef4702028fbb3679189eae033bd2533b9eb54282fd4f7e`
-- source distribution: `32708538e91df6f27f9537066c23e54140251ff73e665a14ef1096568b32879f`
+The corrective `0.1.0a12` command combines uv `--force --upgrade` with the explicit first-party
+requirement `mnemo-unified-context>=0.1.0a0` and `--prerelease explicit`. This refreshes Mnemo's
+index data and admits Mnemo prereleases without opting transitive dependencies into prereleases.
+Pipx receives the same open first-party requirement with `--force --upgrade` and no global
+`--pre`. The corrective focused route, automatic-memory, upgrade, privacy, telemetry, workflow,
+and release suite passes (`91 passed`). The complete `npm run check` gate passes (`990 passed`, `27
+skipped`; PostgreSQL `26 passed`, `1 skipped`) with formatting, lint, strict typing, schema,
+dependency provenance, architecture, and installed-package verification. Source-independent
+`0.1.0a12` artifacts pass the release verifier with these pre-publication SHA-256 digests:
 
-Commit, push, protected publication, live artifact verification, local self-upgrade, and exact
-installed hook-timeout verification remain pending.
+- wheel: `395383f97047a6d4deb2c8155b21159324c0b9f23da71b94e6e94c6ccfec5b3e`
+- source distribution: `f0cb87784ee2325093a6c87afe26ca6d5d15f3e96d337700d5d2ea088bb26576`
+
+Corrective commit and push, protected publication, live self-upgrade, stable transitive-version
+verification, and exact installed hook-timeout verification remain pending.
