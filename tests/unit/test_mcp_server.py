@@ -12,6 +12,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import Tool
 
+from mnemo_memory.apps.mcp import server as mcp_server_module
 from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
 from mnemo_memory.connectors.dbt.artifacts import DbtSourceFreshnessParser
 from mnemo_memory.connectors.dbt.code_excerpt import DbtLocalCodeExcerptReader
@@ -29,6 +30,7 @@ from mnemo_memory.packages.application import (
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_fixture import FixtureMcpContextPort
+from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
 from mnemo_memory.packages.domain import (
     ContextBudget,
@@ -220,6 +222,15 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     )
     assert "record_event" in tools[4].inputSchema["properties"]["operation"]["pattern"]
     assert "event_summary" in tools[4].inputSchema["properties"]
+    token_estimate_property = tools[4].inputSchema["properties"]["token_estimate"]
+    token_estimate_schema = next(
+        candidate
+        for candidate in token_estimate_property["anyOf"]
+        if candidate.get("type") == "integer"
+    )
+    assert token_estimate_schema["maximum"] == 600
+    assert "deterministic local estimate" in token_estimate_property["description"]
+    assert "token_estimate" not in tools[4].inputSchema.get("required", [])
     assert set(tools[3].inputSchema["properties"]) == {"context_packet"}
     assert set(tools[1].inputSchema["required"]) == {"client"}
     assert set(tools[2].inputSchema["required"]) == {"name", "client"}
@@ -228,6 +239,66 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         assert name not in tools[1].inputSchema.get("required", [])
         assert name not in tools[2].inputSchema.get("required", [])
         assert name not in tools[4].inputSchema.get("required", [])
+
+
+def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listing() -> None:
+    events: list[object] = []
+
+    class RecordingPort:
+        def get_context(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("get_context", request))
+            return request
+
+        def list_skills(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("list_skills", request))
+            return request
+
+        def get_skill(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("get_skill", request))
+            return request
+
+        def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("save_checkpoint", request))
+            return request
+
+    class RecordingSession:
+        port: McpContextPort = RecordingPort()
+
+        def refresh_source(self) -> None:
+            events.append("refresh_source")
+
+        def close(self) -> None:
+            events.append("close")
+
+    def build_session() -> RecordingSession:
+        events.append("build")
+        return RecordingSession()
+
+    deferred = mcp_server_module._DeferredMcpContextPort(build_session)
+    tools = asyncio.run(create_server(deferred).list_tools())
+    assert [tool.name for tool in tools] == [
+        "get_context",
+        "list_skills",
+        "get_skill",
+        "explain_context",
+        "save_checkpoint",
+    ]
+    assert events == []
+
+    assert deferred.get_context({"source_query": None}) == {"source_query": None}
+    assert events == ["build", ("get_context", {"source_query": None})]
+    deferred.get_context({"source_changes": {"relative_path": "src/service.py"}})
+    deferred.get_context({"source_overview": {}})
+    assert events.count("build") == 1
+    assert events.count("refresh_source") == 1
+
+    deferred.close()
+    deferred.close()
+    assert events.count("close") == 1
+
+    unused = mcp_server_module._DeferredMcpContextPort(build_session)
+    unused.close()
+    assert events.count("build") == 1
 
 
 def test_fixture_port_is_explicit_test_only_behavior() -> None:
@@ -322,6 +393,34 @@ def test_durable_port_lifecycle_and_safe_errors(tmp_path: Path) -> None:
         assert abandoned_result["lifecycle_status"] == "abandoned"
         with pytest.raises(ValueError, match="MNEMO_CHECKPOINT_NOT_FOUND"):
             port.get_context({**IDS, "checkpoint_id": "88888888-8888-4888-8888-888888888888"})
+
+
+def test_durable_port_estimates_checkpoint_tokens_when_caller_omits_them(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, object] = {
+        "operation": "create",
+        **IDS,
+        "task_objective": "Save a concise durable handoff",
+        "current_state": "The requested walkthrough is complete.",
+        "evidence_references": [EVIDENCE],
+    }
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "estimated-tokens")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+
+        created = port.save_checkpoint(payload)
+
+        assert created["persistence"] == "durable"
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+        assert packet.active_task_checkpoint is not None
+        canonical = json.loads(packet.active_task_checkpoint.content)
+        estimated_tokens = canonical["token_estimate"]
+        canonical["token_estimate"] = 0
+        assert (
+            estimated_tokens
+            == (len(json.dumps(canonical, sort_keys=True, separators=(",", ":"))) + 2) // 3
+        )
+        assert 0 < estimated_tokens <= 600
 
 
 def test_durable_port_accepts_uri_only_evidence_but_rejects_partial_spans(
@@ -1257,6 +1356,37 @@ def test_durable_port_requires_exactly_one_source_impact_target(tmp_path: Path) 
             port.get_context(request)
 
 
+def test_real_stdio_handshake_and_tool_listing_do_not_open_local_storage(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        unavailable_data_directory = tmp_path / "not-a-directory"
+        unavailable_data_directory.write_text("occupied", encoding="utf-8")
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                "-m",
+                "mnemo_memory.apps.mcp.server",
+                "--data-dir",
+                str(unavailable_data_directory),
+            ],
+            cwd=ROOT,
+        )
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            initialized = await session.initialize()
+            assert initialized.serverInfo.name == SERVER_NAME
+            assert [tool.name for tool in (await session.list_tools()).tools] == [
+                "get_context",
+                "list_skills",
+                "get_skill",
+                "explain_context",
+                "save_checkpoint",
+            ]
+            unavailable = await session.call_tool("get_context", IDS)
+            assert unavailable.isError is True
+            assert "MNEMO_STORAGE_UNAVAILABLE" in str(unavailable.content)
+
+    asyncio.run(exercise())
+
+
 def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None:
     async def exercise() -> None:
         parameters = StdioServerParameters(
@@ -1491,7 +1621,9 @@ def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 
 
-def test_invalid_data_directory_exits_with_a_sanitized_startup_error(tmp_path: Path) -> None:
+def test_unused_invalid_data_directory_does_not_block_or_dirty_stdio_startup(
+    tmp_path: Path,
+) -> None:
     occupied = tmp_path / "occupied data directory"
     occupied.write_text("not a directory")
     result = subprocess.run(
@@ -1501,7 +1633,7 @@ def test_invalid_data_directory_exits_with_a_sanitized_startup_error(tmp_path: P
         text=True,
         timeout=8,
     )
-    assert result.returncode == 2
-    assert "MNEMO_STORAGE_UNAVAILABLE" in result.stderr
+    assert result.returncode == 0
+    assert "MNEMO_STORAGE_UNAVAILABLE" not in result.stderr
     assert "Traceback" not in result.stderr
     assert result.stdout == ""

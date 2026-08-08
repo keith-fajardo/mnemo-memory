@@ -6,8 +6,10 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, Protocol, cast
 
 from mcp.server.auth.provider import TokenVerifier
@@ -29,6 +31,7 @@ from mnemo_memory.connectors.dbt.project_binding import (
 )
 from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
+    CheckpointRuntime,
     LocalConfigurationError,
     LocalRuntimeError,
     PersonalSettingsError,
@@ -54,6 +57,9 @@ from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceState
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
+_SOURCE_CONTEXT_KEYS = frozenset(
+    {"source_query", "source_impact", "source_changes", "source_overview"}
+)
 
 
 class CheckpointEvidenceLocationInput(BaseModel):
@@ -138,6 +144,88 @@ class TeamKnowledgeMcpPort(Protocol):
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]: ...
 
     def approve_knowledge_source(self, request: dict[str, object]) -> dict[str, object]: ...
+
+
+class _McpContextSession(Protocol):
+    port: McpContextPort
+
+    def refresh_source(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class _LocalMcpContextSession:
+    """One initialized local runtime retained for the lifetime of an MCP process."""
+
+    def __init__(
+        self,
+        runtime: CheckpointRuntime,
+        port: McpContextPort,
+        source_refresher: Callable[[], None],
+    ) -> None:
+        self.port = port
+        self._runtime = runtime
+        self._source_refresher = source_refresher
+
+    def refresh_source(self) -> None:
+        self._source_refresher()
+
+    def close(self) -> None:
+        self._runtime.close()
+
+
+class _DeferredMcpContextPort:
+    """Keep durable composition and source parsing out of the MCP handshake."""
+
+    def __init__(self, session_factory: Callable[[], _McpContextSession]) -> None:
+        self._session_factory = session_factory
+        self._session: _McpContextSession | None = None
+        self._source_refreshed = False
+        self._closed = False
+        self._lock = Lock()
+
+    def get_context(self, request: dict[str, object]) -> dict[str, object]:
+        session = self._initialized_session()
+        if any(request.get(name) is not None for name in _SOURCE_CONTEXT_KEYS):
+            self._refresh_source_once(session)
+        return session.port.get_context(request)
+
+    def list_skills(self, request: dict[str, object]) -> dict[str, object]:
+        return self._initialized_session().port.list_skills(request)
+
+    def get_skill(self, request: dict[str, object]) -> dict[str, object]:
+        return self._initialized_session().port.get_skill(request)
+
+    def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
+        return self._initialized_session().port.save_checkpoint(request)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            session = self._session
+            self._session = None
+        if session is not None:
+            session.close()
+
+    def _initialized_session(self) -> _McpContextSession:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("MNEMO_STORAGE_UNAVAILABLE")
+            if self._session is None:
+                try:
+                    self._session = self._session_factory()
+                except (LocalConfigurationError, LocalRuntimeError, PersonalSettingsError):
+                    raise RuntimeError("MNEMO_STORAGE_UNAVAILABLE") from None
+            return self._session
+
+    def _refresh_source_once(self, session: _McpContextSession) -> None:
+        with self._lock:
+            if self._source_refreshed:
+                return
+            session.refresh_source()
+            self._source_refreshed = True
 
 
 def create_server(
@@ -552,7 +640,19 @@ def create_server(
                 ),
             ),
         ] = None,
-        token_estimate: Annotated[int | None, Field(default=None, ge=0, le=600)] = None,
+        token_estimate: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=0,
+                le=600,
+                description=(
+                    "Optional caller estimate for create, revise, complete, and abandon. "
+                    "When omitted, Mnemo calculates a deterministic local estimate. Ignored by "
+                    "record_lesson and record_event."
+                ),
+            ),
+        ] = None,
         checkpoint_id: Annotated[
             str | None,
             Field(
@@ -707,24 +807,26 @@ def create_server(
     return server
 
 
-def main(data_directory: Path | None = None) -> None:
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
-    with build_checkpoint_runtime(
+def _build_local_mcp_context_session(
+    data_directory: Path | None,
+    project_directory: Path,
+) -> _LocalMcpContextSession:
+    runtime = build_checkpoint_runtime(
         resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
-    ) as runtime:
+    )
+    try:
         assert runtime.dbt_manifest_service is not None
         assert runtime.source_structure_repository is not None
         assert runtime.knowledge_document_repository is not None
+        source_repository = runtime.source_structure_repository
         binding_store = LocalMemoryProjectBindingStore(runtime.config.data_directory)
         try:
-            binding = binding_store.get(Path.cwd())
+            binding = binding_store.get(project_directory)
         except AutomaticMemoryBindingError:
             binding = None
-        if binding is not None:
-            refresh_registered_project_source(binding, runtime.source_structure_repository)
         observer = CheckpointSourceObserver(
             binding_store,
-            runtime.source_structure_repository,
+            source_repository,
             runtime.repository,
             lambda: datetime.now(UTC),
         )
@@ -754,31 +856,49 @@ def main(data_directory: Path | None = None) -> None:
         )
         skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
         settings = PersonalSettingsStore(runtime.config.data_directory).load()
-        create_server(
-            DurableMcpContextPort(
-                runtime.checkpoint_service,
-                UnifiedContextEngine(
-                    UnifiedContextService(
-                        runtime.checkpoint_service,
-                        runtime.dbt_manifest_service,
-                        runtime.source_structure_repository,
-                        runtime.repository,
-                        runtime.knowledge_document_repository,
-                        semantic_knowledge,
-                        KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
-                        DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
-                        skill_registry,
-                    ),
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            UnifiedContextEngine(
+                UnifiedContextService(
+                    runtime.checkpoint_service,
+                    runtime.dbt_manifest_service,
+                    source_repository,
                     runtime.repository,
+                    runtime.knowledge_document_repository,
+                    semantic_knowledge,
+                    KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
+                    DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
+                    skill_registry,
                 ),
-                observer.observe,
-                None if binding is None else binding.checkpoint_scope,
-                current_dbt_source_state,
-                skill_registry,
-                settings.context_budget,
-                settings.approved_event_capture_enabled,
-            )
-        ).run(transport="stdio")
+                runtime.repository,
+            ),
+            observer.observe,
+            None if binding is None else binding.checkpoint_scope,
+            current_dbt_source_state,
+            skill_registry,
+            settings.context_budget,
+            settings.approved_event_capture_enabled,
+        )
+
+        def refresh_source() -> None:
+            if binding is not None:
+                refresh_registered_project_source(binding, source_repository)
+
+        return _LocalMcpContextSession(runtime, port, refresh_source)
+    except Exception:
+        runtime.close()
+        raise
+
+
+def main(data_directory: Path | None = None) -> None:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
+    deferred_port = _DeferredMcpContextPort(
+        lambda: _build_local_mcp_context_session(data_directory, Path.cwd())
+    )
+    try:
+        create_server(deferred_port).run(transport="stdio")
+    finally:
+        deferred_port.close()
 
 
 if __name__ == "__main__":

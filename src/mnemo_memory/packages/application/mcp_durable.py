@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Protocol, cast
 
 from mnemo_memory.packages.application.checkpoints import (
@@ -27,6 +28,7 @@ from mnemo_memory.packages.application.checkpoints import (
     RecordApprovedEpisodicEvent,
     RecordCheckpointLesson,
     ReviseCheckpoint,
+    estimate_checkpoint_tokens,
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
 from mnemo_memory.packages.application.unified_context import (
@@ -869,7 +871,8 @@ def _scope(request: Mapping[str, object], default: MemoryScope | None = None) ->
 
 
 def _content(request: Mapping[str, object]) -> CheckpointContent:
-    return CheckpointContent(
+    supplied_token_estimate = request.get("token_estimate")
+    content = CheckpointContent(
         task_objective=_string(request, "task_objective"),
         completed_work=_strings(request, "completed_work"),
         current_state=_string(request, "current_state"),
@@ -880,9 +883,14 @@ def _content(request: Mapping[str, object]) -> CheckpointContent:
         relevant_files=_strings(request, "relevant_files"),
         relevant_artifacts=_strings(request, "relevant_artifacts"),
         verification_performed=_strings(request, "verification_performed"),
-        token_estimate=_integer(request.get("token_estimate")),
+        token_estimate=(
+            0 if supplied_token_estimate is None else _integer(supplied_token_estimate)
+        ),
         lessons=_lessons(request),
     )
+    if supplied_token_estimate is None:
+        return replace(content, token_estimate=estimate_checkpoint_tokens(content))
+    return content
 
 
 def _evidence(request: Mapping[str, object]) -> tuple[EvidenceReference, ...]:

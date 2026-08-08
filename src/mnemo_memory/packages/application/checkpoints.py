@@ -521,7 +521,7 @@ class CheckpointApplicationService:
             )
         except (TypeError, ValueError) as error:
             raise CheckpointApplicationInvalidContent("checkpoint lesson is invalid") from error
-        content = replace(content, token_estimate=_checkpoint_token_estimate(content))
+        content = replace(content, token_estimate=estimate_checkpoint_tokens(content))
         self._validate_write(command.scope, content, evidence)
         revision = self._call(
             lambda: self._repository.append_revision(
@@ -1426,8 +1426,8 @@ class CheckpointApplicationService:
             raise translated from error
 
 
-def _checkpoint_token_estimate(content: CheckpointContent) -> int:
-    """Use Mnemo's deterministic cold-input heuristic for a lesson-only revision."""
+def estimate_checkpoint_tokens(content: CheckpointContent) -> int:
+    """Estimate canonical checkpoint content with Mnemo's cold-input heuristic."""
     payload = content.to_dict()
     payload["token_estimate"] = 0
     return (len(json.dumps(payload, sort_keys=True, separators=(",", ":"))) + 2) // 3

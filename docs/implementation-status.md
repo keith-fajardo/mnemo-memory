@@ -4494,3 +4494,107 @@ After normal PyPI simple-index propagation, the exact documented uv command inst
 `before_version==after_version==0.1.0a13`, `changed=false`, and `status=already_current`. The exact
 installed hook launcher reports `0.1.0a13`, and all five Mnemo-owned Codex lifecycle handlers have
 the single timeout value `300`. Production publication and live verification are complete.
+
+### Local MCP cold-start handshake — Complete
+
+Codex `0.147.0` reported `MCP startup interrupted` for `mnemo-memory` when started from the
+registered ATK path. The per-process client timeline proves this is latency rather than a server
+crash: Mnemo was pending when Codex ended its initial startup phase and completed initialization
+roughly 27 seconds later. A subsequent warm handshake completed below one second. ATK resolves to
+the parent `~/Desktop/local/personal` Git root, and the local MCP composition root currently opens
+and migrates SQLite and synchronously refreshes that registered source projection before starting
+the stdio transport.
+
+This bounded correction must make server construction, MCP initialization, and `tools/list`
+independent of local storage and source parsing. The durable runtime must initialize exactly once
+on the first real Mnemo tool call. A source projection refresh must occur only when a context
+request explicitly asks for source structure, or through the existing post-checkpoint observer;
+normal checkpoint, recap, and skill calls must not pay repository-parse latency. Process shutdown
+must close an initialized runtime without constructing an unused one. Existing five-tool schemas,
+scope resolution, fail-closed authorization, fail-open source observation, and sanitized storage
+errors must remain unchanged.
+
+Acceptance requires focused deferred-composition and real-stdio regressions, the complete
+repository gate, and an installed-style ATK handshake measurement. This issue adds no dependency,
+schema migration, MCP tool, network surface, authorization change, background daemon, retained
+payload, or automatic canonical memory mutation.
+
+Implemented a process-local deferred MCP port that constructs the existing durable runtime exactly
+once on the first storage-backed tool call and closes it only when it was initialized. FastMCP
+construction, protocol initialization, and tool listing no longer resolve local configuration,
+open or migrate SQLite, load personal settings, or parse registered source files. Known lazy
+configuration and storage failures return the fixed `MNEMO_STORAGE_UNAVAILABLE` boundary through
+the tool response instead of terminating the MCP handshake.
+
+The former unconditional startup source refresh is now a one-time, fail-open refresh immediately
+before the first explicit `source_query`, `source_impact`, `source_changes`, or `source_overview`
+request. Normal checkpoint, recap, skill, and knowledge retrieval do not parse the repository.
+Post-checkpoint source observation remains unchanged. Enabled-project real-stdio coverage proves
+an explicit source request still sees source changes made before process launch.
+
+Focused deferred-composition and real-stdio verification passes (`34 passed`). From the real ATK
+working directory, the source-built `mnemo-memory mcp serve --stdio` launcher completes protocol
+initialization in `1.472` seconds and lists all five tools in `0.002` seconds, for `1.474` seconds
+total. A first normal scoped context request initializes SQLite lazily and completes in `0.019`
+seconds without repository parsing. The complete `npm run check` gate passes (`993 passed`, `27
+skipped`; PostgreSQL `26 passed`, `1 skipped`) with formatting, lint, strict typing for 269 files,
+schema validation, dependency provenance for 94 registered entries, architecture validation for
+147 product Python files, and installed-package verification.
+
+### Checkpoint token-estimate omission — Complete
+
+Three valid `save_checkpoint` create requests were rejected with the sanitized
+`MNEMO_INVALID_INPUT` response because the MCP schema advertised `token_estimate` as optional
+while the durable request translator required a non-negative integer. Optional checkpoint list
+fields correctly defaulted to empty values and did not cause the rejection.
+
+This bounded correction must deterministically estimate checkpoint tokens when the caller omits
+the estimate, while retaining an explicitly supplied estimate as required by ADR 0002. The
+existing local, tokenizer-free checkpoint heuristic and 600-token write budget remain
+authoritative. `record_lesson` and `record_event` must not require an irrelevant token field,
+sanitized errors must remain payload-free, and no schema, dependency, storage, authorization,
+retention, or network change is permitted.
+
+Acceptance requires focused durable-MCP and tool-schema regressions plus the complete repository
+gate.
+
+The durable MCP translator now constructs canonical checkpoint content with a zero placeholder
+only when the caller omits `token_estimate`, then replaces it with the existing deterministic
+checkpoint estimate before application-policy validation or persistence. Explicit caller
+estimates remain unchanged. The MCP schema documents the optional fallback and keeps
+`record_lesson` and `record_event` free of an irrelevant requirement.
+
+Focused MCP verification passes (`35 passed`), including a regression that reproduces the
+previously rejected minimal create payload and proves the persisted estimate matches the exact
+deterministic heuristic within the 600-token budget. The complete `npm run check` gate passes
+(`994 passed`, `27 skipped`; PostgreSQL `26 passed`, `1 skipped`) with formatting, lint, strict
+typing for 269 files, schema validation, dependency provenance for 94 registered entries,
+architecture validation for 147 product Python files, and installed-package verification.
+
+### Release 0.1.0a14 — In progress
+
+The user approved deployment of the completed local MCP cold-start and checkpoint
+token-estimation corrections. PyPI returned 404 for the exact `0.1.0a14` metadata endpoint before
+the bump, confirming the immutable version was unused. Current package metadata, lockfile,
+install documentation, artifact verifiers, workflow contracts, and workflow tests target
+`0.1.0a14`; historical `0.1.0a13` publication evidence remains unchanged.
+
+Production publication must use the manual protected `publish-pypi.yml` workflow, transfer the
+single verified wheel/sdist/checksum bundle without rebuilding it, publish through environment
+OIDC, and complete the independent PyPI metadata, provenance, hash, download, install, and smoke
+verification job. No TestPyPI publication, dependency addition, migration, or configuration
+mutation is part of this release.
+
+Focused MCP and release verification passes (`46 passed`), both release workflow YAML files
+parse, and the complete `npm run check` gate passes (`994 passed`, `27 skipped`; PostgreSQL `26
+passed`, `1 skipped`) with formatting, lint, strict typing, schema validation, dependency
+provenance for 94 registered entries, architecture validation for 147 product Python files, and
+installed-package verification. The source-independent `0.1.0a14` artifacts pass the release
+verifier with these local pre-publication SHA-256 digests:
+
+- wheel: `6800a2473dcce35fa6d3ac99aaefd74fafaae8f08f0a2f835b562fb1bb9e8dbb`
+- source distribution: `c7c810583ae63a1de6fe82970fb3a5e61b4349d32c5fdb9debbf00e6beceb38b`
+
+GitHub secret scanning reports no open alerts. Dependabot alerts are disabled and code scanning
+has no analysis for this repository; the locked dependency/provenance, architecture, full-test,
+artifact, and protected-publication gates above remain the available release controls.
