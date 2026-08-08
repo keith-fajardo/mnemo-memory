@@ -10,6 +10,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
+from typing import cast
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
@@ -19,7 +21,10 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     disable_client_hooks,
     enable_client_hooks,
 )
-from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
+from mnemo_memory.connectors.automatic_memory.hook import (
+    AutomaticMemoryHook,
+    PromptContextAttachment,
+)
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
     refresh_registered_project_source,
@@ -66,6 +71,9 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
+)
+from mnemo_memory.packages.telemetry import (
+    LocalAutomaticRouteTelemetryStore,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -679,6 +687,128 @@ def test_prompt_boundary_uses_prompt_transiently_and_attaches_bounded_context(
     assert prompt not in state
 
 
+def test_prompt_route_correlation_observes_only_tool_name_not_payload(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    event_id = UUID("11111111-1111-4111-8111-111111111111")
+    private_marker = "private-tool-payload-7f30"
+    observed: list[tuple[UUID, str]] = []
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, prompt: (
+            PromptContextAttachment(None, event_id) if "parser" in prompt else None
+        ),
+        tool_telemetry_observer=lambda route_event_id, tool_name: observed.append(
+            (route_event_id, tool_name)
+        ),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Where is the parser defined?",
+        }
+    )
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": private_marker},
+            "tool_response": private_marker,
+        }
+    )
+    hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Thanks",
+        }
+    )
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": private_marker},
+            "tool_response": private_marker,
+        }
+    )
+
+    assert observed == [(event_id, "Bash")]
+    state = (data / "automatic-memory-session-state.json").read_text(encoding="utf-8")
+    assert str(event_id) not in state
+    assert private_marker not in state
+
+
+def test_prompt_delivery_observer_receives_only_final_hook_output_counts(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    event_id = UUID("11111111-1111-4111-8111-111111111111")
+    delivered: list[tuple[UUID, int, int, bool]] = []
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "small context", event_id
+        ),
+        delivery_telemetry_observer=lambda *metrics: delivered.append(metrics),
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Which context applies?",
+        }
+    )
+
+    hook_output = cast(dict[str, object], result["hookSpecificOutput"])
+    output = hook_output["additionalContext"]
+    assert isinstance(output, str)
+    assert delivered == [(event_id, len(output), len(output.encode("utf-8")), False)]
+
+
+def test_rejected_prompt_attachment_records_zero_delivery(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    event_id = UUID("11111111-1111-4111-8111-111111111111")
+    delivered: list[tuple[UUID, int, int, bool]] = []
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "x" * 16_001, event_id
+        ),
+        delivery_telemetry_observer=lambda *metrics: delivered.append(metrics),
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Which context applies?",
+        }
+    )
+
+    assert result == {}
+    assert delivered == [(event_id, 0, 0, False)]
+
+
 def test_automatic_prompt_context_selects_scoped_markdown_with_material_token_savings(
     tmp_path: Path,
 ) -> None:
@@ -841,6 +971,128 @@ def test_automatic_prompt_context_attaches_only_bounded_checkpoint_recap(
     assert recap["recap_days"] == 3
     assert recap["task_objective"] == "Finish compact dbt inventory."
     assert packet["episodic_memories"][0]["evidence_references"]
+
+
+def test_automatic_skill_discovery_is_lazy_bounded_and_content_free(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    private_body = "private brainstorming workflow body"
+    prompt = "Help me design a complex feature with unclear requirements."
+    (project / "brainstorm.md").write_text(
+        "---\nmnemo_kind: skill\nmnemo_name: brainstorming\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: design, requirements\nmnemo_clients: codex\n"
+        "mnemo_trust: checked_in\n"
+        "mnemo_when: Use when designing a complex feature with unclear requirements\n---\n"
+        f"# Brainstorming\n{private_body}\n",
+        encoding="utf-8",
+    )
+    cli._refresh_project_knowledge(data, binding)
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, prompt, "codex"
+    )
+
+    assert attached.telemetry_event_id is not None
+    assert attached.context is not None
+    assert attached.context.startswith("MNEMO_SKILL_DISCOVERY_V1 ")
+    assert '"name":"brainstorming"' in attached.context
+    assert '"estimated_body_tokens":' in attached.context
+    assert private_body not in attached.context
+    assert (len(attached.context) + 3) // 4 <= 256
+    telemetry = (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+    assert prompt not in telemetry
+    assert private_body not in telemetry
+    summary = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    routes = cast(dict[str, dict[str, int]], summary["routes"])
+    totals = cast(dict[str, int], summary["totals"])
+    assert routes["skill_discovery"]["events"] == 1
+    assert totals["rendered_estimated_tokens"] > 0
+
+
+def test_exact_lookup_records_zero_attachment_and_unknown_direct_tool_cost(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, "Where is AutomaticMemoryHook defined?", "codex"
+    )
+    assert attached.context is None
+    assert attached.telemetry_event_id is not None
+    cli._record_automatic_route_tool(data, attached.telemetry_event_id, "Bash")
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "memory",
+            "routes",
+            "--project-dir",
+            str(project),
+            "--data-dir",
+            str(data),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["routes"]["direct_lookup"] == {
+        "duplicate_renders": 0,
+        "estimated_total_tokens": 0,
+        "events": 1,
+        "fallbacks": 0,
+        "hits": 0,
+        "maximum_attachment_tokens": 0,
+        "misses": 0,
+        "tool_calls": 1,
+    }
+    assert summary["totals"]["rendered_estimated_tokens"] == 0
+    assert summary["totals"]["tool_calls"] == 1
+    assert summary["totals"]["unmeasured_tool_calls"] == 1
+
+
+def test_structural_miss_records_a_direct_lookup_fallback_without_prompt(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    prompt = "Show the architecture of this repository and its main components."
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, prompt, "codex"
+    )
+
+    assert attached.context is None
+    before_tool = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    before_routes = cast(dict[str, dict[str, int]], before_tool["routes"])
+    assert before_routes["structure"]["fallbacks"] == 0
+    assert attached.telemetry_event_id is not None
+
+    cli._record_automatic_route_tool(data, attached.telemetry_event_id, "Bash")
+    after_tool = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    routes = cast(dict[str, dict[str, int]], after_tool["routes"])
+    assert routes["structure"]["misses"] == 1
+    assert routes["structure"]["fallbacks"] == 1
+    assert prompt not in (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
 
 
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
@@ -1038,7 +1290,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
     received: list[tuple[Path, object, str]] = []
-    prompt_received: list[tuple[Path, object, str]] = []
+    prompt_received: list[tuple[Path, object, str, str]] = []
     refreshed: list[tuple[Path, object]] = []
     counted: list[tuple[Path, object]] = []
 
@@ -1046,9 +1298,9 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         received.append((directory, scope, client))
         return '{"packet":"saved"}'
 
-    def load_prompt(directory: Path, scope: object, prompt: str) -> str:
-        prompt_received.append((directory, scope, prompt))
-        return '{"packet":"relevant"}'
+    def load_prompt(directory: Path, scope: object, prompt: str, client: str) -> object:
+        prompt_received.append((directory, scope, prompt, client))
+        return PromptContextAttachment(f"rendered-for-{client}:relevant")
 
     rendered: list[tuple[str | None, str]] = []
 
@@ -1063,7 +1315,7 @@ def test_cli_hook_wires_the_bounded_context_attachment(
     )
     monkeypatch.setattr(
         cli,
-        "_automatic_prompt_context_attachment",
+        "_automatic_prompt_context_for_hook",
         load_prompt,
     )
     monkeypatch.setattr(cli, "_render_automatic_context_attachment", render)
@@ -1114,11 +1366,12 @@ def test_cli_hook_wires_the_bounded_context_attachment(
         ),
     )
     assert prompt_result.exit_code == 0, prompt_result.output
-    assert prompt_received == [(data.resolve(), binding.checkpoint_scope, "finance reconciliation")]
+    assert prompt_received == [
+        (data.resolve(), binding.checkpoint_scope, "finance reconciliation", "codex")
+    ]
     assert "relevant" in prompt_result.output
     assert rendered == [
         ('{"packet":"saved"}', "codex"),
-        ('{"packet":"relevant"}', "codex"),
     ]
 
 

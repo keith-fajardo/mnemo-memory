@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -417,3 +418,36 @@ def test_mcp_lists_metadata_gets_exact_skill_and_passes_context_selection() -> N
     assert len(packet["skills_and_procedures"]) == 1  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
         port.list_skills({"client": "any"})
+
+
+def test_skill_discovery_uses_bounded_trigger_metadata_without_loading_body() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    private_body = "private workflow body that must remain lazy"
+    skill = _revision(
+        _scope(),
+        "skills/brainstorm.md",
+        "---\nmnemo_kind: skill\nmnemo_name: brainstorming\nmnemo_version: 1.0.0\n"
+        "mnemo_tags: design, requirements\nmnemo_clients: codex, claude-code\n"
+        "mnemo_trust: checked_in\n"
+        "mnemo_when: Use when designing a complex feature with unclear requirements\n---\n"
+        f"# Brainstorming\n{private_body}",
+    )
+    repository.apply_sync(_scope(), (skill,), ())
+    registry = KnowledgeDocumentSkillRegistry(repository)
+
+    candidates = registry.discover_current_skills(
+        _scope(),
+        "Help me design a complex feature; the requirements are unclear.",
+        "codex",
+    )
+
+    assert len(candidates) == 1
+    metadata = candidates[0].to_dict()
+    assert metadata["name"] == "brainstorming"
+    assert metadata["when_to_use"] == (
+        "Use when designing a complex feature with unclear requirements"
+    )
+    assert cast(int, metadata["estimated_body_tokens"]) > 0
+    assert "sections" not in metadata
+    assert private_body not in str(metadata)
+    assert registry.discover_current_skills(_scope(), "Where is Foo defined?", "codex") == ()

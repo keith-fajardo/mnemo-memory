@@ -951,6 +951,48 @@ therefore proves only that the versioned project remains clean at the same commi
 responsible for explicitly checkpointing important external tool outcomes. A future broader
 side-effect classifier requires a separate threat review and cannot rely on model inference.
 
+### Automatic route telemetry and lazy skill discovery
+
+**Scenario:** Automatic routing persists a prompt, path, command, tool result, or retrieved payload;
+an untrusted skill description becomes an instruction; corrupt or unbounded metrics become an
+activity log; or an estimated token count is presented as provider-billed usage. Aggressive skill
+matching can also spend more context than it saves.
+
+**Required controls:** Route selection uses a closed deterministic policy over one transient prompt
+of at most 512 characters. Durable telemetry contains only the explicit task scope, opaque event
+ID, supported client, closed route/outcome and bounded reason codes, hit/miss/fallback state,
+canonical item tokens, final rendered character/byte/estimated-token counts, latency, candidate
+count, duplicate-render flag, and closed downstream tool categories. It stores no prompt, path,
+skill body, source text, command text, tool input, tool output, environment, or model trace. The
+hook derives final counts from the complete emitted `additionalContext`, including its wrapper,
+without passing that content to telemetry; rejected attachments finalize at zero delivered bytes.
+It maps only the already-visible tool name to a closed category and never reads the tool payload.
+Unmeasured downstream tool calls remain explicitly unmeasured rather than contributing a false
+zero-token claim.
+
+The local telemetry snapshot is mode `0600` inside a mode-`0700` directory, uses a process lock and
+atomic replacement, keeps at most 256 events, rejects symlinks and oversized or malformed state,
+and replaces corrupt regular state only when a new valid event is recorded. Aggregates are filtered
+to the exact registered task scope before display. Automatic skill discovery reads only checked-in,
+client-compatible metadata, limits `mnemo_when` to 500 normalized characters, requires deterministic
+term overlap, returns at most three candidates, and caps the rendered catalog at 256 estimated
+tokens. Candidate descriptions are labelled untrusted discovery data; the exact skill body is not
+attached until the agent explicitly calls `get_skill`.
+
+**Verification:** Route-policy tests distinguish direct lookup, prior memory, knowledge, structure,
+and skill discovery. Hook and registry tests prove that skill bodies, prompts, and private markers
+do not enter candidate output or telemetry; a structural miss records a fallback only after a
+direct-inspection tool is observed; direct-tool observation records a category without command or
+result content; bounded retention, permissions, corruption recovery, aggregate inspection, render
+accounting, and client compatibility are covered.
+
+**Residual risk:** Term overlap can miss synonyms or suggest an irrelevant skill, and the coding
+model may ignore a valid candidate. Rendered token counts use Mnemo's character estimate, not the
+client tokenizer or provider bill. Since tool output remains unread, total downstream tokens are
+unknown unless a future client supplies an independently trusted content-free usage metric. Live
+comparisons must therefore report unknown calls and use controlled client-reported baselines before
+claiming net savings. Telemetry does not silently tune routing policy.
+
 ### Poisoned memories
 
 **Scenario:** Incorrect assistant claims, malicious source content, repeated low-trust assertions,

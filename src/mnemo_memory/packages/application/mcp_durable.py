@@ -814,6 +814,8 @@ def _skill_metadata(skill: ProjectSkill) -> dict[str, object]:
         "source_digest": skill.source_digest,
         "trust": skill.trust.value,
         "version": skill.version,
+        "when_to_use": skill.when_to_use,
+        "estimated_body_tokens": skill.estimated_body_tokens,
     }
 
 

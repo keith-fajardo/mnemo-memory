@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a9
+uv tool install mnemo-unified-context==0.1.0a10
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -682,6 +682,7 @@ mnemo_version: 1.2.0
 mnemo_tags: dbt, reconciliation
 mnemo_clients: codex, claude-code
 mnemo_trust: checked_in
+mnemo_when: Use when reviewing a dbt reconciliation change before approval
 ---
 
 # Reconciliation review
@@ -701,12 +702,52 @@ mnemo_skill_tags: reconciliation, dbt
 ---
 ```
 
+The optional `mnemo_when` value is discovery metadata: describe only the conditions under which
+the skill applies, not its workflow. At a prompt boundary Mnemo compares bounded transient terms
+with that description and the explicit tags. It can attach up to three compatible candidate
+descriptions in at most 256 estimated tokens. Candidate metadata remains untrusted data and never
+contains the skill body. The agent must select one candidate and call `get_skill` with its exact
+name and client before the checked-in body enters model context. This is deterministic local
+shortlisting, not a model classifier, and a non-match loads nothing.
+
 The normal repository Markdown sync imports these files without modifying them. `list_skills`
-returns compatible metadata; `get_skill` returns one exact current revision with source digest;
-and `get_context` accepts either `skill_tags` plus `skill_client`, or `skill_agent_name` plus
-`skill_client`. Skill Markdown remains untrusted evidence. Mnemo loads only applicable skills,
-retains predecessor revisions after changes, and keeps mandatory project procedures ahead of
-skills under budget pressure.
+returns compatible metadata including `mnemo_when` and the estimated body size; `get_skill`
+returns one exact current revision with source digest; and `get_context` accepts either
+`skill_tags` plus `skill_client`, or `skill_agent_name` plus `skill_client`. Skill Markdown remains
+untrusted evidence. Mnemo attaches only explicitly selected skill bodies, retains predecessor
+revisions after changes, and keeps mandatory project procedures ahead of skills under budget
+pressure.
+
+#### Inspect automatic route cost and outcomes
+
+Automatic prompt context now chooses one bounded route before retrieval:
+
+- an exact file or symbol lookup recommends direct inspection and attaches no Mnemo context;
+- recap and prior-session language selects saved checkpoint history;
+- architecture, dependency, impact, and dbt questions select saved structure;
+- a matching `mnemo_when` description selects only lazy skill metadata;
+- other domain questions probe scoped project memory and attach nothing on a miss;
+- trivial greetings attach nothing.
+
+Inspect the private aggregate for the enabled project with:
+
+```bash
+mnemo memory routes
+```
+
+The JSON report groups route events, hits, misses, fallbacks, latency, canonical item tokens, final
+rendered bytes, rendered estimated tokens, and downstream tool-call counts. Final render sizes cover
+the complete Mnemo `additionalContext` emitted by the hook, including its wrapper; a rejected
+attachment records zero delivered bytes. The store keeps at most 256 content-free events in the
+private Mnemo data directory. It records scope identifiers, fixed route/reason codes, counts, and
+sizes; it never records the prompt, candidate body, source text, path, command text, tool input, or
+tool output.
+
+`rendered_estimated_tokens` uses Mnemo's deterministic character estimate and is not provider
+billing data. Because the hook does not inspect tool output, `unmeasured_tool_calls` is especially
+important: a direct lookup can show zero Mnemo attachment tokens and one downstream call, but
+Mnemo does not claim that the downstream result was free. Use controlled client-reported usage
+tests when comparing net savings between direct inspection and structural context.
 
 ### Optional: add one Obsidian vault
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from mnemo_memory.packages.domain import (
     KnowledgeDocumentSourceKind,
     MemoryScope,
@@ -23,6 +26,34 @@ _TAGS = "mnemo_tags"
 _CLIENTS = "mnemo_clients"
 _CLIENT = "mnemo_client"
 _SKILL_TAGS = "mnemo_skill_tags"
+_WHEN = "mnemo_when"
+_DISCOVERY_TERMS = re.compile(r"[a-z0-9]+")
+_DISCOVERY_STOP_WORDS = frozenset(
+    {"a", "an", "and", "for", "in", "is", "of", "on", "the", "to", "use", "when", "with"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SkillDiscoveryCandidate:
+    """Bounded discovery metadata; never the skill body."""
+
+    skill: ProjectSkill
+    client: str
+    score: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "applicability_tags": list(self.skill.applicability_tags),
+            "client": self.client,
+            "estimated_body_tokens": self.skill.estimated_body_tokens,
+            "name": self.skill.name,
+            "revision_id": str(self.skill.revision.revision_id),
+            "source_digest": self.skill.source_digest,
+            "version": self.skill.version,
+            "when_to_use": self.skill.when_to_use,
+        }
+
+
 _TRUST = "mnemo_trust"
 
 
@@ -72,6 +103,42 @@ class KnowledgeDocumentSkillRegistry:
             if expected_tags.intersection(skill.applicability_tags)
         )[: _require_limit(maximum_skills)]
 
+    def discover_current_skills(
+        self,
+        scope: MemoryScope,
+        prompt: str,
+        client: str,
+        maximum_skills: int = 3,
+    ) -> tuple[SkillDiscoveryCandidate, ...]:
+        """Return metadata-only candidates using transient deterministic term overlap."""
+
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
+            raise ValueError("skill discovery prompt is invalid")
+        _require_limit(maximum_skills)
+        if maximum_skills > 3:
+            raise ValueError("automatic skill discovery is limited to three candidates")
+        compatible_client = _require_supported_client(client)
+        prompt_terms = _discovery_terms(prompt)
+        candidates: list[SkillDiscoveryCandidate] = []
+        for skill in self.list_current_skills(scope, compatible_client, 32):
+            description_terms = _discovery_terms(skill.when_to_use)
+            tag_hits = len(prompt_terms.intersection(skill.applicability_tags))
+            description_hits = len(prompt_terms.intersection(description_terms))
+            if tag_hits == 0 and description_hits < 2:
+                continue
+            candidates.append(
+                SkillDiscoveryCandidate(
+                    skill,
+                    compatible_client,
+                    tag_hits * 4 + description_hits,
+                )
+            )
+        return tuple(
+            sorted(candidates, key=lambda candidate: (-candidate.score, candidate.skill.name))[
+                :maximum_skills
+            ]
+        )
+
     def get_current_agent(self, scope: MemoryScope, name: str, client: str) -> ProjectAgent | None:
         project_scope = _require_project_scope(scope)
         expected_name = normalize_registry_name(name)
@@ -105,6 +172,7 @@ class KnowledgeDocumentSkillRegistry:
                         _parse_tags(_required(values, _TAGS)),
                         normalize_skill_clients(_parse_csv(_required(values, _CLIENTS))),
                         ProjectSkillTrust(_required(values, _TRUST)),
+                        values.get(_WHEN, ""),
                     )
                 )
             except (TypeError, ValueError):
@@ -180,3 +248,7 @@ def _parse_csv(value: str) -> tuple[str, ...]:
 
 def _parse_tags(value: str) -> tuple[str, ...]:
     return normalize_procedure_tags(_parse_csv(value))
+
+
+def _discovery_terms(value: str) -> frozenset[str]:
+    return frozenset(_DISCOVERY_TERMS.findall(value.casefold())).difference(_DISCOVERY_STOP_WORDS)

@@ -4283,3 +4283,91 @@ installed-package verification. Workflow YAML parsing and the final diff whitesp
 The separately observed invalid PreCompact response and proposed token analytics remain outside
 this bounded release. Publication still requires the committed revision to be pushed and the
 protected production workflow to succeed.
+
+### Cost-aware automatic context routing and meta telemetry — Complete
+
+A demonstrated investigation asked Mnemo for structural awareness, received no matching source
+items, and then succeeded with a narrow exact search. The client had no prior signal for choosing
+the lower-cost route and Mnemo retained no content-free outcome showing that the structural route
+missed. Separately, checked-in skills are retrieved lazily only after exact tags are supplied, so
+their applicability metadata cannot yet help an agent decide that a workflow applies.
+
+This bounded issue must make automatic context selection choose the smallest applicable route
+among no attachment, prior task memory, project knowledge, saved structure, and lazy checked-in
+skill discovery. Selection must remain deterministic, authorization-first, client-compatible,
+budgeted, and fail-open. It must not call a model, proxy or alter the agent's model endpoint, store
+the prompt, source text, command text, tool input/output, or secrets, or treat model output as
+authority. Mandatory checked-in procedures remain protected and deterministic.
+
+Acceptance requires privacy-safe scenario telemetry for the chosen route, reason, hit or miss,
+fallback signal when observable, final rendered byte and estimated-token cost, canonical item
+tokens, duplicate-render status, and bounded latency. The user must be able to inspect aggregate
+route outcomes through an existing local CLI or dashboard surface. Focused tests must distinguish
+an exact low-cost lookup from architecture/impact, prior-memory, and skill-trigger scenarios;
+prove lazy skill bodies remain unattached until selected; prove telemetry contains no prompt or
+retrieved payload; and cover bounded retention and corrupted-state recovery. The threat model,
+user guidance, and complete repository gate must be updated. No new dependency, schema migration,
+MCP tool, network request, or team behavior is approved by this issue.
+
+Automatic prompt retrieval now makes one deterministic route decision before building context. A
+trivial prompt attaches nothing; an exact file, symbol, or simple file-count question recommends
+direct inspection with a zero-token Mnemo attachment ceiling; recap language selects prior task
+memory; architecture, impact, dependency, and dbt language selects saved structure; and remaining
+domain questions probe scoped knowledge. Existing dbt inventory and recap semantics remain exact.
+Route budgets are fixed inputs to the decision rather than learned from noisy telemetry, and every
+failure remains fail-open.
+
+Checked-in skills may now declare a normalized `mnemo_when` discovery description. Mnemo combines
+that metadata with existing applicability tags and client compatibility using bounded local term
+overlap. It returns at most three metadata-only candidates inside a 256-estimated-token catalog;
+the body remains outside model context until the agent explicitly requests the exact skill through
+`get_skill`. Candidate metadata is labelled untrusted and includes immutable revision/digest
+identity plus an estimated body size.
+
+The standard-library-only telemetry component stores at most 256 private content-free events with
+explicit task scope, fixed route/reason/outcome values, planned attachment ceiling, canonical
+tokens, final rendered characters/bytes/estimated tokens, latency, duplicate status, fallback,
+and closed downstream tool categories. The hook never reads command text, tool input, or tool
+output; downstream calls without a trusted metric remain explicitly unmeasured. Writes use a
+private process lock, atomic replacement, mode `0600`, symlink rejection, bounded reads, and safe
+corrupt-state recovery. The hook replaces preliminary render counts with the complete emitted
+`additionalContext` size, including Mnemo's wrapper, and resets rejected attachments to zero.
+`mnemo memory routes` exposes only exact-scope aggregates.
+
+Focused routing, automatic-memory, and registry verification passes (`82 passed`), including
+direct-versus-dbt count selection, structural miss/fallback, lazy-body privacy,
+prompt/tool-payload exclusion, bounded retention, permissions, corruption recovery, final-hook
+render accounting, recap compatibility, and CLI inspection. The complete `npm run check` gate
+passes (`986 passed`, `27 skipped`; PostgreSQL `26 passed`, `1 skipped`) with
+formatting and strict typing for 269 files, schema validation, dependency/provenance validation for
+94 registered entries, architecture validation for 147 product Python files, and installed-package
+verification. No dependency, migration, MCP tool, model call, endpoint, network, authorization,
+retention-policy, or team behavior changed.
+
+### PyPI 0.1.0a10 cost-aware routing release candidate — In Progress
+
+This explicitly approved release packages only the completed cost-aware automatic context routing,
+lazy skill-discovery metadata, and private route-cost telemetry issue as the next immutable
+prerelease. Package metadata, lockfile, installation guidance, workflow artifact names, release
+verifiers, and release tests must agree on `0.1.0a10`. Publication remains restricted to the
+protected production PyPI OIDC workflow, which must rebuild and verify the committed revision,
+publish only its checksum-bound wheel and source distribution, and verify the live PyPI metadata,
+provenance, hashes, and installed wheel after upload.
+
+No additional product behavior, dependency, migration, MCP tool, model call, endpoint, network
+integration, authorization rule, retention policy, or team behavior is approved by this release
+issue. Completion requires the focused release suite, independently built artifact verification,
+the complete repository gate, workflow YAML validation, a clean committed and pushed revision,
+successful protected publication, and live production verification.
+
+Pre-publication verification passes: the focused routing, automatic-memory, skill-registry,
+workflow, packaging, and release-verifier suite reports `93 passed`; both workflow YAML files parse;
+source-root and installed-package verification pass; and the complete `npm run check` gate reports
+`986 passed`, `27 skipped` with PostgreSQL `26 passed`, `1 skipped`. Independently built
+source-independent artifacts pass the release verifier with these SHA-256 digests:
+
+- wheel: `027e356382a38233a3bd2042135822988cd209cc7b19421ac3ca86543652a330`
+- source distribution: `ad9eeab45b2a82e7a643c0a81e271e3c6160990511230d8943911de1444fa27f`
+
+The protected production workflow, live registry verification, and final clean release state remain
+pending.

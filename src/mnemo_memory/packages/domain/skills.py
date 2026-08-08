@@ -77,6 +77,7 @@ class ProjectSkill:
     applicability_tags: tuple[str, ...]
     compatible_clients: tuple[str, ...]
     trust: ProjectSkillTrust
+    when_to_use: str = ""
 
     def __post_init__(self) -> None:
         if self.revision.document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
@@ -91,10 +92,21 @@ class ProjectSkill:
         )
         if self.trust is not ProjectSkillTrust.CHECKED_IN:
             raise ValueError("project skill trust is invalid")
+        if not isinstance(self.when_to_use, str):
+            raise TypeError("project skill discovery description is invalid")
+        description = " ".join(self.when_to_use.split())
+        if len(description) > 500 or any(ord(character) < 32 for character in description):
+            raise ValueError("project skill discovery description is invalid")
+        object.__setattr__(self, "when_to_use", description)
 
     @property
     def source_digest(self) -> str:
         return self.revision.document.content_digest
+
+    @property
+    def estimated_body_tokens(self) -> int:
+        characters = sum(len(section.content) for section in self.revision.document.sections)
+        return (characters + 3) // 4
 
 
 @dataclass(frozen=True, slots=True)

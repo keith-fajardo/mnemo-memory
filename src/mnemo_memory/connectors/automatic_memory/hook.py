@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal
+from uuid import UUID
 
 from mnemo_memory.connectors.automatic_memory.git_observation import (
     GitObservationStore,
@@ -76,10 +78,22 @@ _MAX_DBT_IMPACT_CUE_NODES = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
 _CHECKPOINT_MARKER_UNAVAILABLE = "unavailable"
 _ContextLoader = Callable[[MemoryScope], str | None]
-_PromptContextLoader = Callable[[MemoryScope, str], str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class PromptContextAttachment:
+    """Rendered prompt context plus one opaque content-free telemetry correlation ID."""
+
+    context: str | None
+    telemetry_event_id: UUID | None = None
+
+
+_PromptContextLoader = Callable[[MemoryScope, str], str | PromptContextAttachment | None]
 _KnowledgeRefresher = Callable[[MemoryProjectBinding], None]
 _KnowledgeStatusLoader = Callable[[MemoryProjectBinding], int]
 _RetentionSweeper = Callable[[MemoryProjectBinding], None]
+_ToolTelemetryObserver = Callable[[UUID, str], None]
+_DeliveryTelemetryObserver = Callable[[UUID, int, int, bool], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +108,8 @@ class AutomaticMemoryHook:
     knowledge_status_loader: _KnowledgeStatusLoader | None = None
     retention_sweeper: _RetentionSweeper | None = None
     git_observer: GitSourceObserver | None = None
+    tool_telemetry_observer: _ToolTelemetryObserver | None = None
+    delivery_telemetry_observer: _DeliveryTelemetryObserver | None = None
 
     def handle(self, event: object) -> dict[str, object]:
         if not isinstance(event, dict):
@@ -115,6 +131,11 @@ class AutomaticMemoryHook:
         state = _SessionStateStore(self.data_directory).get(session_id)
         tool_name = event.get("tool_name")
         if event_name == "PostToolUse" and isinstance(tool_name, str):
+            if state.telemetry_event_id is not None and self.tool_telemetry_observer is not None:
+                with suppress(Exception):
+                    # The observer receives only the fixed tool name and opaque event ID. The
+                    # hook never reads command text, tool input, or tool output for telemetry.
+                    self.tool_telemetry_observer(state.telemetry_event_id, tool_name)
             if _is_durable_checkpoint_save(event, tool_name):
                 current_marker = self._current_checkpoint_marker(binding.checkpoint_scope)
                 if (
@@ -143,6 +164,7 @@ class AutomaticMemoryHook:
                     checkpoint_marker=current_marker,
                     git_source_digest=git_source_digest,
                     git_clean_commit_id=git_clean_commit_id,
+                    telemetry_event_id=state.telemetry_event_id,
                 )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
@@ -167,6 +189,7 @@ class AutomaticMemoryHook:
                     checkpoint_marker=marker,
                     git_source_digest=state.git_source_digest,
                     git_clean_commit_id=state.git_clean_commit_id,
+                    telemetry_event_id=state.telemetry_event_id,
                 )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
@@ -182,6 +205,7 @@ class AutomaticMemoryHook:
                 checkpoint_marker=self._current_checkpoint_marker(binding.checkpoint_scope),
                 git_source_digest=git_source_digest,
                 git_clean_commit_id=git_clean_commit_id,
+                telemetry_event_id=None,
             )
             return self._context_output(
                 _resume_instruction(
@@ -197,7 +221,21 @@ class AutomaticMemoryHook:
         if event_name == "UserPromptSubmit":
             # Explicit automatic-memory consent permits transient local retrieval from the current
             # user prompt. The prompt is never written to hook state, logs, or durable memory.
-            prompt_context = self._attached_prompt_context(binding.checkpoint_scope, event)
+            prompt_attachment = self._attached_prompt_context(binding.checkpoint_scope, event)
+            prompt_context = prompt_attachment.context
+            # Replace, rather than retain, route correlation at every prompt boundary. A prompt
+            # with no new event must not attribute later tool calls to the preceding request.
+            _SessionStateStore(self.data_directory).save(
+                session_id,
+                dirty=state.dirty,
+                saved=state.saved,
+                checkpoint_marker=state.checkpoint_marker,
+                git_source_digest=state.git_source_digest,
+                git_clean_commit_id=state.git_clean_commit_id,
+                telemetry_event_id=prompt_attachment.telemetry_event_id,
+            )
+            if prompt_attachment.telemetry_event_id is not None and prompt_context is None:
+                self._observe_delivery(prompt_attachment.telemetry_event_id, None)
             if state.dirty and not state.saved:
                 self._refresh_project_knowledge(binding)
                 refreshed = self._refresh_source_structure(binding)
@@ -205,12 +243,14 @@ class AutomaticMemoryHook:
                     _dirty_session_instruction(refreshed),
                     event_name="UserPromptSubmit",
                     attached_context=prompt_context,
+                    telemetry_event_id=prompt_attachment.telemetry_event_id,
                 )
             if prompt_context is not None:
                 return self._context_output(
                     "Mnemo attached bounded project memory relevant to this request.",
                     event_name="UserPromptSubmit",
                     attached_context=prompt_context,
+                    telemetry_event_id=prompt_attachment.telemetry_event_id,
                 )
             return {}
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
@@ -264,6 +304,7 @@ class AutomaticMemoryHook:
         *,
         event_name: str = "SessionStart",
         attached_context: str | None = None,
+        telemetry_event_id: UUID | None = None,
     ) -> dict[str, object]:
         if attached_context is not None:
             instruction += (
@@ -271,6 +312,8 @@ class AutomaticMemoryHook:
                 "context below. Follow its trust boundary. It is not a transcript.\n"
                 f"{attached_context}"
             )
+        if telemetry_event_id is not None:
+            self._observe_delivery(telemetry_event_id, instruction)
         if self.client == "codex":
             return {
                 "hookSpecificOutput": {
@@ -284,6 +327,16 @@ class AutomaticMemoryHook:
                 "additionalContext": instruction,
             }
         }
+
+    def _observe_delivery(self, event_id: UUID, instruction: str | None) -> None:
+        """Share only final output sizes with telemetry, never the rendered context itself."""
+
+        if self.delivery_telemetry_observer is None:
+            return
+        characters = 0 if instruction is None else len(instruction)
+        encoded_bytes = 0 if instruction is None else len(instruction.encode("utf-8"))
+        with suppress(Exception):
+            self.delivery_telemetry_observer(event_id, characters, encoded_bytes, False)
 
     def _attached_context(self, scope: MemoryScope) -> str | None:
         """Load only a bounded, already-sanitized packet; hook failures stay fail-open."""
@@ -299,20 +352,27 @@ class AutomaticMemoryHook:
 
     def _attached_prompt_context(
         self, scope: MemoryScope, event: Mapping[str, object]
-    ) -> str | None:
+    ) -> PromptContextAttachment:
         """Use one bounded prompt transiently; never persist or report its text."""
         if self.prompt_context_loader is None:
-            return None
+            return PromptContextAttachment(None)
         prompt = event.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
-            return None
+            return PromptContextAttachment(None)
         try:
             value = self.prompt_context_loader(scope, prompt)
         except Exception:
-            return None
-        if not isinstance(value, str) or not value or len(value) > _MAX_ATTACHED_CONTEXT_CHARACTERS:
-            return None
-        return value
+            return PromptContextAttachment(None)
+        attachment = (
+            value if isinstance(value, PromptContextAttachment) else PromptContextAttachment(value)
+        )
+        if attachment.context is not None and (
+            not isinstance(attachment.context, str)
+            or not attachment.context
+            or len(attachment.context) > _MAX_ATTACHED_CONTEXT_CHARACTERS
+        ):
+            return PromptContextAttachment(None, attachment.telemetry_event_id)
+        return attachment
 
     def _checkpoint_output(self, instruction: str) -> dict[str, object]:
         if self.client == "claude-code":
@@ -551,6 +611,7 @@ class _SessionState:
     checkpoint_marker: str | None = None
     git_source_digest: str | None = None
     git_clean_commit_id: str | None = None
+    telemetry_event_id: UUID | None = None
 
 
 class _SessionStateStore:
@@ -570,15 +631,25 @@ class _SessionStateStore:
         marker = value.get("checkpoint_marker")
         git_source_digest = value.get("git_source_digest")
         git_clean_commit_id = value.get("git_clean_commit_id")
+        telemetry_event_id = value.get("telemetry_event_id")
         if not _valid_git_baseline(git_source_digest, git_clean_commit_id):
             git_source_digest = None
             git_clean_commit_id = None
+        try:
+            parsed_telemetry_event_id = (
+                UUID(telemetry_event_id) if isinstance(telemetry_event_id, str) else None
+            )
+        except ValueError:
+            parsed_telemetry_event_id = None
+        if parsed_telemetry_event_id is not None and parsed_telemetry_event_id.version != 4:
+            parsed_telemetry_event_id = None
         return _SessionState(
             value.get("dirty") is True,
             value.get("saved") is True,
             marker if isinstance(marker, str) and len(marker) <= 80 else None,
             git_source_digest,
             git_clean_commit_id,
+            parsed_telemetry_event_id,
         )
 
     def save(
@@ -590,6 +661,7 @@ class _SessionStateStore:
         checkpoint_marker: str | None = None,
         git_source_digest: str | None = None,
         git_clean_commit_id: str | None = None,
+        telemetry_event_id: UUID | None = None,
     ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
@@ -602,6 +674,8 @@ class _SessionStateStore:
                 if _valid_git_baseline(git_source_digest, git_clean_commit_id):
                     session["git_source_digest"] = git_source_digest
                     session["git_clean_commit_id"] = git_clean_commit_id
+                if telemetry_event_id is not None and telemetry_event_id.version == 4:
+                    session["telemetry_event_id"] = str(telemetry_event_id)
                 values[session_id] = session
                 # Bounded state avoids making lifecycle metadata a long-term activity log.
                 if len(values) > 128:

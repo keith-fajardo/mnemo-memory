@@ -98,7 +98,7 @@ it cannot replace that environment-specific capacity test.
 The optional runtime is installed with:
 
 ```bash
-uv tool install "mnemo-unified-context[team]==0.1.0a9"
+uv tool install "mnemo-unified-context[team]==0.1.0a10"
 ```
 
 Do not start or expose it until the database, OAuth, secret files, quotas, proxy, operations checks,

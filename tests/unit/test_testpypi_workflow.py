@@ -3,8 +3,8 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).parents[2]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/publish-testpypi.yml"
 RELEASE_FILES = {
-    "mnemo_unified_context-0.1.0a9-py3-none-any.whl",
-    "mnemo_unified_context-0.1.0a9.tar.gz",
+    "mnemo_unified_context-0.1.0a10-py3-none-any.whl",
+    "mnemo_unified_context-0.1.0a10.tar.gz",
     "SHA256SUMS",
 }
 
@@ -44,13 +44,13 @@ def test_testpypi_workflow_uses_verified_explicit_artifacts_and_pypi_dependencie
     assert "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b" in value
     assert "packages-dir: publish-release/" in value
     assert "attestations: true" in value
-    assert "cp release/mnemo_unified_context-0.1.0a9-py3-none-any.whl publish-release/" in value
-    assert "cp release/mnemo_unified_context-0.1.0a9.tar.gz publish-release/" in value
+    assert "cp release/mnemo_unified_context-0.1.0a10-py3-none-any.whl publish-release/" in value
+    assert "cp release/mnemo_unified_context-0.1.0a10.tar.gz publish-release/" in value
     assert "uv publish build-output" not in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "test.pypi.org/simple" not in value
     assert "--index-url https://pypi.org/simple/" in value
-    assert "downloaded-release/mnemo_unified_context-0.1.0a9-py3-none-any.whl" in value
+    assert "downloaded-release/mnemo_unified_context-0.1.0a10-py3-none-any.whl" in value
     assert 'python -m pip install "uv==' not in value
     assert "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b" in value
     assert "\n          ! rg " not in value
