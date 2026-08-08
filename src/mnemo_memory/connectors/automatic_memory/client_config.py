@@ -10,7 +10,7 @@ from tempfile import NamedTemporaryFile
 from typing import Literal
 
 ClientName = Literal["codex", "claude-code"]
-_HOOK_TIMEOUT_SECONDS = 30
+_HOOK_TIMEOUT_SECONDS = 300
 
 
 class AutomaticMemoryClientConfigError(ValueError):

@@ -970,6 +970,13 @@ It maps only the already-visible tool name to a closed category and never reads 
 Unmeasured downstream tool calls remain explicitly unmeasured rather than contributing a false
 zero-token claim.
 
+Local Mnemo operational intent is a separate fixed route with no database retrieval or model call.
+Its bounded recommendation contains only static command names and policy text, never the prompt,
+local paths, command output, configuration content, or hook payload. It may tell the agent to
+suggest an `AGENTS.md` fallback when equivalent guidance is absent or hooks failed, but neither the
+hook nor Mnemo mutates that repository file. Mnemo-owned client hook entries use a 300-second
+deadline and only exact owned handlers are upgraded; unrelated handlers and matchers are preserved.
+
 The local telemetry snapshot is mode `0600` inside a mode-`0700` directory, uses a process lock and
 atomic replacement, keeps at most 256 events, rejects symlinks and oversized or malformed state,
 and replaces corrupt regular state only when a new valid event is recorded. Aggregates are filtered
@@ -979,8 +986,9 @@ term overlap, returns at most three candidates, and caps the rendered catalog at
 tokens. Candidate descriptions are labelled untrusted discovery data; the exact skill body is not
 attached until the agent explicitly calls `get_skill`.
 
-**Verification:** Route-policy tests distinguish direct lookup, prior memory, knowledge, structure,
-and skill discovery. Hook and registry tests prove that skill bodies, prompts, and private markers
+**Verification:** Route-policy tests distinguish direct lookup, local diagnostics, prior memory,
+knowledge, structure, and skill discovery. Hook and registry tests prove that skill bodies,
+prompts, and private markers
 do not enter candidate output or telemetry; a structural miss records a fallback only after a
 direct-inspection tool is observed; direct-tool observation records a category without command or
 result content; bounded retention, permissions, corruption recovery, aggregate inspection, render
@@ -992,6 +1000,11 @@ client tokenizer or provider bill. Since tool output remains unread, total downs
 unknown unless a future client supplies an independently trusted content-free usage metric. Live
 comparisons must therefore report unknown calls and use controlled client-reported baselines before
 claiming net savings. Telemetry does not silently tune routing policy.
+
+The 300-second hook deadline mitigates false timeouts but does not remove synchronous project
+refresh work from `SessionStart`, dirty `Stop`, or `PreCompact`; a large project can therefore still
+delay a lifecycle response. Moving refresh off the hook critical path requires a separate bounded
+architecture issue.
 
 ### Poisoned memories
 

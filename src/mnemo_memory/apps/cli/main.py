@@ -396,7 +396,11 @@ def _automatic_prompt_context_result(
 
     started = monotonic()
     preliminary = choose_automatic_context_route(prompt)
-    if preliminary.route in {AutomaticContextRoute.NONE, AutomaticContextRoute.DIRECT_LOOKUP}:
+    if preliminary.route in {
+        AutomaticContextRoute.NONE,
+        AutomaticContextRoute.DIRECT_LOOKUP,
+        AutomaticContextRoute.LOCAL_DIAGNOSTICS,
+    }:
         return _AutomaticPromptContextResult(preliminary, None, (), _elapsed_milliseconds(started))
     decision = preliminary
     candidates: tuple[SkillDiscoveryCandidate, ...] = ()
@@ -586,12 +590,14 @@ def _automatic_prompt_context_for_hook(
         rendered = render_context_packet(result.packet, client)
     elif result.skill_candidates:
         rendered = _render_skill_discovery(result.skill_candidates, client)
+    elif result.decision.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS:
+        rendered = _render_local_diagnostics_guidance(client)
 
     if result.failed:
         outcome = AutomaticRouteOutcome.ERROR
     elif result.skill_candidates:
         outcome = AutomaticRouteOutcome.CANDIDATE
-    elif result.packet is not None:
+    elif result.packet is not None or rendered is not None:
         outcome = AutomaticRouteOutcome.HIT
     elif result.decision.route in {
         AutomaticContextRoute.NONE,
@@ -640,6 +646,32 @@ def _render_skill_discovery(
             break
         selected = proposed
     return _skill_discovery_line(selected, client) if selected else None
+
+
+def _render_local_diagnostics_guidance(client: ClientName) -> str:
+    """Return bounded local-first guidance plus an optional durable repository fallback."""
+
+    return "MNEMO_LOCAL_DIAGNOSTICS_V1 " + json.dumps(
+        {
+            "agents_md_policy": (
+                "Suggest the scoped AGENTS.md rule when equivalent guidance is absent or Mnemo "
+                "hooks have failed. Never edit the repository automatically."
+            ),
+            "agents_md_suggestion": (
+                "For questions about the active Mnemo version, configuration, memory status, or "
+                "hook failures, inspect the local installation with `mnemo --version`, `mnemo "
+                "status`, `mnemo recap`, and the configured hook command. Do not invoke OpenAI "
+                "documentation skills or web search unless the user explicitly asks."
+            ),
+            "client": client,
+            "guidance": (
+                "Treat this as a local Mnemo operational question. Inspect the installed command, "
+                "local status, saved recap, and exact configured hook launcher before answering."
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _skill_discovery_line(candidates: list[dict[str, object]], client: ClientName) -> str:

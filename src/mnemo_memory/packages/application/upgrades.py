@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -18,6 +19,7 @@ from .backups import PersonalBackupError, PersonalBackupResult, PersonalBackupSe
 from .config import LocalConfig
 
 _PACKAGE_NAME = "mnemo-unified-context"
+_SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.!+_-]{0,63}\Z")
 
 
 class InstallationManager(StrEnum):
@@ -55,14 +57,23 @@ class PersonalUpgradeResult:
     backup: PersonalBackupResult
     service_was_running: bool
     service_restarted: bool
+    before_version: str
+    after_version: str
+
+    @property
+    def changed(self) -> bool:
+        return self.before_version != self.after_version
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "status": "upgraded",
+            "status": "upgraded" if self.changed else "already_current",
             "manager": self.manager.value,
             "backup": self.backup.to_dict(),
             "service_was_running": self.service_was_running,
             "service_restarted": self.service_restarted,
+            "before_version": self.before_version,
+            "after_version": self.after_version,
+            "changed": self.changed,
         }
 
 
@@ -89,6 +100,7 @@ class PersonalUpgradeService:
         python_executable: Path | None = None,
         executable_resolver: Callable[[str], str | None] = shutil.which,
         command_runner: Callable[[tuple[str, ...]], int] | None = None,
+        version_reader: Callable[[Path], str] | None = None,
         pid_alive: Callable[[int], bool] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -104,6 +116,7 @@ class PersonalUpgradeService:
         self._python_executable = (python_executable or Path(sys.executable)).resolve()
         self._resolve_executable = executable_resolver
         self._run_command = command_runner or _run_silent_command
+        self._read_version = version_reader or _read_installed_version
         self._pid_alive = pid_alive or _pid_exists
         self._monotonic = monotonic
         self._sleep = sleep
@@ -133,6 +146,15 @@ class PersonalUpgradeService:
                 raise PersonalUpgradeError("MNEMO_UPGRADE_STOP_FAILED", backup=backup) from error
             if not self._await_stopped(pid):
                 raise PersonalUpgradeError("MNEMO_UPGRADE_STOP_TIMEOUT", backup=backup)
+        try:
+            before_version = self._installed_version()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            restored = self._restart_after_failure(was_running)
+            raise PersonalUpgradeError(
+                "MNEMO_UPGRADE_VERSION_UNAVAILABLE",
+                backup=backup,
+                prior_service_restored=restored,
+            ) from error
         install_code = self._run(self._manager_command(manager, manager_path))
         if install_code != 0:
             restored = self._restart_after_failure(was_running)
@@ -141,6 +163,15 @@ class PersonalUpgradeService:
                 backup=backup,
                 prior_service_restored=restored,
             )
+        try:
+            after_version = self._installed_version()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            restored = self._restart_after_failure(was_running)
+            raise PersonalUpgradeError(
+                "MNEMO_UPGRADE_VERSION_UNAVAILABLE",
+                backup=backup,
+                prior_service_restored=restored,
+            ) from error
         if self._run(self._cli_command("init")) != 0:
             raise PersonalUpgradeError("MNEMO_UPGRADE_VALIDATION_FAILED", backup=backup)
         restarted = False
@@ -148,7 +179,14 @@ class PersonalUpgradeService:
             if self._run(self._cli_command("start")) != 0:
                 raise PersonalUpgradeError("MNEMO_UPGRADE_RESTART_FAILED", backup=backup)
             restarted = True
-        return PersonalUpgradeResult(manager, backup, was_running, restarted)
+        return PersonalUpgradeResult(
+            manager,
+            backup,
+            was_running,
+            restarted,
+            before_version,
+            after_version,
+        )
 
     def _manager_executable(self, manager: InstallationManager) -> Path:
         resolved = self._resolve_executable(manager.value)
@@ -162,8 +200,29 @@ class PersonalUpgradeService:
     @staticmethod
     def _manager_command(manager: InstallationManager, executable: Path) -> tuple[str, ...]:
         if manager is InstallationManager.UV:
-            return (str(executable), "tool", "upgrade", _PACKAGE_NAME)
-        return (str(executable), "upgrade", _PACKAGE_NAME)
+            return (
+                str(executable),
+                "tool",
+                "install",
+                "--force",
+                "--prerelease",
+                "allow",
+                _PACKAGE_NAME,
+            )
+        return (
+            str(executable),
+            "install",
+            "--force",
+            "--upgrade",
+            "--pip-args=--pre",
+            _PACKAGE_NAME,
+        )
+
+    def _installed_version(self) -> str:
+        version = self._read_version(self._python_executable)
+        if not isinstance(version, str) or _SAFE_VERSION.fullmatch(version) is None:
+            raise ValueError("installed version is invalid")
+        return version
 
     def _cli_command(self, action: str) -> tuple[str, ...]:
         return (
@@ -230,6 +289,29 @@ def _run_silent_command(command: tuple[str, ...]) -> int:
         timeout=600,
     )
     return completed.returncode
+
+
+def _read_installed_version(python_executable: Path) -> str:
+    """Read only the fixed package version from the exact managed environment."""
+
+    completed = subprocess.run(
+        (
+            str(python_executable),
+            "-c",
+            "from importlib.metadata import version; print(version('mnemo-unified-context'))",
+        ),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("installed version is unavailable")
+    value = completed.stdout.strip()
+    if _SAFE_VERSION.fullmatch(value) is None:
+        raise ValueError("installed version is invalid")
+    return value
 
 
 def _pid_exists(pid: int) -> bool:

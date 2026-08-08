@@ -94,7 +94,7 @@ The PyPI distribution is `mnemo-unified-context`; the primary installed command 
 `mnemo-memory` remains a compatibility alias for existing scripts and client registrations.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a10
+uv tool install mnemo-unified-context==0.1.0a11
 mnemo --version
 mnemo init
 
@@ -321,6 +321,9 @@ For uv- or pipx-managed installs:
 mnemo upgrade
 mnemo uninstall --yes
 ```
+
+`mnemo upgrade` explicitly considers prereleases and reports the exact before/after installed
+versions, distinguishing a real upgrade from an already-current installation.
 
 Normal uninstall preserves the configured data directory and backups. Permanent local data erasure
 requires the separate `--delete-data` form described in the memory-management guide.

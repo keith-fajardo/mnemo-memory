@@ -4384,3 +4384,65 @@ published SHA-256 digests:
 
 Production publication and live verification are complete. No long-lived registry credential was
 used.
+
+### Local Mnemo operational guidance and verified self-upgrade — In progress
+
+Two demonstrated failures define this bounded issue. First, a local Mnemo version, memory-status,
+or hook-failure question was misrouted to OpenAI documentation and web search after session context
+failed. Second, `mnemo upgrade` invoked a receipt-constrained, prerelease-unaware package-manager
+command, discarded its output, and reported `upgraded` without proving the installed version
+changed.
+
+Mnemo must recognize only bounded local operational intent and emit a compact deterministic
+recommendation to inspect `mnemo --version`, `mnemo status`, `mnemo recap`, and the configured hook
+launcher before using external documentation. The recommendation may suggest a scoped
+`AGENTS.md` fallback when equivalent guidance is absent or hooks are failing, but it must never
+edit another repository automatically. The prompt remains transient and must not enter telemetry,
+memory, logs, or the recommendation.
+
+Mnemo-owned Codex and Claude Code lifecycle handlers must use a 300-second client timeout, and
+reconnecting must upgrade exact owned legacy timeout values without duplicating handlers or
+changing unrelated hooks. The prompt-time local diagnostics route must still return without
+opening the normal retrieval runtime.
+
+The self-upgrader must replace an exact pinned receipt with an unpinned package request through the
+owning manager, explicitly allow prereleases through supported uv and pipx arguments,
+read the installed distribution version before and after the package-manager operation, and report
+`upgraded` only when the version actually changes; an unchanged successful resolution reports
+`already_current`. Version validation must expose no installer output or environment data and all
+existing backup, stop, validation, restart, and fail-open boundaries remain intact.
+
+Acceptance requires focused route, hook, telemetry, upgrade, privacy, and CLI tests; updated user
+and threat-model guidance; the complete repository gate; an immutable `0.1.0a11` release; a clean
+commit and push; protected production PyPI publication; and live artifact and installed-version
+verification. This issue adds no dependency, schema migration, MCP tool, model call, network
+surface, automatic repository mutation, authorization change, or retained prompt/tool payload.
+
+Implemented a closed `local_diagnostics` route and reason that recognize bounded Mnemo runtime and
+lifecycle-failure language before opening the normal retrieval runtime. The fixed recommendation
+is below 256 estimated tokens, names local version/status/recap and exact hook inspection, rejects
+unrequested OpenAI documentation or web search, and includes the user-approved scoped `AGENTS.md`
+suggestion with an explicit no-auto-edit policy. Explicit recap and previous-session language keeps
+its existing checkpoint-history precedence. Route telemetry records only the closed route, reason,
+delivery cost, and hit state; the prompt and recommendation content are not retained.
+
+Exact Mnemo-owned Codex and Claude Code hook entries now use 300 seconds and existing owned values
+are upgraded in place. The backup-gated self-upgrader replaces exact pinned receipts through an
+unpinned force-install owned by uv or pipx, explicitly permits prereleases, reads a bounded version
+from the exact managed Python before and after installation, and distinguishes `upgraded` from
+`already_current`. Installer output remains discarded and existing service recovery behavior is
+preserved.
+
+Focused route, automatic-memory, upgrade, privacy, telemetry, and CLI verification passes (`81
+passed`). The complete `npm run check` gate passes (`990 passed`, `27 skipped`; PostgreSQL `26
+passed`, `1 skipped`) with formatting, lint, strict typing for 269 files, schema validation,
+dependency/provenance validation for 94 registered entries, architecture validation for 147
+product Python files, and installed-package verification. Both workflow YAML files parse.
+Independently built source-independent `0.1.0a11` artifacts pass the release verifier with these
+pre-publication SHA-256 digests:
+
+- wheel: `c1e46fcc862e697ae4ef4702028fbb3679189eae033bd2533b9eb54282fd4f7e`
+- source distribution: `32708538e91df6f27f9537066c23e54140251ff73e665a14ef1096568b32879f`
+
+Commit, push, protected publication, live artifact verification, local self-upgrade, and exact
+installed hook-timeout verification remain pending.

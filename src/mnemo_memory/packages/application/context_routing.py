@@ -18,6 +18,7 @@ class AutomaticContextRoute(StrEnum):
 
     NONE = "none"
     DIRECT_LOOKUP = "direct_lookup"
+    LOCAL_DIAGNOSTICS = "local_diagnostics"
     PRIOR_MEMORY = "prior_memory"
     KNOWLEDGE = "knowledge"
     STRUCTURE = "structure"
@@ -29,6 +30,7 @@ class AutomaticContextRouteReason(StrEnum):
 
     TRIVIAL = "trivial"
     EXACT_SOURCE_LOOKUP = "exact_source_lookup"
+    LOCAL_MNEMO_OPERATION = "local_mnemo_operation"
     PRIOR_MEMORY = "prior_memory"
     EXPLICIT_KNOWLEDGE = "explicit_knowledge"
     GENERAL_MEMORY_PROBE = "general_memory_probe"
@@ -41,6 +43,7 @@ class AutomaticContextRouteReason(StrEnum):
 _MAXIMUM_ROUTE_TOKENS = {
     AutomaticContextRoute.NONE: 0,
     AutomaticContextRoute.DIRECT_LOOKUP: 0,
+    AutomaticContextRoute.LOCAL_DIAGNOSTICS: 256,
     AutomaticContextRoute.PRIOR_MEMORY: 1_300,
     AutomaticContextRoute.KNOWLEDGE: 1_300,
     AutomaticContextRoute.STRUCTURE: 1_000,
@@ -73,9 +76,20 @@ def choose_automatic_context_route(
 
     if (
         "recap" in terms
-        or terms & {"previous", "earlier", "remember"}
+        or terms & {"previous", "earlier"}
         or ("last" in terms and "session" in terms)
     ):
+        return _decision(
+            AutomaticContextRoute.PRIOR_MEMORY, AutomaticContextRouteReason.PRIOR_MEMORY
+        )
+
+    if _is_local_mnemo_operation(terms):
+        return _decision(
+            AutomaticContextRoute.LOCAL_DIAGNOSTICS,
+            AutomaticContextRouteReason.LOCAL_MNEMO_OPERATION,
+        )
+
+    if "remember" in terms:
         return _decision(
             AutomaticContextRoute.PRIOR_MEMORY, AutomaticContextRouteReason.PRIOR_MEMORY
         )
@@ -152,3 +166,32 @@ def _decision(
     route: AutomaticContextRoute, reason: AutomaticContextRouteReason
 ) -> AutomaticContextRouteDecision:
     return AutomaticContextRouteDecision(route, reason, _MAXIMUM_ROUTE_TOKENS[route])
+
+
+def _is_local_mnemo_operation(terms: frozenset[str]) -> bool:
+    """Recognize only local runtime questions; generic memory topics remain normal queries."""
+
+    operational = {
+        "active",
+        "config",
+        "configuration",
+        "current",
+        "diagnose",
+        "diagnostics",
+        "hook",
+        "hooks",
+        "installed",
+        "recap",
+        "remember",
+        "status",
+        "timeout",
+        "upgrade",
+        "version",
+    }
+    if "mnemo" in terms and terms & operational:
+        return True
+    if "mnemo" in terms and "using" in terms and terms & {"what", "which", "right"}:
+        return True
+    lifecycle = terms & {"precompact", "sessionstart"}
+    failure = terms & {"failed", "failure", "hook", "hooks", "timeout", "timed"}
+    return bool(lifecycle and failure)

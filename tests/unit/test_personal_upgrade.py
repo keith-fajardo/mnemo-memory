@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -106,6 +107,15 @@ def _manager_environment(tmp_path: Path, manager: InstallationManager) -> tuple[
     return environment, executable
 
 
+def _versions(*values: str) -> Callable[[Path], str]:
+    versions = iter(values)
+
+    def read(_: Path) -> str:
+        return next(versions)
+
+    return read
+
+
 def _evidence() -> EvidenceReference:
     return EvidenceReference(
         EvidenceId.new(),
@@ -139,15 +149,28 @@ def test_uv_upgrade_backs_up_first_validates_with_new_cli_and_preserves_stopped_
         python_executable=tmp_path / "python",
         executable_resolver=lambda name: str(executable) if name == "uv" else None,
         command_runner=run,
+        version_reader=_versions("0.1.0a9", "0.1.0a10"),
     ).upgrade()
 
     assert result.manager is InstallationManager.UV
     assert result.service_was_running is False
     assert result.service_restarted is False
+    assert result.before_version == "0.1.0a9"
+    assert result.after_version == "0.1.0a10"
+    assert result.changed is True
+    assert result.to_dict()["status"] == "upgraded"
     assert log == [
         "status",
         "backup",
-        (str(executable), "tool", "upgrade", "mnemo-unified-context"),
+        (
+            str(executable),
+            "tool",
+            "install",
+            "--force",
+            "--prerelease",
+            "allow",
+            "mnemo-unified-context",
+        ),
         (
             str(tmp_path / "python"),
             "-m",
@@ -176,6 +199,7 @@ def test_pipx_upgrade_stops_then_restores_a_running_service(tmp_path: Path) -> N
         python_executable=tmp_path / "python",
         executable_resolver=lambda name: str(executable) if name == "pipx" else None,
         command_runner=run,
+        version_reader=_versions("0.1.0a9", "0.1.0a10"),
         pid_alive=lambda _: False,
     ).upgrade()
 
@@ -185,10 +209,39 @@ def test_pipx_upgrade_stops_then_restores_a_running_service(tmp_path: Path) -> N
     assert log[:3] == ["status", "backup", "stop"]
     assert cast(tuple[str, ...], log[3]) == (
         str(executable),
-        "upgrade",
+        "install",
+        "--force",
+        "--upgrade",
+        "--pip-args=--pre",
         "mnemo-unified-context",
     )
     assert cast(tuple[str, ...], log[-1])[3] == "start"
+
+
+def test_successful_unchanged_resolution_reports_already_current(tmp_path: Path) -> None:
+    log: list[object] = []
+    config = LocalConfig.defaults(tmp_path / "profile")
+    environment, executable = _manager_environment(tmp_path, InstallationManager.UV)
+
+    def run(command: tuple[str, ...]) -> int:
+        log.append(command)
+        return 0
+
+    result = PersonalUpgradeService(
+        config,
+        backup_service=_Backup(_backup(tmp_path), log),
+        lifecycle=_Lifecycle(log),
+        environment_root=environment,
+        python_executable=tmp_path / "python",
+        executable_resolver=lambda _: str(executable),
+        command_runner=run,
+        version_reader=_versions("0.1.0a10", "0.1.0a10"),
+    ).upgrade()
+
+    assert result.changed is False
+    assert result.to_dict()["status"] == "already_current"
+    assert result.to_dict()["before_version"] == "0.1.0a10"
+    assert result.to_dict()["after_version"] == "0.1.0a10"
 
 
 def test_upgrade_fails_before_backup_for_unowned_missing_or_uninitialized_state(
@@ -264,6 +317,7 @@ def test_upgrade_failure_paths_keep_backup_and_bound_service_state(tmp_path: Pat
             python_executable=tmp_path / "python",
             executable_resolver=lambda _: str(executable),
             command_runner=fail_install,
+            version_reader=_versions("0.1.0a9"),
             pid_alive=lambda _: False,
         ).upgrade()
     assert install_failed.value.code == "MNEMO_UPGRADE_INSTALL_FAILED"
@@ -289,6 +343,7 @@ def test_upgrade_failure_paths_keep_backup_and_bound_service_state(tmp_path: Pat
             python_executable=tmp_path / "python",
             executable_resolver=lambda _: str(executable),
             command_runner=fail_validation,
+            version_reader=_versions("0.1.0a9", "0.1.0a10"),
             pid_alive=lambda _: False,
         ).upgrade()
     assert validation_failed.value.code == "MNEMO_UPGRADE_VALIDATION_FAILED"
@@ -324,6 +379,7 @@ def test_failed_upgrade_preserves_live_data_and_a_readable_recovery_copy(tmp_pat
             environment_root=environment,
             executable_resolver=lambda _: str(executable),
             command_runner=lambda _: 1,
+            version_reader=_versions("0.1.0a9"),
         ).upgrade()
 
     assert failure.value.code == "MNEMO_UPGRADE_INSTALL_FAILED"
@@ -403,6 +459,29 @@ def test_default_runner_discards_installer_output(monkeypatch: pytest.MonkeyPatc
     assert observed["stdout"] is subprocess.DEVNULL
     assert observed["stderr"] is subprocess.DEVNULL
     assert observed["timeout"] == 600
+
+
+def test_version_reader_uses_exact_environment_and_accepts_only_bounded_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed: dict[str, object] = {}
+    python = tmp_path / "managed-python"
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed["command"] = command
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="0.1.0a11\n", stderr="private")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    assert upgrade_module._read_installed_version(python) == "0.1.0a11"
+    command = cast(tuple[str, ...], observed["command"])
+    assert command[0] == str(python)
+    assert command[1] == "-c"
+    assert "mnemo-unified-context" in command[2]
+    assert observed["capture_output"] is True
+    assert observed["text"] is True
+    assert observed["timeout"] == 30
 
 
 def test_upgrade_cli_reports_a_bounded_unsupported_environment(tmp_path: Path) -> None:

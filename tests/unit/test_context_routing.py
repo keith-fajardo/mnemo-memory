@@ -46,6 +46,19 @@ def test_prior_memory_and_lazy_skill_discovery_take_explicit_routes() -> None:
     assert skill.maximum_attachment_tokens < 300
 
 
+def test_local_mnemo_operations_select_bounded_diagnostics_guidance() -> None:
+    version = choose_automatic_context_route("What Mnemo are you using right?")
+    hook = choose_automatic_context_route("Why did the SessionStart hook timeout?")
+
+    assert version.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS
+    assert version.reason is AutomaticContextRouteReason.LOCAL_MNEMO_OPERATION
+    assert version.maximum_attachment_tokens == 256
+    assert hook.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS
+    assert choose_automatic_context_route("Is long-term memory worth using?").route is (
+        AutomaticContextRoute.KNOWLEDGE
+    )
+
+
 def test_trivial_prompt_attaches_nothing_and_general_domain_query_probes_memory() -> None:
     assert choose_automatic_context_route("hello").route is AutomaticContextRoute.NONE
     general = choose_automatic_context_route("finance reconciliation variance")

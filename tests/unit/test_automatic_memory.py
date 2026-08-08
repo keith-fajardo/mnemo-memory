@@ -1017,6 +1017,42 @@ def test_automatic_skill_discovery_is_lazy_bounded_and_content_free(
     assert totals["rendered_estimated_tokens"] > 0
 
 
+def test_local_mnemo_operation_emits_bounded_local_first_guidance_without_prompt(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    prompt = "What Mnemo are you using right? private-marker-5a91"
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, prompt, "codex"
+    )
+
+    assert attached.context is not None
+    assert attached.context.startswith("MNEMO_LOCAL_DIAGNOSTICS_V1 ")
+    assert "mnemo --version" in attached.context
+    assert "mnemo status" in attached.context
+    assert "mnemo recap" in attached.context
+    assert "configured hook command" in attached.context
+    assert "OpenAI documentation skills or web search" in attached.context
+    assert "AGENTS.md" in attached.context
+    assert "Never edit the repository automatically" in attached.context
+    assert prompt not in attached.context
+    assert (len(attached.context) + 3) // 4 <= 256
+    assert attached.telemetry_event_id is not None
+    telemetry = (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+    assert prompt not in telemetry
+    summary = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    routes = cast(dict[str, dict[str, int]], summary["routes"])
+    assert routes["local_diagnostics"]["hits"] == 1
+
+
 def test_exact_lookup_records_zero_attachment_and_unknown_direct_tool_cost(
     tmp_path: Path,
 ) -> None:
@@ -2300,7 +2336,7 @@ def test_client_configuration_upgrades_owned_hook_timeout_without_duplication(
         if "automatic-memory-hook --client codex" in handler["command"]
     ]
     assert len(owned) == 5
-    assert all(handler["timeout"] == 30 for handler in owned)
+    assert all(handler["timeout"] == 300 for handler in owned)
     assert enable_client_hooks("codex", launcher, home, data) is False
 
 

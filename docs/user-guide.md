@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a10
+uv tool install mnemo-unified-context==0.1.0a11
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -421,9 +421,15 @@ mnemo --version
 
 Mnemo accepts exactly one ownership marker in its running isolated environment and resolves only
 that manager executable. It publishes a verified backup before stopping a running local service or
-invoking the installer. On success it runs the upgraded CLI's initialization to apply and validate
-migrations, then restarts the service only if it was previously running. The manager output is
-discarded. A bounded failure result includes the recovery artifact after backup succeeds and says
+invoking the installer. Because an exact installation constraint remains pinned during a normal
+uv upgrade, Mnemo asks the owning manager to force-install the unpinned package name. The uv route
+explicitly allows prereleases; the pipx route supplies pip's prerelease flag. Mnemo reads the exact
+managed distribution version before and after the operation.
+The result is `upgraded` only when those versions differ and `already_current` when the manager
+successfully resolves the same version; both results include `before_version`, `after_version`, and
+`changed`. On success it runs the upgraded CLI's initialization to apply and validate migrations,
+then restarts the service only if it was previously running. The manager output is discarded. A
+bounded failure result includes the recovery artifact after backup succeeds and says
 whether an installer-failure restart restored the prior service. Validation and restart failures
 leave the service stopped for inspection. The command does not silently downgrade the package or
 restore the database; retain the reported backup for explicit recovery.
@@ -477,6 +483,11 @@ tells the agent to treat that material as evidence rather than instructions, and
 relevant saved structure when a task names a symbol or file. This is a
 reliable reminder at a fresh-session boundary, not hidden transcript monitoring or a promise that
 Mnemo can read a model's private reasoning.
+
+Mnemo-owned lifecycle handlers use a 300-second client deadline. Enabling or reconnecting an exact
+owned client upgrades older timeout values without duplicating handlers or modifying unrelated
+hooks. The longer deadline accommodates large local structure refreshes and remains fail-open; it
+is not a latency target.
 
 ### Review and govern approved facts
 
@@ -723,11 +734,19 @@ pressure.
 Automatic prompt context now chooses one bounded route before retrieval:
 
 - an exact file or symbol lookup recommends direct inspection and attaches no Mnemo context;
+- a local Mnemo version, configuration, status, recap, upgrade, or hook-failure question attaches
+  a compact local-first diagnostic recommendation without opening the normal retrieval runtime;
 - recap and prior-session language selects saved checkpoint history;
 - architecture, dependency, impact, and dbt questions select saved structure;
 - a matching `mnemo_when` description selects only lazy skill metadata;
 - other domain questions probe scoped project memory and attach nothing on a miss;
 - trivial greetings attach nothing.
+
+The local-diagnostics recommendation directs the agent to inspect `mnemo --version`, `mnemo
+status`, `mnemo recap`, and the exact configured hook launcher before answering. It also tells the
+agent not to use OpenAI documentation or web search unless explicitly requested. When equivalent
+repository guidance is absent or hooks are failing, the agent may suggest the scoped `AGENTS.md`
+fallback, but Mnemo never edits that file automatically. The transient prompt is not retained.
 
 Inspect the private aggregate for the enabled project with:
 

@@ -19,7 +19,15 @@ _FORMAT_VERSION = 1
 _MAXIMUM_FILE_BYTES = 1_048_576
 _SAFE_REASON = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _ROUTES = frozenset(
-    {"none", "direct_lookup", "prior_memory", "knowledge", "structure", "skill_discovery"}
+    {
+        "none",
+        "direct_lookup",
+        "local_diagnostics",
+        "prior_memory",
+        "knowledge",
+        "structure",
+        "skill_discovery",
+    }
 )
 
 
