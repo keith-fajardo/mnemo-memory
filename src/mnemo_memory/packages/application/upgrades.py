@@ -114,7 +114,10 @@ class PersonalUpgradeService:
             lifecycle = build_lifecycle_service(config)
         self._lifecycle = lifecycle
         self._environment_root = (environment_root or Path(sys.prefix)).resolve()
-        self._python_executable = (python_executable or Path(sys.executable)).resolve()
+        selected_python = (python_executable or Path(sys.executable)).expanduser()
+        # Preserve the managed environment entry point. Resolving this symlink selects the base
+        # interpreter, which cannot see the tool environment's installed distribution or CLI.
+        self._python_executable = Path(os.path.abspath(selected_python))
         self._resolve_executable = executable_resolver
         self._run_command = command_runner or _run_silent_command
         self._read_version = version_reader or _read_installed_version

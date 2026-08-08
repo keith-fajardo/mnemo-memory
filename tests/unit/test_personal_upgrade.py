@@ -244,6 +244,45 @@ def test_successful_unchanged_resolution_reports_already_current(tmp_path: Path)
     assert result.to_dict()["after_version"] == "0.1.0a10"
 
 
+def test_upgrade_preserves_the_managed_python_symlink_for_version_and_cli_validation(
+    tmp_path: Path,
+) -> None:
+    log: list[object] = []
+    config = LocalConfig.defaults(tmp_path / "profile")
+    environment, executable = _manager_environment(tmp_path, InstallationManager.UV)
+    base_python = tmp_path / "base-python"
+    base_python.write_text("private base interpreter", encoding="utf-8")
+    managed_python = tmp_path / "managed-python"
+    managed_python.symlink_to(base_python)
+    observed: list[Path] = []
+    versions = iter(("0.1.0a11", "0.1.0a12"))
+
+    def read_version(path: Path) -> str:
+        observed.append(path)
+        return next(versions)
+
+    def run(command: tuple[str, ...]) -> int:
+        log.append(command)
+        return 0
+
+    PersonalUpgradeService(
+        config,
+        backup_service=_Backup(_backup(tmp_path), log),
+        lifecycle=_Lifecycle(log),
+        environment_root=environment,
+        python_executable=managed_python,
+        executable_resolver=lambda _: str(executable),
+        command_runner=run,
+        version_reader=read_version,
+    ).upgrade()
+
+    expected = managed_python.absolute()
+    assert observed == [expected, expected]
+    init_command = cast(tuple[str, ...], log[-1])
+    assert init_command[0] == str(expected)
+    assert str(base_python) not in init_command
+
+
 def test_upgrade_fails_before_backup_for_unowned_missing_or_uninitialized_state(
     tmp_path: Path,
 ) -> None:

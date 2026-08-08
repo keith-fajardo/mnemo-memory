@@ -4414,7 +4414,7 @@ read the installed distribution version before and after the package-manager ope
 existing backup, stop, validation, restart, and fail-open boundaries remain intact.
 
 Acceptance requires focused route, hook, telemetry, upgrade, privacy, and CLI tests; updated user
-and threat-model guidance; the complete repository gate; an immutable corrective `0.1.0a12`
+and threat-model guidance; the complete repository gate; an immutable corrective `0.1.0a13`
 release; a clean
 commit and push; protected production PyPI publication; and live artifact and installed-version
 verification. This issue adds no dependency, schema migration, MCP tool, model call, network
@@ -4460,5 +4460,25 @@ dependency provenance, architecture, and installed-package verification. Source-
 - wheel: `395383f97047a6d4deb2c8155b21159324c0b9f23da71b94e6e94c6ccfec5b3e`
 - source distribution: `f0cb87784ee2325093a6c87afe26ca6d5d15f3e96d337700d5d2ea088bb26576`
 
-Corrective commit and push, protected publication, live self-upgrade, stable transitive-version
-verification, and exact installed hook-timeout verification remain pending.
+Corrective release commit `1027e39225c1516ca5ecb278bd22bb96899058af` and protected workflow
+run `31245740149` successfully published and independently verified `0.1.0a12`. A clean install
+proved that its open first-party requirement selects `0.1.0a12` with stable `pydantic==2.13.4`,
+`pydantic-core==2.46.4`, and `starlette==1.5.0`. The end-to-end `mnemo upgrade` acceptance then
+failed with `MNEMO_UPGRADE_VERSION_UNAVAILABLE`: resolving the managed environment's Python
+symlink selected uv's base interpreter, which cannot see the tool environment's installed Mnemo
+metadata or CLI.
+
+The final `0.1.0a13` correction preserves the absolute managed-environment Python entry point
+without dereferencing its symlink for before/after version reads, migration validation, and service
+restart. A focused regression creates an actual symlink and proves both version reads and the CLI
+command keep that managed path. The final focused release suite passes (`92 passed`), and the
+complete `npm run check` gate passes (`991 passed`, `27 skipped`; PostgreSQL `26 passed`, `1
+skipped`) with formatting, lint, strict typing, schema, dependency provenance, architecture, and
+installed-package verification. Source-independent `0.1.0a13` artifacts pass the release verifier
+with these pre-publication SHA-256 digests:
+
+- wheel: `72b2f232040970a75a1c1b1803069126546489d16876eb090c19ea1508119ef6`
+- source distribution: `03523720b079235a95df2df494a4414cae129a0117ef99180ddd6288d4ca8c28`
+
+Corrective commit and push, protected publication, successful `already_current` self-upgrade, and
+exact installed 300-second hook verification remain pending.
