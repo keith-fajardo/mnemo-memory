@@ -4571,7 +4571,7 @@ deterministic heuristic within the 600-token budget. The complete `npm run check
 typing for 269 files, schema validation, dependency provenance for 94 registered entries,
 architecture validation for 147 product Python files, and installed-package verification.
 
-### Release 0.1.0a14 — In progress
+### Release 0.1.0a14 — Complete
 
 The user approved deployment of the completed local MCP cold-start and checkpoint
 token-estimation corrections. PyPI returned 404 for the exact `0.1.0a14` metadata endpoint before
@@ -4598,3 +4598,20 @@ verifier with these local pre-publication SHA-256 digests:
 GitHub secret scanning reports no open alerts. Dependabot alerts are disabled and code scanning
 has no analysis for this repository; the locked dependency/provenance, architecture, full-test,
 artifact, and protected-publication gates above remain the available release controls.
+
+Release commit `7f1cc18bb6478a3f0da853d2113c33b61cb302fe` was pushed to `main`, and
+protected production workflow run `31250232892` completed successfully. Its isolated build,
+repository/evaluation, artifact inspection, wheel/sdist smoke, OIDC publication, and independent
+PyPI metadata, provenance, hash, download, install, and initialization jobs all passed. Live PyPI
+metadata and the immutable workflow bundle agree on these canonical SHA-256 digests:
+
+- wheel: `9a5de7f5e540184906112fd5ed24224e54ff0a4230b10db9e1c59f393839470a`
+- source distribution: `6746bef91c593528ebae075bee14afe1c7f2f4085430c3bfce648b3dc1f96482`
+
+The managed local uv installation upgraded from `0.1.0a13` to `0.1.0a14` after creating a verified
+schema-v30 backup. From the real ATK working directory, the installed launcher initialized MCP in
+`1.589` seconds, listed all five tools in `0.004` seconds, and returned a normal bounded context in
+`0.058` seconds. An isolated installed-package regression then submitted the previously failing
+minimal checkpoint without optional list fields or `token_estimate`; the save succeeded, persisted
+an active checkpoint, and recorded Mnemo's deterministic estimate of `104` tokens. Production
+deployment and local acceptance are complete.
