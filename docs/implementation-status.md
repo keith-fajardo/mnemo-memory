@@ -4344,7 +4344,7 @@ formatting and strict typing for 269 files, schema validation, dependency/proven
 verification. No dependency, migration, MCP tool, model call, endpoint, network, authorization,
 retention-policy, or team behavior changed.
 
-### PyPI 0.1.0a10 cost-aware routing release candidate — In Progress
+### PyPI 0.1.0a10 cost-aware routing release — Complete
 
 This explicitly approved release packages only the completed cost-aware automatic context routing,
 lazy skill-discovery metadata, and private route-cost telemetry issue as the next immutable
@@ -4369,5 +4369,18 @@ source-independent artifacts pass the release verifier with these SHA-256 digest
 - wheel: `027e356382a38233a3bd2042135822988cd209cc7b19421ac3ca86543652a330`
 - source distribution: `ad9eeab45b2a82e7a643c0a81e271e3c6160990511230d8943911de1444fa27f`
 
-The protected production workflow, live registry verification, and final clean release state remain
-pending.
+Release commit `cb175c27208c70d6eba890b4309c875555ad0459` was pushed to `main` and protected
+workflow run `31242976877` completed successfully. Its independent build-and-verify job reran the
+complete repository gate and deterministic evaluations, inspected and smoke-tested both artifacts,
+and transferred one checksum-bound release bundle. The isolated OIDC job published only that wheel
+and source distribution, and the final unprivileged job verified live PyPI metadata, provenance,
+hashes, downloaded wheel installation, CLI initialization, and packaged resources.
+
+The downloaded workflow bundle, its `SHA256SUMS`, and live PyPI metadata agree on these canonical
+published SHA-256 digests:
+
+- wheel: `6dc3fc0bf4d243892d60ae60fa576875679f6d2e06514c9fb587170eb022775a`
+- source distribution: `83ab39602b38bfc40a3abaf7c196b427c29c2e74a9b9c4d49d17fb4009767e15`
+
+Production publication and live verification are complete. No long-lived registry credential was
+used.
