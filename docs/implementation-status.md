@@ -4385,7 +4385,7 @@ published SHA-256 digests:
 Production publication and live verification are complete. No long-lived registry credential was
 used.
 
-### Local Mnemo operational guidance and verified self-upgrade — In progress
+### Local Mnemo operational guidance and verified self-upgrade — Complete
 
 Two demonstrated failures define this bounded issue. First, a local Mnemo version, memory-status,
 or hook-failure question was misrouted to OpenAI documentation and web search after session context
@@ -4415,8 +4415,7 @@ existing backup, stop, validation, restart, and fail-open boundaries remain inta
 
 Acceptance requires focused route, hook, telemetry, upgrade, privacy, and CLI tests; updated user
 and threat-model guidance; the complete repository gate; an immutable corrective `0.1.0a13`
-release; a clean
-commit and push; protected production PyPI publication; and live artifact and installed-version
+release; a clean commit and push; protected production PyPI publication; and live artifact and installed-version
 verification. This issue adds no dependency, schema migration, MCP tool, model call, network
 surface, automatic repository mutation, authorization change, or retained prompt/tool payload.
 
@@ -4480,5 +4479,18 @@ with these pre-publication SHA-256 digests:
 - wheel: `72b2f232040970a75a1c1b1803069126546489d16876eb090c19ea1508119ef6`
 - source distribution: `03523720b079235a95df2df494a4414cae129a0117ef99180ddd6288d4ca8c28`
 
-Corrective commit and push, protected publication, successful `already_current` self-upgrade, and
-exact installed 300-second hook verification remain pending.
+Final release commit `c63fdfe4bc229c13248f0c9ae4582d868f50f986` was pushed to `main`, and
+protected production workflow run `31246662186` completed successfully. Its independent verifier
+confirmed the published metadata, artifact hashes, downloaded wheel, installed CLI, and packaged
+resources. Live PyPI metadata and the resolver-facing simple index agree on these canonical
+published SHA-256 digests:
+
+- wheel: `4680b6e6d6b03ddfdd377987e5e342c85a2f8ed6c0825120041840b5720dd3f7`
+- source distribution: `d6c08f1412a19acaa232afedcf3924966d121f8fa4c2b8e8a123ae2cc205a1ef`
+
+After normal PyPI simple-index propagation, the exact documented uv command installed
+`0.1.0a13` while retaining stable `pydantic==2.13.4`, `pydantic-core==2.46.4`, and
+`starlette==1.5.0`. The live installed `mnemo upgrade` completed with
+`before_version==after_version==0.1.0a13`, `changed=false`, and `status=already_current`. The exact
+installed hook launcher reports `0.1.0a13`, and all five Mnemo-owned Codex lifecycle handlers have
+the single timeout value `300`. Production publication and live verification are complete.
