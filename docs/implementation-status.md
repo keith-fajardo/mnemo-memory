@@ -4664,7 +4664,7 @@ workflow verification. No dependency, schema, migration, storage, retention, pro
 provider change was made. This issue is complete; any cache tier or memory-maturation policy needs
 a separately approved issue.
 
-### `0.1.0a15` production deployment — In progress
+### `0.1.0a15` production deployment — Complete
 
 The user explicitly requested deployment of the completed token-bounded single-delivery automatic
 context change. Release metadata, pinned artifact names, verification scripts, user-facing install
@@ -4674,3 +4674,24 @@ manual production PyPI workflow from a clean pushed `main` commit. Completion re
 local gate, protected workflow build and evaluation gates, checksum-bound OIDC publication, live
 PyPI metadata and provenance verification, exact artifact hashes, and an isolated installed-package
 smoke test. No TestPyPI or direct local upload is authorized or needed for this production release.
+
+Production deployment is complete. The exact PyPI version endpoint returned `404` before the bump,
+confirming that `0.1.0a15` was unused. The release tree passed the complete local `npm run check`
+gate, the source verifier, workflow contract tests and YAML validation, and source-independent local
+wheel/sdist inspection. Clean release commit `990ec18446708e978fff1b9393f4508ac254660e`
+was pushed to `main` and protected production workflow run `31349469982` completed successfully.
+Its clean-runner repository and deterministic evaluation gates, artifact build and smoke tests,
+checksum bundle, OIDC publication, and separate live PyPI verification jobs all passed.
+
+The downloaded immutable workflow bundle and live PyPI metadata/provenance agree on these canonical
+SHA-256 digests:
+
+- wheel: `3cb593c68e36acb05ee5c426933310eca74160c9e0766b14a285211a68f7a97d`
+- source distribution: `4de0d62f042eec2d6b7f86bf69dd32a790ca81522f798e9dd5072501ac3978e1`
+
+An independent post-workflow verification downloaded both production artifacts, rechecked the
+workflow checksum bundle, validated PyPI metadata and integrity provenance, and installed the exact
+published wheel into a fresh Python 3.12 environment. The isolated command reported
+`mnemo 0.1.0a15`, imported from `site-packages`, exposed the compatibility command, and initialized
+a fresh personal database at schema version `30`. Production deployment and acceptance are
+complete.
