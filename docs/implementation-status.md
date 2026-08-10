@@ -4902,7 +4902,7 @@ architecture, and installed-package checks passed. A separately built wheel with
 installed into a fresh Python 3.12 environment, exposed all new CLI help surfaces, and returned a
 valid local router status without downloading model files.
 
-### `0.1.0a17` production deployment — In progress
+### `0.1.0a17` production deployment — Complete
 
 The user explicitly approved production deployment and local installation of the completed shadow
 planner, compact checkpoint guidance, explicit phrase teaching, content-free diagnostics, and
@@ -4914,3 +4914,22 @@ Acceptance requires a clean complete repository gate, one reviewed release commi
 successful protected `publish-pypi.yml` execution, live PyPI metadata and integrity-provenance
 verification, and installation of the exact published `0.1.0a17` package with the `router` extra on
 this Mac. No TestPyPI publication, direct local upload, or later live-routing issue is authorized.
+
+Production deployment is complete. Release commit
+`74d851842428dc7d959daca0ce9a65080635fa2e` was pushed to `main`, and protected workflow run
+`31416676176` completed successfully. Its clean-runner repository and deterministic evaluation
+gates, source-independent build, wheel/sdist smoke tests, checksum-bound OIDC publication, and live
+PyPI verification all passed.
+
+The immutable workflow bundle, downloaded production artifacts, and PyPI integrity provenance agree
+on these SHA-256 digests:
+
+- wheel: `984a1efc2856e03df2603006525d37db69d92d5c7d2e21158f563ebcbfc6e7f5`
+- source distribution: `542387c240c025a063c166a2cf4097f6e78a295cbc6546ec9098d4225a3f766d`
+
+The first name-based local install attempt occurred before the PyPI simple index exposed the new
+version and made no installation change. The exact checksum- and provenance-verified production
+wheel was then installed with the `router` extra. The installed command reports `mnemo 0.1.0a17`,
+imports from the uv tool's `site-packages`, retains the existing Codex connection, and reports the
+pinned Potion model revision as installed and enabled in uncertainty-only shadow mode. Ordinary
+hooks remain network-free.
