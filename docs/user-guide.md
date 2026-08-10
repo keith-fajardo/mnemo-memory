@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a16
+uv tool install mnemo-unified-context==0.1.0a17
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -770,6 +770,64 @@ important: a direct lookup can show zero Mnemo attachment tokens and one downstr
 Mnemo does not claim that the downstream result was free. Use controlled client-reported usage
 tests when comparing net savings between direct inspection and structural context.
 
+#### Teach and inspect the shadow two-axis planner
+
+The live automatic route above remains unchanged and mutually exclusive. Mnemo can now evaluate a
+separate shadow plan that answers two independent questions—whether structural context is needed
+and whether long-term context is needed—with `yes`, `no`, or `unknown`. If both are `yes`, its
+proposed allocation still totals at most 1,300 tokens. Shadow results do not attach different
+context yet; this stage measures the policy before a later, separately approved live change.
+
+Teach one project-specific phrase explicitly, or forget the exact normalized phrase, with:
+
+```bash
+mnemo learn --phrase "check the blast radius" --as structure
+mnemo learn --phrase "use our release rationale" --as long-term
+mnemo forget --phrase "check the blast radius"
+```
+
+Supported routes are `long-term` (an alias for prior memory), `prior-memory`, `knowledge`, and
+`structure`. Phrases are normalized for deterministic matching, secret-scanned, capped, and stored
+in a private owner/workspace/project-scoped document. Repeating `learn` is idempotent; `forget` is
+exact and idempotent. Mnemo never learns from ordinary prompts and no learned phrase can mean
+“suppress memory.” In this issue, learned phrases affect only the shadow diagnostic result.
+
+Turn the content-free decision footprint on, inspect it, add an evaluation label, or stop/purge it:
+
+```bash
+mnemo memory diagnostics on --retention-days 7
+mnemo memory diagnostics show
+mnemo memory diagnostics mark EVENT_ID helpful
+mnemo memory diagnostics off
+mnemo memory diagnostics purge --yes
+```
+
+Labels are `helpful`, `noise`, and `missing`. A label is evaluation data only and never changes
+routing. `off` stops new events but retains existing events until their TTL or an exact-scope purge;
+`summary` restores aggregate-only collection. Each trace contains closed live/shadow decisions,
+budget proposals, latency, token estimates, and subsequent closed tool categories. It contains no
+prompt, path, payload, embedding, score, command, tool result, or hidden chain of thought. A later
+file read is correlated with the route event; the trace does not prove Mnemo caused that read.
+
+Potion is an optional uncertainty-only semantic proposal for trace mode. Install the optional
+runtime and explicitly acquire the pinned model:
+
+```bash
+uv tool install "mnemo-unified-context[router]"
+mnemo memory router setup
+mnemo memory router status
+```
+
+Setup is the only router operation that downloads files. It acquires the fixed
+`minishlab/potion-base-8M` revision, verifies the required SHA-256 digests, saves private local
+files, and performs a local smoke. Ordinary hooks accept only that verified directory and perform
+no network access. Deterministic rules and explicit learned phrases run first; Potion is called only
+for the existing uncertain knowledge fallback. Missing dependencies, disabled/corrupt weights, or
+inference failure falls back to the deterministic shadow answer without blocking the client.
+`mnemo memory router disable` keeps the verified files but prevents model use. Potion proposals
+cannot select scope, authority, retention, mutation, token ceilings, dbt lineage, live attachment,
+or a no-memory suppression.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,
@@ -830,7 +888,10 @@ automatically. This automatic attachment has a 1,750-token total budget and happ
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
 needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw
-conversation or source body.
+conversation or source body. The hook asks the agent to keep the canonical handoff at or below 450
+Mnemo-estimated tokens—below the hard 600-token checkpoint budget—with one short objective, one or
+two state sentences, and at most three short items per major list. The server still enforces the
+hard limit; the smaller requested target leaves room for JSON structure and evidence references.
 
 Shell-backed reads do not create a checkpoint obligation when Mnemo observed the Git project clean
 at session refresh and a second fixed, shell-free Git probe proves it is still clean at the same

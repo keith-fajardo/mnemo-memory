@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -29,6 +29,8 @@ _ROUTES = frozenset(
         "skill_discovery",
     }
 )
+_SHADOW_NEEDS = frozenset({"yes", "no", "unknown"})
+_SEMANTIC_ROUTES = frozenset({"none", "prior_memory", "knowledge", "structure"})
 
 
 class AutomaticRouteTelemetryError(RuntimeError):
@@ -48,6 +50,37 @@ class AutomaticRouteToolCategory(StrEnum):
     MNEMO = "mnemo"
     MUTATION = "mutation"
     OTHER = "other"
+
+
+class AutomaticRouteFeedback(StrEnum):
+    HELPFUL = "helpful"
+    NOISE = "noise"
+    MISSING = "missing"
+
+
+class AutomaticRouteDiagnosticsMode(StrEnum):
+    OFF = "off"
+    SUMMARY = "summary"
+    TRACE = "trace"
+
+
+@dataclass(frozen=True, slots=True)
+class AutomaticRouteDiagnosticsSettings:
+    mode: AutomaticRouteDiagnosticsMode = AutomaticRouteDiagnosticsMode.SUMMARY
+    retention_days: int = 7
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, AutomaticRouteDiagnosticsMode):
+            raise TypeError("automatic route diagnostic mode is invalid")
+        if (
+            not isinstance(self.retention_days, int)
+            or isinstance(self.retention_days, bool)
+            or not 1 <= self.retention_days <= 90
+        ):
+            raise ValueError("automatic route diagnostic retention is invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"mode": self.mode.value, "retention_days": self.retention_days}
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +161,16 @@ class AutomaticRouteEvent:
     tool_calls: tuple[tuple[str, int], ...] = ()
     tool_result_estimated_tokens: int = 0
     measured_tool_result_calls: int = 0
+    shadow_structural_need: str | None = None
+    shadow_long_term_need: str | None = None
+    shadow_reason: str | None = None
+    shadow_structural_tokens: int = 0
+    shadow_long_term_tokens: int = 0
+    shadow_shared_maximum_tokens: int = 0
+    semantic_invoked: bool = False
+    semantic_route: str | None = None
+    semantic_latency_ms: int = 0
+    feedback: AutomaticRouteFeedback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, UUID) or self.event_id.version != 4:
@@ -156,6 +199,10 @@ class AutomaticRouteEvent:
             self.skill_candidate_count,
             self.tool_result_estimated_tokens,
             self.measured_tool_result_calls,
+            self.shadow_structural_tokens,
+            self.shadow_long_term_tokens,
+            self.shadow_shared_maximum_tokens,
+            self.semantic_latency_ms,
         ):
             if (
                 not isinstance(value, int)
@@ -178,6 +225,37 @@ class AutomaticRouteEvent:
             raise ValueError("automatic route tool counts are invalid")
         if self.measured_tool_result_calls > sum(categories.values()):
             raise ValueError("automatic route measured tool count is invalid")
+        if (self.shadow_structural_need is None) != (self.shadow_long_term_need is None):
+            raise ValueError("automatic route shadow needs are invalid")
+        if self.shadow_structural_need is None:
+            if (
+                self.shadow_reason is not None
+                or self.shadow_structural_tokens
+                or self.shadow_long_term_tokens
+                or self.shadow_shared_maximum_tokens
+                or self.semantic_invoked
+                or self.semantic_route is not None
+                or self.semantic_latency_ms
+            ):
+                raise ValueError("automatic route shadow metadata is invalid")
+        elif (
+            self.shadow_structural_need not in _SHADOW_NEEDS
+            or self.shadow_long_term_need not in _SHADOW_NEEDS
+            or self.shadow_reason is None
+            or _SAFE_REASON.fullmatch(self.shadow_reason) is None
+            or self.shadow_shared_maximum_tokens != 1_300
+            or self.shadow_structural_tokens + self.shadow_long_term_tokens
+            > self.shadow_shared_maximum_tokens
+        ):
+            raise ValueError("automatic route shadow metadata is invalid")
+        if not isinstance(self.semantic_invoked, bool):
+            raise TypeError("automatic route semantic flag is invalid")
+        if self.semantic_invoked != (self.semantic_route is not None):
+            raise ValueError("automatic route semantic metadata is invalid")
+        if self.semantic_route is not None and self.semantic_route not in _SEMANTIC_ROUTES:
+            raise ValueError("automatic route semantic route is invalid")
+        if self.feedback is not None and not isinstance(self.feedback, AutomaticRouteFeedback):
+            raise TypeError("automatic route feedback is invalid")
 
     def with_tool_observation(
         self, category: AutomaticRouteToolCategory, result_characters: int | None
@@ -235,8 +313,13 @@ class AutomaticRouteEvent:
             duplicate_render=duplicate_render,
         )
 
+    def with_feedback(self, feedback: AutomaticRouteFeedback) -> AutomaticRouteEvent:
+        if not isinstance(feedback, AutomaticRouteFeedback):
+            raise TypeError("automatic route feedback is invalid")
+        return replace(self, feedback=feedback)
+
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "event_id": str(self.event_id),
             "scope": self.scope.to_dict(),
             "observed_at": self.observed_at.astimezone(UTC).isoformat(),
@@ -257,10 +340,26 @@ class AutomaticRouteEvent:
             "tool_result_estimated_tokens": self.tool_result_estimated_tokens,
             "measured_tool_result_calls": self.measured_tool_result_calls,
         }
+        if self.shadow_structural_need is not None or self.feedback is not None:
+            value.update(
+                {
+                    "shadow_structural_need": self.shadow_structural_need,
+                    "shadow_long_term_need": self.shadow_long_term_need,
+                    "shadow_reason": self.shadow_reason,
+                    "shadow_structural_tokens": self.shadow_structural_tokens,
+                    "shadow_long_term_tokens": self.shadow_long_term_tokens,
+                    "shadow_shared_maximum_tokens": self.shadow_shared_maximum_tokens,
+                    "semantic_invoked": self.semantic_invoked,
+                    "semantic_route": self.semantic_route,
+                    "semantic_latency_ms": self.semantic_latency_ms,
+                    "feedback": None if self.feedback is None else self.feedback.value,
+                }
+            )
+        return value
 
     @classmethod
     def from_dict(cls, value: object) -> AutomaticRouteEvent:
-        expected = {
+        required = {
             "event_id",
             "scope",
             "observed_at",
@@ -281,7 +380,22 @@ class AutomaticRouteEvent:
             "tool_result_estimated_tokens",
             "measured_tool_result_calls",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        shadow = {
+            "shadow_structural_need",
+            "shadow_long_term_need",
+            "shadow_reason",
+            "shadow_structural_tokens",
+            "shadow_long_term_tokens",
+            "shadow_shared_maximum_tokens",
+            "semantic_invoked",
+            "semantic_route",
+            "semantic_latency_ms",
+            "feedback",
+        }
+        if not isinstance(value, dict) or frozenset(value) not in {
+            frozenset(required),
+            frozenset(required | shadow),
+        }:
             raise ValueError("automatic route event is invalid")
         tool_calls = value["tool_calls"]
         if not isinstance(tool_calls, dict) or any(
@@ -292,6 +406,20 @@ class AutomaticRouteEvent:
         fallback = value["fallback_route"]
         if fallback is not None and not isinstance(fallback, str):
             raise ValueError("automatic fallback route is invalid")
+        shadow_structural_need = value.get("shadow_structural_need")
+        shadow_long_term_need = value.get("shadow_long_term_need")
+        shadow_reason = value.get("shadow_reason")
+        semantic_route = value.get("semantic_route")
+        feedback = value.get("feedback")
+        for item in (
+            shadow_structural_need,
+            shadow_long_term_need,
+            shadow_reason,
+            semantic_route,
+            feedback,
+        ):
+            if item is not None and not isinstance(item, str):
+                raise ValueError("automatic route shadow string is invalid")
         return cls(
             UUID(_string(value["event_id"])),
             AutomaticRouteScope.from_dict(value["scope"]),
@@ -312,6 +440,16 @@ class AutomaticRouteEvent:
             tuple(sorted((key, _integer(count)) for key, count in tool_calls.items())),
             _integer(value["tool_result_estimated_tokens"]),
             _integer(value["measured_tool_result_calls"]),
+            shadow_structural_need,
+            shadow_long_term_need,
+            shadow_reason,
+            _integer(value.get("shadow_structural_tokens", 0)),
+            _integer(value.get("shadow_long_term_tokens", 0)),
+            _integer(value.get("shadow_shared_maximum_tokens", 0)),
+            _boolean(value.get("semantic_invoked", False)),
+            semantic_route,
+            _integer(value.get("semantic_latency_ms", 0)),
+            None if feedback is None else AutomaticRouteFeedback(feedback),
         )
 
 
@@ -332,24 +470,123 @@ class AutomaticRouteSummary:
         }
 
 
+class LocalAutomaticRouteDiagnosticsSettingsStore:
+    """Private opt-in level and bounded retention for automatic route footprints."""
+
+    def __init__(self, data_directory: Path) -> None:
+        self._directory = data_directory.expanduser().resolve()
+        self.path = self._directory / "automatic-route-diagnostics.json"
+        self._lock_path = self._directory / ".automatic-route-diagnostics.lock"
+
+    def load(self) -> AutomaticRouteDiagnosticsSettings:
+        if not self.path.exists():
+            return AutomaticRouteDiagnosticsSettings()
+        if self.path.is_symlink() or not self.path.is_file():
+            raise AutomaticRouteTelemetryError("automatic route diagnostic settings are unsafe")
+        try:
+            if self.path.stat().st_size > 4_096:
+                raise ValueError
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"version", "settings"}
+                or value["version"] != 1
+                or not isinstance(value["settings"], dict)
+                or set(value["settings"]) != {"mode", "retention_days"}
+            ):
+                raise ValueError
+            settings = value["settings"]
+            return AutomaticRouteDiagnosticsSettings(
+                AutomaticRouteDiagnosticsMode(_string(settings["mode"])),
+                _integer(settings["retention_days"]),
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            raise AutomaticRouteTelemetryError(
+                "automatic route diagnostic settings are unavailable"
+            ) from error
+
+    def save(
+        self, settings: AutomaticRouteDiagnosticsSettings
+    ) -> AutomaticRouteDiagnosticsSettings:
+        if not isinstance(settings, AutomaticRouteDiagnosticsSettings):
+            raise TypeError("automatic route diagnostic settings are invalid")
+        payload = json.dumps(
+            {"version": 1, "settings": settings.to_dict()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        temporary: Path | None = None
+        descriptor: int | None = None
+        try:
+            self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(self._directory, 0o700)
+            flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(self._lock_path, flags, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            if self.path.is_symlink():
+                raise OSError
+            with NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self._directory, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(payload)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self.path)
+            os.chmod(self.path, 0o600)
+        except OSError as error:
+            raise AutomaticRouteTelemetryError(
+                "automatic route diagnostic settings are unavailable"
+            ) from error
+        finally:
+            if descriptor is not None:
+                with suppress(OSError):
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return settings
+
+
 class LocalAutomaticRouteTelemetryStore:
     """Keep a bounded private snapshot of content-free route measurements."""
 
-    def __init__(self, data_directory: Path, *, maximum_events: int = 256) -> None:
+    def __init__(
+        self,
+        data_directory: Path,
+        *,
+        maximum_events: int = 256,
+        retention_days: int = 7,
+    ) -> None:
         if not isinstance(maximum_events, int) or isinstance(maximum_events, bool):
             raise TypeError("maximum route events must be an integer")
         if not 1 <= maximum_events <= 4_096:
             raise ValueError("maximum route events are out of bounds")
+        if (
+            not isinstance(retention_days, int)
+            or isinstance(retention_days, bool)
+            or not 1 <= retention_days <= 90
+        ):
+            raise ValueError("automatic route retention is out of bounds")
         self._directory = data_directory.expanduser().resolve()
         self.path = self._directory / "automatic-route-telemetry.json"
         self._maximum_events = maximum_events
+        self._retention_days = retention_days
 
     def record(self, event: AutomaticRouteEvent) -> None:
         if not isinstance(event, AutomaticRouteEvent):
             raise TypeError("automatic route event is invalid")
         with self._lock():
             events, _ = self._read()
-            events = [candidate for candidate in events if candidate.event_id != event.event_id]
+            events = [
+                candidate
+                for candidate in self._current(events, event.observed_at)
+                if candidate.event_id != event.event_id
+            ]
             events.append(event)
             events.sort(key=lambda item: (item.observed_at, str(item.event_id)))
             self._write(events[-self._maximum_events :])
@@ -409,7 +646,7 @@ class LocalAutomaticRouteTelemetryStore:
 
     def summary(self, scope: AutomaticRouteScope) -> AutomaticRouteSummary:
         events, status = self._read()
-        selected = [event for event in events if event.scope == scope]
+        selected = [event for event in self._current(events) if event.scope == scope]
         totals = {
             "maximum_attachment_tokens": sum(event.maximum_attachment_tokens for event in selected),
             "canonical_tokens": sum(event.canonical_tokens for event in selected),
@@ -458,6 +695,65 @@ class LocalAutomaticRouteTelemetryStore:
                 event.rendered_estimated_tokens + event.tool_result_estimated_tokens
             )
         return AutomaticRouteSummary(status, len(selected), totals, routes)
+
+    def events(
+        self, scope: AutomaticRouteScope, *, limit: int = 20
+    ) -> tuple[AutomaticRouteEvent, ...]:
+        if not isinstance(scope, AutomaticRouteScope):
+            raise TypeError("automatic route scope is invalid")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("automatic route event limit is invalid")
+        events, status = self._read()
+        if status == "corrupt":
+            raise AutomaticRouteTelemetryError("automatic route state is unavailable")
+        selected = [event for event in self._current(events) if event.scope == scope]
+        return tuple(reversed(selected[-limit:]))
+
+    def record_feedback(
+        self,
+        scope: AutomaticRouteScope,
+        event_id: UUID,
+        feedback: AutomaticRouteFeedback,
+    ) -> bool:
+        if (
+            not isinstance(scope, AutomaticRouteScope)
+            or not isinstance(event_id, UUID)
+            or not isinstance(feedback, AutomaticRouteFeedback)
+        ):
+            raise TypeError("automatic route feedback is invalid")
+        with self._lock():
+            events, status = self._read()
+            if status == "corrupt":
+                raise AutomaticRouteTelemetryError("automatic route state is unavailable")
+            changed = False
+            values: list[AutomaticRouteEvent] = []
+            for event in self._current(events):
+                if event.event_id == event_id and event.scope == scope:
+                    event = event.with_feedback(feedback)
+                    changed = True
+                values.append(event)
+            if changed:
+                self._write(values)
+            return changed
+
+    def purge(self, scope: AutomaticRouteScope) -> int:
+        if not isinstance(scope, AutomaticRouteScope):
+            raise TypeError("automatic route scope is invalid")
+        with self._lock():
+            events, status = self._read()
+            if status == "corrupt":
+                raise AutomaticRouteTelemetryError("automatic route state is unavailable")
+            removed = sum(1 for event in events if event.scope == scope)
+            if removed:
+                self._write([event for event in events if event.scope != scope])
+            return removed
+
+    def _current(
+        self, events: list[AutomaticRouteEvent], as_of: datetime | None = None
+    ) -> list[AutomaticRouteEvent]:
+        now = datetime.now(UTC) if as_of is None else as_of.astimezone(UTC)
+        cutoff = now - timedelta(days=self._retention_days)
+        return [event for event in events if event.observed_at.astimezone(UTC) >= cutoff]
 
     def _read(self) -> tuple[list[AutomaticRouteEvent], str]:
         if not self.path.exists():

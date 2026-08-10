@@ -935,16 +935,13 @@ def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefre
     instruction = (
         "Before finishing or compacting this task, call Mnemo save_checkpoint with this project "
         f"scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
-        "Create or revise the active checkpoint with a concise objective, current state, "
-        "decisions, verification, evidence, and next action. When a reasoning or analysis "
-        "mistake was corrected, either include a lesson in that revision or use the existing "
-        "save_checkpoint record_lesson operation to append one correction without rebuilding the "
-        "handoff: trigger, mistaken assumption, correction, prevention, and the IDs of its "
-        "supporting evidence. For a separate verified decision, failure, or tool outcome that "
-        "should survive without rewriting the handoff, use save_checkpoint record_event with a "
-        "stable source key and evidence. Recording that small fact does not replace this full "
-        "checkpoint. Retain any still-applicable lessons and approved facts from the current "
-        "context. Do not include a full transcript."
+        "Create or revise the active checkpoint at no more than 450 Mnemo-estimated tokens: one "
+        "short objective, one or two state sentences, and at most three short items each for "
+        "completed work, decisions, verification, and next actions. Keep only relevant evidence "
+        "and files; retain still-applicable lessons and approved facts. For one corrected "
+        "mistake, use record_lesson with its evidence IDs; for one separate verified fact, use "
+        "record_event. "
+        "Neither replaces the checkpoint. Do not include a full transcript."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)

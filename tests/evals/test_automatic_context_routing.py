@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import cast
 
-from mnemo_memory.packages.application.context_routing import choose_automatic_context_route
+from mnemo_memory.packages.application.context_routing import (
+    AutomaticContextNeed,
+    choose_automatic_context_route,
+    plan_automatic_context_needs,
+)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/evals/automatic-context-routing-v1.json"
 
@@ -51,3 +55,47 @@ def test_router_meets_cost_weighted_recall_and_no_memory_precision_gates() -> No
     assert structure_recall >= 0.80
     assert none_precision == 1.0
     assert all(not (actual == "none" and expected != "none") for expected, actual in rows)
+
+
+def test_shadow_planner_meets_combined_axis_and_shared_cost_gates() -> None:
+    cases = (
+        (
+            "Use the previous architecture decision and show which modules depend on this service.",
+            AutomaticContextNeed.YES,
+            AutomaticContextNeed.YES,
+        ),
+        (
+            "Check the documented policy and trace every caller of the affected function.",
+            AutomaticContextNeed.YES,
+            AutomaticContextNeed.YES,
+        ),
+        (
+            "Resume the prior task and inspect downstream files for the chosen adapter.",
+            AutomaticContextNeed.YES,
+            AutomaticContextNeed.YES,
+        ),
+        (
+            "What did we decide in the earlier session?",
+            AutomaticContextNeed.UNKNOWN,
+            AutomaticContextNeed.YES,
+        ),
+        (
+            "Show the dependency graph around this package.",
+            AutomaticContextNeed.YES,
+            AutomaticContextNeed.UNKNOWN,
+        ),
+        (
+            "Translate this complete sentence into French.",
+            AutomaticContextNeed.NO,
+            AutomaticContextNeed.NO,
+        ),
+    )
+
+    for prompt, expected_structure, expected_long_term in cases:
+        live_before = choose_automatic_context_route(prompt)
+        shadow = plan_automatic_context_needs(prompt)
+        live_after = choose_automatic_context_route(prompt)
+        assert shadow.structural_need is expected_structure
+        assert shadow.long_term_need is expected_long_term
+        assert shadow.structural_tokens + shadow.long_term_tokens <= 1_300
+        assert live_after == live_before

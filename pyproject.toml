@@ -1,6 +1,6 @@
 [project]
 name = "mnemo-unified-context"
-version = "0.1.0a16"
+version = "0.1.0a17"
 description = "Local-first durable checkpoint and dbt lineage context for coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -49,6 +49,12 @@ Documentation = "https://github.com/keith-fajardo/mnemo-memory#readme"
 # model weights are fetched only after an explicit local semantic-index action.
 semantic = [
     "fastembed==0.8.0",
+]
+# This extra is used only by the explicitly enabled shadow planner. Ordinary hooks load verified
+# local files and never acquire model weights from the network.
+router = [
+    "huggingface-hub==1.26.0",
+    "model2vec==0.7.0",
 ]
 # Team PostgreSQL support is optional so personal SQLite installs do not acquire a database driver.
 team = [

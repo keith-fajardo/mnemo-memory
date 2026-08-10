@@ -756,9 +756,9 @@ version = "15.0.0"
 license = "MIT"
 source_url = "https://pypi.org/project/rich/15.0.0/"
 author = "Textualize contributors"
-owner = "typer"
-purpose = "CLI presentation"
-replacement_boundary = "Transitive Typer dependency"
+owner = "typer and model2vec"
+purpose = "CLI presentation and optional Model2Vec model-card support"
+replacement_boundary = "Transitive Typer and optional Model2Vec dependency"
 direct = false
 approved = true
 
@@ -998,6 +998,102 @@ approved = true
 
 [[dependencies]]
 ecosystem = "pypi"
+name = "model2vec"
+version = "0.7.0"
+license = "MIT"
+source_url = "https://pypi.org/project/model2vec/0.7.0/"
+author = "Stéphan Tulkens, Thomas van Dongen, and Model2Vec contributors"
+owner = "Mnemo optional hybrid-router adapter"
+purpose = "Loads the explicitly installed Potion static embedding model for uncertainty-only local routing"
+replacement_boundary = "Local routing connector; deterministic policy and application routing contracts remain provider-independent"
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "Jinja2"
+version = "3.1.6"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/Jinja2/3.1.6/"
+author = "Pallets contributors"
+owner = "model2vec"
+purpose = "Template runtime declared by the optional Model2Vec package"
+replacement_boundary = "Transitive Model2Vec model-card support; Mnemo routing does not render templates"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "MarkupSafe"
+version = "3.0.3"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/MarkupSafe/3.0.3/"
+author = "Pallets contributors"
+owner = "Jinja2"
+purpose = "Escaping helper required transitively by Jinja2"
+replacement_boundary = "Transitive Jinja2 support removed with the optional Model2Vec adapter"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "joblib"
+version = "1.5.3"
+license = "BSD-3-Clause"
+source_url = "https://pypi.org/project/joblib/1.5.3/"
+author = "Gael Varoquaux and joblib contributors"
+owner = "model2vec"
+purpose = "Local parallel-work helper declared by Model2Vec; Mnemo keeps routing batches below its multiprocessing threshold"
+replacement_boundary = "Transitive optional Model2Vec inference support"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "safetensors"
+version = "0.8.0"
+license = "Apache-2.0"
+source_url = "https://pypi.org/project/safetensors/0.8.0/"
+author = "Hugging Face safetensors contributors"
+owner = "model2vec"
+purpose = "Memory-safe loading of the digest-verified local Potion embedding matrix"
+replacement_boundary = "Transitive optional Model2Vec weight-loading boundary"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
+name = "setuptools"
+version = "84.0.0"
+license = "MIT"
+source_url = "https://pypi.org/project/setuptools/84.0.0/"
+author = "Python Packaging Authority contributors"
+owner = "model2vec"
+purpose = "Runtime package metadata support declared by Model2Vec"
+replacement_boundary = "Transitive optional Model2Vec packaging support"
+direct = false
+approved = true
+
+[[dependencies]]
+ecosystem = "model-artifact"
+name = "minishlab/potion-base-8M"
+version = "bf8b056651a2c21b8d2565580b8569da283cab23"
+license = "MIT"
+source_url = "https://huggingface.co/minishlab/potion-base-8M/tree/bf8b056651a2c21b8d2565580b8569da283cab23"
+author = "MinishLab contributors"
+owner = "Mnemo optional hybrid-router adapter"
+purpose = "Pinned English static embeddings used only for local uncertainty routing after explicit setup"
+replacement_boundary = "Digest-verified local model directory; deterministic routing remains the fail-open authority"
+required_files = [
+  "config.json@sha256:2a6ac0e9aaa356a68a5688070db78fc3a464fefe85d2f06a1905ce3718687553",
+  "model.safetensors@sha256:f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2",
+  "tokenizer.json@sha256:e67e803f624fb4d67dea1c730d06e1067e1b14d830e2c2202569e3ef0f70bb50",
+]
+direct = true
+approved = true
+
+[[dependencies]]
+ecosystem = "pypi"
 name = "onnxruntime"
 version = "1.28.0"
 license = "MIT"
@@ -1016,9 +1112,9 @@ version = "2.5.1"
 license = "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
 source_url = "https://pypi.org/project/numpy/2.5.1/"
 author = "NumPy contributors"
-owner = "fastembed"
-purpose = "Numeric vectors required by the optional local embedding runtime"
-replacement_boundary = "Transitive FastEmbed numeric runtime"
+owner = "fastembed and model2vec"
+purpose = "Numeric vectors required by the optional local semantic and Potion runtimes"
+replacement_boundary = "Transitive optional local embedding numeric runtime"
 direct = false
 approved = true
 
@@ -1029,10 +1125,10 @@ version = "1.26.0"
 license = "Apache-2.0"
 source_url = "https://pypi.org/project/huggingface-hub/1.26.0/"
 author = "Hugging Face, Inc."
-owner = "fastembed"
-purpose = "Explicit local model-artifact acquisition for the optional semantic extra"
-replacement_boundary = "Transitive FastEmbed model-download client; never used by default Mnemo operation"
-direct = false
+owner = "Mnemo optional semantic and Potion adapters"
+purpose = "Explicit model-artifact support for optional local semantic and Potion runtimes"
+replacement_boundary = "Optional model support; never used by default Mnemo operation or ordinary-hook acquisition"
+direct = true
 approved = true
 
 [[dependencies]]
@@ -1055,9 +1151,9 @@ version = "0.23.1"
 license = "Apache-2.0"
 source_url = "https://pypi.org/project/tokenizers/0.23.1/"
 author = "Hugging Face contributors"
-owner = "fastembed"
-purpose = "Local tokenization required by the optional embedding model"
-replacement_boundary = "Transitive FastEmbed tokenization runtime"
+owner = "fastembed and model2vec"
+purpose = "Local tokenization required by optional semantic and Potion models"
+replacement_boundary = "Transitive optional local embedding tokenization runtime"
 direct = false
 approved = true
 
@@ -1094,9 +1190,9 @@ version = "4.70.0"
 license = "MPL-2.0 AND MIT"
 source_url = "https://pypi.org/project/tqdm/4.70.0/"
 author = "tqdm contributors"
-owner = "fastembed"
-purpose = "Progress reporting for explicit local model acquisition"
-replacement_boundary = "Transitive FastEmbed progress utility"
+owner = "fastembed and model2vec"
+purpose = "Progress support for explicitly invoked optional local model operations"
+replacement_boundary = "Transitive optional local embedding progress utility"
 direct = false
 approved = true
 

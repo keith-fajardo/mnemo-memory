@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from uuid import UUID
 
+import pytest
+from typer.testing import CliRunner
+
+from mnemo_memory.apps.cli.main import app
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.telemetry import (
+    AutomaticRouteDiagnosticsMode,
+    AutomaticRouteDiagnosticsSettings,
     AutomaticRouteEvent,
+    AutomaticRouteFeedback,
     AutomaticRouteOutcome,
     AutomaticRouteScope,
+    AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
 
@@ -129,3 +141,98 @@ def test_corrupt_route_state_is_reported_without_payload_and_recovers_on_record(
     assert recovered["status"] == "available"
     assert recovered["event_count"] == 1
     assert private_marker not in store.path.read_text(encoding="utf-8")
+
+
+def test_trace_fields_are_content_free_backward_compatible_and_labelable(tmp_path: Path) -> None:
+    store = LocalAutomaticRouteTelemetryStore(tmp_path)
+    traced = replace(
+        _event(1),
+        shadow_structural_need="yes",
+        shadow_long_term_need="yes",
+        shadow_reason="potion_proposal",
+        shadow_structural_tokens=600,
+        shadow_long_term_tokens=700,
+        shadow_shared_maximum_tokens=1_300,
+        semantic_invoked=True,
+        semantic_route="structure",
+        semantic_latency_ms=14,
+    )
+    store.record(traced)
+
+    assert store.events(SCOPE) == (traced,)
+    assert store.record_feedback(SCOPE, traced.event_id, AutomaticRouteFeedback.HELPFUL) is True
+    labeled = store.events(SCOPE)[0]
+    assert labeled.feedback is AutomaticRouteFeedback.HELPFUL
+    encoded = store.path.read_text(encoding="utf-8")
+    assert "prompt" not in encoded and "embedding" not in encoded and "score" not in encoded
+
+    legacy = _event(2).to_dict()
+    assert "shadow_structural_need" not in legacy
+    store.path.write_text(json.dumps({"version": 1, "events": [legacy]}), encoding="utf-8")
+    assert store.summary(SCOPE).event_count == 1
+
+
+def test_diagnostic_settings_are_private_strict_and_default_to_summary(tmp_path: Path) -> None:
+    store = LocalAutomaticRouteDiagnosticsSettingsStore(tmp_path)
+
+    assert store.load() == AutomaticRouteDiagnosticsSettings()
+    saved = store.save(AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 14))
+
+    assert store.load() == saved
+    assert store.path.stat().st_mode & 0o777 == 0o600
+    store.path.write_text('{"mode":"trace","prompt":"private"}', encoding="utf-8")
+    with pytest.raises(AutomaticRouteTelemetryError, match="settings"):
+        store.load()
+
+
+def test_exact_scope_purge_does_not_remove_another_project(tmp_path: Path) -> None:
+    other_scope = replace(
+        SCOPE,
+        project_id="66666666-6666-4666-8666-666666666666",
+        task_id="77777777-7777-4777-8777-777777777777",
+    )
+    store = LocalAutomaticRouteTelemetryStore(tmp_path)
+    store.record(_event(1))
+    store.record(replace(_event(2), scope=other_scope))
+
+    assert store.purge(SCOPE) == 1
+    assert store.events(SCOPE) == ()
+    assert len(store.events(other_scope)) == 1
+
+
+def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    project = tmp_path / "project"
+    project.mkdir()
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    scope = AutomaticRouteScope(
+        str(binding.checkpoint_scope.owner_id),
+        str(binding.checkpoint_scope.workspace_id),
+        str(binding.checkpoint_scope.project_id),
+        str(binding.checkpoint_scope.session_id),
+        str(binding.checkpoint_scope.task_id),
+        binding.checkpoint_scope.visibility.value,
+    )
+    event = replace(_event(9), scope=scope, observed_at=datetime.now(UTC))
+    LocalAutomaticRouteTelemetryStore(data).record(event)
+    common = ["--project-dir", str(project), "--data-dir", str(data)]
+    runner = CliRunner()
+
+    enabled = runner.invoke(
+        app, ["memory", "diagnostics", "on", "--retention-days", "14", "--data-dir", str(data)]
+    )
+    shown = runner.invoke(app, ["memory", "diagnostics", "show", *common])
+    marked = runner.invoke(
+        app,
+        ["memory", "diagnostics", "mark", str(event.event_id), "helpful", *common],
+    )
+    disabled = runner.invoke(app, ["memory", "diagnostics", "off", "--data-dir", str(data)])
+    purged = runner.invoke(app, ["memory", "diagnostics", "purge", "--yes", *common])
+
+    assert enabled.exit_code == shown.exit_code == marked.exit_code == disabled.exit_code == 0
+    assert purged.exit_code == 0
+    assert json.loads(enabled.output)["mode"] == "trace"
+    assert json.loads(shown.output)["notice"].endswith("does not prove causation.")
+    assert json.loads(marked.output)["changes_routing"] is False
+    assert json.loads(disabled.output)["existing_events_retained"] is True
+    assert json.loads(purged.output)["removed_events"] == 1

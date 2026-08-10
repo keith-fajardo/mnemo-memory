@@ -1,12 +1,18 @@
 """Deterministic, cost-aware automatic context routing."""
 
+import pytest
+
 from mnemo_memory.packages.application.context_routing import (
+    AutomaticContextNeed,
     AutomaticContextRoute,
     AutomaticContextRouteReason,
     CompactLocalMemoryRouter,
     CompactMemoryRoute,
+    CompactMemoryRouteDecision,
+    LearnedRoutePhrase,
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
+    plan_automatic_context_needs,
 )
 
 
@@ -194,3 +200,53 @@ def test_document_and_self_contained_cues_override_memory_word_distractors() -> 
     assert documented.reason is AutomaticContextRouteReason.EXPLICIT_KNOWLEDGE
     assert previous_value.route is AutomaticContextRoute.NONE
     assert translation.route is AutomaticContextRoute.NONE
+
+
+def test_shadow_planner_can_request_structure_and_long_term_under_one_ceiling() -> None:
+    prompt = (
+        "Use the architecture decision from our previous session and show which modules depend "
+        "on the router."
+    )
+
+    live = choose_automatic_context_route(prompt)
+    shadow = plan_automatic_context_needs(prompt)
+
+    assert live.route is AutomaticContextRoute.PRIOR_MEMORY
+    assert shadow.structural_need is AutomaticContextNeed.YES
+    assert shadow.long_term_need is AutomaticContextNeed.YES
+    assert shadow.structural_tokens == 600
+    assert shadow.long_term_tokens == 700
+    assert shadow.structural_tokens + shadow.long_term_tokens == shadow.shared_maximum_tokens
+
+
+def test_learned_phrase_affects_only_one_shadow_axis_and_cannot_suppress_memory() -> None:
+    phrase = LearnedRoutePhrase("reconcile the ledger", CompactMemoryRoute.STRUCTURE)
+
+    live = choose_automatic_context_route("Please reconcile the ledger for this request.")
+    shadow = plan_automatic_context_needs(
+        "Please reconcile the ledger for this request.", learned_phrases=(phrase,)
+    )
+
+    assert live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+    assert shadow.structural_need is AutomaticContextNeed.YES
+    assert shadow.long_term_need is AutomaticContextNeed.UNKNOWN
+    assert shadow.reason == "learned_phrase"
+    with pytest.raises(ValueError, match="cannot suppress"):
+        LearnedRoutePhrase("skip all memory", CompactMemoryRoute.NONE)
+
+
+class _NoneSemanticRouter:
+    def classify(self, prompt: str) -> CompactMemoryRouteDecision:
+        return CompactMemoryRouteDecision(CompactMemoryRoute.NONE, 0.9, 0.8)
+
+
+def test_semantic_none_proposal_does_not_turn_unknown_into_no() -> None:
+    shadow = plan_automatic_context_needs(
+        "finance reconciliation variance", semantic_router=_NoneSemanticRouter()
+    )
+
+    assert shadow.semantic_invoked is True
+    assert shadow.semantic_route is CompactMemoryRoute.NONE
+    assert shadow.structural_need is AutomaticContextNeed.UNKNOWN
+    assert shadow.long_term_need is AutomaticContextNeed.UNKNOWN
+    assert shadow.structural_tokens == shadow.long_term_tokens == 0

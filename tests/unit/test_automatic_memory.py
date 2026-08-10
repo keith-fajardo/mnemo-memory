@@ -25,6 +25,7 @@ from mnemo_memory.connectors.automatic_memory.hook import (
     AutomaticMemoryHook,
     PromptContextAttachment,
 )
+from mnemo_memory.connectors.automatic_memory.learned_routes import LocalLearnedRouteStore
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
     refresh_registered_project_source,
@@ -33,6 +34,10 @@ from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
     LocalDbtProjectBindingStore,
+)
+from mnemo_memory.connectors.local_embeddings import (
+    LocalPotionRouterSettingsStore,
+    PotionRouterSettings,
 )
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
@@ -49,6 +54,7 @@ from mnemo_memory.packages.application.checkpoints import (
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.application.config import LocalConfig
+from mnemo_memory.packages.application.context_routing import CompactMemoryRoute
 from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -73,6 +79,9 @@ from mnemo_memory.packages.storage import (
     SQLiteSourceStructureRepository,
 )
 from mnemo_memory.packages.telemetry import (
+    AutomaticRouteDiagnosticsMode,
+    AutomaticRouteDiagnosticsSettings,
+    LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
 
@@ -290,6 +299,8 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "still-applicable lessons" in str(stop)
     assert "record_event" in str(stop)
     assert "full transcript" in str(stop)
+    assert "no more than 450 Mnemo-estimated tokens" in str(stop)
+    assert "at most three short items" in str(stop)
 
     failed_save = hook.handle(
         {
@@ -770,6 +781,11 @@ def test_automatic_prompt_secret_view_never_reaches_the_embedding_provider(
         raise AssertionError("secret-bearing prompt must not construct an embedding provider")
 
     monkeypatch.setattr(cli, "FastEmbedLocalProvider", reject_provider)
+    monkeypatch.setattr(cli, "PotionLocalMemoryRouter", reject_provider)
+    LocalAutomaticRouteDiagnosticsSettingsStore(data).save(
+        AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7)
+    )
+    LocalPotionRouterSettingsStore(data).save(PotionRouterSettings(True))
     attached = cli._automatic_prompt_context_for_hook(
         data,
         binding.checkpoint_scope,
@@ -1218,6 +1234,37 @@ def test_exact_lookup_records_zero_attachment_and_unknown_direct_tool_cost(
     assert summary["totals"]["rendered_estimated_tokens"] == 0
     assert summary["totals"]["tool_calls"] == 1
     assert summary["totals"]["unmeasured_tool_calls"] == 1
+
+
+def test_trace_mode_records_shadow_axes_and_off_mode_stops_new_events(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    LocalLearnedRouteStore(data).learn(binding.scope, "blast radius", CompactMemoryRoute.STRUCTURE)
+    settings = LocalAutomaticRouteDiagnosticsSettingsStore(data)
+    settings.save(AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7))
+
+    prompt = "Use the previous session decision and check the blast radius."
+    traced = cli._automatic_prompt_context_for_hook(data, binding.checkpoint_scope, prompt, "codex")
+    scope = cli._automatic_route_scope(binding.checkpoint_scope)
+    events = LocalAutomaticRouteTelemetryStore(data).events(scope)
+
+    assert traced.telemetry_event_id is not None
+    assert len(events) == 1
+    assert events[0].route == "prior_memory"
+    assert events[0].shadow_structural_need == "yes"
+    assert events[0].shadow_long_term_need == "yes"
+    assert events[0].shadow_reason == "learned_phrase"
+    assert events[0].shadow_structural_tokens + events[0].shadow_long_term_tokens == 1_300
+    assert prompt not in LocalAutomaticRouteTelemetryStore(data).path.read_text(encoding="utf-8")
+
+    settings.save(AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.OFF, 7))
+    disabled = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, "Where is AutomaticMemoryHook defined?", "codex"
+    )
+    assert disabled.telemetry_event_id is None
+    assert len(LocalAutomaticRouteTelemetryStore(data).events(scope)) == 1
 
 
 def test_compact_router_skips_memory_without_retaining_its_prompt(tmp_path: Path) -> None:

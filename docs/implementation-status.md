@@ -4845,3 +4845,72 @@ An independent post-workflow audit downloaded that bundle, verified its checksum
 PyPI integrity provenance, and installed the exact published wheel into a fresh Python 3.12
 environment. The isolated command reported `mnemo-memory 0.1.0a16`, imported from `site-packages`,
 loaded packaged resources, and initialized a fresh personal database at schema version `30`.
+
+### Shadow structural/long-term planner, diagnostics, and optional Potion router — Complete
+
+The user explicitly approved the first staged slice of a two-axis structural/long-term planner after
+reviewing local routing benchmarks and an independent architecture review. This issue also includes
+project-scoped phrase teaching through the user-facing `mnemo learn --phrase "..." --as ROUTE` and
+`mnemo forget --phrase "..."` commands, an opt-in content-free decision footprint, and a checkpoint
+hook instruction that asks the agent to stay below 450 Mnemo-estimated tokens. Complete command help
+and user documentation are required. Mnemo must never silently persist prompts seen by automatic
+hooks; learning is an explicit user-authorized mutation only.
+
+Live automatic attachment remains unchanged and mutually exclusive during this issue. In shadow
+mode, structural need and long-term-memory need are independently classified as yes, no, or unknown
+under one 1,300-token planning ceiling, so a prompt may require both. Authoritative literal and
+deterministic routes remain first. The pinned local Potion embedding adapter may propose only when
+the live router returns its existing uncertain knowledge fallback. Its proposal cannot select scope,
+authority, source truth, token budgets, retention, mutation, dbt lineage, direct lookup, or live
+attachment, and a learned/model `none` proposal cannot suppress memory. Missing dependencies, absent
+or invalid weights, loading failure, and inference failure preserve the current bounded knowledge
+fallback without blocking the coding agent. Ordinary hooks perform no network access; model setup is
+explicit, revision-pinned, and digest-verified.
+
+Learned phrases must be bounded, secret-scanned, normalized for exact duplicate/forget behavior,
+stored in an owner/workspace/project-scoped private local document with source, sensitivity, and
+creation provenance, and capped against unbounded growth. Forgetting must be exact, scoped, and
+idempotent, and must leave no derived cache under Mnemo's control. The model receives only the same
+transient 512-character head/tail routing view already approved; prompts, embeddings, scores, and
+predictions remain absent from telemetry and durable state.
+
+Trace diagnostics are explicit and fail-open. They may retain only closed decision fields, route
+costs, latency, subsequent closed tool categories, and an explicit helpful/noise/missing label for a
+bounded TTL. They never retain prompts, paths, payloads, embeddings, scores, hidden reasoning, or
+chain of thought, and they report correlation rather than causation. Turning diagnostics off stops
+new events; exact-scope purge removes existing events. No diagnostic label directly changes routing.
+
+Acceptance requires combined-axis, shared-budget, unchanged-live-route, checkpoint-size-instruction,
+pinned dependency/model provenance, original route examples, routing and cost-weighted evaluation,
+secret and cross-project isolation, corrupt-state, backward-compatible telemetry, model-failure
+fallback, CLI help/documentation, warm/cold latency evidence, the complete `npm run check` gate, and
+a local installed workflow smoke. No live combined attachment, PreToolUse injection, hosted provider,
+configured agent model change, Redis service, automatic phrase promotion, automatic memory-age
+promotion, team-mode learning, Glimmer runtime, or deployment is part of this issue.
+
+Implemented the bounded shadow planner, private scoped phrase store, explicit teach/forget commands,
+summary/trace/off diagnostics with TTL and feedback labels, digest-pinned optional Potion adapter, and
+compact checkpoint instruction. The current live attachment route remains unchanged. On the held-out
+60-prompt evaluation, deterministic routing classified 56 prompts correctly and the uncertainty-only
+hybrid classified 57; Potion ran for four uncertain prompts, improved one, and introduced no
+regression. On the validation machine, first classification took 329.32 ms; the 100-sample warm
+median was 0.15 ms and p95 was 0.20 ms.
+
+The complete `npm run check` gate passed: 1,024 tests passed with 27 expected skips, the isolated
+PostgreSQL suite passed 26 tests with one opt-in load test skipped, and schema, dependency,
+architecture, and installed-package checks passed. A separately built wheel with the `router` extra
+installed into a fresh Python 3.12 environment, exposed all new CLI help surfaces, and returned a
+valid local router status without downloading model files.
+
+### `0.1.0a17` production deployment — In progress
+
+The user explicitly approved production deployment and local installation of the completed shadow
+planner, compact checkpoint guidance, explicit phrase teaching, content-free diagnostics, and
+optional Potion router. Release preparation advances the pinned prerelease version to `0.1.0a17`
+without changing the approved runtime boundary: live attachment remains unchanged and the new
+two-axis planner remains shadow-only.
+
+Acceptance requires a clean complete repository gate, one reviewed release commit pushed to `main`,
+successful protected `publish-pypi.yml` execution, live PyPI metadata and integrity-provenance
+verification, and installation of the exact published `0.1.0a17` package with the `router` extra on
+this Mac. No TestPyPI publication, direct local upload, or later live-routing issue is authorized.

@@ -11,6 +11,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib import import_module
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 from time import monotonic
@@ -29,6 +30,10 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
 from mnemo_memory.connectors.automatic_memory.hook import (
     AutomaticMemoryHook,
     PromptContextAttachment,
+)
+from mnemo_memory.connectors.automatic_memory.learned_routes import (
+    LearnedRouteStoreError,
+    LocalLearnedRouteStore,
 )
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
@@ -54,7 +59,17 @@ from mnemo_memory.connectors.filesystem import (
     MarkdownSourceDiscovery,
     MarkdownSourceDiscoveryRequest,
 )
-from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
+from mnemo_memory.connectors.local_embeddings import (
+    POTION_MODEL_ID,
+    POTION_MODEL_REVISION,
+    FastEmbedLocalProvider,
+    LocalPotionRouterSettingsStore,
+    PotionLocalMemoryRouter,
+    PotionModelInstaller,
+    PotionRouterError,
+    PotionRouterSettings,
+    verify_potion_model,
+)
 from mnemo_memory.packages.application import (
     CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationEpisodicEventNotFound,
@@ -114,8 +129,11 @@ from mnemo_memory.packages.application.command_wrapper import (
 from mnemo_memory.packages.application.context_routing import (
     AutomaticContextRoute,
     AutomaticContextRouteDecision,
+    AutomaticContextShadowPlan,
+    CompactMemoryRoute,
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
+    plan_automatic_context_needs,
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.application.unified_context import (
@@ -183,11 +201,15 @@ from mnemo_memory.packages.storage import (
     SQLiteSourceStructureRepository,
 )
 from mnemo_memory.packages.telemetry import (
+    AutomaticRouteDiagnosticsMode,
+    AutomaticRouteDiagnosticsSettings,
     AutomaticRouteEvent,
+    AutomaticRouteFeedback,
     AutomaticRouteOutcome,
     AutomaticRouteScope,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
 
@@ -242,6 +264,14 @@ memory_event_app = typer.Typer(
     no_args_is_help=True,
     help="Inspect, correct, or retract explicit approved project facts.",
 )
+memory_router_app = typer.Typer(
+    no_args_is_help=True,
+    help="Set up the optional local Potion shadow router.",
+)
+memory_route_diagnostics_app = typer.Typer(
+    no_args_is_help=True,
+    help="Control and inspect content-free automatic route footprints.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
@@ -256,6 +286,16 @@ memory_app.add_typer(
     memory_event_app,
     name="event",
     help="Inspect, correct, or retract one explicit approved project fact.",
+)
+memory_app.add_typer(
+    memory_router_app,
+    name="router",
+    help="Set up the optional local Potion shadow router.",
+)
+memory_app.add_typer(
+    memory_route_diagnostics_app,
+    name="diagnostics",
+    help="Control content-free automatic route footprints.",
 )
 
 _CLI_APPROVED_EVENT_NAMESPACE = UUID("f40bdf0f-3f1c-4540-956e-6cd210477bee")
@@ -288,6 +328,12 @@ class _AutomaticPromptContextResult:
     skill_candidates: tuple[SkillDiscoveryCandidate, ...]
     duration_ms: int
     failed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _AutomaticShadowTrace:
+    plan: AutomaticContextShadowPlan
+    semantic_latency_ms: int
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
@@ -644,6 +690,48 @@ def _render_automatic_context_attachment(
         return None
 
 
+def _automatic_shadow_trace(
+    data_directory: Path, scope: MemoryScope, prompt: str
+) -> _AutomaticShadowTrace:
+    """Evaluate the opt-in shadow planner; every adapter failure falls back deterministically."""
+
+    project_scope = MemoryScope(
+        scope.owner_id,
+        ScopeLevel.PROJECT,
+        scope.visibility,
+        scope.workspace_id,
+        scope.project_id,
+    )
+    try:
+        learned = tuple(
+            record.routing_phrase()
+            for record in LocalLearnedRouteStore(data_directory).records(project_scope)
+        )
+    except (LearnedRouteStoreError, OSError, TypeError, ValueError):
+        learned = ()
+
+    semantic_router: PotionLocalMemoryRouter | None = None
+    if not contains_high_confidence_secret(prompt):
+        try:
+            settings = LocalPotionRouterSettingsStore(data_directory).load()
+            if settings.enabled:
+                semantic_router = PotionLocalMemoryRouter(data_directory)
+        except (PotionRouterError, OSError, TypeError, ValueError):
+            semantic_router = None
+
+    started = monotonic()
+    try:
+        plan = plan_automatic_context_needs(
+            prompt,
+            learned_phrases=learned,
+            semantic_router=semantic_router,
+        )
+    except (PotionRouterError, OSError, RuntimeError, TypeError, ValueError):
+        plan = plan_automatic_context_needs(prompt, learned_phrases=learned)
+    elapsed = _elapsed_milliseconds(started)
+    return _AutomaticShadowTrace(plan, elapsed if plan.semantic_invoked else 0)
+
+
 def _automatic_prompt_context_for_hook(
     data_directory: Path,
     scope: MemoryScope,
@@ -680,6 +768,18 @@ def _automatic_prompt_context_for_hook(
         outcome = AutomaticRouteOutcome.NO_ATTACHMENT
     else:
         outcome = AutomaticRouteOutcome.MISS
+    try:
+        diagnostic_settings = LocalAutomaticRouteDiagnosticsSettingsStore(data_directory).load()
+    except (AutomaticRouteTelemetryError, OSError, TypeError, ValueError):
+        return PromptContextAttachment(rendered)
+    if diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.OFF:
+        return PromptContextAttachment(rendered)
+
+    trace = (
+        _automatic_shadow_trace(data_directory, scope, prompt)
+        if diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.TRACE
+        else None
+    )
     event_id = uuid4()
     characters = 0 if rendered is None else len(rendered)
     event = AutomaticRouteEvent(
@@ -699,9 +799,24 @@ def _automatic_prompt_context_for_hook(
         result.duration_ms,
         len(result.skill_candidates),
         False,
+        shadow_structural_need=(None if trace is None else trace.plan.structural_need.value),
+        shadow_long_term_need=None if trace is None else trace.plan.long_term_need.value,
+        shadow_reason=None if trace is None else trace.plan.reason,
+        shadow_structural_tokens=0 if trace is None else trace.plan.structural_tokens,
+        shadow_long_term_tokens=0 if trace is None else trace.plan.long_term_tokens,
+        shadow_shared_maximum_tokens=(0 if trace is None else trace.plan.shared_maximum_tokens),
+        semantic_invoked=False if trace is None else trace.plan.semantic_invoked,
+        semantic_route=(
+            None
+            if trace is None or trace.plan.semantic_route is None
+            else trace.plan.semantic_route.value
+        ),
+        semantic_latency_ms=0 if trace is None else trace.semantic_latency_ms,
     )
     try:
-        LocalAutomaticRouteTelemetryStore(data_directory).record(event)
+        LocalAutomaticRouteTelemetryStore(
+            data_directory, retention_days=diagnostic_settings.retention_days
+        ).record(event)
     except (AutomaticRouteTelemetryError, OSError, ValueError):
         return PromptContextAttachment(rendered)
     return PromptContextAttachment(rendered, event_id)
@@ -2683,6 +2798,364 @@ def memory_routes(
     except (AutomaticMemoryBindingError, AutomaticRouteTelemetryError, ValueError) as error:
         raise typer.BadParameter("MNEMO_ROUTE_TELEMETRY_UNAVAILABLE") from error
     _show(summary.to_dict())
+
+
+def _enabled_memory_binding(data_directory: Path, project_dir: Path) -> MemoryProjectBinding:
+    binding = LocalMemoryProjectBindingStore(data_directory).get(project_dir)
+    if binding is None:
+        raise typer.BadParameter("MNEMO_MEMORY_PROJECT_NOT_ENABLED")
+    return binding
+
+
+def _learned_route(value: str) -> CompactMemoryRoute:
+    normalized = value.strip().casefold().replace("_", "-")
+    aliases = {
+        "long-term": CompactMemoryRoute.PRIOR_MEMORY,
+        "prior-memory": CompactMemoryRoute.PRIOR_MEMORY,
+        "knowledge": CompactMemoryRoute.KNOWLEDGE,
+        "structure": CompactMemoryRoute.STRUCTURE,
+        "structural": CompactMemoryRoute.STRUCTURE,
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as error:
+        raise typer.BadParameter(
+            "--as must be long-term, prior-memory, knowledge, or structure"
+        ) from error
+
+
+@app.command("learn", help="Teach one explicit project phrase to the shadow memory planner.")
+def learn_route_phrase(
+    phrase: str = typer.Option(..., "--phrase", help="Phrase to match deterministically."),
+    route: str = typer.Option(
+        ...,
+        "--as",
+        help="Route: long-term, prior-memory, knowledge, or structure.",
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Persist only one user-authorized phrase; prompt traffic is never learned implicitly."""
+
+    try:
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        result = LocalLearnedRouteStore(config.data_directory).learn(
+            binding.scope, phrase, _learned_route(route)
+        )
+    except (AutomaticMemoryBindingError, LearnedRouteStoreError, ValueError) as error:
+        code = str(error) if str(error).startswith("MNEMO_") else "MNEMO_LEARNED_ROUTE_UNAVAILABLE"
+        raise typer.BadParameter(code) from error
+    assert result.record is not None
+    _show(
+        {
+            "status": "learned" if result.changed else "unchanged",
+            "route": result.record.route.value,
+            "active_mode": "shadow",
+            "notice": (
+                "The phrase affects diagnostics only until live two-axis routing is approved."
+            ),
+        }
+    )
+
+
+@app.command("forget", help="Forget one exact project phrase taught to the shadow planner.")
+def forget_route_phrase(
+    phrase: str = typer.Option(..., "--phrase", help="Exact normalized phrase to forget."),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Remove an exact scoped phrase idempotently and leave no derived phrase cache."""
+
+    try:
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        result = LocalLearnedRouteStore(config.data_directory).forget(binding.scope, phrase)
+    except (AutomaticMemoryBindingError, LearnedRouteStoreError, ValueError) as error:
+        code = str(error) if str(error).startswith("MNEMO_") else "MNEMO_LEARNED_ROUTE_UNAVAILABLE"
+        raise typer.BadParameter(code) from error
+    _show({"status": "forgotten" if result.changed else "absent", "active_mode": "shadow"})
+
+
+def _require_potion_runtime() -> None:
+    try:
+        import_module("model2vec")
+    except ImportError as error:
+        raise typer.BadParameter(
+            "MNEMO_POTION_RUNTIME_NOT_INSTALLED: install 'mnemo-unified-context[router]'"
+        ) from error
+
+
+@memory_router_app.command(
+    "setup", help="Download, digest-verify, and enable the pinned local Potion model."
+)
+def memory_router_setup(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """The only router command allowed to access the network."""
+
+    _require_potion_runtime()
+    try:
+        config = resolve_local_config(data_dir)
+        settings = PotionModelInstaller(config.data_directory).install()
+        _ = PotionLocalMemoryRouter(config.data_directory).classify(
+            "Which modules participate in this flow?"
+        )
+    except (PotionRouterError, OSError, RuntimeError, ValueError) as error:
+        raise typer.BadParameter(str(error) or "MNEMO_POTION_SETUP_FAILED") from error
+    _show(
+        {
+            "status": "ready",
+            "enabled": settings.enabled,
+            "model_id": POTION_MODEL_ID,
+            "revision": POTION_MODEL_REVISION,
+            "network_in_ordinary_hooks": False,
+            "active_mode": "uncertainty_only_shadow",
+        }
+    )
+
+
+@memory_router_app.command("enable", help="Enable an already installed verified Potion model.")
+def memory_router_enable(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    _require_potion_runtime()
+    try:
+        config = resolve_local_config(data_dir)
+        installer = PotionModelInstaller(config.data_directory)
+        verify_potion_model(installer.model_directory)
+        store = LocalPotionRouterSettingsStore(config.data_directory)
+        store.save(PotionRouterSettings(True))
+        _ = PotionLocalMemoryRouter(config.data_directory).classify("resume our earlier task")
+    except (PotionRouterError, OSError, RuntimeError, ValueError) as error:
+        raise typer.BadParameter(str(error) or "MNEMO_POTION_ENABLE_FAILED") from error
+    _show({"status": "enabled", "active_mode": "uncertainty_only_shadow"})
+
+
+@memory_router_app.command("disable", help="Disable Potion without deleting its verified files.")
+def memory_router_disable(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        LocalPotionRouterSettingsStore(config.data_directory).save(PotionRouterSettings(False))
+    except (PotionRouterError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_POTION_DISABLE_FAILED") from error
+    _show({"status": "disabled", "model_files_retained": True})
+
+
+@memory_router_app.command("status", help="Show Potion opt-in and verified-install status.")
+def memory_router_status(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        settings = LocalPotionRouterSettingsStore(config.data_directory).load()
+        installer = PotionModelInstaller(config.data_directory)
+        try:
+            verify_potion_model(installer.model_directory)
+            installed = True
+        except PotionRouterError:
+            installed = False
+    except (PotionRouterError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_POTION_STATUS_UNAVAILABLE") from error
+    _show(
+        {
+            "enabled": settings.enabled,
+            "installed": installed,
+            "model_id": settings.model_id,
+            "revision": settings.revision,
+            "active_mode": "uncertainty_only_shadow",
+        }
+    )
+
+
+def _save_route_diagnostic_mode(
+    data_directory: Path,
+    mode: AutomaticRouteDiagnosticsMode,
+    retention_days: int | None = None,
+) -> AutomaticRouteDiagnosticsSettings:
+    store = LocalAutomaticRouteDiagnosticsSettingsStore(data_directory)
+    current = store.load()
+    return store.save(
+        AutomaticRouteDiagnosticsSettings(
+            mode,
+            current.retention_days if retention_days is None else retention_days,
+        )
+    )
+
+
+@memory_route_diagnostics_app.command(
+    "on", help="Enable per-decision content-free shadow footprints."
+)
+def memory_route_diagnostics_on(
+    retention_days: int = typer.Option(7, "--retention-days", min=1, max=90),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        settings = _save_route_diagnostic_mode(
+            config.data_directory, AutomaticRouteDiagnosticsMode.TRACE, retention_days
+        )
+    except (AutomaticRouteTelemetryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    _show({"status": "enabled", **settings.to_dict(), "stores_prompts": False})
+
+
+@memory_route_diagnostics_app.command(
+    "summary", help="Record aggregate route costs without shadow decision details."
+)
+def memory_route_diagnostics_summary(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        settings = _save_route_diagnostic_mode(
+            config.data_directory, AutomaticRouteDiagnosticsMode.SUMMARY
+        )
+    except (AutomaticRouteTelemetryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    _show({"status": "summary", **settings.to_dict()})
+
+
+@memory_route_diagnostics_app.command("off", help="Stop recording new route events.")
+def memory_route_diagnostics_off(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        settings = _save_route_diagnostic_mode(
+            config.data_directory, AutomaticRouteDiagnosticsMode.OFF
+        )
+    except (AutomaticRouteTelemetryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    _show({"status": "disabled", **settings.to_dict(), "existing_events_retained": True})
+
+
+@memory_route_diagnostics_app.command("status", help="Show the route footprint mode and TTL.")
+def memory_route_diagnostics_status(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        settings = LocalAutomaticRouteDiagnosticsSettingsStore(config.data_directory).load()
+    except (AutomaticRouteTelemetryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    _show({"status": "available", **settings.to_dict(), "stores_prompts": False})
+
+
+def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
+    return {
+        "event_id": str(event.event_id),
+        "observed_at": event.observed_at.astimezone(UTC).isoformat(),
+        "live_route": event.route,
+        "live_reason": event.reason,
+        "outcome": event.outcome.value,
+        "shadow_structural_need": event.shadow_structural_need,
+        "shadow_long_term_need": event.shadow_long_term_need,
+        "shadow_reason": event.shadow_reason,
+        "shadow_budget": {
+            "structural": event.shadow_structural_tokens,
+            "long_term": event.shadow_long_term_tokens,
+            "shared_maximum": event.shadow_shared_maximum_tokens,
+        },
+        "semantic_invoked": event.semantic_invoked,
+        "semantic_route": event.semantic_route,
+        "semantic_latency_ms": event.semantic_latency_ms,
+        "route_duration_ms": event.duration_ms,
+        "rendered_estimated_tokens": event.rendered_estimated_tokens,
+        "tool_result_estimated_tokens": event.tool_result_estimated_tokens,
+        "tool_calls": dict(event.tool_calls),
+        "feedback": None if event.feedback is None else event.feedback.value,
+    }
+
+
+@memory_route_diagnostics_app.command(
+    "show", help="Show recent exact-scope content-free decision footprints."
+)
+def memory_route_diagnostics_show(
+    limit: int = typer.Option(20, "--limit", min=1, max=100),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        settings = LocalAutomaticRouteDiagnosticsSettingsStore(config.data_directory).load()
+        events = LocalAutomaticRouteTelemetryStore(
+            config.data_directory, retention_days=settings.retention_days
+        ).events(_automatic_route_scope(binding.checkpoint_scope), limit=limit)
+    except (
+        AutomaticMemoryBindingError,
+        AutomaticRouteTelemetryError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    _show(
+        {
+            "event_count": len(events),
+            "events": [_route_event_view(event) for event in events],
+            "notice": (
+                "Tool activity is correlated with a route event; it does not prove causation."
+            ),
+        }
+    )
+
+
+@memory_route_diagnostics_app.command(
+    "mark", help="Label one exact-scope footprint helpful, noise, or missing."
+)
+def memory_route_diagnostics_mark(
+    event_id: UUID = typer.Argument(...),  # noqa: B008
+    label: str = typer.Argument(...),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        feedback = AutomaticRouteFeedback(label.strip().casefold())
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        settings = LocalAutomaticRouteDiagnosticsSettingsStore(config.data_directory).load()
+        changed = LocalAutomaticRouteTelemetryStore(
+            config.data_directory, retention_days=settings.retention_days
+        ).record_feedback(_automatic_route_scope(binding.checkpoint_scope), event_id, feedback)
+    except (
+        AutomaticMemoryBindingError,
+        AutomaticRouteTelemetryError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTIC_MARK_UNAVAILABLE") from error
+    if not changed:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTIC_EVENT_NOT_FOUND")
+    _show({"status": "marked", "feedback": feedback.value, "changes_routing": False})
+
+
+@memory_route_diagnostics_app.command(
+    "purge", help="Delete exact-project route footprints after explicit confirmation."
+)
+def memory_route_diagnostics_purge(
+    confirm: bool = typer.Option(False, "--yes", help="Confirm exact-scope deletion."),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    if not confirm:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTIC_PURGE_CONFIRMATION_REQUIRED")
+    try:
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        removed = LocalAutomaticRouteTelemetryStore(config.data_directory).purge(
+            _automatic_route_scope(binding.checkpoint_scope)
+        )
+    except (
+        AutomaticMemoryBindingError,
+        AutomaticRouteTelemetryError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTIC_PURGE_UNAVAILABLE") from error
+    _show({"status": "purged", "removed_events": removed, "recoverable": False})
 
 
 @app.command("automatic-memory-hook", hidden=True)

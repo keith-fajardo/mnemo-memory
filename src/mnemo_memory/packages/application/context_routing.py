@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
 from math import exp, log
+from typing import Protocol
 
 _PATH = re.compile(
     r"(?:^|\s)(?:[a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]+\.(?:py|ts|tsx|js|jsx|sql|md|yml|yaml|toml|json)(?:\s|$)"
@@ -158,6 +159,12 @@ class CompactMemoryRouteDecision:
     margin: float
 
 
+class CompactMemoryRouter(Protocol):
+    """Provider-neutral advisory classifier used only after deterministic routing."""
+
+    def classify(self, prompt: str) -> CompactMemoryRouteDecision: ...
+
+
 class CompactLocalMemoryRouter:
     """Tiny deterministic presence-based classifier for ambiguous context intent."""
 
@@ -224,6 +231,160 @@ class AutomaticContextRouteDecision:
     route: AutomaticContextRoute
     reason: AutomaticContextRouteReason
     maximum_attachment_tokens: int
+
+
+class AutomaticContextNeed(StrEnum):
+    """One independent shadow-planner answer; unknown never suppresses context."""
+
+    YES = "yes"
+    NO = "no"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class LearnedRoutePhrase:
+    """One already-authorized normalized project phrase supplied by a scoped adapter."""
+
+    phrase: str
+    route: CompactMemoryRoute
+
+    def __post_init__(self) -> None:
+        if self.phrase != normalize_learned_route_phrase(self.phrase):
+            raise ValueError("learned route phrase is not normalized")
+        if self.route is CompactMemoryRoute.NONE:
+            raise ValueError("a learned phrase cannot suppress memory")
+
+
+@dataclass(frozen=True, slots=True)
+class AutomaticContextShadowPlan:
+    """Content-free two-axis proposal that cannot change the live attachment route."""
+
+    structural_need: AutomaticContextNeed
+    long_term_need: AutomaticContextNeed
+    structural_tokens: int
+    long_term_tokens: int
+    shared_maximum_tokens: int
+    reason: str
+    semantic_invoked: bool = False
+    semantic_route: CompactMemoryRoute | None = None
+
+    def __post_init__(self) -> None:
+        if self.shared_maximum_tokens != 1_300:
+            raise ValueError("shadow route ceiling is invalid")
+        if (
+            not 0 <= self.structural_tokens <= self.shared_maximum_tokens
+            or not 0 <= self.long_term_tokens <= self.shared_maximum_tokens
+            or self.structural_tokens + self.long_term_tokens > self.shared_maximum_tokens
+        ):
+            raise ValueError("shadow route token allocation is invalid")
+        if self.reason not in {
+            "deterministic",
+            "learned_phrase",
+            "potion_proposal",
+            "uncertain",
+        }:
+            raise ValueError("shadow route reason is invalid")
+        if self.semantic_invoked != (self.semantic_route is not None):
+            raise ValueError("shadow semantic result is invalid")
+
+
+def normalize_learned_route_phrase(phrase: str) -> str:
+    """Normalize an explicit phrase for deterministic matching and exact forgetting."""
+
+    if not isinstance(phrase, str):
+        raise TypeError("learned route phrase must be a string")
+    return " ".join(_ROUTER_TERM.findall(phrase.casefold()))
+
+
+def compact_memory_route_examples() -> dict[CompactMemoryRoute, tuple[str, ...]]:
+    """Return original Mnemo-owned examples for an optional local semantic adapter."""
+
+    return dict(_ROUTER_EXAMPLES)
+
+
+def plan_automatic_context_needs(
+    prompt: str,
+    *,
+    learned_phrases: tuple[LearnedRoutePhrase, ...] = (),
+    semantic_router: CompactMemoryRouter | None = None,
+) -> AutomaticContextShadowPlan:
+    """Plan independent needs without changing the current live attachment route."""
+
+    bounded = bounded_automatic_context_prompt(prompt)
+    if any(not isinstance(item, LearnedRoutePhrase) for item in learned_phrases):
+        raise TypeError("learned route phrases are invalid")
+    live = choose_automatic_context_route(bounded)
+    terms = frozenset(_ROUTER_TERM.findall(bounded.casefold()))
+
+    if live.route in {
+        AutomaticContextRoute.NONE,
+        AutomaticContextRoute.DIRECT_LOOKUP,
+        AutomaticContextRoute.LOCAL_DIAGNOSTICS,
+        AutomaticContextRoute.SKILL_DISCOVERY,
+    }:
+        structural = AutomaticContextNeed.NO
+        long_term = AutomaticContextNeed.NO
+    elif live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN:
+        structural = AutomaticContextNeed.UNKNOWN
+        long_term = AutomaticContextNeed.UNKNOWN
+    else:
+        structural = (
+            AutomaticContextNeed.YES
+            if live.route is AutomaticContextRoute.STRUCTURE
+            else AutomaticContextNeed.UNKNOWN
+        )
+        long_term = (
+            AutomaticContextNeed.YES
+            if live.route in {AutomaticContextRoute.PRIOR_MEMORY, AutomaticContextRoute.KNOWLEDGE}
+            else AutomaticContextNeed.UNKNOWN
+        )
+
+    if _has_deterministic_structural_cue(bounded, terms):
+        structural = AutomaticContextNeed.YES
+    if _has_deterministic_long_term_cue(terms):
+        long_term = AutomaticContextNeed.YES
+
+    normalized_prompt = normalize_learned_route_phrase(bounded)
+    learned = False
+    for item in learned_phrases:
+        if not _normalized_phrase_matches(normalized_prompt, item.phrase):
+            continue
+        learned = True
+        if item.route is CompactMemoryRoute.STRUCTURE:
+            structural = AutomaticContextNeed.YES
+        else:
+            long_term = AutomaticContextNeed.YES
+
+    semantic_route: CompactMemoryRoute | None = None
+    if live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN and semantic_router is not None:
+        proposal = semantic_router.classify(bounded)
+        if not isinstance(proposal, CompactMemoryRouteDecision):
+            raise TypeError("semantic route proposal is invalid")
+        semantic_route = proposal.route
+        if proposal.route is CompactMemoryRoute.STRUCTURE:
+            structural = AutomaticContextNeed.YES
+        elif proposal.route in {CompactMemoryRoute.PRIOR_MEMORY, CompactMemoryRoute.KNOWLEDGE}:
+            long_term = AutomaticContextNeed.YES
+
+    if semantic_route is not None:
+        reason = "potion_proposal"
+    elif learned:
+        reason = "learned_phrase"
+    elif AutomaticContextNeed.UNKNOWN in {structural, long_term}:
+        reason = "uncertain"
+    else:
+        reason = "deterministic"
+    structural_tokens, long_term_tokens = _shadow_token_allocation(structural, long_term)
+    return AutomaticContextShadowPlan(
+        structural,
+        long_term,
+        structural_tokens,
+        long_term_tokens,
+        1_300,
+        reason,
+        semantic_route is not None,
+        semantic_route,
+    )
 
 
 def choose_automatic_context_route(
@@ -439,6 +600,117 @@ def _decision(
     route: AutomaticContextRoute, reason: AutomaticContextRouteReason
 ) -> AutomaticContextRouteDecision:
     return AutomaticContextRouteDecision(route, reason, _MAXIMUM_ROUTE_TOKENS[route])
+
+
+def _has_deterministic_structural_cue(prompt: str, terms: frozenset[str]) -> bool:
+    if "dbt" in terms and bool(
+        terms & {"lineage", "model", "models", "source", "sources", "test", "tests"}
+    ):
+        return True
+    if terms & {"architecture", "components"} and terms & {
+        "codebase",
+        "repository",
+        "repo",
+        "source",
+    }:
+        return True
+    relationship_terms = terms & {
+        "impact",
+        "depend",
+        "depends",
+        "dependency",
+        "dependencies",
+        "downstream",
+        "upstream",
+        "caller",
+        "callers",
+    }
+    source_terms = terms & {
+        "class",
+        "code",
+        "codebase",
+        "component",
+        "components",
+        "file",
+        "files",
+        "function",
+        "method",
+        "model",
+        "models",
+        "module",
+        "modules",
+        "package",
+        "packages",
+        "repo",
+        "repository",
+        "service",
+        "services",
+        "source",
+        "symbol",
+        "table",
+        "tables",
+    }
+    return bool(relationship_terms and (source_terms or _SYMBOL.search(prompt) is not None))
+
+
+def _has_deterministic_long_term_cue(terms: frozenset[str]) -> bool:
+    documented_terms = {
+        "adr",
+        "contract",
+        "documented",
+        "documentation",
+        "docs",
+        "guidance",
+        "handbook",
+        "notes",
+        "policies",
+        "policy",
+        "standard",
+        "standards",
+    }
+    prior_reference_terms = {
+        "agent",
+        "answer",
+        "attempt",
+        "chat",
+        "choice",
+        "conversation",
+        "decision",
+        "handoff",
+        "investigation",
+        "plan",
+        "rationale",
+        "result",
+        "run",
+        "session",
+        "task",
+        "work",
+    }
+    return bool(
+        terms & documented_terms
+        or {"threat", "model"} <= terms
+        or "recap" in terms
+        or "remember" in terms
+        or (terms & {"previous", "earlier"} and terms & prior_reference_terms)
+        or (terms & {"continue", "prior", "resume"} and terms & prior_reference_terms)
+        or ("last" in terms and terms & {"attempt", "run", "session", "time"})
+    )
+
+
+def _normalized_phrase_matches(prompt: str, phrase: str) -> bool:
+    return f" {phrase} " in f" {prompt} "
+
+
+def _shadow_token_allocation(
+    structural: AutomaticContextNeed, long_term: AutomaticContextNeed
+) -> tuple[int, int]:
+    if structural is AutomaticContextNeed.YES and long_term is AutomaticContextNeed.YES:
+        return 600, 700
+    if structural is AutomaticContextNeed.YES:
+        return 1_000, 0
+    if long_term is AutomaticContextNeed.YES:
+        return 0, 1_300
+    return 0, 0
 
 
 def _router_score(route: CompactMemoryRoute, features: frozenset[str]) -> float:

@@ -976,9 +976,25 @@ or network I/O, emits only no-memory/prior-memory/knowledge/structure, and canno
 authority, evidence, budgets, retention, or mutations. Structural output can select only the
 authorization-first rebuildable projection and never creates dbt or source facts. A no-memory
 result requires both a high score and a separating margin; uncertainty retains the existing
-knowledge probe. The full prompt and bounded view are not persisted. The mandatory deterministic
-high-confidence secret gate disables optional semantic query embedding when either the view or
-selected query matches; no model classifier is accepted as a substitute. Durable telemetry contains
+knowledge probe. A separate shadow planner may answer structural and long-term need independently
+as yes/no/unknown under one fixed 1,300-token ceiling, but it cannot alter live attachment in this
+issue. Explicit `mnemo learn` phrases are secret-scanned, normalized, capped, and stored only with
+exact owner/workspace/project scope and fixed provenance in a private local document. Ordinary
+prompts never create or mutate a learned phrase, a learned phrase cannot select no-memory, and exact
+scoped forgetting is idempotent and leaves no derived phrase cache.
+
+The optional Potion adapter is disabled until explicit setup. Setup is the only network-capable
+router operation: it acquires three required files from one hard-coded public model and full commit,
+then verifies their pinned sizes and SHA-256 digests before enabling private local state. Every cold
+runtime load rechecks those files and passes only the bounded view to local Model2Vec inference.
+Potion is called only for the deterministic router's existing uncertain fallback; its proposal can
+set a shadow axis to yes but cannot set scope, authority, source truth, budget ceilings, retention,
+mutation, dbt lineage, direct lookup, live attachment, or an authoritative no. Missing packages,
+disabled or invalid files, load failure, and inference failure fall back to the deterministic shadow
+answer and do not block the client. The full prompt and bounded view are not persisted. The mandatory
+deterministic high-confidence secret gate disables optional semantic query embedding when either the
+view or selected query matches and prevents a secret-bearing prompt from reaching Potion; no model
+classifier is accepted as a substitute. Durable telemetry contains
 only the explicit task scope, opaque event ID, supported client, closed route/outcome and bounded
 reason codes, hit/miss/fallback state,
 canonical item tokens, final rendered character/byte/estimated-token counts, latency, candidate
@@ -998,9 +1014,15 @@ hook nor Mnemo mutates that repository file. Mnemo-owned client hook entries use
 deadline and only exact owned handlers are upgraded; unrelated handlers and matchers are preserved.
 
 The local telemetry snapshot is mode `0600` inside a mode-`0700` directory, uses a process lock and
-atomic replacement, keeps at most 256 events, rejects symlinks and oversized or malformed state,
-and replaces corrupt regular state only when a new valid event is recorded. Aggregates are filtered
-to the exact registered task scope before display. Automatic skill discovery reads only checked-in,
+atomic replacement, keeps at most 256 events for a configured 1-to-90-day TTL, rejects symlinks and
+oversized or malformed state, and replaces corrupt regular state only when a new valid event is
+recorded. Summary mode preserves the prior aggregate inputs, trace mode additionally stores only
+closed shadow decisions, proposed allocations, semantic invocation/route/latency, and an explicit
+helpful/noise/missing label, and off mode stops new records. Labels never mutate routing. Exact-scope
+show, mark, and purge never read or delete another project; off does not imply deletion. Footprints
+and downstream tool categories establish temporal correlation only and cannot claim the route caused
+an agent action. Aggregates are filtered to the exact registered task scope before display.
+Automatic skill discovery reads only checked-in,
 client-compatible metadata, limits `mnemo_when` to 500 normalized characters, requires deterministic
 term overlap, returns at most three candidates, and caps the rendered catalog at 256 estimated
 tokens. Candidate descriptions are labelled untrusted discovery data; the exact skill body is not
@@ -1011,7 +1033,12 @@ knowledge, structure, and skill discovery. A balanced 60-case original synthetic
 high prior-memory and structural recall plus perfect precision whenever no-memory is selected.
 Long-prompt and repetition regressions prove both boundaries are retained, middle content is not
 forwarded, repeated features do not amplify scores, literal routes retain priority, and uncertain
-input falls back to the bounded probe. Hook and registry tests prove that
+input falls back to the bounded probe. Combined-axis and shared-budget tests prove shadow planning
+does not change the live route; learned-phrase tests cover secret rejection, exact forgetting,
+permissions, corrupt state, and cross-project isolation; model tests cover digest verification,
+bounded input, missing/corrupt runtime fallback, and explicit help. Telemetry tests replay the legacy
+event shape and cover trace settings, labels, TTL, exact-scope purge, and correlation wording. Hook
+and registry tests prove that
 skill bodies,
 prompts, and private markers
 do not enter candidate output or telemetry; a structural miss records a fallback only after a
@@ -1030,6 +1057,11 @@ client tokenizer or provider bill. Since tool output remains unread, total downs
 unknown unless a future client supplies an independently trusted content-free usage metric. Live
 comparisons must therefore report unknown calls and use controlled client-reported baselines before
 claiming net savings. Telemetry does not silently tune routing policy.
+
+Optional Potion adds dependency, artifact supply-chain, cold-load latency, and local CPU cost. The
+pinned digest proves byte identity, not model correctness, and a user-taught phrase can still be a
+poor routing rule. Shadow measurement and explicit labels are therefore required before any later
+live-routing proposal; labels and model outputs never promote or forget policy automatically.
 
 The 300-second hook deadline mitigates false timeouts but does not remove synchronous project
 refresh work from `SessionStart`, dirty `Stop`, or `PreCompact`; a large project can therefore still
