@@ -4663,3 +4663,14 @@ skip, schema validation, dependency/provenance checks, architecture checks, and 
 workflow verification. No dependency, schema, migration, storage, retention, promotion, Redis, or
 provider change was made. This issue is complete; any cache tier or memory-maturation policy needs
 a separately approved issue.
+
+### `0.1.0a15` production deployment — In progress
+
+The user explicitly requested deployment of the completed token-bounded single-delivery automatic
+context change. Release metadata, pinned artifact names, verification scripts, user-facing install
+examples, release-contract tests, and the committed lockfile are being advanced together from
+`0.1.0a14` to the next unused immutable version, `0.1.0a15`. The release must use the protected
+manual production PyPI workflow from a clean pushed `main` commit. Completion requires the complete
+local gate, protected workflow build and evaluation gates, checksum-bound OIDC publication, live
+PyPI metadata and provenance verification, exact artifact hashes, and an isolated installed-package
+smoke test. No TestPyPI or direct local upload is authorized or needed for this production release.
