@@ -4817,7 +4817,7 @@ project, the configured launcher emitted `MNEMO_DIRTY_V1` at the first dirty pro
 second. Its installed router selected `structure` from a long prompt and produced identical
 decisions and scores after two versus twenty repetitions of the same padding phrase.
 
-### `0.1.0a16` production deployment — In progress
+### `0.1.0a16` production deployment — Complete
 
 The user explicitly approved production deployment of the completed PreCompact compatibility,
 long-prompt routing, structural classification, secret-gating, and one-shot reminder changes.
@@ -4828,3 +4828,20 @@ Acceptance requires the complete local gate, source and artifact verification, a
 commit pushed to `main`, successful protected `publish-pypi.yml` execution, live PyPI metadata and
 integrity-provenance verification, and an isolated install of the exact published wheel. No
 TestPyPI or direct local upload is authorized or needed for this production release.
+
+Production deployment is complete. Release commit
+`0c29929e8c72bd1251859ba445a88a197a8306f1` was pushed to `main`, and protected workflow run
+`31392699824` completed successfully. Its clean-runner repository and deterministic evaluation
+gates, source-independent artifact build, wheel/sdist smoke tests, checksum-bound OIDC publication,
+and separate live PyPI verification jobs all passed.
+
+The immutable workflow bundle and production PyPI metadata/provenance agree on these SHA-256
+digests:
+
+- wheel: `979016ca3e5b8f5d38bf18da2f5c5c79f34fd1ee59be995d6178e8ad79649199`
+- source distribution: `71acc237b3d35c062a657b648cb808353bc8215740eb37317741208feeb18264`
+
+An independent post-workflow audit downloaded that bundle, verified its checksum manifest and
+PyPI integrity provenance, and installed the exact published wheel into a fresh Python 3.12
+environment. The isolated command reported `mnemo-memory 0.1.0a16`, imported from `site-packages`,
+loaded packaged resources, and initialized a fresh personal database at schema version `30`.
