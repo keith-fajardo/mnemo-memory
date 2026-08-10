@@ -8,7 +8,7 @@ from .engine import (
     UnifiedContextEngine,
 )
 from .explanation import ContextExplanation, explain_context_packet
-from .rendering import ContextClient, render_context_packet
+from .rendering import ContextClient, render_automatic_context_packet, render_context_packet
 from .selection import finalize_context_packet
 
 __all__ = [
@@ -21,5 +21,6 @@ __all__ = [
     "UnifiedContextEngine",
     "explain_context_packet",
     "finalize_context_packet",
+    "render_automatic_context_packet",
     "render_context_packet",
 ]

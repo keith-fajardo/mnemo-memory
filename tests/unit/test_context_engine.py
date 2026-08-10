@@ -22,6 +22,7 @@ from mnemo_memory.packages.context_engine import (
     UnifiedContextEngine,
     explain_context_packet,
     finalize_context_packet,
+    render_automatic_context_packet,
     render_context_packet,
 )
 from mnemo_memory.packages.domain import (
@@ -749,4 +750,64 @@ def test_client_rendering_is_deterministic_quoted_and_canonical_packet_preservin
         item.evidence_references[0].evidence_id
     )
     assert any(line.startswith("MNEMO_OMISSION ") for line in codex.splitlines())
+    assert packet.to_json() == canonical
+
+
+def test_automatic_rendering_compacts_envelopes_prioritizes_procedures_and_fits_ceiling() -> None:
+    scope = _scope()
+    memory = _memory(
+        scope,
+        17,
+        "Initial automatic renderer fixture.",
+        kind=EpisodicMemoryKind.DECISION,
+        confidence=0.9,
+        activated_at=NOW,
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, (memory,))
+    ).get_context(GetUnifiedContext(scope))
+    episodic = replace(
+        packet.episodic_memories[0],
+        content="lower-priority-marker " + "x" * 4_000,
+        token_estimate=1_006,
+    )
+    procedure = replace(
+        packet.episodic_memories[0],
+        item_id="procedure:required-check",
+        item_type=ContextItemType.MANDATORY_PROCEDURE,
+        content="Run the required checked-in verification.",
+        token_estimate=10,
+    )
+    episodic_provenance = packet.provenance[0]
+    procedure_provenance = replace(
+        episodic_provenance,
+        provenance_id="provenance:procedure:required-check",
+        item_id=procedure.item_id,
+        source_reference="mnemo:procedure/required-check",
+    )
+    packet = replace(
+        packet,
+        budget=replace(packet.budget, episodic_memories=1_200),
+        declared_total_tokens=episodic.token_estimate + procedure.token_estimate,
+        episodic_memories=(episodic,),
+        skills_and_procedures=(procedure,),
+        provenance=(episodic_provenance, procedure_provenance),
+    )
+    canonical = packet.to_json()
+
+    rendered = render_automatic_context_packet(packet, "codex", 700)
+    repeated = render_automatic_context_packet(packet, "codex", 700)
+
+    assert rendered == repeated
+    assert (len(rendered) + 3) // 4 <= 700
+    assert '"delivery_mode":"automatic_compact"' in rendered
+    assert "Run the required checked-in verification" in rendered
+    assert "lower-priority-marker" not in rendered
+    assert '"reason":"token_budget"' in rendered
+    assert '"item_id":"automatic-render"' in rendered
+    assert str(procedure.evidence_references[0].evidence_id) in rendered
+    assert procedure_provenance.source_reference in rendered
+    assert '"level":"task"' in rendered
+    assert f'"source_trust":"{procedure.source_trust.value}"' in rendered
+    assert "immutable_source_ref" not in rendered
     assert packet.to_json() == canonical

@@ -125,7 +125,10 @@ from mnemo_memory.packages.application.unified_context import (
     GetUnifiedContext,
     UnifiedContextService,
 )
-from mnemo_memory.packages.context_engine import UnifiedContextEngine, render_context_packet
+from mnemo_memory.packages.context_engine import (
+    UnifiedContextEngine,
+    render_automatic_context_packet,
+)
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeFile,
@@ -562,14 +565,16 @@ def _elapsed_milliseconds(started: float) -> int:
 
 
 def _render_automatic_context_attachment(
-    canonical_packet: str | None, client: ClientName
+    canonical_packet: str | None,
+    client: ClientName,
+    maximum_tokens: int = _AUTOMATIC_SESSION_CONTEXT_BUDGET.total_limit,
 ) -> str | None:
     """Render one validated canonical attachment; invalid input preserves fail-open behavior."""
     if canonical_packet is None:
         return None
     try:
         packet = ContextPacket.from_json(canonical_packet)
-        return render_context_packet(packet, client)
+        return render_automatic_context_packet(packet, client, maximum_tokens)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
 
@@ -587,7 +592,11 @@ def _automatic_prompt_context_for_hook(
     canonical_tokens = 0
     if result.packet is not None:
         canonical_tokens = result.packet.declared_total_tokens
-        rendered = render_context_packet(result.packet, client)
+        rendered = render_automatic_context_packet(
+            result.packet,
+            client,
+            result.decision.maximum_attachment_tokens,
+        )
     elif result.skill_candidates:
         rendered = _render_skill_discovery(result.skill_candidates, client)
     elif result.decision.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS:

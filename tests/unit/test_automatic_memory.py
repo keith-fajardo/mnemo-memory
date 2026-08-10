@@ -344,6 +344,31 @@ def test_session_start_retention_failure_never_blocks_the_client(tmp_path: Path)
     assert "sensitive storage detail" not in json.dumps(result)
 
 
+def test_session_start_uses_valid_attachment_without_redundant_context_fetch(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    attachment = "MNEMO_CONTEXT_V1 client=codex\nMNEMO_TRUST_BOUNDARY {}\nMNEMO_CONTEXT_END"
+
+    result = AutomaticMemoryHook(
+        data,
+        "codex",
+        context_loader=lambda _: attachment,
+        knowledge_status_loader=lambda _: 1,
+    ).handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    context = str(output["additionalContext"])
+    assert attachment in context
+    assert "already retrieved for this session" in context
+    assert "get_context" not in context
+    assert "knowledge_query" in context
+
+
 def test_installed_hook_expires_a_checkpoint_due_under_personal_settings(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -954,10 +979,11 @@ def test_automatic_prompt_context_attaches_only_bounded_checkpoint_recap(
             )
         )
 
+    prompt = "mnemo recap what I worked on for the past 3days private-marker-2f09"
     attached = cli._automatic_prompt_context_attachment(
         data,
         binding.checkpoint_scope,
-        "mnemo recap what I worked on for the past 3days",
+        prompt,
     )
 
     assert attached is not None
@@ -971,6 +997,24 @@ def test_automatic_prompt_context_attaches_only_bounded_checkpoint_recap(
     assert recap["recap_days"] == 3
     assert recap["task_objective"] == "Finish compact dbt inventory."
     assert packet["episodic_memories"][0]["evidence_references"]
+
+    delivery = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, prompt, "codex"
+    )
+
+    assert delivery.context is not None
+    assert (len(delivery.context) + 3) // 4 <= 1_300
+    assert '"delivery_mode":"automatic_compact"' in delivery.context
+    telemetry = (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+    assert "private-marker-2f09" not in telemetry
+    summary = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    routes = cast(dict[str, dict[str, int]], summary["routes"])
+    assert routes["prior_memory"]["maximum_attachment_tokens"] == 1_300
+    assert routes["prior_memory"]["estimated_total_tokens"] <= 1_300
 
 
 def test_automatic_skill_discovery_is_lazy_bounded_and_content_free(
@@ -1180,6 +1224,8 @@ def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
     assert isinstance(output, dict)
     context = str(output["additionalContext"])
     assert "Remember the deadline-critical handoff" in context
+    assert "already retrieved for this session" in context
+    assert "get_context" not in context
     assert "without a complete checkpoint" not in context
 
 
@@ -1479,6 +1525,9 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
     assert claude_rendering is not None
     assert codex_rendering.startswith("MNEMO_CONTEXT_V1 client=codex\n")
     assert claude_rendering.startswith("MNEMO_CONTEXT_V1 client=claude-code\n")
+    assert '"delivery_mode":"automatic_compact"' in codex_rendering
+    assert (len(codex_rendering) + 3) // 4 <= 1_750
+    assert (len(claude_rendering) + 3) // 4 <= 1_750
     assert "Run the regression check" in codex_rendering
     assert cli._render_automatic_context_attachment('{"not":"a packet"}', "codex") is None
 

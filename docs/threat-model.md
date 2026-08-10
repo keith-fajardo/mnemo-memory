@@ -851,13 +851,23 @@ explicit authorization. Client rendering uses fixed line prefixes and puts every
 one JSON-quoted record, so embedded newlines or renderer sentinel text cannot create a structural
 record. Its fixed trust boundary distinguishes selected checked-in mandatory procedures from all
 other evidence and states that no rendered item grants authority. Rendering is a pure projection
-of an already-authorized canonical packet.
+of an already-authorized canonical packet. Mnemo-owned automatic hooks use a separate compact
+projection capped by the route or session character estimate. It preserves the packet owner scope,
+item content and identity, source reference and digest, source level and visibility, trust,
+validity, conflict state, and bounded evidence identity without repeating the complete canonical
+scope and evidence envelope for every item. Mandatory procedures are considered first; records
+that do not fit are replaced by one fixed content-free token-budget omission. Explicit MCP
+`render_for` output remains the full projection. A valid SessionStart attachment is delivered once
+and does not also require an overlapping `get_context` call; if attachment construction fails, the
+existing scoped retrieval instruction remains fail-open.
 
 **Verification:** Injection corpus across every content category; assertions that packets retain
 data labels and that tool/mutation decisions are unchanged. Renderer tests include embedded record
 sentinels/newlines, both supported clients, exact provenance/rank preservation, deterministic
 output, canonical-packet immutability, optional MCP wrapping, and invalid automatic-attachment
-fail-open behavior.
+fail-open behavior. Compact-renderer tests additionally enforce the delivery ceiling, mandatory
+procedure priority, content-free omission, preserved compact provenance, and no canonical mutation;
+hook tests prove attached SessionStart context suppresses only the redundant fetch instruction.
 
 **Residual risk:** A downstream model may still follow malicious prose; minimize excerpts, surface
 source trust, and test each renderer/client.

@@ -4615,3 +4615,51 @@ schema-v30 backup. From the real ATK working directory, the installed launcher i
 minimal checkpoint without optional list fields or `token_estimate`; the save succeeded, persisted
 an active checkpoint, and recorded Mnemo's deterministic estimate of `104` tokens. Production
 deployment and local acceptance are complete.
+
+### Token-bounded single-delivery automatic context — Complete
+
+The demonstrated automatic-memory path can advertise a bounded canonical packet while delivering a
+materially larger client rendering, because repeated scope, evidence, digest, timestamp, ranking,
+and renderer metadata are outside the canonical item estimate. At `SessionStart`, Mnemo also
+attaches that retrieved packet while instructing the agent to call `get_context` again, causing an
+avoidable second retrieval of overlapping durable memory.
+
+This bounded issue must add a compact deterministic rendering used only by Mnemo-owned automatic
+hooks. It must preserve the explicit trust boundary, packet-level scope, item content, item/source
+identity, trust, validity, conflict state, and bounded evidence identity while avoiding repeated
+per-item envelope fields. The complete automatic attachment must fit its route or session token
+ceiling using Mnemo's existing character estimate; lower-priority records that do not fit must be
+omitted deterministically with a content-free token-budget notice, while selected mandatory
+procedures retain priority. The canonical packet and the existing explicit MCP `render_for`
+projection remain unchanged.
+
+When a valid session-start attachment is present, the lifecycle instruction must tell the agent to
+use that already-checked bounded context and must not require a redundant `get_context` call. If no
+attachment is available, the existing fail-open retrieval instruction remains. Existing dirty-stop
+and pre-compaction checkpoint behavior remains unchanged.
+
+Acceptance requires focused renderer, automatic-memory, client-hook, privacy, and telemetry
+regressions plus the complete `npm run check` gate. The issue adds no dependency, migration, MCP
+tool, model call, provider endpoint change, Redis service, authorization change, retention or
+episodic-promotion policy, raw prompt/tool payload telemetry, or `explain_context` redesign. Route
+policy, lifecycle-wide analytics, write-path cost measurement, and memory maturation remain later
+explicit issues.
+
+Implementation is complete. Mnemo-owned session and prompt attachments now use a deterministic
+compact projection capped by the existing session or route ceiling with the existing character
+estimate. It keeps the trust boundary, packet scope, content, compact source/evidence provenance,
+trust, validity, and conflict state; selected mandatory procedures are considered first, and
+records that do not fit produce one content-free token-budget omission. The canonical packet and
+explicit MCP `render_for` projection are unchanged. SessionStart loads a valid attachment once and
+uses it without requesting an overlapping `get_context`; the prior scoped retrieval instruction is
+retained only when no valid attachment is available. Prompt-route telemetry continues to persist
+only content-free sizes and now demonstrates that rendered estimates remain within the selected
+route ceiling.
+
+Focused context-engine and automatic-memory verification passed `81` tests. The complete
+`npm run check` gate then passed: formatting, lint, type checking, `996` regular tests with `27`
+expected environment-gated skips, `26` PostgreSQL migration/RLS tests with one expected load-test
+skip, schema validation, dependency/provenance checks, architecture checks, and installed personal
+workflow verification. No dependency, schema, migration, storage, retention, promotion, Redis, or
+provider change was made. This issue is complete; any cache tier or memory-maturation policy needs
+a separately approved issue.
