@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a17
+uv tool install mnemo-unified-context==0.1.0a18
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -797,10 +797,17 @@ Turn the content-free decision footprint on, inspect it, add an evaluation label
 ```bash
 mnemo memory diagnostics on --retention-days 7
 mnemo memory diagnostics show
+mnemo memory diagnostics show --format table
 mnemo memory diagnostics mark EVENT_ID helpful
 mnemo memory diagnostics off
 mnemo memory diagnostics purge --yes
 ```
+
+`show` keeps canonical JSON as its default for scripts. `--format table` renders a dependency-free
+plain-text view with time, live route and reason, shadow structure/history needs, estimated attached
+tokens, route latency, Potion result, feedback, and the full event ID used by `mark`. Older
+aggregate-only records show `-` for shadow fields that were never captured. Empty results still show
+the header and the correlation notice; no shell `jq` or `column` pipeline is required.
 
 Labels are `helpful`, `noise`, and `missing`. A label is evaluation data only and never changes
 routing. `off` stops new events but retains existing events until their TTL or an exact-scope purge;

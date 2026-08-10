@@ -18,7 +18,7 @@ from typing import cast
 
 from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 
-DISTRIBUTION_VERSION = "0.1.0a17"
+DISTRIBUTION_VERSION = "0.1.0a18"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
 TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
@@ -424,16 +424,37 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
         project.joinpath("README.md").write_text("# Sample project\n", encoding="utf-8")
         fake_codex = fake_bin / "codex"
         state = work / "codex-registration.json"
+        data_directory = work / "mnemo-data"
         _fake_codex(fake_codex, state)
         _exercise_registration(
             launcher,
             project_directory=project,
-            data_directory=work / "mnemo-data",
+            data_directory=data_directory,
             fake_bin=fake_bin,
             tool_bin=tool_bin,
             state_path=state,
             base_environment=install_environment,
         )
+        table = _run(
+            (
+                str(short_launcher),
+                "memory",
+                "diagnostics",
+                "show",
+                "--format",
+                "table",
+                "--project-dir",
+                str(project),
+                "--data-dir",
+                str(data_directory),
+            ),
+            cwd=project,
+            environment=install_environment,
+        ).stdout
+        if not table.startswith("TIME ") or "EVENT_ID" not in table:
+            raise InstalledWorkflowError("installed diagnostics table header is unavailable")
+        if not table.rstrip().endswith("does not prove causation."):
+            raise InstalledWorkflowError("installed diagnostics table notice is unavailable")
 
 
 def main() -> None:

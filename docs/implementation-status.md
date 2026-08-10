@@ -4933,3 +4933,44 @@ wheel was then installed with the `router` extra. The installed command reports 
 imports from the uv tool's `site-packages`, retains the existing Codex connection, and reports the
 pinned Potion model revision as installed and enabled in uncertainty-only shadow mode. Ordinary
 hooks remain network-free.
+
+### Human-readable route diagnostics table — Complete
+
+The user explicitly approved a native human-readable view for the existing content-free route
+footprints, followed by testing and production deployment. This bounded issue adds
+`mnemo memory diagnostics show --format table`; `--format json` remains the default and preserves
+the existing machine-readable object for scripts.
+
+The table must be deterministic plain text produced with the standard library, require no terminal
+or formatting dependency, and include time, live route/reason, shadow structure/history decisions,
+estimated attachment tokens, routing latency, Potion result, feedback, and the full event ID needed
+by `diagnostics mark`. Missing pre-trace values render as `-`; empty results still render a header and
+the existing correlation notice. Invalid formats must fail through the CLI without reading or
+mutating telemetry. No stored schema, retention, routing, model, prompt handling, or live attachment
+behavior changes in this issue.
+
+Acceptance requires backward-compatible JSON coverage, traced and legacy table rows, empty output,
+invalid-format help, user documentation, an installed-wheel smoke, the complete `npm run check`
+gate, and production deployment plus installation of the exact verified next prerelease.
+
+Implemented the standard-library table renderer with deterministic column widths, numeric
+alignment, UTC timestamps, explicit missing-value markers, Potion results, feedback, and full event
+IDs. The JSON default and object shape are unchanged; unsupported formats are rejected by the CLI
+before the command reads telemetry. User documentation and command help describe both formats.
+
+The focused telemetry/CLI suite passed seven tests. The complete `npm run check` gate passed with
+1,024 tests and 27 expected skips; the isolated PostgreSQL suite passed 26 tests with one opt-in load
+test skipped. Formatting, linting, strict typing, schema, dependency, architecture, and the enhanced
+installed-wheel table smoke all passed.
+
+### `0.1.0a18` production deployment — In progress
+
+The user explicitly approved production deployment and local installation of the completed native
+diagnostics table. Release preparation advances the pinned prerelease version to `0.1.0a18` without
+changing telemetry storage, retention, routing, model, prompt, or live attachment behavior.
+
+Acceptance requires a reviewed release commit pushed to `main`, successful protected
+`publish-pypi.yml` execution, live PyPI metadata/hash/integrity-provenance verification, installation
+of the exact published package with the existing `router` extra on this Mac, retained Potion model
+readiness, and a successful native `--format table` command from the installed distribution. No
+TestPyPI publication or direct local upload is authorized.

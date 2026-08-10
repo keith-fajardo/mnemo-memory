@@ -11,6 +11,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from importlib import import_module
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
@@ -3070,11 +3071,73 @@ def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
     }
 
 
+class _RouteDiagnosticsOutputFormat(str, Enum):
+    JSON = "json"
+    TABLE = "table"
+
+
+_ROUTE_DIAGNOSTIC_NOTICE = (
+    "Tool activity is correlated with a route event; it does not prove causation."
+)
+
+
+def _route_event_table(events: tuple[AutomaticRouteEvent, ...]) -> str:
+    """Render bounded validated telemetry as deterministic dependency-free plain text."""
+
+    headers = (
+        "TIME",
+        "LIVE",
+        "REASON",
+        "STRUCT",
+        "LONG",
+        "TOKENS",
+        "MS",
+        "POTION",
+        "FEEDBACK",
+        "EVENT_ID",
+    )
+    rows = tuple(
+        (
+            event.observed_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            event.route,
+            event.reason,
+            event.shadow_structural_need or "-",
+            event.shadow_long_term_need or "-",
+            str(event.rendered_estimated_tokens),
+            str(event.duration_ms),
+            event.semantic_route or "-",
+            "-" if event.feedback is None else event.feedback.value,
+            str(event.event_id),
+        )
+        for event in events
+    )
+    widths = tuple(
+        max(len(row[index]) for row in (headers, *rows)) for index in range(len(headers))
+    )
+    numeric_columns = {5, 6}
+
+    def render(row: tuple[str, ...]) -> str:
+        cells = tuple(
+            value.rjust(widths[index]) if index in numeric_columns else value.ljust(widths[index])
+            for index, value in enumerate(row)
+        )
+        return "  ".join(cells).rstrip()
+
+    return "\n".join(
+        (render(headers), *(render(row) for row in rows), "", _ROUTE_DIAGNOSTIC_NOTICE)
+    )
+
+
 @memory_route_diagnostics_app.command(
     "show", help="Show recent exact-scope content-free decision footprints."
 )
 def memory_route_diagnostics_show(
     limit: int = typer.Option(20, "--limit", min=1, max=100),
+    output_format: _RouteDiagnosticsOutputFormat = typer.Option(  # noqa: B008
+        _RouteDiagnosticsOutputFormat.JSON,
+        "--format",
+        help="Output format: json or table.",
+    ),
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
@@ -3092,13 +3155,14 @@ def memory_route_diagnostics_show(
         ValueError,
     ) as error:
         raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
+    if output_format is _RouteDiagnosticsOutputFormat.TABLE:
+        typer.echo(_route_event_table(events))
+        return
     _show(
         {
             "event_count": len(events),
             "events": [_route_event_view(event) for event in events],
-            "notice": (
-                "Tool activity is correlated with a route event; it does not prove causation."
-            ),
+            "notice": _ROUTE_DIAGNOSTIC_NOTICE,
         }
     )
 

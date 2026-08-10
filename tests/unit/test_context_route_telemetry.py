@@ -214,7 +214,22 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
         binding.checkpoint_scope.visibility.value,
     )
     event = replace(_event(9), scope=scope, observed_at=datetime.now(UTC))
-    LocalAutomaticRouteTelemetryStore(data).record(event)
+    traced = replace(
+        _event(10),
+        scope=scope,
+        observed_at=event.observed_at + timedelta(seconds=1),
+        shadow_structural_need="yes",
+        shadow_long_term_need="no",
+        shadow_reason="potion_proposal",
+        shadow_structural_tokens=1_000,
+        shadow_shared_maximum_tokens=1_300,
+        semantic_invoked=True,
+        semantic_route="structure",
+        semantic_latency_ms=14,
+    )
+    telemetry = LocalAutomaticRouteTelemetryStore(data)
+    telemetry.record(event)
+    telemetry.record(traced)
     common = ["--project-dir", str(project), "--data-dir", str(data)]
     runner = CliRunner()
 
@@ -222,17 +237,57 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
         app, ["memory", "diagnostics", "on", "--retention-days", "14", "--data-dir", str(data)]
     )
     shown = runner.invoke(app, ["memory", "diagnostics", "show", *common])
+    shown_json = runner.invoke(app, ["memory", "diagnostics", "show", "--format", "json", *common])
+    shown_table = runner.invoke(
+        app, ["memory", "diagnostics", "show", "--format", "table", *common]
+    )
+    invalid_format = runner.invoke(
+        app, ["memory", "diagnostics", "show", "--format", "csv", *common]
+    )
     marked = runner.invoke(
         app,
         ["memory", "diagnostics", "mark", str(event.event_id), "helpful", *common],
     )
     disabled = runner.invoke(app, ["memory", "diagnostics", "off", "--data-dir", str(data)])
     purged = runner.invoke(app, ["memory", "diagnostics", "purge", "--yes", *common])
+    shown_empty = runner.invoke(
+        app, ["memory", "diagnostics", "show", "--format", "table", *common]
+    )
 
     assert enabled.exit_code == shown.exit_code == marked.exit_code == disabled.exit_code == 0
-    assert purged.exit_code == 0
+    assert (
+        shown_json.exit_code
+        == shown_table.exit_code
+        == purged.exit_code
+        == shown_empty.exit_code
+        == 0
+    )
+    assert invalid_format.exit_code == 2
     assert json.loads(enabled.output)["mode"] == "trace"
     assert json.loads(shown.output)["notice"].endswith("does not prove causation.")
+    assert json.loads(shown.output) == json.loads(shown_json.output)
+    table_lines = shown_table.output.splitlines()
+    assert table_lines[0].split() == [
+        "TIME",
+        "LIVE",
+        "REASON",
+        "STRUCT",
+        "LONG",
+        "TOKENS",
+        "MS",
+        "POTION",
+        "FEEDBACK",
+        "EVENT_ID",
+    ]
+    assert "structure  architecture  yes     no" in shown_table.output
+    assert "structure" in shown_table.output
+    assert str(traced.event_id) in shown_table.output
+    assert str(event.event_id) in shown_table.output
+    assert shown_table.output.rstrip().endswith("does not prove causation.")
+    assert "json" in invalid_format.output and "table" in invalid_format.output
     assert json.loads(marked.output)["changes_routing"] is False
     assert json.loads(disabled.output)["existing_events_retained"] is True
-    assert json.loads(purged.output)["removed_events"] == 1
+    assert json.loads(purged.output)["removed_events"] == 2
+    assert shown_empty.output.splitlines()[0].split()[-1] == "EVENT_ID"
+    assert str(event.event_id) not in shown_empty.output
+    assert shown_empty.output.rstrip().endswith("does not prove causation.")
