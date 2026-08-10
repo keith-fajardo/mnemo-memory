@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a15
+uv tool install mnemo-unified-context==0.1.0a16
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -536,13 +536,13 @@ server starts inside an enabled repository, it resolves that repository's saved 
 Calling `get_context` with no scope fields is therefore valid there; supplying only part of a scope
 is rejected rather than mixed with another project's identity.
 
-There is one additional timely cue: when the agent has edited a project file, Mnemo adds a short
-memory reminder before the next user turn. With your explicit connection confirmation, Mnemo may
-use at most 512 characters of that prompt transiently to select already-saved, same-project memory.
-It never writes the prompt to its database, hook state, or logs. The reminder stops only after
-Mnemo verifies that the scoped checkpoint revision actually changed—not merely because a tool name
-was observed. This makes memory use a normal part of supported Codex/Claude Code work without
-making you maintain a parallel instruction file.
+There is one additional timely cue: when the agent first edits a project after its saved handoff,
+Mnemo adds one compact reminder at the next user turn. It does not repeat that base reminder on
+every later prompt in the same dirty checkpoint cycle; Stop and compaction still require the final
+handoff. With your explicit connection confirmation, Mnemo reduces a longer prompt to one transient
+512-character head/tail view before selecting already-saved, same-project memory. Short prompts are
+unchanged. It never writes either form to its database, hook state, or logs. A later verified
+checkpoint revision resets the one-shot reminder for the next work cycle—not merely a tool name.
 
 The short manual equivalent is:
 

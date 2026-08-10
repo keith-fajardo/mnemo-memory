@@ -114,6 +114,7 @@ from mnemo_memory.packages.application.command_wrapper import (
 from mnemo_memory.packages.application.context_routing import (
     AutomaticContextRoute,
     AutomaticContextRouteDecision,
+    bounded_automatic_context_prompt,
     choose_automatic_context_route,
 )
 from mnemo_memory.packages.application.services import LifecycleService
@@ -153,6 +154,7 @@ from mnemo_memory.packages.domain import (
     VerificationStatus,
     Visibility,
     WorkspaceId,
+    normalize_knowledge_query,
 )
 from mnemo_memory.packages.knowledge import (
     LocalEmbeddingError,
@@ -161,6 +163,7 @@ from mnemo_memory.packages.knowledge import (
     SemanticKnowledgeIndexRequest,
     SemanticKnowledgeSearchRequest,
 )
+from mnemo_memory.packages.policy.knowledge import contains_high_confidence_secret
 from mnemo_memory.packages.project_index import (
     SourceImpactDirection,
     SourceImpactQuery,
@@ -398,6 +401,7 @@ def _automatic_prompt_context_result(
     """Select and execute one bounded route without persisting the transient prompt."""
 
     started = monotonic()
+    prompt = bounded_automatic_context_prompt(prompt)
     preliminary = choose_automatic_context_route(prompt)
     if preliminary.route in {
         AutomaticContextRoute.NONE,
@@ -449,15 +453,22 @@ def _automatic_prompt_context_result(
                     total_limit=prompt_budget.total_limit,
                 )
 
+            query_prompt = _automatic_route_query(prompt, decision)
             semantic = None
-            if decision.route is AutomaticContextRoute.KNOWLEDGE:
+            if decision.route is AutomaticContextRoute.KNOWLEDGE and not (
+                contains_high_confidence_secret(prompt, query_prompt)
+            ):
                 semantic = LocalSemanticKnowledgeRetriever(
                     runtime.knowledge_document_repository,
                     FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
                 )
             service = _automatic_prompt_context_service(runtime, semantic)
             request = _automatic_prompt_context_request(
-                scope, prompt, prompt_budget, decision, include_semantic=semantic is not None
+                scope,
+                query_prompt,
+                prompt_budget,
+                decision,
+                include_semantic=semantic is not None,
             )
             try:
                 packet = service.get_context(request)
@@ -465,7 +476,7 @@ def _automatic_prompt_context_result(
                 packet = _automatic_prompt_context_service(runtime, None).get_context(
                     _automatic_prompt_context_request(
                         scope,
-                        prompt,
+                        query_prompt,
                         prompt_budget,
                         decision,
                         include_semantic=False,
@@ -478,6 +489,60 @@ def _automatic_prompt_context_result(
     if not _packet_has_automatic_context(packet):
         return _AutomaticPromptContextResult(decision, None, (), _elapsed_milliseconds(started))
     return _AutomaticPromptContextResult(decision, packet, (), _elapsed_milliseconds(started))
+
+
+def _automatic_route_query(prompt: str, decision: AutomaticContextRouteDecision) -> str:
+    """Prefer one route-aligned boundary line over unrelated pasted head/tail material."""
+
+    lines = tuple(line.strip() for line in prompt.splitlines() if line.strip())
+    selected = prompt
+    candidates = (*reversed(lines), *lines) if len(lines) > 1 else lines
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if choose_automatic_context_route(candidate).route is decision.route:
+            selected = candidate
+            break
+    if decision.route is not AutomaticContextRoute.KNOWLEDGE:
+        return selected
+    control_terms = {
+        "according",
+        "adr",
+        "check",
+        "consult",
+        "contract",
+        "documented",
+        "documentation",
+        "docs",
+        "explain",
+        "find",
+        "for",
+        "from",
+        "guidance",
+        "handbook",
+        "in",
+        "look",
+        "notes",
+        "of",
+        "our",
+        "policy",
+        "project",
+        "repository",
+        "search",
+        "show",
+        "standard",
+        "the",
+        "to",
+        "use",
+        "what",
+        "which",
+    }
+    searchable = tuple(
+        term for term in normalize_knowledge_query(selected) if term not in control_terms
+    )
+    return " ".join(searchable) if searchable else selected
 
 
 def _automatic_prompt_context_service(

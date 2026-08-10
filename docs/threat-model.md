@@ -968,9 +968,19 @@ an untrusted skill description becomes an instruction; corrupt or unbounded metr
 activity log; or an estimated token count is presented as provider-billed usage. Aggressive skill
 matching can also spend more context than it saves.
 
-**Required controls:** Route selection uses a closed deterministic policy over one transient prompt
-of at most 512 characters. Durable telemetry contains only the explicit task scope, opaque event
-ID, supported client, closed route/outcome and bounded reason codes, hit/miss/fallback state,
+**Required controls:** Route selection reduces every nonblank prompt to a transient head/tail view
+of at most 512 characters, then uses authoritative closed literal rules followed, only at the
+ambiguous boundary, by an embedded fixed standard-library classifier. Presence-only features make
+repeated padding idempotent. The classifier uses Mnemo-owned synthetic examples, performs no file
+or network I/O, emits only no-memory/prior-memory/knowledge/structure, and cannot select scope,
+authority, evidence, budgets, retention, or mutations. Structural output can select only the
+authorization-first rebuildable projection and never creates dbt or source facts. A no-memory
+result requires both a high score and a separating margin; uncertainty retains the existing
+knowledge probe. The full prompt and bounded view are not persisted. The mandatory deterministic
+high-confidence secret gate disables optional semantic query embedding when either the view or
+selected query matches; no model classifier is accepted as a substitute. Durable telemetry contains
+only the explicit task scope, opaque event ID, supported client, closed route/outcome and bounded
+reason codes, hit/miss/fallback state,
 canonical item tokens, final rendered character/byte/estimated-token counts, latency, candidate
 count, duplicate-render flag, and closed downstream tool categories. It stores no prompt, path,
 skill body, source text, command text, tool input, tool output, environment, or model trace. The
@@ -997,15 +1007,25 @@ tokens. Candidate descriptions are labelled untrusted discovery data; the exact 
 attached until the agent explicitly calls `get_skill`.
 
 **Verification:** Route-policy tests distinguish direct lookup, local diagnostics, prior memory,
-knowledge, structure, and skill discovery. Hook and registry tests prove that skill bodies,
+knowledge, structure, and skill discovery. A balanced 60-case original synthetic fixture requires
+high prior-memory and structural recall plus perfect precision whenever no-memory is selected.
+Long-prompt and repetition regressions prove both boundaries are retained, middle content is not
+forwarded, repeated features do not amplify scores, literal routes retain priority, and uncertain
+input falls back to the bounded probe. Hook and registry tests prove that
+skill bodies,
 prompts, and private markers
 do not enter candidate output or telemetry; a structural miss records a fallback only after a
 direct-inspection tool is observed; direct-tool observation records a category without command or
 result content; bounded retention, permissions, corruption recovery, aggregate inspection, render
 accounting, and client compatibility are covered.
 
-**Residual risk:** Term overlap can miss synonyms or suggest an irrelevant skill, and the coding
-model may ignore a valid candidate. Rendered token counts use Mnemo's character estimate, not the
+**Residual risk:** The compact classifier is not a universally calibrated probability model. A
+long prompt whose only material instruction is outside its head/tail view can still route
+conservatively to knowledge or miss a specialized route. New phrasing or another domain can still
+produce a false route, so the no-memory threshold is deliberately stricter than prior-memory
+routing and changes require the held-out evaluation. Term
+overlap can miss synonyms or suggest an irrelevant skill, and the coding model may ignore a valid
+candidate. Rendered token counts use Mnemo's character estimate, not the
 client tokenizer or provider bill. Since tool output remains unread, total downstream tokens are
 unknown unless a future client supplies an independently trusted content-free usage metric. Live
 comparisons must therefore report unknown calls and use controlled client-reported baselines before

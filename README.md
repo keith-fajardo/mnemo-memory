@@ -94,7 +94,7 @@ The PyPI distribution is `mnemo-unified-context`; the primary installed command 
 `mnemo-memory` remains a compatibility alias for existing scripts and client registrations.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a15
+uv tool install mnemo-unified-context==0.1.0a16
 mnemo --version
 mnemo init
 

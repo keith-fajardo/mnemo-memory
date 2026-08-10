@@ -4695,3 +4695,136 @@ published wheel into a fresh Python 3.12 environment. The isolated command repor
 `mnemo 0.1.0a15`, imported from `site-packages`, exposed the compatibility command, and initialized
 a fresh personal database at schema version `30`. Production deployment and acceptance are
 complete.
+
+### Compact local memory router — Complete
+
+The user explicitly approved a small memory router after reviewing evidence for adaptive
+retrieval and model cascades. This bounded issue adds one Mnemo-owned, standard-library text
+classifier only at the ambiguous automatic-context boundary. Existing literal rules remain
+authoritative for trivial prompts, exact source lookup, local diagnostics, explicit prior-memory
+language, checked-in skill discovery, dbt, architecture, impact, and explicit knowledge intent.
+
+The classifier may select no attachment, prior task memory, or the existing bounded knowledge
+probe. Low-confidence output must retain the current knowledge-probe behavior, and every route must
+remain authorization-first, token-bounded, inspectable, content-free in telemetry, and fail-open.
+The classifier must not answer the user's task, choose scope or authority, persist a prompt, call a
+provider, download model weights, modify the configured coding model, or authorize memory writes.
+
+Acceptance requires held-out routing regressions with complete prior-memory recall and conservative
+no-memory precision, prompt/privacy and telemetry coverage, documented threat-model boundaries,
+focused tests, and the complete `npm run check` gate. No dependency, model endpoint, schema,
+migration, Redis service, retention rule, or memory-promotion policy is part of this issue.
+
+Implementation is complete. Authoritative literal routes still run first. At only the former
+general-memory fallback, an embedded multinomial classifier built from Mnemo-owned synthetic
+examples now proposes no attachment, prior task memory, or project knowledge. Prior-memory
+selection is recall-oriented; no-memory selection requires both a high posterior and a separating
+margin; all uncertainty retains the existing bounded knowledge probe. The classifier generates no
+answer, performs no I/O, persists no prompt or score, and cannot select scope, authority, evidence,
+budget, retention, or mutation behavior.
+
+Focused routing and automatic-memory verification passed `75` tests. The held-out classifier
+fixture correctly routed all `16` examples, including `6/6` continuation paraphrases and `6/6`
+self-contained prompts; hook telemetry retained the closed route reason and zero delivered tokens
+without retaining the private prompt marker. The complete `npm run check` gate passed: formatting,
+lint, strict typing for `269` files, `1,000` regular tests with `27` expected environment-gated
+skips, `26` PostgreSQL migration/RLS tests with one expected load-test skip, schema validation,
+dependency/provenance checks for `94` entries, architecture checks for `147` product Python files,
+and installed personal workflow verification. No dependency, weight download, provider call,
+schema, migration, storage, Redis, retention, promotion, or configured-agent model change was made.
+
+### Codex PreCompact output compatibility — Complete
+
+The installed Codex `0.147.0` command schema accepts only the common `continue`, `stopReason`,
+`suppressOutput`, and `systemMessage` fields from a `PreCompact` hook. Mnemo currently emits the
+`hookSpecificOutput.additionalContext` shape that Codex accepts at `SessionStart`, so Codex rejects
+the otherwise valid JSON before compaction.
+
+This bounded fix must keep compaction fail-open, preserve the project-scoped pending-handoff
+marker, emit no unsupported Codex `PreCompact` fields, and attach the existing bounded context and
+checkpoint reminder at the following compact-origin `SessionStart`. Claude Code behavior remains
+unchanged. Acceptance requires a focused lifecycle regression, the complete `npm run check` gate,
+and a real installed-hook invocation whose Codex `PreCompact` output is valid empty JSON. No schema,
+migration, dependency, storage, model, routing, retention, or authorization change is included.
+
+Implementation is complete. A dirty Codex `PreCompact` still refreshes bounded project state and
+sets the scoped pending-handoff marker, but now returns `{}` instead of the unsupported
+`hookSpecificOutput.additionalContext` object. The next compact-origin `SessionStart` uses its
+supported `hookSpecificOutput` schema to attach the existing bounded context and pending-checkpoint
+reminder. Claude Code retains the prior PreCompact attachment behavior.
+
+The focused automatic-memory and routing suite passed `75` tests. The complete `npm run check`
+gate passed: formatting, lint, strict typing for `269` files, `1,000` regular tests with `27`
+expected environment-gated skips, `26` PostgreSQL migration/RLS tests with one expected load-test
+skip, schema validation, dependency/provenance checks for `94` entries, architecture checks for
+`147` product Python files, and installed personal workflow verification. The verified working
+tree was installed into the uv-managed `0.1.0a15` command. A full-schema installed smoke marked a
+synthetic session dirty, observed valid empty JSON with no keys from PreCompact, then observed a
+compact-origin SessionStart with bounded context and the pending-checkpoint reminder. No dependency,
+schema, migration, storage, model, routing, retention, authorization, or published-release change
+was made.
+
+### Long-prompt, structural-route, and reminder token safety — Complete
+
+The user approved the follow-up router-safety issue and asked that ambiguous structural-knowledge
+intent also be classified. This issue must route every nonblank prompt through one transient,
+bounded head/tail view; prevent repeated prompt features from amplifying classifier evidence; keep
+no-memory selection conservative; allow the classifier to select only the existing deterministic
+structural projection; and stop repeating the dirty-session reminder on every prompt. Exact dbt and
+source rules remain authoritative, authorization still precedes retrieval, and no prompt or bounded
+view may be persisted or emitted through telemetry.
+
+Acceptance requires focused long-prompt, padding, structural-routing, privacy, and one-shot lifecycle
+regressions; a balanced original synthetic routing fixture with cost-weighted recall and no-memory
+precision gates; threat-model and user-documentation updates; the complete `npm run check` gate; and
+a local installed-hook smoke. No dependency, model weight, provider call, Redis service, schema,
+migration, retention, promotion, or configured-agent model change is included.
+
+Implementation is complete. Every nonblank prompt now uses one transient head/tail view of at most
+512 characters consistently across literal routing, the presence-only classifier, skill discovery,
+and retrieval-query construction. Route-aligned boundary lines avoid letting pasted log/code noise
+swamp a short request. Duplicate unigrams and bigrams contribute once, so repeating known padding
+does not multiply evidence. The classifier can now propose the existing `structure` route, but only
+deterministic authorized projections supply source and dbt facts; uncertainty still falls back to
+bounded knowledge, and the strict no-memory score plus margin remains the only way to suppress an
+attachment.
+
+The dirty-session prompt cue is now `MNEMO_DIRTY_V1`, 250 characters rather than 497 (about 63
+rather than 125 tokens under Mnemo's documented character estimate). A private session-state
+boolean emits that base cue once per dirty checkpoint cycle. Repeated prompts and further edits do
+not resend it; Stop and PreCompact still enforce the handoff, and a verified new checkpoint resets
+the next cycle. Prompt text and the bounded view remain absent from state and telemetry.
+
+Focused routing, lifecycle, privacy, long-prompt, and evaluation verification passed `84` tests,
+including proof that a secret-bearing bounded view cannot construct the optional embedding provider.
+The balanced 60-case original synthetic fixture passed `56/60` (`93.3%`) overall with `15/15`
+prior-memory recall, `14/15` structural recall, and `100%` precision whenever no-memory was chosen.
+The two earlier 45-prompt screens improved from `84.4%` to `97.8%` and from `64.4%` to `88.9%`,
+both with complete prior-memory recall and no false no-memory selection. The complete
+`npm run check` gate passed: formatting and linting, strict typing for `270` files, `1,009` regular
+tests with `27` expected environment-gated skips, `26` PostgreSQL migration/RLS tests with one
+expected load-test skip, schema validation, dependency/provenance checks for `94` entries,
+architecture checks for `147` product Python files, and installed personal workflow verification.
+No dependency, weight, provider, schema, migration, Redis, retention, promotion, or published
+release change was made.
+
+The verified working tree was then installed into the existing local `0.1.0a15` uv tool. The first
+same-version `uv tool install --force .` reused a cached build; the required exact-launcher smoke
+caught the old repeated reminder. Reinstallation with `--reinstall` rebuilt the local artifact, and
+the installed `hook.py` SHA-256 then matched the working tree at
+`34e2ad394d50a0ab5f2fc0579bd667af2407acbae196bc60917e764b9f9cfefa`. In an isolated enabled
+project, the configured launcher emitted `MNEMO_DIRTY_V1` at the first dirty prompt and `{}` at the
+second. Its installed router selected `structure` from a long prompt and produced identical
+decisions and scores after two versus twenty repetitions of the same padding phrase.
+
+### `0.1.0a16` production deployment — In progress
+
+The user explicitly approved production deployment of the completed PreCompact compatibility,
+long-prompt routing, structural classification, secret-gating, and one-shot reminder changes.
+The exact production PyPI version endpoint returned `404` before the bump, confirming that
+`0.1.0a16` was unused. Release metadata and pinned artifact references now target `0.1.0a16`.
+
+Acceptance requires the complete local gate, source and artifact verification, a clean release
+commit pushed to `main`, successful protected `publish-pypi.yml` execution, live PyPI metadata and
+integrity-provenance verification, and an isolated install of the exact published wheel. No
+TestPyPI or direct local upload is authorized or needed for this production release.

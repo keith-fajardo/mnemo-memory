@@ -31,7 +31,7 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a15
+uv tool install mnemo-unified-context==0.1.0a16
 mnemo --help
 mnemo init
 ```
@@ -50,10 +50,26 @@ mnemo connect claude-code
 This creates a private local project binding; you never enter scope UUIDs. At a new session, the
 hook attaches the bounded saved checkpoint, lessons, approved facts, and latest bounded source
 transition automatically in the configured client's rendering, then asks
-the agent to create a compact checkpoint at a stop/compaction boundary. It refreshes Mnemo's
+the agent to create a compact checkpoint at a stop boundary. For Codex compaction, the PreCompact
+hook records the pending handoff without emitting unsupported context fields; the compact-origin
+SessionStart then attaches the bounded context and checkpoint reminder. It refreshes Mnemo's
 syntax-only source map at session start, after a checkpoint save, and before an unsaved changed
 session stops. The attachment has a 1,750-token total budget; it does not read or store a raw
 transcript or source body.
+
+For later prompts, Mnemo treats the current conversation as the agent's short-term context. It
+reduces long inputs to a transient 512-character head/tail view, applies fixed intent rules, then
+uses a tiny embedded local classifier only when the request is ambiguous. Repeated words count once.
+A clearly self-contained prompt receives no Mnemo attachment; continuation language can select
+prior task memory; project-specific intent can select a bounded knowledge probe; source-relationship
+intent can select the existing deterministic structural projection. Low confidence retains the
+knowledge probe instead of suppressing memory. The classifier runs locally with no provider call or
+model-token charge, stores no prompt or bounded view, never computes dbt lineage, and never decides
+what short-term context becomes durable memory.
+
+After a project first becomes dirty, the prompt hook emits one compact `MNEMO_DIRTY_V1` reminder.
+It suppresses repeats during the same unsaved checkpoint cycle, while Stop and PreCompact retain
+their handoff enforcement. Saving a verified new checkpoint revision resets the next cycle.
 
 By default, Codex and Claude Code launched normally will use the same personal Mnemo store. To use
 an isolated store—for a test, demo, or separate profile—set an absolute path before launching the

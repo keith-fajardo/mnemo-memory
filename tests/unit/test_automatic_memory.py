@@ -712,6 +712,76 @@ def test_prompt_boundary_uses_prompt_transiently_and_attaches_bounded_context(
     assert prompt not in state
 
 
+def test_prompt_boundary_passes_only_a_bounded_head_tail_view_of_a_long_prompt(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    received: list[str] = []
+
+    def load(_scope: MemoryScope, prompt: str) -> None:
+        received.append(prompt)
+
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=load,
+    )
+    middle_marker = "private-middle-marker-f840"
+    prompt = (
+        "Use the prior handoff. "
+        + ("pasted-prefix-noise " * 40)
+        + middle_marker
+        + (" pasted-suffix-noise" * 40)
+        + "Trace every caller of this adapter."
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": prompt,
+        }
+    )
+
+    assert result == {}
+    assert len(received) == 1
+    assert len(received[0]) <= 512
+    assert received[0].startswith("Use the prior handoff.")
+    assert received[0].endswith("Trace every caller of this adapter.")
+    assert middle_marker not in received[0]
+    state = (data / "automatic-memory-session-state.json").read_text(encoding="utf-8")
+    assert middle_marker not in state
+
+
+def test_automatic_prompt_secret_view_never_reaches_the_embedding_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    secret = "api_key=abcdefghijklmnop1234"
+
+    def reject_provider(_cache: Path) -> None:
+        raise AssertionError("secret-bearing prompt must not construct an embedding provider")
+
+    monkeypatch.setattr(cli, "FastEmbedLocalProvider", reject_provider)
+    attached = cli._automatic_prompt_context_for_hook(
+        data,
+        binding.checkpoint_scope,
+        f"Consult the project notes about reconciliation.\n{secret}",
+        "codex",
+    )
+
+    assert attached.context is None
+    telemetry = (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+    assert secret not in telemetry
+
+
 def test_prompt_route_correlation_observes_only_tool_name_not_payload(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -862,11 +932,21 @@ def test_automatic_prompt_context_selects_scoped_markdown_with_material_token_sa
     attached = cli._automatic_prompt_context_attachment(
         data, first.checkpoint_scope, "finance reconciliation variance"
     )
+    long_attached = cli._automatic_prompt_context_attachment(
+        data,
+        first.checkpoint_scope,
+        ("pasted-log-noise " * 100)
+        + "\nConsult the project notes for the finance reconciliation variance.",
+    )
 
     assert attached is not None
+    assert long_attached is not None
     packet = json.loads(attached)
+    long_packet = json.loads(long_attached)
     assert packet["declared_total_tokens"] <= 1_300
+    assert long_packet["declared_total_tokens"] <= 1_300
     rendered = json.dumps(packet, sort_keys=True)
+    assert "approved business-date grain" in json.dumps(long_packet, sort_keys=True)
     assert "approved business-date grain" in rendered
     assert "private other-project variance decision" not in rendered
     raw_markdown_tokens = (len(relevant) + sum(len(item) for item in unrelated_documents) + 3) // 4
@@ -1140,6 +1220,33 @@ def test_exact_lookup_records_zero_attachment_and_unknown_direct_tool_cost(
     assert summary["totals"]["unmeasured_tool_calls"] == 1
 
 
+def test_compact_router_skips_memory_without_retaining_its_prompt(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    marker = "private-router-marker-29a82e"
+    prompt = f"Start a new implementation from this specification. {marker}"
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, prompt, "codex"
+    )
+
+    assert attached.context is None
+    assert attached.telemetry_event_id is not None
+    telemetry = (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+    assert marker not in telemetry
+    assert '"reason":"router_no_memory"' in telemetry
+    summary = (
+        LocalAutomaticRouteTelemetryStore(data)
+        .summary(cli._automatic_route_scope(binding.checkpoint_scope))
+        .to_dict()
+    )
+    routes = cast(dict[str, dict[str, int]], summary["routes"])
+    assert routes["none"]["events"] == 1
+    assert routes["none"]["estimated_total_tokens"] == 0
+
+
 def test_structural_miss_records_a_direct_lookup_fallback_without_prompt(
     tmp_path: Path,
 ) -> None:
@@ -1229,7 +1336,7 @@ def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(
     assert "without a complete checkpoint" not in context
 
 
-def test_compaction_requests_a_real_handoff_and_next_session_attaches_saved_revision(
+def test_codex_compaction_defers_handoff_to_schema_compatible_session_start(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "repo"
@@ -1283,12 +1390,23 @@ def test_compaction_requests_a_real_handoff_and_next_session_attaches_saved_revi
     compact = hook.handle(
         {"hook_event_name": "PreCompact", "session_id": "before", "cwd": str(project)}
     )
-    compact_output = compact["hookSpecificOutput"]
-    assert isinstance(compact_output, dict)
-    assert compact_output["hookEventName"] == "PreCompact"
-    assert "save_checkpoint" in str(compact_output["additionalContext"])
-    assert "Preserve the task across compaction" in str(compact_output["additionalContext"])
-    assert "decision" not in compact
+    assert compact == {}
+
+    after_compaction = hook.handle(
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "after-compaction",
+            "source": "compact",
+            "cwd": str(project),
+        }
+    )
+    after_compaction_output = after_compaction["hookSpecificOutput"]
+    assert isinstance(after_compaction_output, dict)
+    assert after_compaction_output["hookEventName"] == "SessionStart"
+    after_compaction_context = str(after_compaction_output["additionalContext"])
+    assert "save a concise checkpoint" in after_compaction_context
+    assert "without a complete checkpoint" in after_compaction_context
+    assert "Preserve the task across compaction" in after_compaction_context
 
     revised = CheckpointContent(
         task_objective=initial.task_objective,
@@ -1316,7 +1434,7 @@ def test_compaction_requests_a_real_handoff_and_next_session_attaches_saved_revi
     hook.handle(
         {
             "hook_event_name": "PostToolUse",
-            "session_id": "before",
+            "session_id": "after-compaction",
             "cwd": str(project),
             "tool_name": "mcp__mnemo-memory__save_checkpoint",
             "tool_input": {"operation": "revise"},
@@ -1811,10 +1929,92 @@ def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
     assert isinstance(output, dict)
     assert output["hookEventName"] == "UserPromptSubmit"
     context = str(output["additionalContext"])
-    assert "Mnemo observed a project mutation" in context
+    assert context.startswith("MNEMO_DIRTY_V1")
+    assert len(context) <= 256
     assert "source_changes" in context
     assert "relative_path" in context
     assert "private user question" not in context
+    state = (data / "automatic-memory-session-state.json").read_text()
+    assert '"dirty_reminder_sent":true' in state
+
+    repeated = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "a second private question",
+        }
+    )
+    assert repeated == {}
+
+
+def test_dirty_session_reminder_resets_after_a_verified_checkpoint(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+    first = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "first request",
+        }
+    )
+    assert "MNEMO_DIRTY_V1" in str(first)
+    assert (
+        hook.handle(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s1",
+                "cwd": str(project),
+                "prompt": "second request",
+            }
+        )
+        == {}
+    )
+
+    _create_test_handoff(data, binding)
+    assert (
+        hook.handle(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "s1",
+                "cwd": str(project),
+                "tool_name": "mcp__mnemo-memory__save_checkpoint",
+                "tool_input": {"operation": "create"},
+            }
+        )
+        == {}
+    )
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+    next_cycle = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "third request",
+        }
+    )
+
+    assert "MNEMO_DIRTY_V1" in str(next_cycle)
 
 
 def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: Path) -> None:
@@ -1878,7 +2078,7 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
             "prompt": "another private user question",
         }
     )
-    assert "hookSpecificOutput" in still_dirty
+    assert still_dirty == {}
     _create_test_handoff(data, binding)
 
 

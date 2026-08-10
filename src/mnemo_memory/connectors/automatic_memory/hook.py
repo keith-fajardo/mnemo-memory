@@ -30,6 +30,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
     exclusive_local_file_lock,
 )
+from mnemo_memory.packages.application.context_routing import bounded_automatic_context_prompt
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationError,
     DbtManifestApplicationService,
@@ -165,6 +166,7 @@ class AutomaticMemoryHook:
                     git_source_digest=git_source_digest,
                     git_clean_commit_id=git_clean_commit_id,
                     telemetry_event_id=state.telemetry_event_id,
+                    dirty_reminder_sent=False,
                 )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
@@ -190,6 +192,7 @@ class AutomaticMemoryHook:
                     git_source_digest=state.git_source_digest,
                     git_clean_commit_id=state.git_clean_commit_id,
                     telemetry_event_id=state.telemetry_event_id,
+                    dirty_reminder_sent=(state.dirty_reminder_sent if state.dirty else False),
                 )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
@@ -206,6 +209,7 @@ class AutomaticMemoryHook:
                 git_source_digest=git_source_digest,
                 git_clean_commit_id=git_clean_commit_id,
                 telemetry_event_id=None,
+                dirty_reminder_sent=False,
             )
             attached_context = self._attached_context(binding.checkpoint_scope)
             return self._context_output(
@@ -223,8 +227,15 @@ class AutomaticMemoryHook:
         if event_name == "UserPromptSubmit":
             # Explicit automatic-memory consent permits transient local retrieval from the current
             # user prompt. The prompt is never written to hook state, logs, or durable memory.
+            refreshed = _SourceRefresh(None)
+            if state.dirty and not state.saved:
+                # Refresh before retrieval so a structural route cannot observe the projection
+                # from before the mutation that caused this prompt-boundary hook.
+                self._refresh_project_knowledge(binding)
+                refreshed = self._refresh_source_structure(binding)
             prompt_attachment = self._attached_prompt_context(binding.checkpoint_scope, event)
             prompt_context = prompt_attachment.context
+            should_remind = state.dirty and not state.saved and not state.dirty_reminder_sent
             # Replace, rather than retain, route correlation at every prompt boundary. A prompt
             # with no new event must not attribute later tool calls to the preceding request.
             _SessionStateStore(self.data_directory).save(
@@ -235,12 +246,11 @@ class AutomaticMemoryHook:
                 git_source_digest=state.git_source_digest,
                 git_clean_commit_id=state.git_clean_commit_id,
                 telemetry_event_id=prompt_attachment.telemetry_event_id,
+                dirty_reminder_sent=state.dirty_reminder_sent or should_remind,
             )
             if prompt_attachment.telemetry_event_id is not None and prompt_context is None:
                 self._observe_delivery(prompt_attachment.telemetry_event_id, None)
-            if state.dirty and not state.saved:
-                self._refresh_project_knowledge(binding)
-                refreshed = self._refresh_source_structure(binding)
+            if should_remind:
                 return self._context_output(
                     _dirty_session_instruction(refreshed),
                     event_name="UserPromptSubmit",
@@ -264,9 +274,13 @@ class AutomaticMemoryHook:
             instruction = _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
             if event_name == "PreCompact":
                 # Compaction hooks are a context boundary, not a command-stop decision. Attach the
-                # last durable handoff while asking the agent to save its current one; if the
-                # client compacts immediately, the persistent pending marker makes the same need
-                # visible at the following SessionStart. No transcript or prompt text is read.
+                # last durable handoff while asking the agent to save its current one when the
+                # client supports that output. Codex's PreCompact schema accepts only common
+                # control fields, not hookSpecificOutput.additionalContext, so its hook must stay
+                # silent and rely on the persistent pending marker to attach the reminder and
+                # bounded handoff at the following SessionStart. No transcript or prompt is read.
+                if self.client == "codex":
+                    return {}
                 return self._context_output(
                     instruction,
                     event_name="PreCompact",
@@ -359,10 +373,10 @@ class AutomaticMemoryHook:
         if self.prompt_context_loader is None:
             return PromptContextAttachment(None)
         prompt = event.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
+        if not isinstance(prompt, str) or not prompt.strip():
             return PromptContextAttachment(None)
         try:
-            value = self.prompt_context_loader(scope, prompt)
+            value = self.prompt_context_loader(scope, bounded_automatic_context_prompt(prompt))
         except Exception:
             return PromptContextAttachment(None)
         attachment = (
@@ -614,6 +628,7 @@ class _SessionState:
     git_source_digest: str | None = None
     git_clean_commit_id: str | None = None
     telemetry_event_id: UUID | None = None
+    dirty_reminder_sent: bool = False
 
 
 class _SessionStateStore:
@@ -652,6 +667,7 @@ class _SessionStateStore:
             git_source_digest,
             git_clean_commit_id,
             parsed_telemetry_event_id,
+            value.get("dirty_reminder_sent") is True,
         )
 
     def save(
@@ -664,6 +680,7 @@ class _SessionStateStore:
         git_source_digest: str | None = None,
         git_clean_commit_id: str | None = None,
         telemetry_event_id: UUID | None = None,
+        dirty_reminder_sent: bool = False,
     ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
@@ -678,6 +695,8 @@ class _SessionStateStore:
                     session["git_clean_commit_id"] = git_clean_commit_id
                 if telemetry_event_id is not None and telemetry_event_id.version == 4:
                     session["telemetry_event_id"] = str(telemetry_event_id)
+                if dirty_reminder_sent:
+                    session["dirty_reminder_sent"] = True
                 values[session_id] = session
                 # Bounded state avoids making lifecycle metadata a long-term activity log.
                 if len(values) > 128:
@@ -1100,15 +1119,11 @@ def _dbt_downstream_cues(
 
 
 def _dirty_session_instruction(refreshed: _SourceRefresh) -> str:
-    """One short prompt-boundary cue; no submitted prompt content is read or retained."""
+    """One compact, one-shot prompt cue; no submitted prompt content is read or retained."""
     instruction = (
-        "Mnemo observed a project mutation in this session. Before analyzing prior changes, "
-        "decisions, verification, or impact, check the stored Mnemo context and request "
-        "source_changes with a relative_path when the question is what changed in one file; "
-        "save a concise "
-        "checkpoint before the task ends. Record a structured lesson when a mistaken assumption "
-        "was corrected, record a separate approved fact only when it is verified and evidenced, "
-        "and apply the prevention step from any relevant earlier lesson."
+        "MNEMO_DIRTY_V1 Work changed after the saved handoff. Check Mnemo context before relying "
+        "on prior state; use source_changes(relative_path=...) for one-file diffs. Save one "
+        "checkpoint before Stop/compact; record only verified, evidenced lessons/events."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)

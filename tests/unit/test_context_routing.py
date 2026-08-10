@@ -3,6 +3,9 @@
 from mnemo_memory.packages.application.context_routing import (
     AutomaticContextRoute,
     AutomaticContextRouteReason,
+    CompactLocalMemoryRouter,
+    CompactMemoryRoute,
+    bounded_automatic_context_prompt,
     choose_automatic_context_route,
 )
 
@@ -63,4 +66,131 @@ def test_trivial_prompt_attaches_nothing_and_general_domain_query_probes_memory(
     assert choose_automatic_context_route("hello").route is AutomaticContextRoute.NONE
     general = choose_automatic_context_route("finance reconciliation variance")
     assert general.route is AutomaticContextRoute.KNOWLEDGE
-    assert general.reason is AutomaticContextRouteReason.GENERAL_MEMORY_PROBE
+    assert general.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+
+
+def test_compact_router_recognizes_held_out_memory_intent_without_a_model_call() -> None:
+    router = CompactLocalMemoryRouter()
+    expected = {
+        CompactMemoryRoute.PRIOR_MEMORY: (
+            "Let's carry on from where the other chat stopped.",
+            "Use the rationale we settled on.",
+            "Did an attempt at this break already?",
+            "Restore the unfinished handoff.",
+            "Have we encountered a similar failure?",
+            "Use the approach from our other conversation.",
+        ),
+        CompactMemoryRoute.KNOWLEDGE: (
+            "Consult the ADR about database tenancy.",
+            "Look up our release rules.",
+            "Search repository notes for OAuth.",
+            "What do our checked-in docs require?",
+        ),
+        CompactMemoryRoute.STRUCTURE: (
+            "Which parts of the codebase collaborate in request routing?",
+            "Trace every caller that can reach this adapter.",
+            "Which modules participate in checkpoint persistence?",
+            "Show the producers and consumers around this table.",
+        ),
+        CompactMemoryRoute.NONE: (
+            "Start a new implementation from this specification.",
+            "Review this new patch.",
+            "Solve this equation.",
+            "Write a haiku.",
+            "Write a unit test for this code.",
+            "Summarize the following text.",
+        ),
+    }
+
+    for route, prompts in expected.items():
+        assert all(router.classify(prompt).route is route for prompt in prompts)
+
+
+def test_compact_router_only_skips_memory_for_a_separated_no_memory_prediction() -> None:
+    self_contained = choose_automatic_context_route(
+        "Start a new implementation from this specification."
+    )
+    continuation = choose_automatic_context_route(
+        "Let's carry on from where the other chat stopped."
+    )
+    ambiguous = choose_automatic_context_route("finance reconciliation variance")
+
+    assert self_contained.route is AutomaticContextRoute.NONE
+    assert self_contained.reason is AutomaticContextRouteReason.ROUTER_NO_MEMORY
+    assert self_contained.maximum_attachment_tokens == 0
+    assert continuation.route is AutomaticContextRoute.PRIOR_MEMORY
+    assert continuation.reason is AutomaticContextRouteReason.ROUTER_PRIOR_MEMORY
+    assert ambiguous.route is AutomaticContextRoute.KNOWLEDGE
+    assert ambiguous.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+
+
+def test_literal_routes_remain_authoritative_over_compact_router_predictions() -> None:
+    exact = choose_automatic_context_route("Where is CompactLocalMemoryRouter defined?")
+    explicit = choose_automatic_context_route("What does the documented policy require?")
+    structure = choose_automatic_context_route("What depends on CompactLocalMemoryRouter?")
+
+    assert exact.reason is AutomaticContextRouteReason.EXACT_SOURCE_LOOKUP
+    assert explicit.reason is AutomaticContextRouteReason.EXPLICIT_KNOWLEDGE
+    assert structure.reason is AutomaticContextRouteReason.SOURCE_IMPACT
+
+
+def test_long_prompt_uses_one_bounded_head_and_tail_view_for_every_route() -> None:
+    middle_marker = "middle-private-marker-4831"
+    prompt = (
+        "Use the rationale from our earlier session. "
+        + ("pasted-prefix-noise " * 40)
+        + middle_marker
+        + (" pasted-suffix-noise" * 40)
+        + "Finish from the saved handoff."
+    )
+
+    bounded = bounded_automatic_context_prompt(prompt)
+    decision = choose_automatic_context_route(prompt)
+
+    assert len(prompt) > 512
+    assert len(bounded) <= 512
+    assert bounded.startswith("Use the rationale from our earlier session.")
+    assert bounded.endswith("Finish from the saved handoff.")
+    assert middle_marker not in bounded
+    assert decision.route is AutomaticContextRoute.PRIOR_MEMORY
+
+
+def test_long_prompt_can_select_structural_context_from_its_instruction_tail() -> None:
+    prompt = (
+        "standalone pasted log line\n" * 100
+    ) + "Trace every caller that reaches this adapter."
+
+    decision = choose_automatic_context_route(prompt)
+
+    assert decision.route is AutomaticContextRoute.STRUCTURE
+    assert decision.reason is AutomaticContextRouteReason.ROUTER_STRUCTURE
+    assert decision.maximum_attachment_tokens == 1_000
+
+
+def test_presence_features_make_repeated_padding_idempotent() -> None:
+    router = CompactLocalMemoryRouter()
+    base = "Continue the work we discussed earlier. "
+    padding = "write a unit test for this function "
+
+    twice = router.classify(base + padding * 2)
+    repeated = router.classify(base + padding * 20)
+
+    assert repeated == twice
+    assert choose_automatic_context_route(base + padding * 20).route is (
+        AutomaticContextRoute.PRIOR_MEMORY
+    )
+
+
+def test_document_and_self_contained_cues_override_memory_word_distractors() -> None:
+    documented = choose_automatic_context_route(
+        "Ignore earlier chat; use the checked-in policy for dependency approvals."
+    )
+    previous_value = choose_automatic_context_route("Write a cache that stores the previous value.")
+    translation = choose_automatic_context_route(
+        "Translate 'continue from where you stopped' into French."
+    )
+
+    assert documented.route is AutomaticContextRoute.KNOWLEDGE
+    assert documented.reason is AutomaticContextRouteReason.EXPLICIT_KNOWLEDGE
+    assert previous_value.route is AutomaticContextRoute.NONE
+    assert translation.route is AutomaticContextRoute.NONE
