@@ -4963,7 +4963,7 @@ The focused telemetry/CLI suite passed seven tests. The complete `npm run check`
 test skipped. Formatting, linting, strict typing, schema, dependency, architecture, and the enhanced
 installed-wheel table smoke all passed.
 
-### `0.1.0a18` production deployment — In progress
+### `0.1.0a18` production deployment — Complete
 
 The user explicitly approved production deployment and local installation of the completed native
 diagnostics table. Release preparation advances the pinned prerelease version to `0.1.0a18` without
@@ -4974,3 +4974,16 @@ Acceptance requires a reviewed release commit pushed to `main`, successful prote
 of the exact published package with the existing `router` extra on this Mac, retained Potion model
 readiness, and a successful native `--format table` command from the installed distribution. No
 TestPyPI publication or direct local upload is authorized.
+
+Release commit `e9daa69a0ef33cd68ae6d4cad86d24dbdaa299f3` was pushed to `main` and
+protected production workflow run `31419614776` passed repository verification, artifact smoke
+tests, OIDC publication, and independent PyPI verification. The immutable artifact hashes are
+`4ac5373d0a50f050510dd27b94a9a97a34cf0f2cc1288854ac4bef43ccf168ee` for the wheel and
+`651d04e0b42f993f1e617a8898851216de4e6651a0e4eee8549b7fcc7117d7fb` for the source
+distribution; a separate live PyPI metadata, hash, provenance, and wheel comparison also passed.
+
+The exact verified wheel was installed locally with the `router` extra. The installed command
+reports `mnemo 0.1.0a18`, the existing Codex connection remains active, and pinned Potion revision
+`bf8b056651a2c21b8d2565580b8569da283cab23` remains installed and enabled in uncertainty-only
+shadow mode. The installed `mnemo memory diagnostics show --format table --limit 3` command rendered
+the local diagnostic events and correlation notice successfully.
