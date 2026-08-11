@@ -31,7 +31,7 @@ Mnemo keeps the live ADR 0045 route unchanged and evaluates a separate content-f
   project phrases establish one or both needs;
 - `lazy_pull` when a need remains unresolved.
 
-`lazy_pull` represents this fixed 29-token estimate: “Mnemo did not attach durable context. If prior
+`lazy_pull` represents this fixed 30-token estimate: “Mnemo did not attach durable context. If prior
 project decisions or structure could change the answer, call get_context.” The hint is not attached
 live in this issue. It reuses the existing authorized, scoped `get_context` tool and does not add a
 second tool description to every model context. A proposed push remains within the existing shared

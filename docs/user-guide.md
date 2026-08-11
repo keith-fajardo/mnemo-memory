@@ -781,7 +781,7 @@ context yet; this stage measures the policy before a later, separately approved 
 The shadow plan also reports one counterfactual action. Explicit need proposes `push_structure`,
 `push_long_term`, or `push_both`; deterministic self-contained and narrowly recognized
 current-output follow-ups propose `none`; unresolved need proposes `lazy_pull`. The last action
-represents a fixed 29-token hint telling the agent to call the existing scoped `get_context` tool
+represents a fixed 30-token hint telling the agent to call the existing scoped `get_context` tool
 only if prior project decisions or repository structure could materially change the answer. The
 hint is measured but is not attached live in this release.
 

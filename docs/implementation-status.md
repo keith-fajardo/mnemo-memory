@@ -5021,7 +5021,7 @@ authorized only after this issue is complete and will be tracked as the next iss
 
 Implemented the shadow-only selective policy with closed `none`, `push_structure`,
 `push_long_term`, `push_both`, and `lazy_pull` actions. Unresolved prompts now propose a fixed
-29-token `get_context` hint instead of a 1,300-token knowledge attachment, while narrowly recognized
+30-token `get_context` hint instead of a 1,300-token knowledge attachment, while narrowly recognized
 current-output prompts propose zero tokens. These are counterfactual measurements only: live
 attachment remains byte-for-byte governed by the prior route. Trace hooks no longer load or invoke
 Potion; its installed model is reported as explicit-evaluation-only.
@@ -5037,7 +5037,7 @@ suite passed 26 tests with one opt-in load test skipped. Formatting, linting, st
 dependency, architecture, and installed-package checks passed. No dependency, model artifact,
 storage migration, live attachment, or configured agent endpoint changed.
 
-### `0.1.0a19` production deployment — In progress
+### `0.1.0a19` production deployment — Complete
 
 The user explicitly approved production deployment and local installation after the completed
 selective-push/lazy-pull shadow and diagnostics issue. Release preparation advances the pinned
@@ -5050,3 +5050,28 @@ a clean complete repository gate, one release commit pushed to `main`, successfu
 of the exact published wheel with the existing `router` extra on this Mac, retained Codex connection
 and diagnostics mode, and an installed table/router-status smoke. No TestPyPI publication, direct
 local upload, live selective attachment, or later routing issue is authorized.
+
+Production deployment is complete. Release commit
+`7634ecc23caa56356a5344ca825bd28bdc634f32` was pushed to `main`, and protected workflow run
+`31450848976` passed clean-runner repository verification, deterministic evaluations,
+source-independent artifact build and smoke tests, checksum-bound OIDC publication, and independent
+live PyPI metadata, hash, provenance, and wheel verification.
+
+The immutable workflow bundle and separately downloaded PyPI artifacts agree on these SHA-256
+digests:
+
+- wheel: `e73cfc533c226b2abaddeb5cf34d4af20c8ba9700019edb3084dfbfb47bee0f6`
+- source distribution: `926d03df692c0cbcd237b7b421d8802a0e483156bdf4a2275507786c71931bfd`
+
+The exact verified wheel was installed locally with the `router` extra. The installed command
+reports `mnemo 0.1.0a19`; `mnemo connect codex --check` reports connected; diagnostics remains in
+trace mode with seven-day retention; and the pinned Potion revision remains installed and enabled
+but now reports `explicit_evaluation_only` and `used_by_automatic_hooks: false`. Installed synthetic
+hook smokes produced `none` with zero proposed tokens for a current-output prompt and `lazy_pull`
+with 30 proposed tokens for an unresolved prompt, while preserving the unchanged live knowledge
+route. The native table rendered the new outcome, action, live/proposed cost, and latency columns.
+
+The installed smoke corrected one documentation-only arithmetic assumption: the fixed hint is 120
+characters and therefore 30, not 29, Mnemo-estimated tokens. The runtime calculation and enforced
+40-token ceiling were already correct; documentation now derives the value from the actual rendered
+string rather than an informal estimate.
