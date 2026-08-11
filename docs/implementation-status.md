@@ -5143,7 +5143,7 @@ architecture, and installed-package checks passed. The built-wheel smoke indepen
 `evidence_files`, compacted an oversized save to no more than 200 tokens, produced a sanitized
 failure, and rendered that failure in the installed diagnostics table.
 
-### `0.1.0a20` production deployment — In progress
+### `0.1.0a20` production deployment — Complete
 
 The user explicitly approved production deployment after completion of the sparse bounded
 checkpoint-save and failure-diagnostics issue. Release preparation advances the pinned prerelease
@@ -5157,3 +5157,24 @@ installation of the exact published wheel with the existing `router` extra on th
 Codex connection and diagnostics mode, and installed compaction, sanitized-failure, and checkpoint
 diagnostics-table smokes. No TestPyPI publication, direct local upload, later routing work, or new
 feature issue is authorized.
+
+Production deployment is complete. Release commit
+`f5b019a326938cfad170730a446d8e6a148faacd` was pushed to `main`, and protected workflow run
+`31462258124` passed clean-runner repository verification, deterministic evaluations,
+source-independent artifact build and wheel/source-distribution smokes, checksum-bound OIDC
+publication, and independent live PyPI metadata, hash, provenance, and wheel verification.
+
+The immutable workflow bundle and separately downloaded PyPI artifacts agree on these SHA-256
+digests:
+
+- wheel: `4e2b4b4b7039d07c9a1d1ad048bb6d96ffcc80fa46ad1340635e84940c06937a`
+- source distribution: `b9c3b6a8b4ffd6262811f7c8cb95e790a200d35f4d92a7f0708d81c1c9c76793`
+
+The exact verified wheel was installed locally with the existing `router` extra. The installed
+command reports `mnemo 0.1.0a20`; the Codex connection remains active; diagnostics remains in trace
+mode with seven-day retention; and pinned Potion revision
+`bf8b056651a2c21b8d2565580b8569da283cab23` remains installed and enabled only for explicit
+evaluation, with automatic-hook use disabled. An isolated installed-runtime smoke compacted an
+oversized checkpoint to 154 estimated tokens, returned a content-free error for an invalid save,
+and rendered both the compacted success and `MNEMO_INVALID_INPUT` failure in the native checkpoint
+diagnostics table.
