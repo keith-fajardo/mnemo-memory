@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a19
+uv tool install mnemo-unified-context==0.1.0a20
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -805,6 +805,7 @@ Turn the content-free decision footprint on, inspect it, add an evaluation label
 mnemo memory diagnostics on --retention-days 7
 mnemo memory diagnostics show
 mnemo memory diagnostics show --format table
+mnemo memory diagnostics saves --format table
 mnemo memory diagnostics mark EVENT_ID helpful
 mnemo memory diagnostics off
 mnemo memory diagnostics purge --yes
@@ -817,6 +818,14 @@ combined routing time, feedback, and the full event ID used by `mark`. `TOKENS` 
 estimate; `PLAN_TOK` is the shadow action's counterfactual estimate. Older aggregate-only records
 show `-` for shadow fields that were never captured. Empty results still show the header and the
 correlation notice; no shell `jq` or `column` pipeline is required.
+
+`diagnostics saves` shows the checkpoint save ledger governed by the same mode and retention.
+Summary mode records failed saves; trace mode records successes and failures. Its JSON or table
+contains only operation, outcome, sanitized error code, duration, stored token estimate, compaction
+flag, time, diagnostic event ID, and the canonical exact-task scope required for filtering. It never
+stores checkpoint text, evidence paths or hashes, checkpoint/revision IDs, arbitrary invalid IDs,
+prompts, tool payloads, or model reasoning. `purge --yes` removes both exact-scope route and
+checkpoint-save diagnostics.
 
 A later Mnemo `get_context` call is recorded only as the closed `context_recall` tool category. This
 helps compare lazy-pull proposals with observed recalls without retaining the query or result. It is
@@ -908,10 +917,13 @@ automatically. This automatic attachment has a 1,750-token total budget and happ
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
 needed. It uses the typed `save_checkpoint` tool, so Mnemo does not silently store a raw
-conversation or source body. The hook asks the agent to keep the canonical handoff at or below 450
-Mnemo-estimated tokens—below the hard 600-token checkpoint budget—with one short objective, one or
-two state sentences, and at most three short items per major list. The server still enforces the
-hard limit; the smaller requested target leaves room for JSON structure and evidence references.
+conversation or source body. The hook asks for a short objective, current state, next action,
+verification, and project-relative `evidence_files`, while omitting scope IDs, a caller token
+estimate, empty lists, and nulls. Mnemo derives full evidence identity locally, computes the
+canonical checkpoint estimate itself, omits absent optional values, and deterministically compacts
+new revisions toward 200 Mnemo-estimated tokens. The existing 600-token active-checkpoint ceiling
+remains defense in depth. A save response reports compaction when text or repeated items were not
+stored in full, so the agent does not need to retry by guessing a smaller token count.
 
 Shell-backed reads do not create a checkpoint obligation when Mnemo observed the Git project clean
 at session refresh and a second fixed, shell-free Git probe proves it is still clean at the same
@@ -922,8 +934,9 @@ explicit edit/write tool, the hook remains conservative and asks for the handoff
 The manual fallback is:
 
 > Save a Mnemo checkpoint with the progress, decisions, failed approach, tests run, evidence, and
-> exact next action. If you corrected an analysis mistake, also save its trigger, mistaken
-> assumption, correction, prevention, and evidence IDs as a lesson. If one verified decision,
+> exact next action. Omit empty fields and use project-relative evidence files. If you corrected an
+> analysis mistake, also save its trigger, mistaken assumption, correction, and prevention as a
+> lesson. If one verified decision,
 > failure, or tool result matters on its own, record it with `record_event` and evidence—but still
 > save a complete checkpoint before stopping. If the handoff is already saved, use the existing
 > `save_checkpoint` operation `record_lesson` to append just that one correction rather than

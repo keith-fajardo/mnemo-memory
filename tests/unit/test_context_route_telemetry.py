@@ -23,8 +23,11 @@ from mnemo_memory.packages.telemetry import (
     AutomaticRouteScope,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    CheckpointSaveDiagnosticEvent,
+    CheckpointSaveOutcome,
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
+    LocalCheckpointSaveTelemetryStore,
 )
 
 NOW = datetime(2026, 8, 8, 2, 0, tzinfo=UTC)
@@ -245,6 +248,16 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     telemetry = LocalAutomaticRouteTelemetryStore(data)
     telemetry.record(event)
     telemetry.record(traced)
+    save_event = CheckpointSaveDiagnosticEvent(
+        UUID("00000000-0000-4000-8000-000000000011"),
+        scope,
+        event.observed_at + timedelta(seconds=2),
+        "record_lesson",
+        CheckpointSaveOutcome.FAILURE,
+        4,
+        "MNEMO_INVALID_INPUT",
+    )
+    LocalCheckpointSaveTelemetryStore(data).record(save_event)
     common = ["--project-dir", str(project), "--data-dir", str(data)]
     runner = CliRunner()
 
@@ -255,6 +268,10 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     shown_json = runner.invoke(app, ["memory", "diagnostics", "show", "--format", "json", *common])
     shown_table = runner.invoke(
         app, ["memory", "diagnostics", "show", "--format", "table", *common]
+    )
+    saves_json = runner.invoke(app, ["memory", "diagnostics", "saves", *common])
+    saves_table = runner.invoke(
+        app, ["memory", "diagnostics", "saves", "--format", "table", *common]
     )
     invalid_format = runner.invoke(
         app, ["memory", "diagnostics", "show", "--format", "csv", *common]
@@ -273,6 +290,8 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     assert (
         shown_json.exit_code
         == shown_table.exit_code
+        == saves_json.exit_code
+        == saves_table.exit_code
         == purged.exit_code
         == shown_empty.exit_code
         == 0
@@ -281,6 +300,18 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     assert json.loads(enabled.output)["mode"] == "trace"
     assert json.loads(shown.output)["notice"].endswith("does not prove causation.")
     assert json.loads(shown.output) == json.loads(shown_json.output)
+    assert json.loads(saves_json.output)["events"][0]["error_code"] == "MNEMO_INVALID_INPUT"
+    assert saves_table.output.splitlines()[0].split() == [
+        "TIME",
+        "OPERATION",
+        "OUTCOME",
+        "ERROR",
+        "TOKENS",
+        "COMPACT",
+        "MS",
+        "EVENT_ID",
+    ]
+    assert "record_lesson" in saves_table.output
     traced_json = json.loads(shown.output)["events"][0]
     assert traced_json["shadow_action"] == "push_structure"
     assert traced_json["shadow_budget"]["estimated_attachment_tokens"] == 1_000
@@ -314,7 +345,8 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     assert "json" in invalid_format.output and "table" in invalid_format.output
     assert json.loads(marked.output)["changes_routing"] is False
     assert json.loads(disabled.output)["existing_events_retained"] is True
-    assert json.loads(purged.output)["removed_events"] == 2
+    assert json.loads(purged.output)["removed_events"] == 3
+    assert json.loads(purged.output)["removed_checkpoint_events"] == 1
     assert shown_empty.output.splitlines()[0].split()[-1] == "EVENT_ID"
     assert str(event.event_id) not in shown_empty.output
     assert shown_empty.output.rstrip().endswith("does not prove causation.")

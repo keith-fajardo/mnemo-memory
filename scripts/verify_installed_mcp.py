@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import select
@@ -18,7 +17,7 @@ from typing import cast
 
 from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 
-DISTRIBUTION_VERSION = "0.1.0a19"
+DISTRIBUTION_VERSION = "0.1.0a20"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
 TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
@@ -193,38 +192,16 @@ def _source_snapshot(packet: Mapping[str, object]) -> str:
 
 
 def _checkpoint_payload() -> dict[str, object]:
+    long_state = "Installed checkpoint compaction remains deterministic and bounded. " * 30
     return {
         "operation": "create",
         "task_objective": "Verify the installed personal workflow",
-        "current_state": "active",
+        "current_state": long_state,
         "completed_work": ["installed Mnemo and connected the sample project"],
         "remaining_work": ["resume through a second fresh MCP process"],
         "decisions": ["use the registered project scope without UUID arguments"],
-        "failures": [],
-        "blockers": [],
-        "relevant_files": ["src/sample.py"],
-        "relevant_artifacts": [],
         "verification_performed": ["source-independent installed workflow"],
-        "evidence_references": [
-            {
-                "evidence_id": "66666666-6666-4666-8666-666666666666",
-                "source_id": "77777777-7777-4777-8777-777777777777",
-                "source_type": "checkpoint",
-                "trust_class": "user_authored",
-                "immutable_source_ref": "synthetic://installed-personal-workflow",
-                "content_hash": "sha256:" + hashlib.sha256(b"installed workflow").hexdigest(),
-                "location": {
-                    "uri": "fixture://installed-personal-workflow",
-                    "start_line": None,
-                    "start_column": None,
-                    "end_line": None,
-                    "end_column": None,
-                },
-                "observed_at": "2026-08-06T00:00:00+00:00",
-                "verification_status": "verified",
-            }
-        ],
-        "token_estimate": 180,
+        "evidence_files": ["src/sample.py"],
     }
 
 
@@ -315,6 +292,18 @@ def _exercise_registration(
         revision = created.get("checkpoint_revision_id")
         if not isinstance(revision, str):
             raise InstalledWorkflowError("installed checkpoint revision is missing")
+        if (
+            not isinstance(created.get("token_estimate"), int)
+            or cast(int, created["token_estimate"]) > 200
+            or not isinstance(created.get("compaction"), dict)
+        ):
+            raise InstalledWorkflowError("installed checkpoint compaction is unavailable")
+        failed = first.tool(
+            "save_checkpoint",
+            {"operation": "invalid", "evidence_files": ["src/sample.py"]},
+        )
+        if failed.get("isError") is not True:
+            raise InstalledWorkflowError("installed checkpoint failure was not sanitized")
     finally:
         first.close()
 
@@ -455,6 +444,24 @@ def verify(source_root: Path, uv_executable: str, python_executable: Path) -> No
             raise InstalledWorkflowError("installed diagnostics table header is unavailable")
         if not table.rstrip().endswith("does not prove causation."):
             raise InstalledWorkflowError("installed diagnostics table notice is unavailable")
+        saves = _run(
+            (
+                str(short_launcher),
+                "memory",
+                "diagnostics",
+                "saves",
+                "--format",
+                "table",
+                "--project-dir",
+                str(project),
+                "--data-dir",
+                str(data_directory),
+            ),
+            cwd=project,
+            environment=install_environment,
+        ).stdout
+        if not saves.startswith("TIME ") or "MNEMO_INVALID_INPUT" not in saves:
+            raise InstalledWorkflowError("installed checkpoint diagnostics table is unavailable")
 
 
 def main() -> None:

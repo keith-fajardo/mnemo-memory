@@ -931,17 +931,14 @@ def _git_observation_instruction(refreshed: _SourceRefresh) -> str:
     return message
 
 
-def _checkpoint_instruction(scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:
+def _checkpoint_instruction(_scope: Mapping[str, object], refreshed: _SourceRefresh) -> str:
     instruction = (
-        "Before finishing or compacting this task, call Mnemo save_checkpoint with this project "
-        f"scope: {json.dumps(scope, sort_keys=True, separators=(',', ':'))}. "
-        "Create or revise the active checkpoint at no more than 450 Mnemo-estimated tokens: one "
-        "short objective, one or two state sentences, and at most three short items each for "
-        "completed work, decisions, verification, and next actions. Keep only relevant evidence "
-        "and files; retain still-applicable lessons and approved facts. For one corrected "
-        "mistake, use record_lesson with its evidence IDs; for one separate verified fact, use "
-        "record_event. "
-        "Neither replaces the checkpoint. Do not include a full transcript."
+        "Before finishing or compacting, call Mnemo save_checkpoint for the bound project. "
+        "Omit scope IDs, token_estimate, empty lists, and null values. Submit a short objective, "
+        "current state, exact next action, verification, and project-relative evidence_files; "
+        "Mnemo computes and compacts the checkpoint to about 200 tokens. Use record_lesson only "
+        "for a corrected mistake and record_event only for a separate verified fact. Neither "
+        "replaces the checkpoint. Do not include a transcript."
     )
     if refreshed.changes is not None:
         instruction += _source_change_instruction(refreshed.changes)

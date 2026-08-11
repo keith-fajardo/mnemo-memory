@@ -296,11 +296,11 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     stop = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
     assert stop["decision"] == "block"
     assert "save_checkpoint" in str(stop)
-    assert "still-applicable lessons" in str(stop)
+    assert "project-relative evidence_files" in str(stop)
     assert "record_event" in str(stop)
-    assert "full transcript" in str(stop)
-    assert "no more than 450 Mnemo-estimated tokens" in str(stop)
-    assert "at most three short items" in str(stop)
+    assert "Do not include a transcript" in str(stop)
+    assert "about 200 tokens" in str(stop)
+    assert "Omit scope IDs, token_estimate, empty lists, and null values" in str(stop)
 
     failed_save = hook.handle(
         {
@@ -1693,7 +1693,7 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
         VerificationStatus.VERIFIED,
     )
     with build_checkpoint_runtime(LocalConfig.defaults(data)) as runtime:
-        runtime.checkpoint_service.create(
+        created = runtime.checkpoint_service.create(
             CreateCheckpoint(binding.checkpoint_scope, content, (evidence,))
         )
     cli._refresh_project_knowledge(data, binding)
@@ -1704,7 +1704,7 @@ def test_automatic_context_attachment_reads_the_real_bounded_durable_handoff(
     packet = json.loads(attached)
     assert packet["declared_total_tokens"] <= 1_750
     assert packet["active_task_checkpoint"]["content"] == json.dumps(
-        content.to_dict(), sort_keys=True, separators=(",", ":")
+        created.revision.content.to_dict(), sort_keys=True, separators=(",", ":")
     )
     lifecycle = [
         json.loads(item["content"])

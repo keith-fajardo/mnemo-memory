@@ -69,22 +69,32 @@ search. Connected automatic sessions also request this compact overview themselv
 
 `save_checkpoint` uses the same registered-scope default. It is mutating but non-destructive and
 requires a tagged `operation` of `create`,
-`revise`, `complete`, `abandon`, `record_lesson`, or `record_event`; the explicit task scope; and structurally
-valid evidence references. `create`, `revise`, `complete`, and `abandon` require the complete
+`revise`, `complete`, `abandon`, `record_lesson`, or `record_event`; a bound task scope; and
+evidence. For the active local project, omit all scope UUIDs. `create`, `revise`, `complete`, and `abandon` require the complete
 canonical checkpoint payload. `revise`, `complete`, and `abandon` require `checkpoint_id` plus
 `expected_revision_id`; `abandon` also requires a nonblank `reason`.
 
-Each evidence reference has a typed MCP input shape. Its `location` always requires a nonblank
-`uri`. When no exact source span is known, submit only `{"uri": "..."}`; Mnemo canonicalizes the
-four omitted coordinates to `null` before validation and persistence. When a span is known, provide
+For ordinary local repository work, prefer `evidence_files` with at most 16 project-relative
+regular files. Mnemo rejects traversal, symlinks, duplicates, and files above 5 MiB; computes the
+full SHA-256 and stable evidence IDs locally; and fills omitted lesson evidence IDs from those
+references. The agent does not need to generate or repeat hashes and UUIDs. Mnemo keeps full hashes
+for integrity. A Git display reference uses a unique prefix of at least six characters and may be
+longer to avoid a collision.
+
+The lower-level `evidence_references` input remains available and mutually exclusive with
+`evidence_files`. Each reference has a typed MCP shape. Its `location` always requires a nonblank
+`uri`. When no exact source span is known, submit only `{"uri": "..."}`; the absent coordinates
+remain absent in canonical storage. Older rows containing four explicit null coordinates remain
+readable. When a span is known, provide
 all four of `start_line`, `start_column`, `end_line`, and `end_column`. Partial spans and unknown
 location fields are rejected without returning the submitted payload.
 
 For a corrected analysis or reasoning mistake, `save_checkpoint` also accepts up to 16 canonical
 `lessons`. Each lesson has a nonblank `trigger`, `mistaken_assumption`, `correction`, and
 `prevention`, plus `evidence_ids` that must reference evidence submitted for that exact revision.
-Mnemo preserves the lesson in the immutable checkpoint content and returns it in the later context
-packet. It never infers a lesson from a transcript, source diff, or model output.
+Mnemo preserves the newest lesson in the compact active revision. Older lessons remain available
+through immutable revision history rather than being copied into every handoff. It never infers a
+lesson from a transcript, source diff, or model output.
 
 ## Record an explicit decision, failure, or tool outcome
 
@@ -129,13 +139,12 @@ the checkpoint budget and uses the ordinary atomic revision comparison, so a sta
   "operation": "record_lesson",
   "checkpoint_id": "<checkpoint-id>",
   "expected_revision_id": "<current-revision-id>",
-  "evidence_references": [{"evidence_id": "<new-or-existing-evidence-id>", "...": "canonical evidence fields"}],
+  "evidence_files": ["src/reconciliation.py"],
   "lessons": [{
     "trigger": "A reconciliation test disagreed with the expected result.",
     "mistaken_assumption": "The two inputs used the same business-date grain.",
     "correction": "Compare them at the documented business-date grain.",
-    "prevention": "Check grain and null handling before changing a join.",
-    "evidence_ids": ["<new-or-existing-evidence-id>"]
+    "prevention": "Check grain and null handling before changing a join."
   }]
 }
 ```
@@ -148,35 +157,25 @@ tool or capture an agent's private reasoning automatically.
 ```json
 {
   "operation": "create",
-  "owner_id": "11111111-1111-4111-8111-111111111111",
-  "workspace_id": "22222222-2222-4222-8222-222222222222",
-  "project_id": "33333333-3333-4333-8333-333333333333",
-  "session_id": "44444444-4444-4444-8444-444444444444",
-  "task_id": "55555555-5555-4555-8555-555555555555",
   "task_objective": "Resume the task",
   "current_state": "implementation in progress",
-  "evidence_references": [{
-    "evidence_id": "66666666-6666-4666-8666-666666666666",
-    "source_id": "77777777-7777-4777-8777-777777777777",
-    "source_type": "checkpoint", "trust_class": "user_authored",
-    "immutable_source_ref": "synthetic://example",
-    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "location": {"uri": "fixture://example"},
-    "observed_at": "2026-08-02T14:00:00+00:00", "verification_status": "verified"
-  }],
+  "remaining_work": ["Run the complete gate."],
+  "evidence_files": ["src/mnemo_memory/packages/application/checkpoints.py"],
   "lessons": [{
     "trigger": "A reconciliation test disagreed with the Finance seed.",
     "mistaken_assumption": "The timestamp join represented the same business-day grain.",
     "correction": "Compare both inputs at the documented business-date grain.",
-    "prevention": "Verify input grain and null behavior before changing a reconciliation join.",
-    "evidence_ids": ["66666666-6666-4666-8666-666666666666"]
-  }],
-  "token_estimate": 120
+    "prevention": "Verify input grain and null behavior before changing a reconciliation join."
+  }]
 }
 ```
 
 Successful saves return the logical checkpoint ID, immutable revision ID, revision number,
-lifecycle status, scope, and `"persistence": "durable"`. Expected failures use sanitized MCP
+lifecycle status, scope, stored `token_estimate`, and `"persistence": "durable"`. Mnemo ignores
+the deprecated caller `token_estimate`, computes the canonical value itself, and targets 200
+tokens. If deterministic compaction omitted repeated items or truncated long text, the response
+adds a populated `compaction` object with the original estimate and counts; otherwise that object
+is absent. Expected failures use sanitized MCP
 codes including `MNEMO_INVALID_INPUT`, `MNEMO_EVIDENCE_REQUIRED`,
 `MNEMO_CHECKPOINT_NOT_FOUND`, `MNEMO_REVISION_CONFLICT`, `MNEMO_INVALID_LIFECYCLE`,
 `MNEMO_TOKEN_BUDGET`, and `MNEMO_STORAGE_UNAVAILABLE`. They never contain SQL, paths, tracebacks,
@@ -216,8 +215,9 @@ Every revision is tied to the same explicit task scope and its submitted evidenc
 
 `get_context` needs only the same scope; add `checkpoint_id` to target an active checkpoint
 explicitly. Returned context is untrusted evidence and cites the exact revision. It never returns a
-transcript or silently truncates stored content. A 600-token checkpoint is accepted; a larger write
-is rejected. A lower requested packet limit returns a structured `token_budget` omission instead.
+transcript. New revisions omit empty optional collections and absent coordinates, deterministically
+compact toward 200 tokens, and retain the 600-token packet ceiling as defense in depth. A lower
+requested packet limit returns a structured `token_budget` omission instead.
 
 For a recap, set `"recap_days": 0` to retrieve the newest saved handoff or use an integer from 1
 through 90 for a recent window. This is an option on the existing `get_context` tool, not another

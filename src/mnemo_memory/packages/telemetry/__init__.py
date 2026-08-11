@@ -13,6 +13,12 @@ from .automatic_routes import (
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
+from .checkpoint_saves import (
+    CheckpointSaveDiagnosticEvent,
+    CheckpointSaveOutcome,
+    CheckpointSaveTelemetryError,
+    LocalCheckpointSaveTelemetryStore,
+)
 
 __all__ = [
     "AutomaticRouteDiagnosticsMode",
@@ -24,6 +30,10 @@ __all__ = [
     "AutomaticRouteSummary",
     "AutomaticRouteTelemetryError",
     "AutomaticRouteToolCategory",
+    "CheckpointSaveDiagnosticEvent",
+    "CheckpointSaveOutcome",
+    "CheckpointSaveTelemetryError",
     "LocalAutomaticRouteDiagnosticsSettingsStore",
     "LocalAutomaticRouteTelemetryStore",
+    "LocalCheckpointSaveTelemetryStore",
 ]

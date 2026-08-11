@@ -14,6 +14,9 @@ from mcp.types import Tool
 
 from mnemo_memory.apps.mcp import server as mcp_server_module
 from mnemo_memory.apps.mcp.server import SERVER_NAME, SERVER_VERSION, create_server
+from mnemo_memory.connectors.automatic_memory.checkpoint_evidence import (
+    CheckpointFileEvidenceResolver,
+)
 from mnemo_memory.connectors.dbt.artifacts import DbtSourceFreshnessParser
 from mnemo_memory.connectors.dbt.code_excerpt import DbtLocalCodeExcerptReader
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
@@ -134,13 +137,18 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[4].inputSchema["properties"]
     assert "lessons" in tools[4].inputSchema["properties"]
-    assert "record_lesson" in tools[4].inputSchema["properties"]["operation"]["pattern"]
+    assert "pattern" not in tools[4].inputSchema["properties"]["operation"]
     assert (
         "without resending the complete checkpoint"
         in tools[4].inputSchema["properties"]["operation"]["description"]
     )
     assert "exactly one" in tools[4].inputSchema["properties"]["lessons"]["description"]
     evidence_schema = tools[4].inputSchema["properties"]["evidence_references"]
+    assert "evidence_files" in tools[4].inputSchema["properties"]
+    assert (
+        "Preferred local shorthand"
+        in tools[4].inputSchema["properties"]["evidence_files"]["description"]
+    )
     evidence_array = next(
         candidate for candidate in evidence_schema["anyOf"] if candidate.get("type") == "array"
     )
@@ -220,7 +228,6 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert tools[0].inputSchema["properties"]["render_for"]["anyOf"][0]["pattern"] == (
         "^(codex|claude-code)$"
     )
-    assert "record_event" in tools[4].inputSchema["properties"]["operation"]["pattern"]
     assert "event_summary" in tools[4].inputSchema["properties"]
     token_estimate_property = tools[4].inputSchema["properties"]["token_estimate"]
     token_estimate_schema = next(
@@ -228,8 +235,8 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         for candidate in token_estimate_property["anyOf"]
         if candidate.get("type") == "integer"
     )
-    assert token_estimate_schema["maximum"] == 600
-    assert "deterministic local estimate" in token_estimate_property["description"]
+    assert "maximum" not in token_estimate_schema
+    assert "Deprecated compatibility field" in token_estimate_property["description"]
     assert "token_estimate" not in tools[4].inputSchema.get("required", [])
     assert set(tools[3].inputSchema["properties"]) == {"context_packet"}
     assert set(tools[1].inputSchema["required"]) == {"client"}
@@ -421,6 +428,118 @@ def test_durable_port_estimates_checkpoint_tokens_when_caller_omits_them(
             == (len(json.dumps(canonical, sort_keys=True, separators=(",", ":"))) + 2) // 3
         )
         assert 0 < estimated_tokens <= 600
+
+
+def test_durable_port_ignores_caller_undercount_and_compacts_to_200_tokens(
+    tmp_path: Path,
+) -> None:
+    long_value = "Keep this checkpoint fact concise after deterministic compaction. " * 30
+    payload = save_payload(
+        token_estimate=1,
+        task_objective=long_value,
+        current_state=long_value,
+        completed_work=[long_value, long_value],
+        remaining_work=[long_value, long_value],
+        decisions=[long_value, long_value],
+        failures=[long_value],
+        blockers=[long_value],
+        relevant_files=[long_value],
+        relevant_artifacts=[long_value],
+        verification_performed=[long_value, long_value],
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "compaction")) as runtime:
+        port = DurableMcpContextPort(runtime.checkpoint_service)
+
+        created = port.save_checkpoint(payload)
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+
+    assert isinstance(created["token_estimate"], int)
+    assert created["token_estimate"] <= 200
+    compaction = created["compaction"]
+    assert isinstance(compaction, dict)
+    assert compaction["target_tokens"] == 200
+    assert compaction["original_token_estimate"] > 200
+    assert packet.active_task_checkpoint is not None
+    canonical = json.loads(packet.active_task_checkpoint.content)
+    assert canonical["token_estimate"] <= 200
+    assert "failures" not in canonical
+    assert "relevant_artifacts" not in canonical
+    assert all(value != [] and value is not None for value in canonical.values())
+
+
+def test_durable_port_normalizes_valid_uppercase_uuid_input(tmp_path: Path) -> None:
+    payload = save_payload(
+        task_id="AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+        evidence_references=[
+            {
+                **EVIDENCE,
+                "evidence_id": "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+                "source_id": "CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC",
+            }
+        ],
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "uppercase")) as runtime:
+        created = DurableMcpContextPort(runtime.checkpoint_service).save_checkpoint(payload)
+
+    assert created["persistence"] == "durable"
+
+
+def test_durable_port_resolves_local_evidence_files_and_lesson_ids(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "checkpoint.py"
+    source.write_text("checkpoint = True\n", encoding="utf-8")
+    payload = save_payload(
+        evidence_references=None,
+        evidence_files=["checkpoint.py"],
+        lessons=[
+            {
+                "trigger": "The previous save was too large.",
+                "mistaken_assumption": "The caller estimate enforced the budget.",
+                "correction": "Mnemo must calculate the canonical estimate.",
+                "prevention": "Compact before persistence.",
+            }
+        ],
+    )
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "evidence-files")) as runtime:
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            checkpoint_evidence_resolver=CheckpointFileEvidenceResolver(project),
+        )
+        created = port.save_checkpoint(payload)
+        packet = ContextPacket.from_dict(port.get_context(context_payload()))
+
+    assert created["persistence"] == "durable"
+    assert packet.active_task_checkpoint is not None
+    reference = packet.active_task_checkpoint.evidence_references[0]
+    assert reference.content_hash.startswith("sha256:")
+    assert len(reference.content_hash) == 71
+    assert reference.location.to_dict() == {"uri": "repo://checkpoint.py"}
+    content = json.loads(packet.active_task_checkpoint.content)
+    assert content["lessons"][0]["evidence_ids"] == [str(reference.evidence_id)]
+
+
+def test_durable_port_emits_content_free_failure_and_success_observations(
+    tmp_path: Path,
+) -> None:
+    observations: list[tuple[object, ...]] = []
+
+    def observe(*values: object) -> None:
+        observations.append(values)
+
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "observations")) as runtime:
+        port = DurableMcpContextPort(
+            runtime.checkpoint_service,
+            checkpoint_save_observer=observe,
+        )
+        with pytest.raises(ValueError, match="MNEMO_EVIDENCE_REQUIRED"):
+            port.save_checkpoint(save_payload(evidence_references=None))
+        port.save_checkpoint(save_payload())
+
+    assert observations[0][1:4] == ("create", "failure", "MNEMO_EVIDENCE_REQUIRED")
+    assert observations[0][5:] == (None, None)
+    assert observations[1][1:4] == ("create", "success", None)
+    assert isinstance(observations[1][5], int)
 
 
 def test_durable_port_accepts_uri_only_evidence_but_rejects_partial_spans(
@@ -654,7 +773,9 @@ def test_durable_port_records_one_lesson_without_full_checkpoint_content(tmp_pat
         assert recorded["revision_number"] == 2
         packet = ContextPacket.from_dict(port.get_context(context_payload()))
     assert packet.active_task_checkpoint is not None
-    assert "Check the shared validation owner" in packet.active_task_checkpoint.content
+    stored_lesson = json.loads(packet.active_task_checkpoint.content)["lessons"][0]
+    assert stored_lesson["prevention"].startswith("Check the shared validation")
+    assert stored_lesson["prevention"].endswith("a CLI exception catch.")
 
 
 def test_durable_port_returns_persisted_scoped_source_structure(tmp_path: Path) -> None:

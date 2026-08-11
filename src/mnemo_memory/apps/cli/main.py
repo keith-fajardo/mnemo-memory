@@ -210,8 +210,11 @@ from mnemo_memory.packages.telemetry import (
     AutomaticRouteScope,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    CheckpointSaveDiagnosticEvent,
+    CheckpointSaveTelemetryError,
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
+    LocalCheckpointSaveTelemetryStore,
 )
 
 app = typer.Typer(
@@ -271,7 +274,7 @@ memory_router_app = typer.Typer(
 )
 memory_route_diagnostics_app = typer.Typer(
     no_args_is_help=True,
-    help="Control and inspect content-free automatic route footprints.",
+    help="Control content-free route and checkpoint diagnostics.",
 )
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
@@ -296,7 +299,7 @@ memory_app.add_typer(
 memory_app.add_typer(
     memory_route_diagnostics_app,
     name="diagnostics",
-    help="Control content-free automatic route footprints.",
+    help="Control content-free route and checkpoint diagnostics.",
 )
 
 _CLI_APPROVED_EVENT_NAMESPACE = UUID("f40bdf0f-3f1c-4540-956e-6cd210477bee")
@@ -2985,7 +2988,7 @@ def _save_route_diagnostic_mode(
 
 
 @memory_route_diagnostics_app.command(
-    "on", help="Enable per-decision content-free shadow footprints."
+    "on", help="Trace content-free route decisions and checkpoint save outcomes."
 )
 def memory_route_diagnostics_on(
     retention_days: int = typer.Option(7, "--retention-days", min=1, max=90),
@@ -3002,7 +3005,7 @@ def memory_route_diagnostics_on(
 
 
 @memory_route_diagnostics_app.command(
-    "summary", help="Record aggregate route costs without shadow decision details."
+    "summary", help="Record aggregate route costs and failed checkpoint saves."
 )
 def memory_route_diagnostics_summary(
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -3017,7 +3020,7 @@ def memory_route_diagnostics_summary(
     _show({"status": "summary", **settings.to_dict()})
 
 
-@memory_route_diagnostics_app.command("off", help="Stop recording new route events.")
+@memory_route_diagnostics_app.command("off", help="Stop recording new diagnostic events.")
 def memory_route_diagnostics_off(
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
@@ -3031,7 +3034,7 @@ def memory_route_diagnostics_off(
     _show({"status": "disabled", **settings.to_dict(), "existing_events_retained": True})
 
 
-@memory_route_diagnostics_app.command("status", help="Show the route footprint mode and TTL.")
+@memory_route_diagnostics_app.command("status", help="Show the diagnostic mode and TTL.")
 def memory_route_diagnostics_status(
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
@@ -3182,6 +3185,75 @@ def memory_route_diagnostics_show(
     )
 
 
+def _checkpoint_save_table(events: tuple[CheckpointSaveDiagnosticEvent, ...]) -> str:
+    headers = ("TIME", "OPERATION", "OUTCOME", "ERROR", "TOKENS", "COMPACT", "MS", "EVENT_ID")
+    rows = tuple(
+        (
+            event.observed_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            event.operation,
+            event.outcome.value,
+            event.error_code or "-",
+            "-" if event.token_estimate is None else str(event.token_estimate),
+            "-" if event.compacted is None else str(event.compacted).lower(),
+            str(event.duration_ms),
+            str(event.event_id),
+        )
+        for event in events
+    )
+    widths = tuple(
+        max(len(row[index]) for row in (headers, *rows)) for index in range(len(headers))
+    )
+    numeric_columns = {4, 6}
+
+    def render(row: tuple[str, ...]) -> str:
+        return "  ".join(
+            value.rjust(widths[index]) if index in numeric_columns else value.ljust(widths[index])
+            for index, value in enumerate(row)
+        ).rstrip()
+
+    return "\n".join((render(headers), *(render(row) for row in rows)))
+
+
+@memory_route_diagnostics_app.command(
+    "saves", help="Show recent exact-scope content-free checkpoint save outcomes."
+)
+def memory_checkpoint_diagnostics_show(
+    limit: int = typer.Option(20, "--limit", min=1, max=100),
+    output_format: _RouteDiagnosticsOutputFormat = typer.Option(  # noqa: B008
+        _RouteDiagnosticsOutputFormat.JSON,
+        "--format",
+        help="Output format: json or table.",
+    ),
+    project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    try:
+        config = resolve_local_config(data_dir)
+        binding = _enabled_memory_binding(config.data_directory, project_dir)
+        settings = LocalAutomaticRouteDiagnosticsSettingsStore(config.data_directory).load()
+        events = LocalCheckpointSaveTelemetryStore(
+            config.data_directory, retention_days=settings.retention_days
+        ).events(_automatic_route_scope(binding.checkpoint_scope), limit=limit)
+    except (
+        AutomaticMemoryBindingError,
+        AutomaticRouteTelemetryError,
+        CheckpointSaveTelemetryError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise typer.BadParameter("MNEMO_CHECKPOINT_DIAGNOSTICS_UNAVAILABLE") from error
+    if output_format is _RouteDiagnosticsOutputFormat.TABLE:
+        typer.echo(_checkpoint_save_table(events))
+        return
+    _show(
+        {
+            "event_count": len(events),
+            "events": [event.to_dict() for event in events],
+            "notice": "Checkpoint diagnostics contain outcomes, not checkpoint text or reasoning.",
+        }
+    )
+
+
 @memory_route_diagnostics_app.command(
     "mark", help="Label one exact-scope footprint helpful, noise, or missing."
 )
@@ -3212,7 +3284,7 @@ def memory_route_diagnostics_mark(
 
 
 @memory_route_diagnostics_app.command(
-    "purge", help="Delete exact-project route footprints after explicit confirmation."
+    "purge", help="Delete exact-project diagnostic events after explicit confirmation."
 )
 def memory_route_diagnostics_purge(
     confirm: bool = typer.Option(False, "--yes", help="Confirm exact-scope deletion."),
@@ -3224,17 +3296,26 @@ def memory_route_diagnostics_purge(
     try:
         config = resolve_local_config(data_dir)
         binding = _enabled_memory_binding(config.data_directory, project_dir)
-        removed = LocalAutomaticRouteTelemetryStore(config.data_directory).purge(
-            _automatic_route_scope(binding.checkpoint_scope)
-        )
+        scope = _automatic_route_scope(binding.checkpoint_scope)
+        removed_routes = LocalAutomaticRouteTelemetryStore(config.data_directory).purge(scope)
+        removed_saves = LocalCheckpointSaveTelemetryStore(config.data_directory).purge(scope)
     except (
         AutomaticMemoryBindingError,
         AutomaticRouteTelemetryError,
+        CheckpointSaveTelemetryError,
         OSError,
         ValueError,
     ) as error:
         raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTIC_PURGE_UNAVAILABLE") from error
-    _show({"status": "purged", "removed_events": removed, "recoverable": False})
+    _show(
+        {
+            "status": "purged",
+            "removed_events": removed_routes + removed_saves,
+            "removed_route_events": removed_routes,
+            "removed_checkpoint_events": removed_saves,
+            "recoverable": False,
+        }
+    )
 
 
 @app.command("automatic-memory-hook", hidden=True)

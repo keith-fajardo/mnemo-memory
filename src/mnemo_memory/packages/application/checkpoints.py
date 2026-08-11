@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from functools import partial
 from typing import TypeVar
 
 from mnemo_memory.packages.domain import (
@@ -71,6 +72,7 @@ _Result = TypeVar("_Result")
 _MAX_HISTORICAL_LESSON_REVISIONS = 16
 _MAX_HISTORICAL_LESSONS = 16
 _MAX_RECAP_EVENTS = 50
+CHECKPOINT_TARGET_TOKENS = 200
 
 
 class CheckpointApplicationError(Exception):
@@ -313,9 +315,21 @@ class CheckpointRecap:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckpointPreparation:
+    """Content-free metadata describing deterministic checkpoint compaction."""
+
+    content: CheckpointContent
+    original_token_estimate: int
+    compacted: bool
+    omitted_item_count: int = 0
+    truncated_field_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointView:
     aggregate: CheckpointAggregate
     revision: CheckpointRevision
+    preparation: CheckpointPreparation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,7 +374,8 @@ class CheckpointApplicationService:
         self._request_id_factory = request_id_factory
 
     def create(self, command: CreateCheckpoint) -> CheckpointView:
-        self._validate_write(command.scope, command.content, command.evidence_references)
+        preparation = prepare_checkpoint_content(command.content)
+        self._validate_write(command.scope, preparation.content, command.evidence_references)
         created_at = self._now()
         checkpoint_id = command.checkpoint_id or self._checkpoint_id_factory()
         revision = CheckpointRevision(
@@ -369,7 +384,7 @@ class CheckpointApplicationService:
             revision_number=1,
             predecessor_revision_id=None,
             scope=command.scope,
-            content=command.content,
+            content=preparation.content,
             status=CheckpointStatus.ACTIVE,
             evidence_references=tuple(command.evidence_references),
             created_at=created_at,
@@ -384,16 +399,17 @@ class CheckpointApplicationService:
             updated_at=created_at,
         )
         self._call(lambda: self._repository.create_checkpoint_aggregate(aggregate, revision))
-        return CheckpointView(aggregate, revision)
+        return CheckpointView(aggregate, revision, preparation)
 
     def revise(self, command: ReviseCheckpoint) -> CheckpointView:
-        self._validate_write(command.scope, command.content, command.evidence_references)
+        preparation = prepare_checkpoint_content(command.content)
+        self._validate_write(command.scope, preparation.content, command.evidence_references)
         revision = self._call(
             lambda: self._repository.append_revision(
                 command.scope,
                 command.checkpoint_id,
                 command.expected_revision_id,
-                command.content,
+                preparation.content,
                 tuple(command.evidence_references),
                 self._now(),
             )
@@ -403,16 +419,18 @@ class CheckpointApplicationService:
                 lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
             ),
             revision,
+            preparation,
         )
 
     def complete(self, command: CompleteCheckpoint) -> CheckpointView:
-        self._validate_write(command.scope, command.content, command.evidence_references)
+        preparation = prepare_checkpoint_content(command.content)
+        self._validate_write(command.scope, preparation.content, command.evidence_references)
         revision = self._call(
             lambda: self._repository.complete_checkpoint(
                 command.scope,
                 command.checkpoint_id,
                 command.expected_revision_id,
-                command.content,
+                preparation.content,
                 tuple(command.evidence_references),
                 self._now(),
             )
@@ -422,10 +440,12 @@ class CheckpointApplicationService:
                 lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
             ),
             revision,
+            preparation,
         )
 
     def abandon(self, command: AbandonCheckpoint) -> CheckpointView:
-        self._validate_write(command.scope, command.content, command.evidence_references)
+        preparation = prepare_checkpoint_content(command.content)
+        self._validate_write(command.scope, preparation.content, command.evidence_references)
         if not isinstance(command.reason, str) or not command.reason.strip():
             raise CheckpointApplicationInvalidContent("abandonment reason must not be blank")
         revision = self._call(
@@ -434,7 +454,7 @@ class CheckpointApplicationService:
                 command.checkpoint_id,
                 command.expected_revision_id,
                 command.reason,
-                command.content,
+                preparation.content,
                 tuple(command.evidence_references),
                 self._now(),
             )
@@ -444,6 +464,7 @@ class CheckpointApplicationService:
                 lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
             ),
             revision,
+            preparation,
         )
 
     def expire(self, command: ExpireCheckpoint) -> CheckpointView:
@@ -501,9 +522,10 @@ class CheckpointApplicationService:
             raise CheckpointApplicationInvalidLifecycle(
                 "checkpoint lifecycle transition is invalid"
             )
-        if command.lesson in current.content.lessons:
+        historical_lessons = self._checkpoint_lessons(command.scope, current)
+        if command.lesson in historical_lessons:
             return CheckpointView(aggregate, current)
-        if len(current.content.lessons) >= _MAX_HISTORICAL_LESSONS:
+        if len(historical_lessons) >= _MAX_HISTORICAL_LESSONS:
             raise CheckpointApplicationInvalidContent(
                 "checkpoint has the maximum number of lessons"
             )
@@ -517,18 +539,18 @@ class CheckpointApplicationService:
         try:
             content = replace(
                 current.content,
-                lessons=(*current.content.lessons, command.lesson),
+                lessons=(command.lesson,),
             )
         except (TypeError, ValueError) as error:
             raise CheckpointApplicationInvalidContent("checkpoint lesson is invalid") from error
-        content = replace(content, token_estimate=estimate_checkpoint_tokens(content))
-        self._validate_write(command.scope, content, evidence)
+        preparation = prepare_checkpoint_content(content)
+        self._validate_write(command.scope, preparation.content, evidence)
         revision = self._call(
             lambda: self._repository.append_revision(
                 command.scope,
                 command.checkpoint_id,
                 command.expected_revision_id,
-                content,
+                preparation.content,
                 evidence,
                 self._now(),
                 CheckpointEventKind.LESSON_RECORDED,
@@ -539,7 +561,34 @@ class CheckpointApplicationService:
                 lambda: self._repository.get_aggregate(command.scope, command.checkpoint_id)
             ),
             revision,
+            preparation,
         )
+
+    def _checkpoint_lessons(
+        self, scope: MemoryScope, current: CheckpointRevision
+    ) -> set[CheckpointLesson]:
+        lessons = set(current.content.lessons)
+        predecessor = current.predecessor_revision_id
+        revisions_seen = 0
+        while (
+            predecessor is not None
+            and revisions_seen < _MAX_HISTORICAL_LESSON_REVISIONS
+            and len(lessons) < _MAX_HISTORICAL_LESSONS
+        ):
+            revision_id = predecessor
+            assert revision_id is not None
+            revision = self._call(
+                partial(
+                    self._repository.get_revision,
+                    scope,
+                    current.checkpoint_id,
+                    revision_id=revision_id,
+                )
+            )
+            lessons.update(revision.content.lessons)
+            predecessor = revision.predecessor_revision_id
+            revisions_seen += 1
+        return lessons
 
     def record_approved_event(
         self, command: RecordApprovedEpisodicEvent
@@ -1431,6 +1480,142 @@ def estimate_checkpoint_tokens(content: CheckpointContent) -> int:
     payload = content.to_dict()
     payload["token_estimate"] = 0
     return (len(json.dumps(payload, sort_keys=True, separators=(",", ":"))) + 2) // 3
+
+
+def prepare_checkpoint_content(
+    content: CheckpointContent, *, target_tokens: int = CHECKPOINT_TARGET_TOKENS
+) -> CheckpointPreparation:
+    """Recompute, sparsify, and deterministically bound one checkpoint revision."""
+    if not isinstance(content, CheckpointContent):
+        raise CheckpointApplicationInvalidContent("checkpoint content must be canonical")
+    if (
+        not isinstance(target_tokens, int)
+        or isinstance(target_tokens, bool)
+        or not 1 <= target_tokens <= DEFAULT_CONTEXT_BUDGET.active_task_checkpoint
+    ):
+        raise ValueError("checkpoint target token budget is invalid")
+    canonical = replace(content, token_estimate=0)
+    original_estimate = estimate_checkpoint_tokens(canonical)
+    canonical = replace(canonical, token_estimate=original_estimate)
+    if original_estimate <= target_tokens:
+        return CheckpointPreparation(canonical, original_estimate, False)
+
+    retained = replace(
+        canonical,
+        completed_work=(),
+        remaining_work=canonical.remaining_work[:1],
+        decisions=canonical.decisions[:1],
+        failures=(),
+        blockers=canonical.blockers[:1],
+        relevant_files=(),
+        relevant_artifacts=(),
+        verification_performed=canonical.verification_performed[:1],
+        lessons=canonical.lessons[-1:],
+        token_estimate=0,
+    )
+    original_items = sum(
+        len(getattr(canonical, name))
+        for name in (
+            "completed_work",
+            "remaining_work",
+            "decisions",
+            "failures",
+            "blockers",
+            "relevant_files",
+            "relevant_artifacts",
+            "verification_performed",
+            "lessons",
+        )
+    )
+    retained_items = sum(
+        len(getattr(retained, name))
+        for name in (
+            "completed_work",
+            "remaining_work",
+            "decisions",
+            "failures",
+            "blockers",
+            "relevant_files",
+            "relevant_artifacts",
+            "verification_performed",
+            "lessons",
+        )
+    )
+    omitted_evidence_ids = sum(max(0, len(lesson.evidence_ids) - 1) for lesson in retained.lessons)
+
+    selected: tuple[CheckpointContent, int] | None = None
+    lower, upper = 1, 160
+    while lower <= upper:
+        limit = (lower + upper) // 2
+        candidate, truncated = _truncate_checkpoint_content(retained, limit)
+        estimate = estimate_checkpoint_tokens(candidate)
+        if estimate <= target_tokens:
+            selected = replace(candidate, token_estimate=estimate), truncated
+            lower = limit + 1
+        else:
+            upper = limit - 1
+    if selected is not None:
+        candidate, truncated = selected
+        return CheckpointPreparation(
+            candidate,
+            original_estimate,
+            True,
+            original_items - retained_items + omitted_evidence_ids,
+            truncated,
+        )
+    raise CheckpointApplicationBudgetExceeded(
+        "checkpoint content cannot fit the active checkpoint target"
+    )
+
+
+def _truncate_checkpoint_content(
+    content: CheckpointContent, limit: int
+) -> tuple[CheckpointContent, int]:
+    truncated = 0
+
+    def text(value: str) -> str:
+        nonlocal truncated
+        if len(value) <= limit:
+            return value
+        truncated += 1
+        if limit < 5:
+            return value[: max(0, limit - 1)].rstrip() + "…"
+        head = (limit - 1) // 2
+        tail = limit - 1 - head
+        return value[:head].rstrip() + "…" + value[-tail:].lstrip()
+
+    def items(values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(text(value) for value in values)
+
+    lessons: list[CheckpointLesson] = []
+    for lesson in content.lessons:
+        lessons.append(
+            CheckpointLesson(
+                text(lesson.trigger),
+                text(lesson.mistaken_assumption),
+                text(lesson.correction),
+                text(lesson.prevention),
+                lesson.evidence_ids[:1],
+            )
+        )
+    return (
+        replace(
+            content,
+            task_objective=text(content.task_objective),
+            completed_work=items(content.completed_work),
+            current_state=text(content.current_state),
+            remaining_work=items(content.remaining_work),
+            decisions=items(content.decisions),
+            failures=items(content.failures),
+            blockers=items(content.blockers),
+            relevant_files=items(content.relevant_files),
+            relevant_artifacts=items(content.relevant_artifacts),
+            verification_performed=items(content.verification_performed),
+            lessons=tuple(lessons),
+            token_estimate=0,
+        ),
+        truncated,
+    )
 
 
 def _combined_evidence(

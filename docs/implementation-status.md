@@ -5075,3 +5075,85 @@ The installed smoke corrected one documentation-only arithmetic assumption: the 
 characters and therefore 30, not 29, Mnemo-estimated tokens. The runtime calculation and enforced
 40-token ceiling were already correct; documentation now derives the value from the actual rendered
 string rather than an informal estimate.
+
+### Sparse 200-token checkpoint saves and failure diagnostics — Complete
+
+The user explicitly approved hardening the existing checkpoint save path after captured failures
+showed two avoidable retry causes: a caller-supplied token estimate could undercount dense content,
+and strict canonical UUID parsing rejected otherwise valid uppercase input. New checkpoint revisions
+must target about 200 Mnemo-estimated tokens through deterministic application-owned compaction,
+rather than relying on an agent to count or retry. The existing 600-token packet ceiling remains a
+defense-in-depth maximum.
+
+Canonical checkpoint JSON must omit empty optional collections and absent evidence coordinates;
+older dense rows with empty arrays or explicit null coordinates remain readable. The save boundary
+must ignore the deprecated caller token estimate, compute the canonical value locally, normalize
+valid UUID spelling, and preserve the newest correction lesson without copying every older lesson
+into the active revision. Compaction must retain a useful objective, state, next action, decisions,
+verification, and newest lesson when present, report that it occurred, and never silently claim the
+original text was stored in full.
+
+Mnemo may expose a Git object abbreviation of at least six hexadecimal characters for human display,
+but integrity and evidence identity continue to use the full digest internally; a fixed six-character
+digest is not an integrity key. Content-free, scope-bound checkpoint diagnostics must record every
+application-reached save failure when diagnostics are enabled and all attempts in trace mode, without
+recording checkpoint text, paths, hashes, checkpoint/revision or arbitrary invalid identifiers, or
+tool payloads. Canonical exact-task scope remains solely for filtering. Schema/transport failures
+that occur before the application boundary are explicitly outside that observer.
+
+Acceptance requires focused compatibility, sparse serialization, deterministic compaction,
+under-count, record-lesson, uppercase-UUID, diagnostic privacy/retention/failure-isolation, and MCP
+contract tests; updated ADR, threat model, user documentation, and help; the complete
+`npm run check` gate; and an installed-wheel smoke. No dependency, database migration, routing,
+automatic learning, model endpoint, release, deployment, or installation is authorized in this
+issue.
+
+Implemented application-owned canonical sizing and deterministic compaction. Every write now
+ignores the deprecated caller estimate, recomputes sparse serialized size, and stores at most 200
+estimated tokens for the tested inputs while preserving the objective/state, one current next
+action, blocker, decision, verification, and newest lesson when present. Middle truncation keeps
+both the beginning and ending of retained facts, and successful responses expose stored size plus a
+populated compaction report only when items or text changed. Lesson-only revisions retain one newest
+lesson while exact-scope immutable predecessor history supplies duplicate detection, the existing
+16-lesson bound, and later historical recall.
+
+New checkpoint JSON omits empty optional collections, URI-only evidence omits absent coordinates,
+and decoders retain backward compatibility with dense empty/null rows. Valid uppercase UUID input
+is normalized before canonical domain parsing. Local callers can use bounded project-relative
+`evidence_files`; Mnemo rejects traversal, symlinks, duplicates, and oversized files, then derives
+full SHA-256 evidence and lesson IDs internally. Git uses a unique display prefix of at least six
+characters while full hashes remain integrity data. No dependency or migration was added.
+
+The automatic checkpoint instruction no longer injects five scope UUIDs or asks the agent to guess
+a token estimate. It asks for only populated handoff fields and `evidence_files`. The existing
+diagnostic mode now controls a private exact-scope checkpoint save ledger: summary records failures,
+trace records every application-reached attempt, and off records none. JSON and
+`mnemo memory diagnostics saves --format table` omit absent metrics and expose only closed outcome,
+cost, latency, and compaction metadata; storage failure is fail-open and exact-scope purge removes
+route and save records together.
+
+Focused compatibility, compaction, undercount, lesson-history, uppercase-UUID, resolver-security,
+telemetry-privacy/mode, CLI JSON/table, real MCP-process, and cross-client transport tests passed.
+The deterministic cross-client evaluation resumes through Codex and Claude with a 197-token
+checkpoint while requiring paired task-specific fragments for the core objective, decision, next
+action, verification, and prevention lesson plus exact provenance. The complete `npm run check`
+gate passed 1,039 tests with 27 expected skips, the isolated PostgreSQL gate passed 26 tests with
+one opt-in load test skipped, and formatting, linting, strict typing, schema, dependency,
+architecture, and installed-package checks passed. The built-wheel smoke independently resolved
+`evidence_files`, compacted an oversized save to no more than 200 tokens, produced a sanitized
+failure, and rendered that failure in the installed diagnostics table.
+
+### `0.1.0a20` production deployment — In progress
+
+The user explicitly approved production deployment after completion of the sparse bounded
+checkpoint-save and failure-diagnostics issue. Release preparation advances the pinned prerelease
+version to `0.1.0a20` without changing the approved checkpoint, evidence, telemetry, routing,
+model, prompt, storage, or retention behavior.
+
+Acceptance requires a reviewed release delta on top of the completed implementation, a clean
+complete repository gate, one release commit pushed to `main`, successful protected
+`publish-pypi.yml` execution, live PyPI metadata/hash/integrity-provenance verification,
+installation of the exact published wheel with the existing `router` extra on this Mac, retained
+Codex connection and diagnostics mode, and installed compaction, sanitized-failure, and checkpoint
+diagnostics-table smokes. No TestPyPI publication, direct local upload, later routing work, or new
+feature issue is authorized.

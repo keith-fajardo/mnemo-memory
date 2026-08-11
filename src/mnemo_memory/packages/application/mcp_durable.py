@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from time import monotonic
 from typing import Protocol, cast
+from uuid import UUID
 
 from mnemo_memory.packages.application.checkpoints import (
+    CHECKPOINT_TARGET_TOKENS,
     AbandonCheckpoint,
     CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
@@ -90,6 +93,13 @@ class DurableMcpContextPort:
         skills: ProjectSkillRegistry | None = None,
         default_budget: ContextBudget | None = None,
         approved_event_capture_enabled: bool = True,
+        checkpoint_evidence_resolver: (
+            Callable[[MemoryScope, tuple[str, ...]], tuple[EvidenceReference, ...]] | None
+        ) = None,
+        checkpoint_save_observer: (
+            Callable[[MemoryScope, str, str, str | None, int, int | None, bool | None], object]
+            | None
+        ) = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -101,6 +111,8 @@ class DurableMcpContextPort:
         if not isinstance(approved_event_capture_enabled, bool):
             raise TypeError("approved event capture setting must be a boolean")
         self._approved_event_capture_enabled = approved_event_capture_enabled
+        self._checkpoint_evidence_resolver = checkpoint_evidence_resolver
+        self._checkpoint_save_observer = checkpoint_save_observer
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -701,10 +713,13 @@ class DurableMcpContextPort:
             raise _mcp_error(error) from error
 
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
+        started_at = monotonic()
+        scope: MemoryScope | None = None
+        diagnostic_operation = _diagnostic_operation(request.get("operation"))
         try:
             operation = _string(request, "operation")
             scope = _scope(request, self._default_scope)
-            evidence = _evidence(request)
+            evidence = _evidence(request, scope, self._checkpoint_evidence_resolver)
             if operation == "record_event":
                 if not self._approved_event_capture_enabled:
                     raise CheckpointApplicationInvalidContent(
@@ -719,6 +734,15 @@ class DurableMcpContextPort:
                         evidence,
                     )
                 )
+                self._observe_checkpoint_attempt(
+                    scope,
+                    diagnostic_operation,
+                    "success",
+                    None,
+                    started_at,
+                    None,
+                    None,
+                )
                 return {
                     "event_id": str(event.event.event_id),
                     "event_kind": event.event.kind.value,
@@ -727,7 +751,7 @@ class DurableMcpContextPort:
                     "idempotent": event.idempotent,
                 }
             if operation == "create":
-                content = _content(request)
+                content = _content(request, evidence)
                 view = self._service.create(
                     CreateCheckpoint(
                         scope,
@@ -742,21 +766,21 @@ class DurableMcpContextPort:
                     request, "expected_revision_id", CheckpointRevisionId
                 )
                 if operation == "revise":
-                    content = _content(request)
+                    content = _content(request, evidence)
                     view = self._service.revise(
                         ReviseCheckpoint(
                             scope, checkpoint_id, expected_revision_id, content, evidence
                         )
                     )
                 elif operation == "complete":
-                    content = _content(request)
+                    content = _content(request, evidence)
                     view = self._service.complete(
                         CompleteCheckpoint(
                             scope, checkpoint_id, expected_revision_id, content, evidence
                         )
                     )
                 elif operation == "abandon":
-                    content = _content(request)
+                    content = _content(request, evidence)
                     view = self._service.abandon(
                         AbandonCheckpoint(
                             scope,
@@ -768,7 +792,7 @@ class DurableMcpContextPort:
                         )
                     )
                 elif operation == "record_lesson":
-                    lessons = _lessons(request)
+                    lessons = _lessons(request, evidence)
                     if len(lessons) != 1:
                         raise ValueError("record_lesson requires exactly one lesson")
                     view = self._service.record_lesson(
@@ -782,16 +806,45 @@ class DurableMcpContextPort:
                         "or record_event"
                     )
             self._observe_checkpoint_save(view)
-            return {
+            self._observe_checkpoint_attempt(
+                scope,
+                diagnostic_operation,
+                "success",
+                None,
+                started_at,
+                view.revision.content.token_estimate,
+                None if view.preparation is None else view.preparation.compacted,
+            )
+            result: dict[str, object] = {
                 "checkpoint_id": str(view.aggregate.checkpoint_id),
                 "checkpoint_revision_id": str(view.revision.revision_id),
                 "revision_number": view.revision.revision_number,
                 "lifecycle_status": view.aggregate.lifecycle_status.value,
                 "scope": view.aggregate.scope.to_dict(),
                 "persistence": "durable",
+                "token_estimate": view.revision.content.token_estimate,
             }
+            preparation = view.preparation
+            if preparation is not None and preparation.compacted:
+                result["compaction"] = {
+                    "target_tokens": CHECKPOINT_TARGET_TOKENS,
+                    "original_token_estimate": preparation.original_token_estimate,
+                    "omitted_item_count": preparation.omitted_item_count,
+                    "truncated_field_count": preparation.truncated_field_count,
+                }
+            return result
         except Exception as error:
-            raise _mcp_error(error) from error
+            safe_error = _mcp_error(error)
+            self._observe_checkpoint_attempt(
+                scope,
+                diagnostic_operation,
+                "failure",
+                str(safe_error).partition(":")[0],
+                started_at,
+                None,
+                None,
+            )
+            raise safe_error from error
 
     def _observe_checkpoint_save(self, view: CheckpointView) -> None:
         """Keep optional local structure observation fail-open and outside MCP errors."""
@@ -802,6 +855,33 @@ class DurableMcpContextPort:
         except Exception:
             # A durable checkpoint has already succeeded. Do not disclose parser/storage details
             # or turn an optional local index refresh into a failed save response.
+            return
+
+    def _observe_checkpoint_attempt(
+        self,
+        scope: MemoryScope | None,
+        operation: str,
+        outcome: str,
+        error_code: str | None,
+        started_at: float,
+        token_estimate: int | None,
+        compacted: bool | None,
+    ) -> None:
+        """Emit only closed, content-free save metrics and never change the save outcome."""
+        if self._checkpoint_save_observer is None or scope is None:
+            return
+        try:
+            duration_ms = max(0, int((monotonic() - started_at) * 1_000))
+            self._checkpoint_save_observer(
+                scope,
+                operation,
+                outcome,
+                error_code,
+                duration_ms,
+                token_estimate,
+                compacted,
+            )
+        except Exception:
             return
 
 
@@ -870,8 +950,9 @@ def _scope(request: Mapping[str, object], default: MemoryScope | None = None) ->
     )
 
 
-def _content(request: Mapping[str, object]) -> CheckpointContent:
-    supplied_token_estimate = request.get("token_estimate")
+def _content(
+    request: Mapping[str, object], evidence: tuple[EvidenceReference, ...]
+) -> CheckpointContent:
     content = CheckpointContent(
         task_objective=_string(request, "task_objective"),
         completed_work=_strings(request, "completed_work"),
@@ -883,18 +964,33 @@ def _content(request: Mapping[str, object]) -> CheckpointContent:
         relevant_files=_strings(request, "relevant_files"),
         relevant_artifacts=_strings(request, "relevant_artifacts"),
         verification_performed=_strings(request, "verification_performed"),
-        token_estimate=(
-            0 if supplied_token_estimate is None else _integer(supplied_token_estimate)
-        ),
-        lessons=_lessons(request),
+        token_estimate=0,
+        lessons=_lessons(request, evidence),
     )
-    if supplied_token_estimate is None:
-        return replace(content, token_estimate=estimate_checkpoint_tokens(content))
-    return content
+    return replace(content, token_estimate=estimate_checkpoint_tokens(content))
 
 
-def _evidence(request: Mapping[str, object]) -> tuple[EvidenceReference, ...]:
+def _evidence(
+    request: Mapping[str, object],
+    scope: MemoryScope,
+    resolver: Callable[[MemoryScope, tuple[str, ...]], tuple[EvidenceReference, ...]] | None,
+) -> tuple[EvidenceReference, ...]:
     value = request.get("evidence_references")
+    files = request.get("evidence_files")
+    if value is not None and files is not None:
+        raise ValueError("use evidence_files or evidence_references, not both")
+    if files is not None:
+        if (
+            not isinstance(files, list)
+            or not files
+            or not all(isinstance(item, str) for item in files)
+        ):
+            raise ValueError("evidence_files must be a non-empty array of strings")
+        if resolver is None:
+            raise CheckpointApplicationMissingProvenance(
+                "local checkpoint evidence resolution is unavailable"
+            )
+        return resolver(scope, tuple(files))
     if not isinstance(value, list) or not value:
         raise CheckpointApplicationMissingProvenance("checkpoint evidence is required")
     if not all(isinstance(item, Mapping) for item in value):
@@ -902,15 +998,8 @@ def _evidence(request: Mapping[str, object]) -> tuple[EvidenceReference, ...]:
     normalized: list[Mapping[str, object]] = []
     for item in value:
         reference = dict(item)
-        location = reference.get("location")
-        if isinstance(location, Mapping) and set(location) == {"uri"}:
-            reference["location"] = {
-                "uri": location["uri"],
-                "start_line": None,
-                "start_column": None,
-                "end_line": None,
-                "end_column": None,
-            }
+        reference["evidence_id"] = _normalize_uuid(reference.get("evidence_id"), "evidence_id")
+        reference["source_id"] = _normalize_uuid(reference.get("source_id"), "source_id")
         normalized.append(reference)
     return tuple(EvidenceReference.from_dict(item) for item in normalized)
 
@@ -924,13 +1013,26 @@ def _strings(request: Mapping[str, object], name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _lessons(request: Mapping[str, object]) -> tuple[CheckpointLesson, ...]:
+def _lessons(
+    request: Mapping[str, object], evidence: tuple[EvidenceReference, ...] = ()
+) -> tuple[CheckpointLesson, ...]:
     value = request.get("lessons", [])
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
         raise ValueError("lessons must be an array of objects")
-    return tuple(CheckpointLesson.from_dict(item) for item in value)
+    normalized: list[Mapping[str, object]] = []
+    for item in value:
+        lesson = dict(item)
+        if lesson.get("evidence_ids") is None and evidence:
+            lesson["evidence_ids"] = [str(reference.evidence_id) for reference in evidence]
+        elif isinstance(lesson.get("evidence_ids"), list):
+            lesson["evidence_ids"] = [
+                _normalize_uuid(identifier, "lesson evidence_id")
+                for identifier in lesson["evidence_ids"]
+            ]
+        normalized.append(lesson)
+    return tuple(CheckpointLesson.from_dict(item) for item in normalized)
 
 
 def _string(request: Mapping[str, object], name: str, *, default: str | None = None) -> str:
@@ -949,10 +1051,7 @@ def _integer(value: object) -> int:
 def _required_id[IdentifierType: Identifier](
     request: Mapping[str, object], name: str, cls: type[IdentifierType]
 ) -> IdentifierType:
-    value = request.get(name)
-    if not isinstance(value, str):
-        raise ValueError(f"{name} must be a UUID")
-    return cls.from_string(value)
+    return cls.from_string(_normalize_uuid(request.get(name), name))
 
 
 def _optional_id[IdentifierType: Identifier](
@@ -961,6 +1060,20 @@ def _optional_id[IdentifierType: Identifier](
     if request.get(name) is None:
         return None
     return _required_id(request, name, cls)
+
+
+def _diagnostic_operation(value: object) -> str:
+    allowed = {"create", "revise", "complete", "abandon", "record_lesson", "record_event"}
+    return value if isinstance(value, str) and value in allowed else "invalid"
+
+
+def _normalize_uuid(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a UUID")
+    try:
+        return str(UUID(value))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a UUID") from error
 
 
 def _mcp_error(error: Exception) -> ValueError:

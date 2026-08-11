@@ -1,5 +1,5 @@
 {
-  "fixture_version": "1.0",
+  "fixture_version": "2.0",
   "fixture_id": "durable-config-validation-resume",
   "transcript_file": "fresh-session-resumption-transcript.md",
   "task_prompt": "Finish the validation error rendering change for the local configuration command. Preserve the accepted error-code contract and add the missing regression test.",
@@ -27,15 +27,15 @@
     }
   ],
   "facts": [
-    {"id": "objective", "kind": "required", "text": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.", "mnemo_marker": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.", "evidence": ["E01"]},
-    {"id": "accepted-decision", "kind": "current_decision", "text": "Keep validation in LocalConfig and translate only at the CLI boundary.", "evidence": ["E07"]},
-    {"id": "decision-rationale", "kind": "required", "text": "Keeping validation in LocalConfig preserves one error contract for CLI, API, and MCP startup.", "evidence": ["E07"]},
-    {"id": "failed-approach", "kind": "required", "text": "Do not catch ValueError separately in each Typer command because that produced inconsistent messages.", "evidence": ["E05"]},
-    {"id": "reasoning-lesson", "kind": "required", "text": "Before adding a CLI exception catch, verify that validation has one shared application owner.", "evidence": ["E05"]},
-    {"id": "files", "kind": "required", "text": "Relevant files are packages/application/config.py, apps/cli/main.py, and tests/unit/test_lifecycle.py.", "mnemo_marker": "packages/application/config.py", "evidence": ["E09"]},
-    {"id": "verification", "kind": "verified", "text": "The focused lifecycle tests passed after the shared CLI translator was added.", "evidence": ["E11"]},
-    {"id": "next-action", "kind": "required", "text": "Add a regression test for a malformed log level, then run npm run check.", "evidence": ["E13"]},
-    {"id": "status", "kind": "required", "text": "The task is stopped before the malformed log-level regression test is written.", "mnemo_marker": "Add a regression test for a malformed log level", "evidence": ["E15"]},
+    {"id": "objective", "kind": "required", "text": "Render local configuration validation errors as stable MNEMO_CONFIG_INVALID messages.", "mnemo_markers": ["Render local co", "VALID messages."], "evidence": ["E01"]},
+    {"id": "accepted-decision", "kind": "current_decision", "text": "Keep validation in LocalConfig and translate only at the CLI boundary.", "mnemo_markers": ["Keep validation", "CLI boundary."], "evidence": ["E07"]},
+    {"id": "decision-rationale", "kind": "optional", "text": "Keeping validation in LocalConfig preserves one error contract for CLI, API, and MCP startup.", "evidence": ["E07"]},
+    {"id": "failed-approach", "kind": "optional", "text": "Do not catch ValueError separately in each Typer command because that produced inconsistent messages.", "evidence": ["E05"]},
+    {"id": "reasoning-lesson", "kind": "required", "text": "Before adding a CLI exception catch, verify that validation has one shared application owner.", "mnemo_markers": ["Before adding a", "lication owner."], "evidence": ["E05"]},
+    {"id": "files", "kind": "optional", "text": "Relevant files are packages/application/config.py, apps/cli/main.py, and tests/unit/test_lifecycle.py.", "evidence": ["E09"]},
+    {"id": "verification", "kind": "verified", "text": "The focused lifecycle tests passed after the shared CLI translator was added.", "mnemo_markers": ["The focused lif", "was added."], "evidence": ["E11"]},
+    {"id": "next-action", "kind": "required", "text": "Add a regression test for a malformed log level, then run npm run check.", "mnemo_markers": ["Add a regressio", "npm run check."], "evidence": ["E13"]},
+    {"id": "status", "kind": "required", "text": "The task is stopped before the malformed log-level regression test is written.", "mnemo_markers": ["Add a regressio", "npm run check."], "evidence": ["E15"]},
     {"id": "isolated-test", "kind": "optional", "text": "Use an isolated temporary configuration for the regression test.", "evidence": ["E06"]},
     {"id": "superseded-decision", "kind": "forbidden_stale", "text": "Move all configuration validation into the Typer CLI commands", "evidence": ["E04"]},
     {"id": "unverified-inference", "kind": "unverified_inference", "text": "The API likely already formats malformed log-level errors correctly", "evidence": ["E12"]}

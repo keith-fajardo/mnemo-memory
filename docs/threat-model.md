@@ -1373,6 +1373,15 @@ binding, requeues at most 100 failed jobs whose leases are absent or expired, pr
 counts, and does not claim handler success. Active leases and every other project remain unchanged;
 storage and adapter failures return only bounded codes.
 
+Checkpoint save diagnostics use the existing explicit diagnostic mode and retention setting. In
+summary mode they record failures only; trace mode records all application-reached save attempts;
+off records nothing. Each event contains canonical exact-task scope for filtering plus a closed
+operation, success/failure, sanitized error code, duration, stored token estimate, and compaction
+flag. Checkpoint text, paths, hashes, checkpoint/revision IDs, arbitrary invalid identifiers,
+prompts, payloads, and model reasoning are prohibited. Storage is mode-0600, bounded, TTL-pruned,
+symlink-rejecting, exact-scope filtered, and
+fail-open so a telemetry failure cannot change a successful or failed checkpoint outcome.
+
 ### Compromised connectors
 
 **Scenario:** A connector returns forged scope/source metadata, reads beyond registration, supplies
@@ -1385,6 +1394,14 @@ never proxy or rewrite model endpoints.
 
 **Verification:** Forged metadata, traversal, symlink escape, malformed artifacts, oversized input,
 timeout, partial failure, and model-endpoint invariance tests for every connector.
+
+Local checkpoint `evidence_files` accepts at most 16 project-relative regular files under the
+registered root, follows no symlink, rejects traversal and files over 5 MiB, reads with no-follow
+where supported, and persists only a repository URI plus full content digest and deterministic
+evidence identity. A Git abbreviation is display metadata only and uses Git's unique prefix of at
+least six characters; it is never the integrity key. Raw evidence files, Git stderr, remotes, and
+absolute paths are not stored or returned. The lower-level canonical evidence input remains
+available for non-local and team composition without granting filesystem resolution.
 
 The supplemental dbt adapters accept only explicit caller scope and source identity, current
 reviewed schema versions, finite timings, unique resource identities, and configured byte/resource/

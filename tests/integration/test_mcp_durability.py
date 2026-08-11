@@ -30,6 +30,13 @@ from mnemo_memory.packages.application import (
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.domain import CheckpointId, ContextPacket, MemoryScope
+from mnemo_memory.packages.telemetry import (
+    AutomaticRouteDiagnosticsMode,
+    AutomaticRouteDiagnosticsSettings,
+    AutomaticRouteScope,
+    LocalAutomaticRouteDiagnosticsSettingsStore,
+    LocalCheckpointSaveTelemetryStore,
+)
 
 ROOT = Path(__file__).parents[2]
 DBT_FIXTURE = ROOT / "tests" / "fixtures" / "dbt" / "manifest-v12.json"
@@ -170,6 +177,58 @@ def structured(result: dict[str, object]) -> dict[str, object]:
     return cast(dict[str, object], result["structuredContent"])
 
 
+def diagnostic_scope() -> AutomaticRouteScope:
+    return AutomaticRouteScope(
+        SCOPE["owner_id"],
+        SCOPE["workspace_id"],
+        SCOPE["project_id"],
+        SCOPE["session_id"],
+        SCOPE["task_id"],
+        "project",
+    )
+
+
+def test_checkpoint_diagnostic_modes_record_only_the_authorized_attempts(tmp_path: Path) -> None:
+    summary_data = tmp_path / "summary diagnostics"
+    process = McpProcess(summary_data)
+    try:
+        assert process.tool("save_checkpoint", save_payload()).get("isError") is not True
+        failed = process.tool("save_checkpoint", save_payload("not-an-operation"))
+        assert failed["isError"] is True
+    finally:
+        process.close()
+    summary = LocalCheckpointSaveTelemetryStore(summary_data).events(diagnostic_scope())
+    assert len(summary) == 1
+    assert summary[0].outcome.value == "failure"
+    assert summary[0].operation == "invalid"
+    assert summary[0].error_code == "MNEMO_INVALID_INPUT"
+
+    trace_data = tmp_path / "trace diagnostics"
+    LocalAutomaticRouteDiagnosticsSettingsStore(trace_data).save(
+        AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7)
+    )
+    traced = McpProcess(trace_data)
+    try:
+        assert traced.tool("save_checkpoint", save_payload()).get("isError") is not True
+    finally:
+        traced.close()
+    events = LocalCheckpointSaveTelemetryStore(trace_data).events(diagnostic_scope())
+    assert len(events) == 1
+    assert events[0].outcome.value == "success"
+    assert events[0].token_estimate is not None and events[0].token_estimate <= 200
+
+    off_data = tmp_path / "off diagnostics"
+    LocalAutomaticRouteDiagnosticsSettingsStore(off_data).save(
+        AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.OFF, 7)
+    )
+    disabled = McpProcess(off_data)
+    try:
+        disabled.tool("save_checkpoint", save_payload())
+    finally:
+        disabled.close()
+    assert LocalCheckpointSaveTelemetryStore(off_data).events(diagnostic_scope()) == ()
+
+
 def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) -> None:
     data_directory = tmp_path / "Mnemo data Δ with spaces"
     process_a = McpProcess(data_directory)
@@ -183,9 +242,10 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
             "save_checkpoint",
         ]
         oversized = process_a.tool("save_checkpoint", save_payload(token_estimate=601))
-        assert oversized["isError"] is True
-        assert "MNEMO_TOKEN_BUDGET" not in json.dumps(oversized)
-        created = structured(process_a.tool("save_checkpoint", save_payload()))
+        assert oversized.get("isError") is not True
+        bounded = structured(oversized)
+        assert cast(int, bounded["token_estimate"]) <= 200
+        created = bounded
         revised = structured(
             process_a.tool(
                 "save_checkpoint",
@@ -209,7 +269,15 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
         assert packet.active_task_checkpoint is not None
         assert str(revised["checkpoint_revision_id"]) in packet.provenance[0].source_reference
         omitted = ContextPacket.from_dict(
-            structured(process_b.tool("get_context", {**context_payload(), "total_tokens": 599}))
+            structured(
+                process_b.tool(
+                    "get_context",
+                    {
+                        **context_payload(),
+                        "total_tokens": cast(int, revised["token_estimate"]) - 1,
+                    },
+                )
+            )
         )
         assert omitted.active_task_checkpoint is None
         assert omitted.omissions[0].reason.value == "token_budget"
@@ -376,9 +444,8 @@ def test_abrupt_acknowledged_write_and_two_process_conflict_are_durable(tmp_path
         conflicts = [result for result in outcomes if result.get("isError") is True]
         assert len(successes) == 1 and len(conflicts) == 1
         assert "MNEMO_REVISION_CONFLICT" in json.dumps(conflicts[0])
-        assert (
-            structured(left.tool("get_context", context_payload()))["declared_total_tokens"] == 600
-        )
+        declared = structured(left.tool("get_context", context_payload()))["declared_total_tokens"]
+        assert isinstance(declared, int) and 0 < declared <= 200
     finally:
         left.close()
         right.close()

@@ -273,9 +273,46 @@ def test_checkpoint_lesson_rejects_missing_or_unrelated_evidence() -> None:
 
 
 def test_old_canonical_content_without_lessons_remains_readable() -> None:
-    encoded = CheckpointContent.from_legacy(checkpoint(task_scope(), evidence())).to_dict()
-    encoded.pop("lessons")
-    assert CheckpointContent.from_dict(encoded).lessons == ()
+    content = CheckpointContent.from_legacy(checkpoint(task_scope(), evidence()))
+    encoded = {
+        "task_objective": content.task_objective,
+        "completed_work": list(content.completed_work),
+        "current_state": content.current_state,
+        "remaining_work": list(content.remaining_work),
+        "decisions": list(content.decisions),
+        "failures": [],
+        "blockers": [],
+        "relevant_files": list(content.relevant_files),
+        "relevant_artifacts": list(content.relevant_artifacts),
+        "verification_performed": list(content.verification_performed),
+        "token_estimate": content.token_estimate,
+    }
+    assert CheckpointContent.from_dict(encoded) == content
+
+
+def test_new_canonical_content_omits_empty_optional_collections() -> None:
+    content = CheckpointContent(
+        "Keep only populated checkpoint values",
+        (),
+        "Sparse serialization is active",
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        21,
+    )
+
+    encoded = content.to_dict()
+
+    assert encoded == {
+        "task_objective": "Keep only populated checkpoint values",
+        "current_state": "Sparse serialization is active",
+        "token_estimate": 21,
+    }
+    assert CheckpointContent.from_dict(encoded) == content
 
 
 def test_canonical_revision_round_trip_keeps_ids_distinct() -> None:

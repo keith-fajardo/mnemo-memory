@@ -141,15 +141,22 @@ def _quality(
 
     def present(facts: list[Mapping[str, object]], text: str) -> list[str]:
         normalized_text = normalize(text)
-        return [
-            cast(str, fact["id"])
-            for fact in facts
-            if (
-                normalize(cast(str, fact.get("mnemo_marker", fact["text"]))) in normalized_text
-                if use_markers
-                else normalize(cast(str, fact["text"])) in normalized_text
-            )
-        ]
+        present_ids: list[str] = []
+        for fact in facts:
+            if not use_markers:
+                matched = normalize(cast(str, fact["text"])) in normalized_text
+            else:
+                markers = fact.get("mnemo_markers")
+                if isinstance(markers, list) and all(isinstance(item, str) for item in markers):
+                    matched = all(normalize(item) in normalized_text for item in markers)
+                else:
+                    matched = (
+                        normalize(cast(str, fact.get("mnemo_marker", fact["text"])))
+                        in normalized_text
+                    )
+            if matched:
+                present_ids.append(cast(str, fact["id"]))
+        return present_ids
 
     required_present = present(required, context)
     optional_present = present(optional, context)

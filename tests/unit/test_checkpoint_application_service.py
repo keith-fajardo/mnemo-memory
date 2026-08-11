@@ -10,7 +10,6 @@ import pytest
 
 from mnemo_memory.packages.application import (
     AbandonCheckpoint,
-    CheckpointApplicationBudgetExceeded,
     CheckpointApplicationDuplicate,
     CheckpointApplicationEpisodicEventConflict,
     CheckpointApplicationEpisodicEventNotFound,
@@ -545,8 +544,10 @@ def test_write_validation_and_repository_error_translation() -> None:
     scope_value = scope()
     with pytest.raises(CheckpointApplicationMissingProvenance):
         target.create(CreateCheckpoint(scope_value, content(), ()))
-    with pytest.raises(CheckpointApplicationBudgetExceeded):
-        target.create(CreateCheckpoint(scope_value, content(tokens=601), (evidence(),)))
+    bounded = target.create(CreateCheckpoint(scope_value, content(tokens=601), (evidence(),)))
+    assert bounded.revision.content.token_estimate <= 200
+    assert bounded.preparation is not None
+    assert bounded.preparation.original_token_estimate != 601
     with pytest.raises(CheckpointApplicationInvalidScope):
         target.create(
             CreateCheckpoint(
@@ -580,7 +581,7 @@ def test_context_uses_exact_current_revision_and_is_stable() -> None:
     packet = target.get_context(GetCheckpointContext(scope_value))
     assert packet.active_task_checkpoint is not None
     assert str(revised.revision.revision_id) in packet.active_task_checkpoint.item_id
-    assert packet.active_task_checkpoint.token_estimate == 600
+    assert packet.active_task_checkpoint.token_estimate == revised.revision.content.token_estimate
     assert packet.provenance[0].source_reference.endswith(str(revised.revision.revision_id))
     assert json.loads(packet.active_task_checkpoint.content) == revised.revision.content.to_dict()
     assert packet.to_json() == packet.to_json()
@@ -705,16 +706,18 @@ def test_record_lesson_rejects_missing_evidence_terminal_and_full_lesson_history
         ),
     )
     full = full_target.create(CreateCheckpoint(full_scope, full_content, (full_evidence,)))
-    with pytest.raises(CheckpointApplicationInvalidContent, match="maximum number of lessons"):
-        full_target.record_lesson(
-            RecordCheckpointLesson(
-                full_scope,
-                full.aggregate.checkpoint_id,
-                full.revision.revision_id,
-                terminal_lesson,
-                (lesson_evidence,),
-            )
+    assert full.preparation is not None and full.preparation.compacted
+    assert full.preparation.omitted_item_count >= 15
+    recorded = full_target.record_lesson(
+        RecordCheckpointLesson(
+            full_scope,
+            full.aggregate.checkpoint_id,
+            full.revision.revision_id,
+            terminal_lesson,
+            (lesson_evidence,),
         )
+    )
+    assert recorded.revision.content.lessons[0].trigger.startswith("A terminal checkpoint")
 
 
 def test_context_retains_a_prior_evidence_backed_lesson_after_revision() -> None:
@@ -753,6 +756,49 @@ def test_context_retains_a_prior_evidence_backed_lesson_after_revision() -> None
     assert packet.provenance[1].source_reference.endswith("/lesson/0")
     assert str(initial.revision.revision_id) in packet.provenance[1].source_reference
     assert packet.declared_total_tokens == packet.computed_total_tokens
+
+
+def test_record_lesson_bounds_the_immutable_predecessor_history() -> None:
+    target = service()
+    scope_value = scope()
+    reference = evidence()
+    current = target.create(CreateCheckpoint(scope_value, content(), (reference,)))
+
+    for index in range(16):
+        lesson = CheckpointLesson(
+            f"trigger {index}",
+            f"assumption {index}",
+            f"correction {index}",
+            f"prevention {index}",
+            (reference.evidence_id,),
+        )
+        current = target.record_lesson(
+            RecordCheckpointLesson(
+                scope_value,
+                current.aggregate.checkpoint_id,
+                current.revision.revision_id,
+                lesson,
+                (reference,),
+            )
+        )
+
+    overflow = CheckpointLesson(
+        "overflow trigger",
+        "overflow assumption",
+        "overflow correction",
+        "overflow prevention",
+        (reference.evidence_id,),
+    )
+    with pytest.raises(CheckpointApplicationInvalidContent, match="maximum number of lessons"):
+        target.record_lesson(
+            RecordCheckpointLesson(
+                scope_value,
+                current.aggregate.checkpoint_id,
+                current.revision.revision_id,
+                overflow,
+                (reference,),
+            )
+        )
 
 
 def test_context_omits_historical_lesson_when_episodic_budget_is_exhausted() -> None:
@@ -795,7 +841,9 @@ def test_context_empty_omits_terminal_and_over_budget_content() -> None:
     initial = create(target, scope_value)
     packet = target.get_context(
         GetCheckpointContext(
-            scope_value, initial.aggregate.checkpoint_id, ContextBudget(active_task_checkpoint=99)
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            ContextBudget(active_task_checkpoint=initial.revision.content.token_estimate - 1),
         )
     )
     assert packet.active_task_checkpoint is None
@@ -818,7 +866,9 @@ def test_context_total_limit_and_cross_scope_do_not_disclose_checkpoint() -> Non
     initial = create(target, scope_value)
     packet = target.get_context(
         GetCheckpointContext(
-            scope_value, initial.aggregate.checkpoint_id, ContextBudget(total_limit=99)
+            scope_value,
+            initial.aggregate.checkpoint_id,
+            ContextBudget(total_limit=initial.revision.content.token_estimate - 1),
         )
     )
     assert packet.active_task_checkpoint is None

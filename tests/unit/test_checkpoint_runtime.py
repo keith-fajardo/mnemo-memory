@@ -201,7 +201,12 @@ def test_runtime_preserves_reasoning_lesson_across_reopen(tmp_path: Path) -> Non
         restored = runtime.checkpoint_service.get(
             GetCheckpoint(scope_value, created.aggregate.checkpoint_id)
         )
-    assert restored.revision.content.lessons == (lesson,)
+    assert created.preparation is not None and created.preparation.compacted
+    assert restored.revision.content == created.revision.content
+    assert len(restored.revision.content.lessons) == 1
+    correction = restored.revision.content.lessons[0].correction
+    assert correction.startswith("Use the documented busines")
+    assert correction.endswith("grain for reconciliation.")
 
 
 def test_runtime_returns_a_prior_lesson_when_a_newer_revision_omits_it(tmp_path: Path) -> None:

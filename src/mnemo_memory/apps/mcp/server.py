@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Protocol, cast
+from uuid import uuid4
 
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
@@ -18,6 +19,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
+from mnemo_memory.connectors.automatic_memory.checkpoint_evidence import (
+    CheckpointFileEvidenceResolver,
+)
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
     refresh_registered_project_source,
@@ -53,6 +57,14 @@ from mnemo_memory.packages.context_engine import (
     render_context_packet,
 )
 from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceStateFingerprint
+from mnemo_memory.packages.telemetry import (
+    AutomaticRouteDiagnosticsMode,
+    AutomaticRouteScope,
+    CheckpointSaveDiagnosticEvent,
+    CheckpointSaveOutcome,
+    LocalAutomaticRouteDiagnosticsSettingsStore,
+    LocalCheckpointSaveTelemetryStore,
+)
 
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
@@ -582,7 +594,8 @@ def create_server(
         name="save_checkpoint",
         description=(
             "Create, revise, complete, abandon, record a correction lesson, or record one "
-            "explicit evidence-backed decision, failure, or tool outcome for durable task memory."
+            "explicit evidence-backed fact. Omit local scope IDs and caller token estimates; "
+            "prefer evidence_files. Mnemo targets a sparse 200-token checkpoint."
         ),
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     )
@@ -590,7 +603,6 @@ def create_server(
         operation: Annotated[
             str,
             Field(
-                pattern="^(create|revise|complete|abandon|record_lesson|record_event)$",
                 description=(
                     "Lifecycle operation. record_lesson appends exactly one evidence-backed "
                     "correction to the current active revision without resending the complete "
@@ -598,13 +610,22 @@ def create_server(
                 ),
             ),
         ],
-        owner_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
-        workspace_id: Annotated[
-            str | None, Field(default=None, min_length=36, max_length=36)
+        owner_id: Annotated[
+            str | None,
+            Field(default=None, description="Omit all scope IDs for the active local project."),
         ] = None,
-        project_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
-        session_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
-        task_id: Annotated[str | None, Field(default=None, min_length=36, max_length=36)] = None,
+        workspace_id: Annotated[
+            str | None, Field(default=None, description="Omit with all other local scope IDs.")
+        ] = None,
+        project_id: Annotated[
+            str | None, Field(default=None, description="Omit with all other local scope IDs.")
+        ] = None,
+        session_id: Annotated[
+            str | None, Field(default=None, description="Omit with all other local scope IDs.")
+        ] = None,
+        task_id: Annotated[
+            str | None, Field(default=None, description="Omit with all other local scope IDs.")
+        ] = None,
         task_objective: Annotated[
             str | None,
             Field(
@@ -634,9 +655,21 @@ def create_server(
                 min_length=1,
                 max_length=64,
                 description=(
-                    "Required evidence for every save; lesson evidence IDs must be retained here. "
-                    "A location requires uri. Omit all four source-span coordinates when unknown, "
-                    "or provide start_line, start_column, end_line, and end_column together."
+                    "Lower-level alternative to evidence_files. Lesson evidence IDs must refer "
+                    "to these references. A location requires uri; omit all four source-span "
+                    "coordinates when unknown, or provide all four together."
+                ),
+            ),
+        ] = None,
+        evidence_files: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=16,
+                description=(
+                    "Preferred local shorthand: project-relative files that Mnemo hashes and "
+                    "converts into evidence IDs. Use this or evidence_references, never both."
                 ),
             ),
         ] = None,
@@ -644,12 +677,9 @@ def create_server(
             int | None,
             Field(
                 default=None,
-                ge=0,
-                le=600,
                 description=(
-                    "Optional caller estimate for create, revise, complete, and abandon. "
-                    "When omitted, Mnemo calculates a deterministic local estimate. Ignored by "
-                    "record_lesson and record_event."
+                    "Deprecated compatibility field. Mnemo ignores caller estimates, computes "
+                    "the canonical value locally, and targets a compact 200-token checkpoint."
                 ),
             ),
         ] = None,
@@ -657,8 +687,6 @@ def create_server(
             str | None,
             Field(
                 default=None,
-                min_length=36,
-                max_length=36,
                 description="Required for every operation except create.",
             ),
         ] = None,
@@ -666,15 +694,13 @@ def create_server(
             str | None,
             Field(
                 default=None,
-                min_length=36,
-                max_length=36,
                 description="Required for revise, complete, abandon, and record_lesson.",
             ),
         ] = None,
         reason: Annotated[str | None, Field(default=None, max_length=4_000)] = None,
         event_kind: Annotated[
             str | None,
-            Field(default=None, pattern="^(decision|failure|tool_outcome)$"),
+            Field(default=None),
         ] = None,
         event_summary: Annotated[
             str | None, Field(default=None, min_length=1, max_length=1_200)
@@ -693,7 +719,8 @@ def create_server(
                 max_length=16,
                 description=(
                     "Canonical correction lessons. record_lesson requires exactly one; complete "
-                    "content revisions may retain up to 16 applicable lessons."
+                    "content revisions accept up to 16. With evidence_files, omit evidence_ids "
+                    "and Mnemo fills them from the resolved files."
                 ),
             ),
         ] = None,
@@ -717,6 +744,7 @@ def create_server(
                 # Nested evidence is validated by the canonical durable boundary so malformed
                 # values receive Mnemo's payload-free error instead of Pydantic's value echo.
                 "evidence_references": evidence_references,
+                "evidence_files": evidence_files,
                 "token_estimate": token_estimate,
                 "checkpoint_id": checkpoint_id,
                 "expected_revision_id": expected_revision_id,
@@ -856,6 +884,50 @@ def _build_local_mcp_context_session(
         )
         skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
         settings = PersonalSettingsStore(runtime.config.data_directory).load()
+
+        def observe_checkpoint_save(
+            scope: MemoryScope,
+            operation: str,
+            outcome: str,
+            error_code: str | None,
+            duration_ms: int,
+            token_estimate: int | None,
+            compacted: bool | None,
+        ) -> None:
+            diagnostics = LocalAutomaticRouteDiagnosticsSettingsStore(
+                runtime.config.data_directory
+            ).load()
+            if diagnostics.mode is AutomaticRouteDiagnosticsMode.OFF or (
+                diagnostics.mode is AutomaticRouteDiagnosticsMode.SUMMARY and outcome == "success"
+            ):
+                return
+            assert scope.workspace_id is not None
+            assert scope.project_id is not None
+            assert scope.session_id is not None
+            assert scope.task_id is not None
+            event = CheckpointSaveDiagnosticEvent(
+                uuid4(),
+                AutomaticRouteScope(
+                    str(scope.owner_id),
+                    str(scope.workspace_id),
+                    str(scope.project_id),
+                    str(scope.session_id),
+                    str(scope.task_id),
+                    scope.visibility.value,
+                ),
+                datetime.now(UTC),
+                operation,
+                CheckpointSaveOutcome(outcome),
+                duration_ms,
+                error_code,
+                token_estimate,
+                compacted,
+            )
+            LocalCheckpointSaveTelemetryStore(
+                runtime.config.data_directory,
+                retention_days=diagnostics.retention_days,
+            ).record(event)
+
         port = DurableMcpContextPort(
             runtime.checkpoint_service,
             UnifiedContextEngine(
@@ -878,6 +950,10 @@ def _build_local_mcp_context_session(
             skill_registry,
             settings.context_budget,
             settings.approved_event_capture_enabled,
+            checkpoint_evidence_resolver=(
+                None if binding is None else CheckpointFileEvidenceResolver(binding.project_root)
+            ),
+            checkpoint_save_observer=observe_checkpoint_save,
         )
 
         def refresh_source() -> None:

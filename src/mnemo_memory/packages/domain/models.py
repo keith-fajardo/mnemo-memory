@@ -364,21 +364,26 @@ class EvidenceLocation:
             raise ValueError("evidence span end cannot precede start")
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "uri": self.uri,
-            "start_line": self.start_line,
-            "start_column": self.start_column,
-            "end_line": self.end_line,
-            "end_column": self.end_column,
-        }
+        value: dict[str, object] = {"uri": self.uri}
+        if self.start_line is not None:
+            value.update(
+                {
+                    "start_line": self.start_line,
+                    "start_column": self.start_column,
+                    "end_line": self.end_line,
+                    "end_column": self.end_column,
+                }
+            )
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
         fields = {"uri", "start_line", "start_column", "end_line", "end_column"}
-        _strict_fields(value, fields, "evidence location")
+        if set(value) not in ({"uri"}, fields):
+            _strict_fields(value, fields, "evidence location")
         uri = _string_value(value["uri"], "uri")
         positions = {
-            name: _optional_int_value(value[name], name)
+            name: _optional_int_value(value.get(name), name)
             for name in ("start_line", "start_column", "end_line", "end_column")
         }
         return cls(uri=uri, **positions)
@@ -666,42 +671,53 @@ class CheckpointContent:
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "task_objective": self.task_objective,
-            "completed_work": list(self.completed_work),
             "current_state": self.current_state,
-            "remaining_work": list(self.remaining_work),
-            "decisions": list(self.decisions),
-            "failures": list(self.failures),
-            "blockers": list(self.blockers),
-            "relevant_files": list(self.relevant_files),
-            "relevant_artifacts": list(self.relevant_artifacts),
-            "verification_performed": list(self.verification_performed),
             "token_estimate": self.token_estimate,
-            "lessons": [item.to_dict() for item in self.lessons],
         }
+        for name in (
+            "completed_work",
+            "remaining_work",
+            "decisions",
+            "failures",
+            "blockers",
+            "relevant_files",
+            "relevant_artifacts",
+            "verification_performed",
+        ):
+            items = getattr(self, name)
+            if items:
+                value[name] = list(items)
+        if self.lessons:
+            value["lessons"] = [item.to_dict() for item in self.lessons]
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
         fields = set(cls.__dataclass_fields__)
-        # Canonical payloads written before lessons existed remain readable; every
-        # newly serialized payload contains ``lessons`` explicitly.
-        if set(value) not in (fields, fields - {"lessons"}):
-            _strict_fields(value, fields, "checkpoint content")
+        required = {"task_objective", "current_state", "token_estimate"}
+        actual = set(value)
+        if not required.issubset(actual) or not actual.issubset(fields):
+            unknown = sorted(actual - fields)
+            missing = sorted(required - actual)
+            raise ValueError(
+                f"checkpoint content fields are invalid; unknown={unknown}, missing={missing}"
+            )
         lessons = value.get("lessons", [])
         if not isinstance(lessons, list) or not all(isinstance(item, Mapping) for item in lessons):
             raise TypeError("checkpoint content lessons must be an array of objects")
         return cls(
             _string_value(value["task_objective"], "task_objective"),
-            _string_tuple(value["completed_work"], "completed_work"),
+            _string_tuple(value.get("completed_work", []), "completed_work"),
             _string_value(value["current_state"], "current_state"),
-            _string_tuple(value["remaining_work"], "remaining_work"),
-            _string_tuple(value["decisions"], "decisions"),
-            _string_tuple(value["failures"], "failures"),
-            _string_tuple(value["blockers"], "blockers"),
-            _string_tuple(value["relevant_files"], "relevant_files"),
-            _string_tuple(value["relevant_artifacts"], "relevant_artifacts"),
-            _string_tuple(value["verification_performed"], "verification_performed"),
+            _string_tuple(value.get("remaining_work", []), "remaining_work"),
+            _string_tuple(value.get("decisions", []), "decisions"),
+            _string_tuple(value.get("failures", []), "failures"),
+            _string_tuple(value.get("blockers", []), "blockers"),
+            _string_tuple(value.get("relevant_files", []), "relevant_files"),
+            _string_tuple(value.get("relevant_artifacts", []), "relevant_artifacts"),
+            _string_tuple(value.get("verification_performed", []), "verification_performed"),
             _int_value(value["token_estimate"], "token_estimate"),
             tuple(CheckpointLesson.from_dict(item) for item in lessons),
         )

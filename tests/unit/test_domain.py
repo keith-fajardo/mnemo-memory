@@ -69,6 +69,25 @@ def evidence() -> EvidenceReference:
     )
 
 
+def test_evidence_location_omits_absent_coordinates_and_reads_dense_legacy_shape() -> None:
+    location = EvidenceLocation("repo://packages/domain/models.py")
+
+    assert location.to_dict() == {"uri": "repo://packages/domain/models.py"}
+    assert EvidenceLocation.from_dict(location.to_dict()) == location
+    assert (
+        EvidenceLocation.from_dict(
+            {
+                "uri": "repo://packages/domain/models.py",
+                "start_line": None,
+                "start_column": None,
+                "end_line": None,
+                "end_column": None,
+            }
+        )
+        == location
+    )
+
+
 def checkpoint(**changes: object) -> Checkpoint:
     values: dict[str, object] = {
         "checkpoint_id": CheckpointId.new(),
