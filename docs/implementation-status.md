@@ -5327,7 +5327,7 @@ artifact hashes match, all ten charts are valid XML, and the result scan found n
 private keys. No dependency, database migration, model endpoint, MCP behavior, release,
 deployment, or installation changed in this issue.
 
-### `0.1.0a21` production deployment — In progress
+### `0.1.0a21` production deployment — Complete
 
 The user explicitly approved production deployment and local installation of the completed semantic
 checkpoint ledger, adaptive renderer, and lifecycle viability evaluation. Release preparation
@@ -5352,3 +5352,29 @@ source-independent artifacts passed the release verifier with pre-publication SH
 
 - wheel: `64a4238c3a71c64ce2e22d4a4bde230626ab710d9768fea641ad924399c0a586`
 - source distribution: `ec56f6692e29452531f1c54af2a7b19b08a908a9b83898f9ed01d70c886ffd1d`
+
+Production deployment is complete. Release commit
+`ccdaefb1c0a9469cf996f94eb6a974796cb4e146` was pushed to `main`, and protected workflow run
+`31523523647` passed clean-runner repository verification and deterministic evaluations,
+source-independent build and wheel/source-distribution installation smokes, checksum-bound OIDC
+publication, and independent live PyPI metadata, hash, provenance, and wheel verification.
+
+The immutable workflow bundle, its `SHA256SUMS`, and live PyPI metadata agree on these authoritative
+SHA-256 digests:
+
+- wheel: `fc758d1fd4103d12c214c018af8a8a273af44f2e36dc4bab1a1237315c1cc069`
+- source distribution: `c4e8066787f2b3b8d4092e0b7fc078d358b125576d97695d80b2cbe321570074`
+
+The exact workflow wheel was installed locally with the existing `router` extra. The installed
+command and distribution metadata report `0.1.0a21`; the receipt points to the verified workflow
+wheel; the packaged schema-31 migration exists; an isolated personal profile initialized at schema
+31 with semantic storage objects; and the installed-code 12-case semantic evaluation reproduced
+100% minimum continuation, protected-span, and provenance fidelity with zero inversions, critical
+omissions, or false memories. Codex and Claude Code connection checks pass, and diagnostics remains
+in trace mode with seven-day retention.
+
+Installation cannot rewrite code already imported by an existing Python MCP process. Resident
+Codex/Claude processes predated this installation, and no unrelated process was terminated to force
+a hot reload. The refreshed connection will use `0.1.0a21` for newly started MCP processes or the
+next agent session. Even after restart, automatic context behavior remains the existing public path;
+semantic M3 was packaged but intentionally not promoted into automatic attachment by this release.
