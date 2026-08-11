@@ -153,6 +153,9 @@ def test_trace_fields_are_content_free_backward_compatible_and_labelable(tmp_pat
         shadow_structural_tokens=600,
         shadow_long_term_tokens=700,
         shadow_shared_maximum_tokens=1_300,
+        shadow_action="push_both",
+        shadow_estimated_tokens=1_300,
+        shadow_duration_ms=5,
         semantic_invoked=True,
         semantic_route="structure",
         semantic_latency_ms=14,
@@ -170,6 +173,15 @@ def test_trace_fields_are_content_free_backward_compatible_and_labelable(tmp_pat
     assert "shadow_structural_need" not in legacy
     store.path.write_text(json.dumps({"version": 1, "events": [legacy]}), encoding="utf-8")
     assert store.summary(SCOPE).event_count == 1
+
+    old_shadow = traced.to_dict()
+    old_shadow.pop("shadow_action")
+    old_shadow.pop("shadow_estimated_tokens")
+    old_shadow.pop("shadow_duration_ms")
+    store.path.write_text(json.dumps({"version": 1, "events": [old_shadow]}), encoding="utf-8")
+    replayed = store.events(SCOPE)[0]
+    assert replayed.shadow_action is None
+    assert replayed.semantic_latency_ms == 14
 
 
 def test_diagnostic_settings_are_private_strict_and_default_to_summary(tmp_path: Path) -> None:
@@ -223,6 +235,9 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
         shadow_reason="potion_proposal",
         shadow_structural_tokens=1_000,
         shadow_shared_maximum_tokens=1_300,
+        shadow_action="push_structure",
+        shadow_estimated_tokens=1_000,
+        shadow_duration_ms=5,
         semantic_invoked=True,
         semantic_route="structure",
         semantic_latency_ms=14,
@@ -266,20 +281,32 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     assert json.loads(enabled.output)["mode"] == "trace"
     assert json.loads(shown.output)["notice"].endswith("does not prove causation.")
     assert json.loads(shown.output) == json.loads(shown_json.output)
+    traced_json = json.loads(shown.output)["events"][0]
+    assert traced_json["shadow_action"] == "push_structure"
+    assert traced_json["shadow_budget"]["estimated_attachment_tokens"] == 1_000
+    assert traced_json["shadow_duration_ms"] == 14
+    assert traced_json["total_routing_duration_ms"] == 26
     table_lines = shown_table.output.splitlines()
     assert table_lines[0].split() == [
         "TIME",
         "LIVE",
+        "OUTCOME",
         "REASON",
+        "SHADOW",
         "STRUCT",
         "LONG",
         "TOKENS",
-        "MS",
+        "PLAN_TOK",
+        "ROUTE_MS",
+        "SHADOW_MS",
         "POTION",
+        "POTION_MS",
+        "TOTAL_MS",
         "FEEDBACK",
         "EVENT_ID",
     ]
-    assert "structure  architecture  yes     no" in shown_table.output
+    assert "structure  hit" in shown_table.output
+    assert "push_structure  yes     no" in shown_table.output
     assert "structure" in shown_table.output
     assert str(traced.event_id) in shown_table.output
     assert str(event.event_id) in shown_table.output

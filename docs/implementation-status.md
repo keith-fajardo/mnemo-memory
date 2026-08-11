@@ -4987,3 +4987,66 @@ reports `mnemo 0.1.0a18`, the existing Codex connection remains active, and pinn
 `bf8b056651a2c21b8d2565580b8569da283cab23` remains installed and enabled in uncertainty-only
 shadow mode. The installed `mnemo memory diagnostics show --format table --limit 3` command rendered
 the local diagnostic events and correlation notice successfully.
+
+### Selective-push/lazy-pull shadow policy and complete route diagnostics — Complete
+
+The user explicitly approved the first evidence-gathering slice of the researched token-efficiency
+recommendation. This issue changes only the opt-in shadow planner and content-free diagnostics. Live
+automatic attachment remains unchanged: no prompt receives less or different context because of
+this issue.
+
+The shadow policy must preserve explicit deterministic structure and long-term routes, propose no
+attachment for clear self-contained/current-output prompts, and convert unresolved prompts from an
+automatic 1,300-token knowledge proposal to a bounded `lazy_pull` action representing a static hint
+of no more than 40 estimated tokens. The hint tells an agent to use the existing scoped
+`get_context` tool only when prior project decisions or repository structure could materially change
+the answer; this issue does not add a second recall tool or inject the hint live. Project-scoped
+learned phrases remain deterministic inputs. Potion remains available for explicit evaluation but
+must not load or run synchronously in automatic trace hooks.
+
+Diagnostics must remain prompt-free and backward compatible while exposing the shadow action,
+proposed attachment-token cost, live outcome, route latency, shadow-planning latency, and their
+combined routing time in JSON and the native table. Existing semantic/Potion fields remain readable
+for historical events. Telemetry must describe correlation, not causation, and must not store
+prompts, paths, payloads, embeddings, scores, or hidden reasoning.
+
+Acceptance requires focused deterministic routing, current-output, uncertain lazy-pull, explicit
+combined-axis, learned-phrase, no-synchronous-Potion, closed `get_context` correlation, legacy
+telemetry, JSON/table, privacy, and
+failure-isolation tests; updated ADR, threat model, user documentation, and implementation status;
+the complete `npm run check` gate; and an installed-wheel smoke before release. Live selective
+attachment, automatic learning, a new retrieval tool, Redis, a hosted provider, or model endpoint
+changes are outside this issue. Production deployment and local installation are explicitly
+authorized only after this issue is complete and will be tracked as the next issue.
+
+Implemented the shadow-only selective policy with closed `none`, `push_structure`,
+`push_long_term`, `push_both`, and `lazy_pull` actions. Unresolved prompts now propose a fixed
+29-token `get_context` hint instead of a 1,300-token knowledge attachment, while narrowly recognized
+current-output prompts propose zero tokens. These are counterfactual measurements only: live
+attachment remains byte-for-byte governed by the prior route. Trace hooks no longer load or invoke
+Potion; its installed model is reported as explicit-evaluation-only.
+
+New trace events add a validated action, proposed token estimate, and shadow-planning duration.
+JSON and table views expose live outcome, live/shadow/combined routing latency, proposed cost, and
+historical Potion latency. A later `get_context` call is retained only as `context_recall`, never as
+its query or result. Both aggregate-only and original shadow event shapes replay successfully.
+
+The focused routing, telemetry, hook, Potion-boundary, and evaluation suite passed 101 tests. The
+complete `npm run check` gate passed with 1,026 tests and 27 expected skips; the isolated PostgreSQL
+suite passed 26 tests with one opt-in load test skipped. Formatting, linting, strict typing, schema,
+dependency, architecture, and installed-package checks passed. No dependency, model artifact,
+storage migration, live attachment, or configured agent endpoint changed.
+
+### `0.1.0a19` production deployment — In progress
+
+The user explicitly approved production deployment and local installation after the completed
+selective-push/lazy-pull shadow and diagnostics issue. Release preparation advances the pinned
+prerelease version to `0.1.0a19` without promoting the shadow policy to live attachment. Potion
+remains installed only for explicit local evaluation and automatic hooks remain deterministic.
+
+Acceptance requires a reviewed version-only release delta on top of the completed implementation,
+a clean complete repository gate, one release commit pushed to `main`, successful protected
+`publish-pypi.yml` execution, live PyPI metadata/hash/integrity-provenance verification, installation
+of the exact published wheel with the existing `router` extra on this Mac, retained Codex connection
+and diagnostics mode, and an installed table/router-status smoke. No TestPyPI publication, direct
+local upload, live selective attachment, or later routing issue is authorized.

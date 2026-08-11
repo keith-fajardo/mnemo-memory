@@ -3,9 +3,11 @@
 import pytest
 
 from mnemo_memory.packages.application.context_routing import (
+    AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
     AutomaticContextNeed,
     AutomaticContextRoute,
     AutomaticContextRouteReason,
+    AutomaticContextShadowAction,
     CompactLocalMemoryRouter,
     CompactMemoryRoute,
     CompactMemoryRouteDecision,
@@ -216,6 +218,8 @@ def test_shadow_planner_can_request_structure_and_long_term_under_one_ceiling() 
     assert shadow.long_term_need is AutomaticContextNeed.YES
     assert shadow.structural_tokens == 600
     assert shadow.long_term_tokens == 700
+    assert shadow.action is AutomaticContextShadowAction.PUSH_BOTH
+    assert shadow.estimated_attachment_tokens == 1_300
     assert shadow.structural_tokens + shadow.long_term_tokens == shadow.shared_maximum_tokens
 
 
@@ -231,6 +235,7 @@ def test_learned_phrase_affects_only_one_shadow_axis_and_cannot_suppress_memory(
     assert shadow.structural_need is AutomaticContextNeed.YES
     assert shadow.long_term_need is AutomaticContextNeed.UNKNOWN
     assert shadow.reason == "learned_phrase"
+    assert shadow.action is AutomaticContextShadowAction.PUSH_STRUCTURE
     with pytest.raises(ValueError, match="cannot suppress"):
         LearnedRoutePhrase("skip all memory", CompactMemoryRoute.NONE)
 
@@ -250,3 +255,26 @@ def test_semantic_none_proposal_does_not_turn_unknown_into_no() -> None:
     assert shadow.structural_need is AutomaticContextNeed.UNKNOWN
     assert shadow.long_term_need is AutomaticContextNeed.UNKNOWN
     assert shadow.structural_tokens == shadow.long_term_tokens == 0
+    assert shadow.action is AutomaticContextShadowAction.LAZY_PULL
+    assert shadow.estimated_attachment_tokens == (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4
+    assert shadow.estimated_attachment_tokens <= 40
+
+
+def test_shadow_policy_proposes_none_for_current_output_and_lazy_pull_when_unknown() -> None:
+    current_prompt = "This is the output; what is your conclusion?"
+    uncertain_prompt = "finance reconciliation variance"
+
+    current_live = choose_automatic_context_route(current_prompt)
+    current = plan_automatic_context_needs(current_prompt)
+    uncertain_live = choose_automatic_context_route(uncertain_prompt)
+    uncertain = plan_automatic_context_needs(uncertain_prompt)
+
+    assert current_live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+    assert current.action is AutomaticContextShadowAction.NONE
+    assert current.reason == "current_session"
+    assert current.structural_need is current.long_term_need is AutomaticContextNeed.NO
+    assert current.estimated_attachment_tokens == 0
+    assert uncertain_live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+    assert uncertain.action is AutomaticContextShadowAction.LAZY_PULL
+    assert uncertain.structural_need is uncertain.long_term_need is AutomaticContextNeed.UNKNOWN
+    assert 0 < uncertain.estimated_attachment_tokens <= 40

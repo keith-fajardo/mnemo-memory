@@ -267,7 +267,7 @@ memory_event_app = typer.Typer(
 )
 memory_router_app = typer.Typer(
     no_args_is_help=True,
-    help="Set up the optional local Potion shadow router.",
+    help="Manage the optional local Potion evaluation model.",
 )
 memory_route_diagnostics_app = typer.Typer(
     no_args_is_help=True,
@@ -291,7 +291,7 @@ memory_app.add_typer(
 memory_app.add_typer(
     memory_router_app,
     name="router",
-    help="Set up the optional local Potion shadow router.",
+    help="Manage the optional local Potion evaluation model.",
 )
 memory_app.add_typer(
     memory_route_diagnostics_app,
@@ -334,7 +334,7 @@ class _AutomaticPromptContextResult:
 @dataclass(frozen=True, slots=True)
 class _AutomaticShadowTrace:
     plan: AutomaticContextShadowPlan
-    semantic_latency_ms: int
+    shadow_duration_ms: int
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
@@ -694,8 +694,9 @@ def _render_automatic_context_attachment(
 def _automatic_shadow_trace(
     data_directory: Path, scope: MemoryScope, prompt: str
 ) -> _AutomaticShadowTrace:
-    """Evaluate the opt-in shadow planner; every adapter failure falls back deterministically."""
+    """Evaluate the deterministic shadow planner without loading a model in the hook path."""
 
+    started = monotonic()
     project_scope = MemoryScope(
         scope.owner_id,
         ScopeLevel.PROJECT,
@@ -710,27 +711,11 @@ def _automatic_shadow_trace(
         )
     except (LearnedRouteStoreError, OSError, TypeError, ValueError):
         learned = ()
-
-    semantic_router: PotionLocalMemoryRouter | None = None
-    if not contains_high_confidence_secret(prompt):
-        try:
-            settings = LocalPotionRouterSettingsStore(data_directory).load()
-            if settings.enabled:
-                semantic_router = PotionLocalMemoryRouter(data_directory)
-        except (PotionRouterError, OSError, TypeError, ValueError):
-            semantic_router = None
-
-    started = monotonic()
     try:
-        plan = plan_automatic_context_needs(
-            prompt,
-            learned_phrases=learned,
-            semantic_router=semantic_router,
-        )
-    except (PotionRouterError, OSError, RuntimeError, TypeError, ValueError):
         plan = plan_automatic_context_needs(prompt, learned_phrases=learned)
-    elapsed = _elapsed_milliseconds(started)
-    return _AutomaticShadowTrace(plan, elapsed if plan.semantic_invoked else 0)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        plan = plan_automatic_context_needs(prompt)
+    return _AutomaticShadowTrace(plan, _elapsed_milliseconds(started))
 
 
 def _automatic_prompt_context_for_hook(
@@ -806,13 +791,16 @@ def _automatic_prompt_context_for_hook(
         shadow_structural_tokens=0 if trace is None else trace.plan.structural_tokens,
         shadow_long_term_tokens=0 if trace is None else trace.plan.long_term_tokens,
         shadow_shared_maximum_tokens=(0 if trace is None else trace.plan.shared_maximum_tokens),
+        shadow_action=None if trace is None else trace.plan.action.value,
+        shadow_estimated_tokens=(0 if trace is None else trace.plan.estimated_attachment_tokens),
+        shadow_duration_ms=0 if trace is None else trace.shadow_duration_ms,
         semantic_invoked=False if trace is None else trace.plan.semantic_invoked,
         semantic_route=(
             None
             if trace is None or trace.plan.semantic_route is None
             else trace.plan.semantic_route.value
         ),
-        semantic_latency_ms=0 if trace is None else trace.semantic_latency_ms,
+        semantic_latency_ms=0,
     )
     try:
         LocalAutomaticRouteTelemetryStore(
@@ -902,7 +890,9 @@ def _record_automatic_route_tool(data_directory: Path, event_id: UUID, tool_name
     """Record only a closed tool category; never inspect tool input or output."""
 
     normalized = tool_name.casefold()
-    if "mnemo" in normalized:
+    if "get_context" in normalized:
+        category = AutomaticRouteToolCategory.CONTEXT_RECALL
+    elif "mnemo" in normalized:
         category = AutomaticRouteToolCategory.MNEMO
     elif normalized in {"apply_patch", "edit", "write"}:
         category = AutomaticRouteToolCategory.MUTATION
@@ -2911,7 +2901,8 @@ def memory_router_setup(
             "model_id": POTION_MODEL_ID,
             "revision": POTION_MODEL_REVISION,
             "network_in_ordinary_hooks": False,
-            "active_mode": "uncertainty_only_shadow",
+            "active_mode": "explicit_evaluation_only",
+            "used_by_automatic_hooks": False,
         }
     )
 
@@ -2930,7 +2921,13 @@ def memory_router_enable(
         _ = PotionLocalMemoryRouter(config.data_directory).classify("resume our earlier task")
     except (PotionRouterError, OSError, RuntimeError, ValueError) as error:
         raise typer.BadParameter(str(error) or "MNEMO_POTION_ENABLE_FAILED") from error
-    _show({"status": "enabled", "active_mode": "uncertainty_only_shadow"})
+    _show(
+        {
+            "status": "enabled",
+            "active_mode": "explicit_evaluation_only",
+            "used_by_automatic_hooks": False,
+        }
+    )
 
 
 @memory_router_app.command("disable", help="Disable Potion without deleting its verified files.")
@@ -2966,7 +2963,8 @@ def memory_router_status(
             "installed": installed,
             "model_id": settings.model_id,
             "revision": settings.revision,
-            "active_mode": "uncertainty_only_shadow",
+            "active_mode": "explicit_evaluation_only",
+            "used_by_automatic_hooks": False,
         }
     )
 
@@ -3046,6 +3044,7 @@ def memory_route_diagnostics_status(
 
 
 def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
+    shadow_duration_ms = max(event.shadow_duration_ms, event.semantic_latency_ms)
     return {
         "event_id": str(event.event_id),
         "observed_at": event.observed_at.astimezone(UTC).isoformat(),
@@ -3055,15 +3054,19 @@ def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
         "shadow_structural_need": event.shadow_structural_need,
         "shadow_long_term_need": event.shadow_long_term_need,
         "shadow_reason": event.shadow_reason,
+        "shadow_action": event.shadow_action,
         "shadow_budget": {
             "structural": event.shadow_structural_tokens,
             "long_term": event.shadow_long_term_tokens,
             "shared_maximum": event.shadow_shared_maximum_tokens,
+            "estimated_attachment_tokens": event.shadow_estimated_tokens,
         },
+        "shadow_duration_ms": shadow_duration_ms,
         "semantic_invoked": event.semantic_invoked,
         "semantic_route": event.semantic_route,
         "semantic_latency_ms": event.semantic_latency_ms,
         "route_duration_ms": event.duration_ms,
+        "total_routing_duration_ms": event.duration_ms + shadow_duration_ms,
         "rendered_estimated_tokens": event.rendered_estimated_tokens,
         "tool_result_estimated_tokens": event.tool_result_estimated_tokens,
         "tool_calls": dict(event.tool_calls),
@@ -3087,12 +3090,18 @@ def _route_event_table(events: tuple[AutomaticRouteEvent, ...]) -> str:
     headers = (
         "TIME",
         "LIVE",
+        "OUTCOME",
         "REASON",
+        "SHADOW",
         "STRUCT",
         "LONG",
         "TOKENS",
-        "MS",
+        "PLAN_TOK",
+        "ROUTE_MS",
+        "SHADOW_MS",
         "POTION",
+        "POTION_MS",
+        "TOTAL_MS",
         "FEEDBACK",
         "EVENT_ID",
     )
@@ -3100,12 +3109,18 @@ def _route_event_table(events: tuple[AutomaticRouteEvent, ...]) -> str:
         (
             event.observed_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
             event.route,
+            event.outcome.value,
             event.reason,
+            event.shadow_action or "-",
             event.shadow_structural_need or "-",
             event.shadow_long_term_need or "-",
             str(event.rendered_estimated_tokens),
+            str(event.shadow_estimated_tokens),
             str(event.duration_ms),
+            str(max(event.shadow_duration_ms, event.semantic_latency_ms)),
             event.semantic_route or "-",
+            str(event.semantic_latency_ms),
+            str(event.duration_ms + max(event.shadow_duration_ms, event.semantic_latency_ms)),
             "-" if event.feedback is None else event.feedback.value,
             str(event.event_id),
         )
@@ -3114,7 +3129,7 @@ def _route_event_table(events: tuple[AutomaticRouteEvent, ...]) -> str:
     widths = tuple(
         max(len(row[index]) for row in (headers, *rows)) for index in range(len(headers))
     )
-    numeric_columns = {5, 6}
+    numeric_columns = {7, 8, 9, 10, 12, 13}
 
     def render(row: tuple[str, ...]) -> str:
         cells = tuple(

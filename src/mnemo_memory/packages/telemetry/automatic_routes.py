@@ -30,6 +30,7 @@ _ROUTES = frozenset(
     }
 )
 _SHADOW_NEEDS = frozenset({"yes", "no", "unknown"})
+_SHADOW_ACTIONS = frozenset({"none", "push_structure", "push_long_term", "push_both", "lazy_pull"})
 _SEMANTIC_ROUTES = frozenset({"none", "prior_memory", "knowledge", "structure"})
 
 
@@ -46,6 +47,7 @@ class AutomaticRouteOutcome(StrEnum):
 
 
 class AutomaticRouteToolCategory(StrEnum):
+    CONTEXT_RECALL = "context_recall"
     DIRECT_INSPECTION = "direct_inspection"
     MNEMO = "mnemo"
     MUTATION = "mutation"
@@ -167,6 +169,9 @@ class AutomaticRouteEvent:
     shadow_structural_tokens: int = 0
     shadow_long_term_tokens: int = 0
     shadow_shared_maximum_tokens: int = 0
+    shadow_action: str | None = None
+    shadow_estimated_tokens: int = 0
+    shadow_duration_ms: int = 0
     semantic_invoked: bool = False
     semantic_route: str | None = None
     semantic_latency_ms: int = 0
@@ -202,6 +207,8 @@ class AutomaticRouteEvent:
             self.shadow_structural_tokens,
             self.shadow_long_term_tokens,
             self.shadow_shared_maximum_tokens,
+            self.shadow_estimated_tokens,
+            self.shadow_duration_ms,
             self.semantic_latency_ms,
         ):
             if (
@@ -233,6 +240,9 @@ class AutomaticRouteEvent:
                 or self.shadow_structural_tokens
                 or self.shadow_long_term_tokens
                 or self.shadow_shared_maximum_tokens
+                or self.shadow_action is not None
+                or self.shadow_estimated_tokens
+                or self.shadow_duration_ms
                 or self.semantic_invoked
                 or self.semantic_route is not None
                 or self.semantic_latency_ms
@@ -243,11 +253,36 @@ class AutomaticRouteEvent:
             or self.shadow_long_term_need not in _SHADOW_NEEDS
             or self.shadow_reason is None
             or _SAFE_REASON.fullmatch(self.shadow_reason) is None
+            or (self.shadow_action is not None and self.shadow_action not in _SHADOW_ACTIONS)
             or self.shadow_shared_maximum_tokens != 1_300
             or self.shadow_structural_tokens + self.shadow_long_term_tokens
             > self.shadow_shared_maximum_tokens
+            or self.shadow_estimated_tokens > self.shadow_shared_maximum_tokens
         ):
             raise ValueError("automatic route shadow metadata is invalid")
+        if self.shadow_action is not None:
+            allocated = self.shadow_structural_tokens + self.shadow_long_term_tokens
+            valid_action = {
+                "none": self.shadow_estimated_tokens == allocated == 0,
+                "lazy_pull": allocated == 0 and 0 < self.shadow_estimated_tokens <= 40,
+                "push_structure": (
+                    self.shadow_structural_tokens > 0
+                    and self.shadow_long_term_tokens == 0
+                    and self.shadow_estimated_tokens == allocated
+                ),
+                "push_long_term": (
+                    self.shadow_structural_tokens == 0
+                    and self.shadow_long_term_tokens > 0
+                    and self.shadow_estimated_tokens == allocated
+                ),
+                "push_both": (
+                    self.shadow_structural_tokens > 0
+                    and self.shadow_long_term_tokens > 0
+                    and self.shadow_estimated_tokens == allocated
+                ),
+            }[self.shadow_action]
+            if not valid_action:
+                raise ValueError("automatic route shadow action is invalid")
         if not isinstance(self.semantic_invoked, bool):
             raise TypeError("automatic route semantic flag is invalid")
         if self.semantic_invoked != (self.semantic_route is not None):
@@ -349,6 +384,9 @@ class AutomaticRouteEvent:
                     "shadow_structural_tokens": self.shadow_structural_tokens,
                     "shadow_long_term_tokens": self.shadow_long_term_tokens,
                     "shadow_shared_maximum_tokens": self.shadow_shared_maximum_tokens,
+                    "shadow_action": self.shadow_action,
+                    "shadow_estimated_tokens": self.shadow_estimated_tokens,
+                    "shadow_duration_ms": self.shadow_duration_ms,
                     "semantic_invoked": self.semantic_invoked,
                     "semantic_route": self.semantic_route,
                     "semantic_latency_ms": self.semantic_latency_ms,
@@ -392,9 +430,15 @@ class AutomaticRouteEvent:
             "semantic_latency_ms",
             "feedback",
         }
+        shadow_v2 = shadow | {
+            "shadow_action",
+            "shadow_estimated_tokens",
+            "shadow_duration_ms",
+        }
         if not isinstance(value, dict) or frozenset(value) not in {
             frozenset(required),
             frozenset(required | shadow),
+            frozenset(required | shadow_v2),
         }:
             raise ValueError("automatic route event is invalid")
         tool_calls = value["tool_calls"]
@@ -409,12 +453,14 @@ class AutomaticRouteEvent:
         shadow_structural_need = value.get("shadow_structural_need")
         shadow_long_term_need = value.get("shadow_long_term_need")
         shadow_reason = value.get("shadow_reason")
+        shadow_action = value.get("shadow_action")
         semantic_route = value.get("semantic_route")
         feedback = value.get("feedback")
         for item in (
             shadow_structural_need,
             shadow_long_term_need,
             shadow_reason,
+            shadow_action,
             semantic_route,
             feedback,
         ):
@@ -446,6 +492,9 @@ class AutomaticRouteEvent:
             _integer(value.get("shadow_structural_tokens", 0)),
             _integer(value.get("shadow_long_term_tokens", 0)),
             _integer(value.get("shadow_shared_maximum_tokens", 0)),
+            shadow_action,
+            _integer(value.get("shadow_estimated_tokens", 0)),
+            _integer(value.get("shadow_duration_ms", 0)),
             _boolean(value.get("semantic_invoked", False)),
             semantic_route,
             _integer(value.get("semantic_latency_ms", 0)),

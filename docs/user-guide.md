@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a18
+uv tool install mnemo-unified-context==0.1.0a19
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -778,6 +778,13 @@ and whether long-term context is needed—with `yes`, `no`, or `unknown`. If bot
 proposed allocation still totals at most 1,300 tokens. Shadow results do not attach different
 context yet; this stage measures the policy before a later, separately approved live change.
 
+The shadow plan also reports one counterfactual action. Explicit need proposes `push_structure`,
+`push_long_term`, or `push_both`; deterministic self-contained and narrowly recognized
+current-output follow-ups propose `none`; unresolved need proposes `lazy_pull`. The last action
+represents a fixed 29-token hint telling the agent to call the existing scoped `get_context` tool
+only if prior project decisions or repository structure could materially change the answer. The
+hint is measured but is not attached live in this release.
+
 Teach one project-specific phrase explicitly, or forget the exact normalized phrase, with:
 
 ```bash
@@ -804,10 +811,16 @@ mnemo memory diagnostics purge --yes
 ```
 
 `show` keeps canonical JSON as its default for scripts. `--format table` renders a dependency-free
-plain-text view with time, live route and reason, shadow structure/history needs, estimated attached
-tokens, route latency, Potion result, feedback, and the full event ID used by `mark`. Older
-aggregate-only records show `-` for shadow fields that were never captured. Empty results still show
-the header and the correlation notice; no shell `jq` or `column` pipeline is required.
+plain-text view with time, live route, outcome and reason, shadow action and structure/history needs,
+live and proposed token estimates, live-route and shadow-planner latency, historical Potion latency,
+combined routing time, feedback, and the full event ID used by `mark`. `TOKENS` is the live rendered
+estimate; `PLAN_TOK` is the shadow action's counterfactual estimate. Older aggregate-only records
+show `-` for shadow fields that were never captured. Empty results still show the header and the
+correlation notice; no shell `jq` or `column` pipeline is required.
+
+A later Mnemo `get_context` call is recorded only as the closed `context_recall` tool category. This
+helps compare lazy-pull proposals with observed recalls without retaining the query or result. It is
+a correlation and possible miss proxy, not proof that the shadow action caused or needed the call.
 
 Labels are `helpful`, `noise`, and `missing`. A label is evaluation data only and never changes
 routing. `off` stops new events but retains existing events until their TTL or an exact-scope purge;
@@ -816,8 +829,9 @@ budget proposals, latency, token estimates, and subsequent closed tool categorie
 prompt, path, payload, embedding, score, command, tool result, or hidden chain of thought. A later
 file read is correlated with the route event; the trace does not prove Mnemo caused that read.
 
-Potion is an optional uncertainty-only semantic proposal for trace mode. Install the optional
-runtime and explicitly acquire the pinned model:
+Potion remains an optional local evaluation model, but automatic hooks do not load or invoke it.
+Install the optional runtime and explicitly acquire the pinned model only when evaluating alternative
+router behavior:
 
 ```bash
 uv tool install "mnemo-unified-context[router]"
@@ -827,13 +841,12 @@ mnemo memory router status
 
 Setup is the only router operation that downloads files. It acquires the fixed
 `minishlab/potion-base-8M` revision, verifies the required SHA-256 digests, saves private local
-files, and performs a local smoke. Ordinary hooks accept only that verified directory and perform
-no network access. Deterministic rules and explicit learned phrases run first; Potion is called only
-for the existing uncertain knowledge fallback. Missing dependencies, disabled/corrupt weights, or
-inference failure falls back to the deterministic shadow answer without blocking the client.
-`mnemo memory router disable` keeps the verified files but prevents model use. Potion proposals
-cannot select scope, authority, retention, mutation, token ceilings, dbt lineage, live attachment,
-or a no-memory suppression.
+files, and performs a local smoke. `status` reports `explicit_evaluation_only` and
+`used_by_automatic_hooks: false`. Ordinary hooks perform no Potion file validation, model load,
+inference, or network access. Deterministic rules and explicit learned phrases produce the automatic
+shadow action. `mnemo memory router disable` keeps the verified files but disables explicit model
+evaluation. A Potion proposal cannot select scope, authority, retention, mutation, token ceilings,
+dbt lineage, live attachment, or a no-memory suppression.
 
 ### Optional: add one Obsidian vault
 

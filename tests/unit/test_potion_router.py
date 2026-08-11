@@ -110,12 +110,12 @@ def test_potion_classifier_uses_only_the_bounded_head_tail_view(tmp_path: Path) 
     assert private_middle not in model.last_sentences[0]
 
 
-def test_router_help_states_explicit_setup_and_shadow_scope() -> None:
+def test_router_help_states_explicit_setup_and_evaluation_scope() -> None:
     runner = CliRunner()
     memory = runner.invoke(app, ["memory", "--help"])
     router = runner.invoke(app, ["memory", "router", "--help"])
 
     assert memory.exit_code == router.exit_code == 0
-    assert "Potion shadow router" in memory.output
+    assert "Potion evaluation model" in memory.output
     assert "digest-verify" in router.output
     assert "enable" in router.output and "disable" in router.output

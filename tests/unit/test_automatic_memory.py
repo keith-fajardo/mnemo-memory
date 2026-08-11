@@ -1236,7 +1236,9 @@ def test_exact_lookup_records_zero_attachment_and_unknown_direct_tool_cost(
     assert summary["totals"]["unmeasured_tool_calls"] == 1
 
 
-def test_trace_mode_records_shadow_axes_and_off_mode_stops_new_events(tmp_path: Path) -> None:
+def test_trace_mode_records_shadow_axes_without_loading_potion_and_off_stops_new_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / "repo"
     project.mkdir()
     data = tmp_path / "data"
@@ -1244,6 +1246,11 @@ def test_trace_mode_records_shadow_axes_and_off_mode_stops_new_events(tmp_path: 
     LocalLearnedRouteStore(data).learn(binding.scope, "blast radius", CompactMemoryRoute.STRUCTURE)
     settings = LocalAutomaticRouteDiagnosticsSettingsStore(data)
     settings.save(AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7))
+    monkeypatch.setattr(
+        cli,
+        "PotionLocalMemoryRouter",
+        lambda *_args, **_kwargs: pytest.fail("automatic trace must not load Potion"),
+    )
 
     prompt = "Use the previous session decision and check the blast radius."
     traced = cli._automatic_prompt_context_for_hook(data, binding.checkpoint_scope, prompt, "codex")
@@ -1256,6 +1263,11 @@ def test_trace_mode_records_shadow_axes_and_off_mode_stops_new_events(tmp_path: 
     assert events[0].shadow_structural_need == "yes"
     assert events[0].shadow_long_term_need == "yes"
     assert events[0].shadow_reason == "learned_phrase"
+    assert events[0].shadow_action == "push_both"
+    assert events[0].shadow_estimated_tokens == 1_300
+    assert events[0].shadow_duration_ms >= 0
+    assert events[0].semantic_invoked is False
+    assert events[0].semantic_latency_ms == 0
     assert events[0].shadow_structural_tokens + events[0].shadow_long_term_tokens == 1_300
     assert prompt not in LocalAutomaticRouteTelemetryStore(data).path.read_text(encoding="utf-8")
 
@@ -1327,6 +1339,29 @@ def test_structural_miss_records_a_direct_lookup_fallback_without_prompt(
     assert routes["structure"]["misses"] == 1
     assert routes["structure"]["fallbacks"] == 1
     assert prompt not in (data / "automatic-route-telemetry.json").read_text(encoding="utf-8")
+
+
+def test_lazy_pull_correlates_get_context_as_a_closed_tool_category(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    LocalAutomaticRouteDiagnosticsSettingsStore(data).save(
+        AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7)
+    )
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, "finance reconciliation variance", "codex"
+    )
+    assert attached.telemetry_event_id is not None
+    cli._record_automatic_route_tool(data, attached.telemetry_event_id, "mnemo-memory.get_context")
+
+    event = LocalAutomaticRouteTelemetryStore(data).events(
+        cli._automatic_route_scope(binding.checkpoint_scope)
+    )[0]
+    assert event.shadow_action == "lazy_pull"
+    assert dict(event.tool_calls) == {"context_recall": 1}
+    assert "finance" not in LocalAutomaticRouteTelemetryStore(data).path.read_text(encoding="utf-8")
 
 
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(

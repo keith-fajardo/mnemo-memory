@@ -241,6 +241,23 @@ class AutomaticContextNeed(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AutomaticContextShadowAction(StrEnum):
+    """One closed shadow action; it never changes the live attachment route."""
+
+    NONE = "none"
+    PUSH_STRUCTURE = "push_structure"
+    PUSH_LONG_TERM = "push_long_term"
+    PUSH_BOTH = "push_both"
+    LAZY_PULL = "lazy_pull"
+
+
+AUTOMATIC_CONTEXT_LAZY_PULL_HINT = (
+    "Mnemo did not attach durable context. If prior project decisions or structure could change "
+    "the answer, call get_context."
+)
+_LAZY_PULL_ESTIMATED_TOKENS = (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4
+
+
 @dataclass(frozen=True, slots=True)
 class LearnedRoutePhrase:
     """One already-authorized normalized project phrase supplied by a scoped adapter."""
@@ -265,6 +282,8 @@ class AutomaticContextShadowPlan:
     long_term_tokens: int
     shared_maximum_tokens: int
     reason: str
+    action: AutomaticContextShadowAction
+    estimated_attachment_tokens: int
     semantic_invoked: bool = False
     semantic_route: CompactMemoryRoute | None = None
 
@@ -278,12 +297,50 @@ class AutomaticContextShadowPlan:
         ):
             raise ValueError("shadow route token allocation is invalid")
         if self.reason not in {
+            "current_session",
             "deterministic",
             "learned_phrase",
             "potion_proposal",
             "uncertain",
         }:
             raise ValueError("shadow route reason is invalid")
+        if not isinstance(self.action, AutomaticContextShadowAction):
+            raise TypeError("shadow route action is invalid")
+        if (
+            not isinstance(self.estimated_attachment_tokens, int)
+            or isinstance(self.estimated_attachment_tokens, bool)
+            or not 0 <= self.estimated_attachment_tokens <= self.shared_maximum_tokens
+        ):
+            raise ValueError("shadow route estimated attachment tokens are invalid")
+        allocated_tokens = self.structural_tokens + self.long_term_tokens
+        if self.action is AutomaticContextShadowAction.NONE:
+            valid_estimate = self.estimated_attachment_tokens == allocated_tokens == 0
+        elif self.action is AutomaticContextShadowAction.LAZY_PULL:
+            valid_estimate = (
+                allocated_tokens == 0
+                and self.estimated_attachment_tokens == _LAZY_PULL_ESTIMATED_TOKENS
+                and self.estimated_attachment_tokens <= 40
+            )
+        elif self.action is AutomaticContextShadowAction.PUSH_STRUCTURE:
+            valid_estimate = (
+                self.structural_tokens > 0
+                and self.long_term_tokens == 0
+                and self.estimated_attachment_tokens == allocated_tokens
+            )
+        elif self.action is AutomaticContextShadowAction.PUSH_LONG_TERM:
+            valid_estimate = (
+                self.structural_tokens == 0
+                and self.long_term_tokens > 0
+                and self.estimated_attachment_tokens == allocated_tokens
+            )
+        else:
+            valid_estimate = (
+                self.structural_tokens > 0
+                and self.long_term_tokens > 0
+                and self.estimated_attachment_tokens == allocated_tokens
+            )
+        if not valid_estimate:
+            raise ValueError("shadow route action token estimate is invalid")
         if self.semantic_invoked != (self.semantic_route is not None):
             raise ValueError("shadow semantic result is invalid")
 
@@ -355,8 +412,24 @@ def plan_automatic_context_needs(
         else:
             long_term = AutomaticContextNeed.YES
 
+    current_session = False
+    if (
+        live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+        and not learned
+        and structural is AutomaticContextNeed.UNKNOWN
+        and long_term is AutomaticContextNeed.UNKNOWN
+        and _has_current_session_self_contained_cue(normalized_prompt)
+    ):
+        structural = AutomaticContextNeed.NO
+        long_term = AutomaticContextNeed.NO
+        current_session = True
+
     semantic_route: CompactMemoryRoute | None = None
-    if live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN and semantic_router is not None:
+    if (
+        live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+        and not current_session
+        and semantic_router is not None
+    ):
         proposal = semantic_router.classify(bounded)
         if not isinstance(proposal, CompactMemoryRouteDecision):
             raise TypeError("semantic route proposal is invalid")
@@ -370,11 +443,19 @@ def plan_automatic_context_needs(
         reason = "potion_proposal"
     elif learned:
         reason = "learned_phrase"
+    elif current_session:
+        reason = "current_session"
     elif AutomaticContextNeed.UNKNOWN in {structural, long_term}:
         reason = "uncertain"
     else:
         reason = "deterministic"
     structural_tokens, long_term_tokens = _shadow_token_allocation(structural, long_term)
+    action = _shadow_action(structural, long_term)
+    estimated_attachment_tokens = (
+        _LAZY_PULL_ESTIMATED_TOKENS
+        if action is AutomaticContextShadowAction.LAZY_PULL
+        else structural_tokens + long_term_tokens
+    )
     return AutomaticContextShadowPlan(
         structural,
         long_term,
@@ -382,6 +463,8 @@ def plan_automatic_context_needs(
         long_term_tokens,
         1_300,
         reason,
+        action,
+        estimated_attachment_tokens,
         semantic_route is not None,
         semantic_route,
     )
@@ -699,6 +782,33 @@ def _has_deterministic_long_term_cue(terms: frozenset[str]) -> bool:
 
 def _normalized_phrase_matches(prompt: str, phrase: str) -> bool:
     return f" {phrase} " in f" {prompt} "
+
+
+def _has_current_session_self_contained_cue(prompt: str) -> bool:
+    phrases = (
+        "here is the output",
+        "here is the result",
+        "interpret this output",
+        "so what is your conclusion",
+        "this is the output",
+        "this is the result",
+        "what is your conclusion",
+    )
+    return any(_normalized_phrase_matches(prompt, phrase) for phrase in phrases)
+
+
+def _shadow_action(
+    structural: AutomaticContextNeed, long_term: AutomaticContextNeed
+) -> AutomaticContextShadowAction:
+    if structural is AutomaticContextNeed.YES and long_term is AutomaticContextNeed.YES:
+        return AutomaticContextShadowAction.PUSH_BOTH
+    if structural is AutomaticContextNeed.YES:
+        return AutomaticContextShadowAction.PUSH_STRUCTURE
+    if long_term is AutomaticContextNeed.YES:
+        return AutomaticContextShadowAction.PUSH_LONG_TERM
+    if structural is AutomaticContextNeed.NO and long_term is AutomaticContextNeed.NO:
+        return AutomaticContextShadowAction.NONE
+    return AutomaticContextShadowAction.LAZY_PULL
 
 
 def _shadow_token_allocation(
