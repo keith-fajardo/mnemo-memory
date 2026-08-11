@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemo.local/schemas/pilot-evidence-v1.schema.json",
+  "title": "Mnemo pilot evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pilot_id", "consent_reference", "status", "problem_severity", "frequency", "willingness_to_pay", "retention", "evidence_references"],
+  "properties": {
+    "schema_version": {"const": "mnemo-pilot-evidence/1.0"},
+    "pilot_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{6,64}$"},
+    "consent_reference": {"type": "string", "minLength": 1},
+    "status": {"enum": ["candidate", "design_partner", "pilot", "completed", "withdrawn"]},
+    "problem_severity": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "frequency": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "willingness_to_pay": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "retention": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "verified_cost_avoidance_usd": {"type": ["number", "null"], "minimum": 0},
+    "continued_use_days": {"type": ["integer", "null"], "minimum": 0},
+    "evidence_references": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}

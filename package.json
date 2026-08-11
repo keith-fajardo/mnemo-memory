@@ -24,6 +24,7 @@
     "eval:cross-client": "uv run python -m scripts.run_cross_client_benchmark",
     "eval:unified-context": "uv run python -m scripts.run_unified_context_benchmark",
     "eval:wrapper-overhead": "uv run python -m scripts.run_wrapper_overhead_benchmark",
+    "eval:viability": "uv run python -m scripts.run_viability_evaluation",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run postgres:check && npm run schema:check && npm run dependencies:check && npm run architecture:check && npm run package:check"
   }
 }

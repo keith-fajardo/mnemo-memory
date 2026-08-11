@@ -94,7 +94,7 @@ The PyPI distribution is `mnemo-unified-context`; the primary installed command 
 `mnemo-memory` remains a compatibility alias for existing scripts and client registrations.
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a20
+uv tool install mnemo-unified-context==0.1.0a21
 mnemo --version
 mnemo init
 
@@ -340,6 +340,10 @@ requires the separate `--delete-data` form described in the memory-management gu
 - [Local MCP reference](docs/local-mcp.md) — exact tool operations and payloads.
 - [Product memory contract](docs/product-memory-contract.md) — authority, evidence, scope, and
   retention rules.
+- [Semantic checkpoints](docs/semantic-checkpoints.md) — evidence, typed atoms, delta/snapshot
+  persistence, adaptive rendering, evaluation, and current limitations.
+- [Lifecycle viability evaluation](docs/evaluations/viability-evaluation.md) — paired baselines,
+  lifecycle cost, integrity, statistics, economics, and decision thresholds.
 - [Threat model](docs/threat-model.md) — security and privacy analysis.
 - [Implementation status](docs/implementation-status.md) — completed build history.
 

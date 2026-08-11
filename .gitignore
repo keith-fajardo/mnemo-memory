@@ -28,6 +28,7 @@ coverage/
 *.log
 *.tmp
 tmp/
+evaluation-results/
 
 # Editors and operating systems
 .DS_Store

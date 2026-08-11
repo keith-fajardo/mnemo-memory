@@ -31,7 +31,7 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a20
+uv tool install mnemo-unified-context==0.1.0a21
 mnemo --help
 mnemo init
 ```

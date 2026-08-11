@@ -1504,6 +1504,38 @@ reviewed third-party publishing action. Registry acceptance proves publisher ide
 binding, not that signed code is benign; users still need a trusted project source and appropriate
 version review.
 
+### Semantic checkpoint scope confusion, fabricated meaning, and deletion residue
+
+**Scenario:** A semantic compiler links an atom to another task's event, upgrades an attributed or
+uncertain claim into a fact, silently removes negation or an approval condition to meet 200 tokens,
+reactivates a superseded instruction, or leaves copied semantic text after its final evidence event
+is explicitly erased.
+
+**Required controls:** Semantic writes require complete task scope and validate every new atom's
+source event inside that scope before mutation. Compiler output is a closed patch proposal;
+deterministic identity, schema, lifecycle, supersession, and parent checks precede one SQLite
+transaction. The baseline compiler retains actor and epistemic qualifiers and lowers confidence for
+uncertainty. Rendering selects whole atoms, protects logical and structured spans before a two-rule
+idempotent phrase table, retains mandatory units past the ceiling, and reports whole-unit omissions.
+Checkpoint-local evidence aliases remain resolvable to exact source events. Source-event erasure
+cascades its association; an atom with no remaining source is erased and checkpoint references
+cascade. A payload-free compilation marker prevents remaining historical events from being
+reprocessed after a deleted head. Patch rows contain only operation and object IDs.
+
+**Verification:** Pure-domain and repository tests cover broken evidence references, idempotent
+patches, supersession, exact-scope reads, and cross-task denial. Rendering tests cover negation,
+modality, approval conditions, uncertainty, commands, paths, UUIDs, hashes, dates, versions,
+numbers, units, no intra-unit ellipses, structured omissions, deterministic output, and mandatory
+overrun. SQLite tests reopen materialized delta/snapshot state. The held-out local corpus checks
+required-group and protected-span fidelity, inversions, false-memory probes, provenance, drift, and
+multiple tokenizer adapters.
+
+**Residual risk:** Personal SQLite has no RLS and relies on exact-scope adapter queries and local
+file permissions. PostgreSQL/team persistence, semantic export/deletion APIs, general natural-
+language contradiction resolution, actual provider tokenizers, and cross-model fresh-session
+evaluation are not implemented in this slice. The compact format is not production-validated until
+the documented corpus and two-model thresholds pass.
+
 ## Security gates and ownership
 
 Changes affecting a threat above must update its required controls and verification. Security tests

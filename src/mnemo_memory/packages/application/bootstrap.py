@@ -15,11 +15,13 @@ from mnemo_memory.packages.application.dbt import (
     DbtSourceFreshnessParserPort,
 )
 from mnemo_memory.packages.application.knowledge import KnowledgeDocumentApplicationService
+from mnemo_memory.packages.application.semantic_memory import SemanticMemoryService
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import KnowledgeSyncPlanner
 from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
+    SQLiteSemanticCheckpointRepository,
     SQLiteSourceStructureRepository,
 )
 
@@ -43,6 +45,7 @@ class CheckpointRuntime:
         source_structure_repository: SQLiteSourceStructureRepository | None = None,
         knowledge_document_service: KnowledgeDocumentApplicationService | None = None,
         knowledge_document_repository: SQLiteKnowledgeDocumentRepository | None = None,
+        semantic_memory_service: SemanticMemoryService | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
@@ -51,6 +54,7 @@ class CheckpointRuntime:
         self.source_structure_repository = source_structure_repository
         self.knowledge_document_service = knowledge_document_service
         self.knowledge_document_repository = knowledge_document_repository
+        self.semantic_memory_service = semantic_memory_service
         self._closed = False
 
     def close(self) -> None:
@@ -91,6 +95,9 @@ def build_checkpoint_runtime(
         knowledge_repository = SQLiteKnowledgeDocumentRepository(
             config.database_path, base_directory=config.data_directory
         )
+        semantic_repository = SQLiteSemanticCheckpointRepository(
+            config.database_path, base_directory=config.data_directory
+        )
     except (OSError, ValueError, RuntimeError, sqlite3.DatabaseError) as error:
         raise LocalRuntimeError(
             "configured Mnemo storage is unavailable or incompatible"
@@ -128,4 +135,9 @@ def build_checkpoint_runtime(
             planner=KnowledgeSyncPlanner(),
         ),
         knowledge_repository,
+        SemanticMemoryService(
+            repository,
+            semantic_repository,
+            clock=lambda: datetime.now(UTC),
+        ),
     )

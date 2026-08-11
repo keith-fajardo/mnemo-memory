@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "seed": 20260812,
+  "reuse_counts": [1, 3, 10],
+  "sliding_window_tokens": 600,
+  "rolling_summary_tokens": 200,
+  "compact_tokens": 200,
+  "adaptive_tokens": 600,
+  "retrieval_tokens": 240,
+  "drift_cycles": 8,
+  "bootstrap_samples": 2000,
+  "noninferiority_margin": 0.05,
+  "token_counter_id": "mnemo/conservative-lexical-v1",
+  "live_evaluation_enabled": false,
+  "provider_native_configured": false,
+  "model_grader_configured": false,
+  "external_budget": {
+    "maximum_external_calls": 0,
+    "maximum_suite_cost_usd": 0.0,
+    "maximum_run_cost_usd": 0.0
+  },
+  "economic_assumptions": [
+    {
+      "name": "low",
+      "annual_eligible_runs": 1000,
+      "input_cost_per_million": 1.0,
+      "output_cost_per_million": 4.0,
+      "annual_human_hours_saved": 0.0,
+      "human_hour_value": 40.0,
+      "annual_failures_avoided": 0.0,
+      "avoided_failure_value": 100.0,
+      "annual_development_cost": 120000.0,
+      "annual_infrastructure_cost": 5000.0
+    },
+    {
+      "name": "expected",
+      "annual_eligible_runs": 25000,
+      "input_cost_per_million": 3.0,
+      "output_cost_per_million": 12.0,
+      "annual_human_hours_saved": 250.0,
+      "human_hour_value": 75.0,
+      "annual_failures_avoided": 10.0,
+      "avoided_failure_value": 1000.0,
+      "annual_development_cost": 200000.0,
+      "annual_infrastructure_cost": 25000.0
+    },
+    {
+      "name": "high",
+      "annual_eligible_runs": 250000,
+      "input_cost_per_million": 10.0,
+      "output_cost_per_million": 30.0,
+      "annual_human_hours_saved": 2500.0,
+      "human_hour_value": 150.0,
+      "annual_failures_avoided": 100.0,
+      "avoided_failure_value": 10000.0,
+      "annual_development_cost": 300000.0,
+      "annual_infrastructure_cost": 100000.0
+    }
+  ]
+}

@@ -99,6 +99,10 @@ from .contracts import (
     ProjectSkillRegistry,
     RepositoryStorageFailure,
     RevisionConflict,
+    SemanticCheckpointConflict,
+    SemanticCheckpointNotFound,
+    SemanticCheckpointRepository,
+    SemanticCheckpointStorageFailure,
     SourceStructureRepository,
     SupplementalArtifactConflict,
     SupplementalArtifactStoreResult,
@@ -158,6 +162,7 @@ from .reference import (
     ReferenceSourceStructureRepository,
     ReferenceTaskActivityEventRepository,
 )
+from .semantic_reference import ReferenceSemanticCheckpointRepository
 from .sqlite import (
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
@@ -165,6 +170,7 @@ from .sqlite import (
     SQLiteSchemaTooNewError,
     SQLiteSourceStructureRepository,
 )
+from .sqlite_semantic import SQLiteSemanticCheckpointRepository
 from .team import (
     ReferenceTeamControlPlaneRepository,
     TeamAuditPage,
@@ -300,6 +306,7 @@ __all__ = [
     "ReferenceEventOutboxRepository",
     "ReferenceKnowledgeDocumentRepository",
     "ReferenceProjectIndexRepository",
+    "ReferenceSemanticCheckpointRepository",
     "ReferenceSourceStructureRepository",
     "ReferenceTaskActivityEventRepository",
     "ReferenceTeamControlPlaneRepository",
@@ -309,7 +316,12 @@ __all__ = [
     "SQLiteKnowledgeDocumentRepository",
     "SQLiteMigrationError",
     "SQLiteSchemaTooNewError",
+    "SQLiteSemanticCheckpointRepository",
     "SQLiteSourceStructureRepository",
+    "SemanticCheckpointConflict",
+    "SemanticCheckpointNotFound",
+    "SemanticCheckpointRepository",
+    "SemanticCheckpointStorageFailure",
     "SourceStructureRepository",
     "SupplementalArtifactConflict",
     "SupplementalArtifactStoreResult",

@@ -54,6 +54,7 @@ from mnemo_memory.packages.domain import (
     KnowledgeExportBundle,
     KnowledgeSectionEmbedding,
     KnownKnowledgeDocument,
+    MaterializedSemanticCheckpoint,
     MemoryId,
     MemoryScope,
     OutboxJobId,
@@ -61,6 +62,9 @@ from mnemo_memory.packages.domain import (
     ProjectClientProfile,
     ProjectProcedure,
     ProjectSkill,
+    SemanticCheckpoint,
+    SemanticCheckpointPatch,
+    SemanticMemoryAtom,
     TaskActivityEvent,
     TaskActivityEventDeletion,
     TaskActivityEventExpiration,
@@ -114,6 +118,44 @@ class InvalidCheckpointScope(CheckpointRepositoryError):
 
 class RepositoryStorageFailure(CheckpointRepositoryError):
     pass
+
+
+class SemanticCheckpointRepositoryError(Exception):
+    """Expected outcome for one exact-scope semantic checkpoint transaction."""
+
+
+class SemanticCheckpointNotFound(SemanticCheckpointRepositoryError):
+    pass
+
+
+class SemanticCheckpointConflict(SemanticCheckpointRepositoryError):
+    pass
+
+
+class SemanticCheckpointStorageFailure(SemanticCheckpointRepositoryError):
+    pass
+
+
+class SemanticCheckpointRepository(Protocol):
+    def get_current_semantic_checkpoint(self, scope: MemoryScope) -> SemanticCheckpoint | None: ...
+
+    def get_semantic_checkpoint(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> SemanticCheckpoint: ...
+
+    def list_semantic_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]: ...
+
+    def list_compiled_semantic_event_ids(self, scope: MemoryScope) -> frozenset[EventId]: ...
+
+    def materialize_semantic_checkpoint(
+        self, scope: MemoryScope, checkpoint_id: CheckpointId
+    ) -> MaterializedSemanticCheckpoint: ...
+
+    def store_semantic_checkpoint(
+        self,
+        patch: SemanticCheckpointPatch,
+        materialized: MaterializedSemanticCheckpoint,
+    ) -> bool: ...
 
 
 class CheckpointDeletionRepositoryError(Exception):

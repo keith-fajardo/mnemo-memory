@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemo.local/schemas/anonymized-trace-v1.schema.json",
+  "title": "Mnemo anonymized trace JSONL records",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "trace_id", "anonymized"],
+      "properties": {
+        "schema_version": {"const": "mnemo-anonymized-trace/1.0"},
+        "trace_id": {"type": "string", "minLength": 1},
+        "anonymized": {"const": true}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_event_key", "actor", "summary"],
+      "properties": {
+        "source_event_key": {"type": "string", "minLength": 1},
+        "actor": {"enum": ["user", "agent", "assistant", "tool"]},
+        "summary": {"type": "string", "minLength": 1}
+      }
+    }
+  ]
+}

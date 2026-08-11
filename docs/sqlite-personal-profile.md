@@ -68,6 +68,16 @@ prior schema unchanged. Restore the verified pre-upgrade schema-29 backup to rev
 migration 0030, recognizing that payload erased after migration cannot be reconstructed from the
 live database.
 
+Migration `0031_semantic_checkpoints.sql` additively stores the typed semantic atom ledger,
+source-event associations, payload-free compiled-event markers, deterministic patch audit,
+checkpoint metadata, and active atom references for personal semantic checkpoints. Source-event
+associations cascade after an
+authorized event erasure; an orphaned atom and its checkpoint references then disappear, while the
+patch audit retains only operation and object IDs. The migration is forward-only and transactional;
+an injected failure leaves the prior schema unchanged. Restore the verified pre-upgrade schema-30
+backup to reverse a committed migration 0031. See `semantic-checkpoints.md` for the application and
+rendering contract.
+
 Migration `0014_dbt_supplemental_artifacts.sql` adds immutable minimized catalog and run-results
 projections beneath exact manifest snapshots. Composite foreign keys bind every relation, column,
 result, and timing row to both its digest-addressed supplemental artifact and an existing manifest

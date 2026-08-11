@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "name": "changed-goal",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "goal: Ship the prototype."},
+        {"actor": "user", "summary": "goal: Ship the verified package after approval."}
+      ],
+      "required": ["Ship the verified package after approval."],
+      "protected": ["after approval"],
+      "constraints": [],
+      "decisions": [],
+      "temporal": ["after approval"],
+      "superseded": ["Ship the prototype."],
+      "inversions": ["Ship without approval."],
+      "false_memories": ["Production deployment completed."]
+    },
+    {
+      "name": "superseded-decision-rationale",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "decision: Use JSON because it is simple."},
+        {"actor": "user", "summary": "decision: Use SQLite because transactions are required."}
+      ],
+      "required": ["Use SQLite because transactions are required."],
+      "protected": [],
+      "constraints": [],
+      "decisions": ["because transactions are required"],
+      "temporal": [],
+      "superseded": ["Use JSON because it is simple."],
+      "inversions": [],
+      "false_memories": ["Use PostgreSQL."]
+    },
+    {
+      "name": "old-active-constraint",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "constraint: Never deploy without explicit user approval."},
+        {"actor": "agent", "summary": "fact: A design note was reviewed."},
+        {"actor": "agent", "summary": "fact: An unrelated discussion occurred."}
+      ],
+      "required": ["Never deploy without explicit user approval."],
+      "protected": ["Never deploy without explicit user approval."],
+      "constraints": ["Never deploy without explicit user approval."],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["Deploy without explicit user approval."],
+      "false_memories": ["The user approved deployment."]
+    },
+    {
+      "name": "negation-and-modality",
+      "preferred_tokens": 300,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "constraint: Do not deploy."},
+        {"actor": "user", "summary": "constraint: May deploy to staging."},
+        {"actor": "user", "summary": "constraint: Must retain every audit record."}
+      ],
+      "required": ["Do not deploy.", "May deploy to staging.", "Must retain every audit record."],
+      "protected": ["Do not", "May deploy", "Must retain every"],
+      "constraints": ["Do not deploy.", "May deploy to staging.", "Must retain every audit record."],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["Deploy.", "May not deploy to staging."],
+      "false_memories": []
+    },
+    {
+      "name": "conditional-approval",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "constraint: Deploy only after approval if all tests pass."}
+      ],
+      "required": ["Deploy only after approval if all tests pass."],
+      "protected": ["only after approval if all"],
+      "constraints": ["Deploy only after approval if all tests pass."],
+      "decisions": [],
+      "temporal": ["after approval"],
+      "superseded": [],
+      "inversions": ["Deploy before approval."],
+      "false_memories": ["The user approved deployment."]
+    },
+    {
+      "name": "quantifiers-and-qualifiers",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "constraint: At least 3 of 4 checks must pass; no failed security checks are allowed."}
+      ],
+      "required": ["At least 3 of 4 checks must pass; no failed security checks are allowed."],
+      "protected": ["At least", "3 of 4", "must pass", "no failed"],
+      "constraints": ["At least 3 of 4 checks must pass; no failed security checks are allowed."],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["All checks passed."],
+      "false_memories": []
+    },
+    {
+      "name": "uncertain-claim",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "agent", "summary": "inference: The failure might be caused by a stale cache; this is uncertain."}
+      ],
+      "required": ["might be caused by a stale cache; this is uncertain."],
+      "protected": ["might", "uncertain"],
+      "constraints": [],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["The failure is caused by a stale cache."],
+      "false_memories": []
+    },
+    {
+      "name": "conflicting-speakers",
+      "preferred_tokens": 600,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "fact: The migration passed."},
+        {"actor": "agent", "summary": "fact: The migration failed."}
+      ],
+      "required": ["The migration passed.", "The migration failed."],
+      "protected": [],
+      "constraints": [],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["Both speakers agreed."],
+      "false_memories": []
+    },
+    {
+      "name": "failure-lesson-blocker",
+      "preferred_tokens": 300,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "tool", "summary": "failure: npm run check failed because schema version 30 was stale."},
+        {"actor": "agent", "summary": "fact: The lesson is to derive version assertions from the runtime constant."},
+        {"actor": "user", "summary": "open_question: Whether PostgreSQL parity is approved remains unresolved."},
+        {"actor": "agent", "summary": "result: The focused tests passed."}
+      ],
+      "required": ["Whether PostgreSQL parity is approved remains unresolved."],
+      "protected": ["approved", "unresolved"],
+      "constraints": [],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["PostgreSQL parity is approved."],
+      "false_memories": ["The complete gate passed."]
+    },
+    {
+      "name": "exact-structured-literals",
+      "preferred_tokens": 400,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "constraint: Run `uv run pytest -q` in /tmp/mnemo using v1.2.3 on 2026-08-12; preserve 123e4567-e89b-12d3-a456-426614174000, aabbccddeeff0011, 127.0.0.1, and 42 MB."}
+      ],
+      "required": ["`uv run pytest -q`", "/tmp/mnemo", "v1.2.3", "2026-08-12", "123e4567-e89b-12d3-a456-426614174000", "aabbccddeeff0011", "127.0.0.1", "42 MB"],
+      "protected": ["`uv run pytest -q`", "/tmp/mnemo", "v1.2.3", "2026-08-12", "123e4567-e89b-12d3-a456-426614174000", "aabbccddeeff0011", "127.0.0.1", "42 MB"],
+      "constraints": ["Run `uv run pytest -q`"],
+      "decisions": [],
+      "temporal": ["2026-08-12"],
+      "superseded": [],
+      "inversions": [],
+      "false_memories": []
+    },
+    {
+      "name": "dense-mandatory-state",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "goal: Complete the semantic checkpoint slice."},
+        {"actor": "user", "summary": "constraint: Do not remove evidence associations."},
+        {"actor": "user", "summary": "constraint: Must preserve active decisions."},
+        {"actor": "user", "summary": "decision: Use whole-unit omission because partial facts invert meaning."},
+        {"actor": "user", "summary": "open_question: External Claude evaluation remains unresolved."},
+        {"actor": "user", "summary": "next_action: Run the complete repository gate."}
+      ],
+      "required": ["Complete the semantic checkpoint slice.", "Do not remove evidence associations.", "Must preserve active decisions.", "Use whole-unit omission because partial facts invert meaning.", "External Claude evaluation remains unresolved.", "Run the complete repository gate."],
+      "protected": ["Do not", "Must preserve", "unresolved"],
+      "constraints": ["Do not remove evidence associations.", "Must preserve active decisions."],
+      "decisions": ["because partial facts invert meaning"],
+      "temporal": [],
+      "superseded": [],
+      "inversions": ["Remove evidence associations."],
+      "false_memories": ["External Claude evaluation passed."]
+    },
+    {
+      "name": "irrelevant-conversation",
+      "preferred_tokens": 200,
+      "maximum_tokens": 600,
+      "events": [
+        {"actor": "user", "summary": "goal: Repair checkpoint fidelity."},
+        {"actor": "agent", "summary": "fact: A conversation about lunch happened."},
+        {"actor": "agent", "summary": "fact: The weather was discussed."},
+        {"actor": "user", "summary": "next_action: Verify protected spans byte for byte."}
+      ],
+      "required": ["Repair checkpoint fidelity.", "Verify protected spans byte for byte."],
+      "protected": [],
+      "constraints": [],
+      "decisions": [],
+      "temporal": [],
+      "superseded": [],
+      "inversions": [],
+      "false_memories": ["Lunch changes checkpoint behavior."]
+    }
+  ]
+}

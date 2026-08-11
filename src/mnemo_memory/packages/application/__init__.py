@@ -139,6 +139,32 @@ from .knowledge_transfer import (
     KnowledgeTransferResult,
     KnowledgeTransferStorageFailure,
 )
+from .semantic_evaluation import (
+    SemanticCheckpointEvaluation,
+    SemanticEvaluationExpectation,
+    evaluate_semantic_checkpoint,
+)
+from .semantic_memory import (
+    DeterministicMemoryCompiler,
+    SemanticCheckpointSaveResult,
+    SemanticMemoryApplicationError,
+    SemanticMemoryService,
+)
+from .semantic_rendering import (
+    DEFAULT_MAXIMUM_TOKENS,
+    DEFAULT_PREFERRED_TOKENS,
+    PHRASE_TABLE_VERSION,
+    CallableTokenCounter,
+    CheckpointTokenCounter,
+    ConservativeTokenCounter,
+    ProtectedSpan,
+    RenderedSemanticCheckpoint,
+    SemanticOmissionNotice,
+    detect_protected_spans,
+    measure_checkpoint_tokens,
+    reduce_checkpoint_phrases,
+    render_semantic_checkpoint,
+)
 from .services import LifecycleService
 from .settings import PersonalSettings, PersonalSettingsError, PersonalSettingsStore
 from .team_backups import (
@@ -172,6 +198,9 @@ from .upgrades import (
 )
 
 __all__ = [
+    "DEFAULT_MAXIMUM_TOKENS",
+    "DEFAULT_PREFERRED_TOKENS",
+    "PHRASE_TABLE_VERSION",
     "AbandonCheckpoint",
     "ApproveTeamKnowledgeSource",
     "ApprovedEpisodicEventGovernanceView",
@@ -183,6 +212,7 @@ __all__ = [
     "ApprovedEventTransferError",
     "ApprovedEventTransferResult",
     "ApprovedEventTransferStorageFailure",
+    "CallableTokenCounter",
     "CheckpointApplicationBudgetExceeded",
     "CheckpointApplicationDuplicate",
     "CheckpointApplicationEpisodicEventConflict",
@@ -205,12 +235,14 @@ __all__ = [
     "CheckpointRetentionService",
     "CheckpointRetentionSweepResult",
     "CheckpointRuntime",
+    "CheckpointTokenCounter",
     "CheckpointTransferConflict",
     "CheckpointTransferError",
     "CheckpointTransferResult",
     "CheckpointTransferStorageFailure",
     "CheckpointView",
     "CompleteCheckpoint",
+    "ConservativeTokenCounter",
     "CorrectApprovedEpisodicEvent",
     "CreateCheckpoint",
     "DbtApplicationAmbiguous",
@@ -221,6 +253,7 @@ __all__ = [
     "DbtApplicationStorageFailure",
     "DbtManifestApplicationService",
     "DbtSupplementalArtifacts",
+    "DeterministicMemoryCompiler",
     "DiagnosticClientStatus",
     "EventOutboxApplicationError",
     "EventOutboxApplicationStorageFailure",
@@ -284,6 +317,7 @@ __all__ = [
     "PersonalUpgradeError",
     "PersonalUpgradeResult",
     "PersonalUpgradeService",
+    "ProtectedSpan",
     "QueryLineage",
     "QueryManifestChanges",
     "QueryManifestSelector",
@@ -291,10 +325,17 @@ __all__ = [
     "QueryTestCoverage",
     "RecordApprovedEpisodicEvent",
     "RecordCheckpointLesson",
+    "RenderedSemanticCheckpoint",
     "ResolveManifestFile",
     "ResolvedManifestFile",
     "RetractApprovedEpisodicEvent",
     "ReviseCheckpoint",
+    "SemanticCheckpointEvaluation",
+    "SemanticCheckpointSaveResult",
+    "SemanticEvaluationExpectation",
+    "SemanticMemoryApplicationError",
+    "SemanticMemoryService",
+    "SemanticOmissionNotice",
     "SetApprovedEpisodicEventPin",
     "SourceFreshnessQueryResult",
     "SynchronizeKnowledgeDocuments",
@@ -316,5 +357,10 @@ __all__ = [
     "build_checkpoint_runtime",
     "build_lifecycle_service",
     "default_data_directory",
+    "detect_protected_spans",
+    "evaluate_semantic_checkpoint",
+    "measure_checkpoint_tokens",
+    "reduce_checkpoint_phrases",
+    "render_semantic_checkpoint",
     "resolve_local_config",
 ]

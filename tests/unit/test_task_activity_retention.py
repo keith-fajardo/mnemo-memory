@@ -448,7 +448,7 @@ def test_task_retention_migration_rolls_back_and_preserves_existing_state(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 30
+    assert sqlite.schema_version() == 31
     with sqlite3.connect(sqlite.path) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert "source_event_id" not in {

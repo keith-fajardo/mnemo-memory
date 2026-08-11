@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemo.local/schemas/usage-event-v1.schema.json",
+  "title": "Content-free Mnemo pilot usage event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "pilot_id", "occurred_at", "event_kind", "memory_condition", "horizon_band", "reuse_count", "task_success", "provider_usage_available", "scope_hash"],
+  "properties": {
+    "schema_version": {"const": "mnemo-pilot-usage/1.0"},
+    "event_id": {"type": "string", "format": "uuid"},
+    "pilot_id": {"type": "string", "minLength": 1},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "event_kind": {"enum": ["checkpoint_save", "recall", "retrieval", "continuation", "failure", "human_intervention"]},
+    "memory_condition": {"enum": ["full_history", "sliding_window", "rolling_summary", "provider_native", "mnemo_compact", "mnemo_adaptive", "mnemo_retrieval"]},
+    "horizon_band": {"enum": ["short", "medium", "long"]},
+    "reuse_count": {"type": "integer", "minimum": 0},
+    "task_success": {"type": ["boolean", "null"]},
+    "provider_usage_available": {"type": "boolean"},
+    "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "cached_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "reasoning_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "latency_ms": {"type": ["number", "null"], "minimum": 0},
+    "cost_usd": {"type": ["number", "null"], "minimum": 0},
+    "scope_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "failure_code": {"type": ["string", "null"]}
+  }
+}

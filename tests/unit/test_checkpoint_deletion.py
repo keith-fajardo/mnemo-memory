@@ -247,4 +247,4 @@ def test_checkpoint_deletion_migration_rolls_back_and_retries(tmp_path: Path) ->
 
     assert repository.schema_version() == 0
     repository.migrate()
-    assert repository.schema_version() == 30
+    assert repository.schema_version() == 31

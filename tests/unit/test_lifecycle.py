@@ -67,7 +67,7 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
     assert first["initialized"] is True
     assert second["initialized"] is False
-    assert first["schema_version"] == 30
+    assert first["schema_version"] == 31
     assert value.config.config_path.exists()
     assert value.config.database_path.exists()
 

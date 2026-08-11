@@ -5178,3 +5178,177 @@ evaluation, with automatic-hook use disabled. An isolated installed-runtime smok
 oversized checkpoint to 154 estimated tokens, returned a content-free error for an invalid save,
 and rendered both the compacted success and `MNEMO_INVALID_INPUT` failure in the native checkpoint
 diagnostics table.
+
+### Semantic checkpoint ledger and adaptive rendering — Complete
+
+The user explicitly approved one bounded vertical slice of Mnemo's long-term checkpoint system:
+reuse exact-scope immutable task-activity events and their immutable evidence references as the
+evidence archive; compile those events through a pluggable, deterministic baseline compiler into a
+typed semantic ledger; persist validated idempotent patches and periodic materialized checkpoints
+in personal SQLite; and render whole semantic units in compact, portable, and audit modes with
+measured 200-token preferred and 600-token ceiling policies.
+
+This issue must preserve attribution, uncertainty, negation, modality, conditions, identifiers,
+commands, and evidence associations; never recursively summarize prose or insert ellipses inside a
+unit; retain all mandatory active units even when they exceed the ceiling; and emit structured
+whole-unit omission notices with retrieval handles. Phrase reduction is limited to a versioned,
+idempotent safe table outside detected protected spans. Existing checkpoint revisions, reviewed
+episodic memory, public MCP tools, model endpoints, and automatic attachment behavior remain
+unchanged.
+
+Acceptance requires pure-domain patch and supersession tests, immutable-evidence and exact-scope
+SQLite tests, delta/snapshot equivalence, protected-span and phrase-table regression tests,
+deterministic compact/portable/audit rendering, adaptive-budget and mandatory-overrun tests, an
+always-local evaluation comparing history and renderings, documentation of evidence/ledger/view
+boundaries and limitations, focused tests, and the complete `npm run check` gate. The additive
+personal SQLite migration must have a documented forward-only recovery path. PostgreSQL/team
+persistence, MCP surface expansion, live automatic-context replacement, external-model calls,
+release, deployment, and installation are outside this issue.
+
+Implemented a storage-neutral semantic checkpoint domain with all eleven required atom kinds,
+attribution and epistemic qualifiers, confidence, priority, validity, evidence lineage, lifecycle,
+and explicit supersession. A closed patch model supports add, metadata update, supersede, resolve,
+expire, checkpoint activation, and checkpoint removal. Pure patch application validates scope,
+identity, evidence, immutable meaning, and targets before producing state; exact replay is
+idempotent. The deterministic baseline compiler consumes only new immutable task-activity events,
+recognizes explicit type labels, preserves unlabeled ambiguity as attributed inference, and emits
+patches rather than rewriting a prior rendering.
+
+Personal schema 31 additively persists atoms, event associations, payload-free compiled-event
+markers, patch operations, checkpoint metadata, and checkpoint atom materializations. Routine saves
+are deltas; generation one and every configured eighth generation are snapshots. Historical
+materializations retain their then-active atom representation after later supersession. Authorized
+source deletion cascades associations, orphan atoms, and checkpoint references without retaining
+copied text; the payload-free compilation marker prevents replay after a deleted head event, and a
+new save can continue. Migration failure rolls back both schema objects and its ledger entry; the
+documented reversal is restoration of a verified schema-30 backup.
+
+Compact, portable, and audit renderings select indivisible atoms under a 200-token preferred target
+and 600-token ceiling. Mandatory goals, constraints, decisions, questions, actions, commitments,
+authority, and critical uncertainty survive regardless of age or ceiling. Omitted optional units
+produce typed counts, kinds, reasons, and retrieval handles. A two-rule `safe-phrases-v1` table is
+idempotent and runs only outside detected logical, quoted, code, command, path, identifier, hash,
+date, version, IP, number, unit, and authority spans. Injectable provider tokenizer adapters are
+used when supplied; the named lexical fallback counts token pieces, not visible characters.
+
+The focused semantic suite passed 28 tests. A separate 12-case held-out corpus measured 100%
+required-group continuation fidelity, 100% protected-span fidelity, 100% provenance coverage, zero
+meaning inversions, zero critical omissions, zero false-memory probes, deterministic repeated
+rendering, and no drift. Eleven compact cases fit 0-200 fallback tokens and one used the 201-600
+band; none exceeded 600. Synthetic tests separately prove mandatory state survives a greater-than-
+600 overrun while optional state is partitioned.
+
+Against canonical immutable event JSON, aggregate history/compact/portable counts were
+20,779/1,481/3,560 with the conservative lexical fallback, 9,766/887/2,108 with the deterministic
+OpenAI-shaped byte proxy, and 11,160/1,011/2,408 with the deterministic Anthropic-shaped byte proxy.
+The resulting history-to-compact ratios were 14.03x, 11.01x, and 11.04x. The provider-shaped values
+are comparison fixtures, not exact provider tokenizer claims.
+
+The complete `npm run check` gate passed with 1,067 tests and 27 expected skips. The isolated
+PostgreSQL/RLS gate passed 26 tests with one opt-in load test skipped; formatting, linting, strict
+typing, schema, dependency/provenance, architecture, and installed-package checks passed. No
+dependency, PostgreSQL schema, model endpoint, MCP tool, automatic attachment, release, deployment,
+or installation changed.
+
+This compact format is not production-validated: the held-out corpus has 12 rather than at least 50
+cases, exact provider tokenizers were unavailable, and no fresh-session Codex/OpenAI or
+Claude/Anthropic continuation runs were performed. PostgreSQL/team persistence, a separately
+versioned append-only atom-metadata history, semantic export/deletion APIs, general contradiction
+resolution, runtime composition into the public MCP save path, and live automatic-context adoption
+remain explicit follow-on work requiring a new approved issue.
+
+### Lifecycle viability evaluation — Complete
+
+The user explicitly approved a bounded, dependency-free evaluation issue to determine whether the
+current semantic checkpoint slice improves long-horizon continuation while reducing total
+lifecycle token consumption. The evaluated worktree is based on commit
+`bef8bb312aab386bb17ab0698af399e0b69584b1` plus the uncommitted semantic-checkpoint issue above.
+
+Acceptance requires versioned synthetic scenario and ground-truth contracts spanning short,
+medium, and long horizons; paired full-history, sliding-window, rolling-summary, Mnemo compact,
+Mnemo adaptive, and Mnemo adaptive-plus-retrieval adapters; an explicitly unavailable
+provider-native condition unless a real provider capability is configured; lifecycle token,
+latency, retry, break-even, statistical, memory-integrity, task-impact-proxy, economic-sensitivity,
+Pareto, and viability calculations; exact deterministic graders plus a blind semantic-grader
+boundary; external-call budget denial by default; append-only raw results, aggregate data,
+reproducibility metadata, SVG charts, and a decision report; real-trace import and pilot/market
+evidence schemas; focused tests and the complete `npm run check` gate.
+
+No live provider call is authorized merely because a CLI or credential exists. Live evaluation
+requires an explicit nonzero repository evaluation budget and a configured adapter. Offline
+information-availability scores must not be described as generated-agent task success, provider
+token usage, market validation, or production portability. This issue does not alter model
+endpoints, MCP behavior, persistence schemas, release state, installation, or deployment.
+
+Implemented a dependency-free, versioned evaluation package with typed scenario and ground-truth
+contracts, seven explicit condition adapters, fail-closed external-call budgets, lifecycle token and
+cost accounting, deterministic integrity and blind semantic-grader boundaries, paired
+counterbalancing, bootstrap statistics, non-inferiority and Pareto analysis, market and trace-import
+schemas, ten SVG charts, and a 25-section decision report. The corpus expands six original realistic
+workflow templates to 18 short, medium, and long scenarios, including all required controlled
+challenges. Saved runs are append-only and include raw JSONL, flat per-run metrics, aggregates,
+configuration, environment metadata, artifact hashes, and separate blind-review packets and
+condition keys.
+
+Final offline run `offline-20260812-bef8bb3-004` executed 378 observations: 324 available paired
+observations, 54 per available condition, across reuse counts one, three, and ten. B3 remained
+explicitly unavailable because no real provider-native adapter was configured. The checked-in
+budget authorized zero external calls and zero spend, so no model completion, provider usage,
+provider billing, or model grader result was fabricated; external cost was $0.00.
+
+M3 achieved 0.993 mean gated LME, 100% required-knowledge, hard-constraint, protected-span,
+temporal/supersession, and evidence-association fidelity, zero critical violations and false-memory
+probes, and exact eight-cycle drift resistance in the synthetic deterministic evaluation. At the
+same 200-token memory policy, the M1 information-availability proxy exceeded B2 rolling summary by
+0.701. These are context-availability measurements, not live agent task success or continuation
+quality.
+
+The primary token hypothesis failed under the measured offline lifecycle accounting. Median M3
+lifecycle tokens were 42,681 versus 13,615.5 for B0, a median TES of -209.6% after save,
+validation, recall, retrieval, and repair estimates. Median calculated break-even was 10.272 reuses
+and P90 was 31.541. Only long-horizon reuse ten had positive median TES, at 6.6%, still below the
+30% target; medium reuse ten was -2.4%, and all shorter or lower-reuse strata were worse. Economic
+sensitivity had negative per-run token savings in every case; its optimistic positive annual value
+was driven solely by unvalidated human-time and failure-avoidance assumptions. Market pull and
+portability remain unmeasured.
+
+The final verdict is **INSUFFICIENT EVIDENCE**, with four of eight provisional thresholds passed.
+The harness supports continued validation, but the executed evidence does not justify production
+integration or continued product investment by itself. The highest-value next experiment is a
+preregistered, explicitly funded fresh-session study with at least 30 paired B0/B2/M3 runs on one
+OpenAI and one Anthropic model, exact provider usage, hidden held-out traces, and blinded human
+review.
+
+The focused viability suite passed 14 tests. The complete `npm run check` gate
+passed 1,080 tests with 27 expected skips; isolated PostgreSQL/RLS passed 26 tests with one opt-in
+load test skipped; formatting, linting, strict typing, schema, dependency/provenance, architecture,
+and installed-package checks passed. The final saved log reaggregates exactly, all 19 recorded
+artifact hashes match, all ten charts are valid XML, and the result scan found no credentials or
+private keys. No dependency, database migration, model endpoint, MCP behavior, release,
+deployment, or installation changed in this issue.
+
+### `0.1.0a21` production deployment — In progress
+
+The user explicitly approved production deployment and local installation of the completed semantic
+checkpoint ledger, adaptive renderer, and lifecycle viability evaluation. Release preparation
+advances the coordinated prerelease metadata from `0.1.0a20` to the next unused immutable version,
+`0.1.0a21`. PyPI returned 404 for that exact version before preparation.
+
+Acceptance requires a reviewed release delta, the complete local repository gate, source-independent
+wheel and source-distribution verification, one release commit pushed to `main`, successful protected
+`publish-pypi.yml` execution, independent live PyPI metadata/hash/provenance verification,
+installation of the exact published wheel with the existing `router` extra, and installed-runtime
+version, connection, diagnostics, migration, and semantic-checkpoint smokes. Deployment packages the
+implemented code but does not promote semantic M3 into automatic context: the public MCP and
+automatic-attachment path remains intentionally unchanged. No TestPyPI publication or direct local
+upload is authorized.
+
+Release-candidate verification passed before commit: the focused semantic, viability, workflow,
+and artifact-verifier suite passed 52 tests; both workflow YAML files parsed; and the complete
+`npm run check` gate passed 1,081 tests with 27 expected skips, plus the isolated PostgreSQL/RLS
+gate with 26 tests passed and one opt-in load test skipped. Formatting, linting, strict typing,
+schema, dependency/provenance, architecture, and installed-package checks passed. The
+source-independent artifacts passed the release verifier with pre-publication SHA-256 digests:
+
+- wheel: `64a4238c3a71c64ce2e22d4a4bde230626ab710d9768fea641ad924399c0a586`
+- source distribution: `ec56f6692e29452531f1c54af2a7b19b08a908a9b83898f9ed01d70c886ffd1d`
