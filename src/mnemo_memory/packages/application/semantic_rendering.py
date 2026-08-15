@@ -31,6 +31,7 @@ _MANDATORY_KINDS = {
     SemanticAtomKind.DECISION,
     SemanticAtomKind.OPEN_QUESTION,
     SemanticAtomKind.NEXT_ACTION,
+    SemanticAtomKind.FAILURE,
 }
 _KIND_ORDER = {
     SemanticAtomKind.GOAL: 0,
@@ -337,16 +338,12 @@ def render_semantic_checkpoint(
             (
                 kind.value,
                 counter.count(
-                    "\n".join(
-                        _atom_line(
-                            atom,
-                            mode,
-                            atom_aliases,
-                            evidence_aliases,
-                            evidence,
-                        )
-                        for atom in selected
-                        if atom.kind is kind
+                    _kind_text(
+                        tuple(atom for atom in selected if atom.kind is kind),
+                        mode,
+                        atom_aliases,
+                        evidence_aliases,
+                        evidence,
                     )
                 ),
             )
@@ -437,9 +434,15 @@ def _assemble(
     ]
     if mode is SemanticRendererProfile.COMPACT:
         terminal_kinds = {SemanticAtomKind.CONSTRAINT, SemanticAtomKind.NEXT_ACTION}
-        body = tuple(atom for atom in selected if atom.kind not in terminal_kinds)
+        failures = tuple(atom for atom in selected if atom.kind is SemanticAtomKind.FAILURE)
+        body = tuple(
+            atom
+            for atom in selected
+            if atom.kind not in terminal_kinds and atom.kind is not SemanticAtomKind.FAILURE
+        )
         guardrails = tuple(atom for atom in selected if atom.kind in terminal_kinds)
     else:
+        failures = ()
         body = selected
         guardrails = ()
     lines.extend(
@@ -451,6 +454,8 @@ def _assemble(
         _atom_line(atom, mode, atom_aliases, evidence_aliases, evidence_events)
         for atom in guardrails
     )
+    if failures:
+        lines.append(_failure_line(failures, atom_aliases, evidence_aliases))
     rendered = "\n".join(lines)
     for _ in range(4):
         measured = counter.count(rendered)
@@ -510,25 +515,8 @@ def _atom_line(
     )
     qualifiers = dict(atom.qualifiers)
     if mode is SemanticRendererProfile.COMPACT:
-        metadata = [
-            alias,
-            f"by={atom.subject}",
-            f"confidence={atom.confidence:g}",
-        ]
-        for key in (
-            "epistemic",
-            "critical_uncertainty",
-            "condition",
-            "rationale",
-            "uncertainty",
-            "authority_boundary",
-        ):
-            if key in qualifiers:
-                metadata.append(f"{key}={qualifiers[key]}")
-        metadata.append(f"e={sources}")
-        if atom.supersedes_atom_id is not None:
-            metadata.append(f"supersedes={atom_aliases.get(atom.supersedes_atom_id, 'historical')}")
-        return f"{_COMPACT_TAG[atom.kind]} {meaning} [{' '.join(metadata)}]"
+        metadata = _compact_metadata(atom, alias, sources, qualifiers, atom_aliases)
+        return f"{_COMPACT_TAG[atom.kind]} {meaning} [{metadata}]"
     line = (
         f"{atom.kind.value} {alias} | subject={atom.subject} | predicate={atom.predicate} "
         f"| meaning={meaning} | confidence={atom.confidence:g} | evidence={sources}"
@@ -551,6 +539,64 @@ def _atom_line(
             )
         line += " | provenance=" + ";".join(source_details)
     return line
+
+
+def _compact_metadata(
+    atom: SemanticMemoryAtom,
+    alias: str,
+    sources: str,
+    qualifiers: Mapping[str, str],
+    atom_aliases: Mapping[MemoryId, str],
+) -> str:
+    metadata = [alias, f"by={atom.subject}", f"confidence={atom.confidence:g}"]
+    for key in (
+        "epistemic",
+        "critical_uncertainty",
+        "condition",
+        "rationale",
+        "uncertainty",
+        "authority_boundary",
+    ):
+        if key in qualifiers:
+            metadata.append(f"{key}={qualifiers[key]}")
+    metadata.append(f"e={sources}")
+    if atom.supersedes_atom_id is not None:
+        metadata.append(f"supersedes={atom_aliases.get(atom.supersedes_atom_id, 'historical')}")
+    return " ".join(metadata)
+
+
+def _failure_line(
+    atoms: tuple[SemanticMemoryAtom, ...],
+    atom_aliases: Mapping[MemoryId, str],
+    evidence_aliases: Mapping[EventId, str],
+) -> str:
+    entries = []
+    for atom in atoms:
+        meaning = reduce_checkpoint_phrases(atom.object_value)
+        sources = ",".join(evidence_aliases[item] for item in atom.source_event_ids)
+        metadata = _compact_metadata(
+            atom,
+            atom_aliases[atom.atom_id],
+            sources,
+            dict(atom.qualifiers),
+            atom_aliases,
+        )
+        entries.append(f"{meaning} [{metadata}]")
+    return "AVOID (already failed): " + "; ".join(entries)
+
+
+def _kind_text(
+    atoms: tuple[SemanticMemoryAtom, ...],
+    mode: SemanticRendererProfile,
+    atom_aliases: Mapping[MemoryId, str],
+    evidence_aliases: Mapping[EventId, str],
+    evidence_events: Mapping[EventId, TaskActivityEvent],
+) -> str:
+    if mode is SemanticRendererProfile.COMPACT and atoms[0].kind is SemanticAtomKind.FAILURE:
+        return _failure_line(atoms, atom_aliases, evidence_aliases)
+    return "\n".join(
+        _atom_line(atom, mode, atom_aliases, evidence_aliases, evidence_events) for atom in atoms
+    )
 
 
 def _omission(

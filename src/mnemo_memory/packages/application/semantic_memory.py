@@ -84,6 +84,7 @@ _CHECKPOINT_PROJECTION_RETENTION_POLICY = RetentionPolicyId(
     UUID("1a965f61-3ec5-4e67-bf83-4c6b58146ff7")
 )
 _CHECKPOINT_KIND_ORDER = {kind: index for index, kind in enumerate(_PRIORITY)}
+_FAILURE_LEDGER_LIMIT = 16
 _MEMORY_HANDLE = re.compile(
     r"^memory:(?P<checkpoint>[0-9a-f]{8}):"
     r"(?P<kind>goal|fact|state|decision|constraint|preference|open_question|"
@@ -234,7 +235,7 @@ class DeterministicMemoryCompiler:
         for event in events:
             kind, meaning, explicit = self._classify(event)
             predicate = self._predicate(kind, explicit)
-            qualifiers = self._qualifiers(event, meaning, explicit)
+            qualifiers = self._qualifiers(event, kind, meaning, explicit)
             comparable = tuple(
                 atom
                 for atom in active.values()
@@ -336,7 +337,10 @@ class DeterministicMemoryCompiler:
 
     @staticmethod
     def _qualifiers(
-        event: TaskActivityEvent, meaning: str, explicit: bool
+        event: TaskActivityEvent,
+        kind: SemanticAtomKind,
+        meaning: str,
+        explicit: bool,
     ) -> tuple[tuple[str, str], ...]:
         epistemic = {
             TaskActivityActor.USER: "user_claim",
@@ -350,7 +354,7 @@ class DeterministicMemoryCompiler:
             "event_kind": event.kind.value,
             "explicit_type": str(explicit).lower(),
         }
-        if _UNCERTAINTY.search(meaning):
+        if kind is SemanticAtomKind.FAILURE or _UNCERTAINTY.search(meaning):
             values["critical_uncertainty"] = "true"
         if _CONDITION.search(meaning):
             values["condition"] = "present_in_meaning"
@@ -582,10 +586,22 @@ class SemanticMemoryService:
             for event in pending
             if event.source_event_key.startswith(CHECKPOINT_PROJECTION_SOURCE_PREFIX)
         }
+        desired_failure_count = sum(
+            kind is SemanticAtomKind.FAILURE for kind, _ in desired_identities
+        )
+        retained_failure_ids = {
+            atom.atom_id
+            for atom in sorted(
+                (atom for atom in stale_projected if atom.kind is SemanticAtomKind.FAILURE),
+                key=lambda atom: (atom.created_at, str(atom.atom_id)),
+                reverse=True,
+            )[: max(0, _FAILURE_LEDGER_LIMIT - desired_failure_count)]
+        }
         prior_projected = tuple(
             atom
             for atom in stale_projected
-            if not (
+            if atom.atom_id not in retained_failure_ids
+            and not (
                 atom.kind
                 in {
                     SemanticAtomKind.GOAL,
@@ -1197,7 +1213,7 @@ class SemanticMemoryService:
         add(SemanticAtomKind.RESULT, content.completed_work)
         add(SemanticAtomKind.NEXT_ACTION, content.remaining_work)
         add(SemanticAtomKind.DECISION, content.decisions)
-        add(SemanticAtomKind.FAILURE, content.failures)
+        add(SemanticAtomKind.FAILURE, content.failures[-_FAILURE_LEDGER_LIMIT:])
         add(SemanticAtomKind.CONSTRAINT, content.blockers)
         if content.relevant_files:
             add(

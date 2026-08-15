@@ -451,6 +451,94 @@ def test_changed_current_state_is_volatile_and_supersedes_without_fact_authority
     assert replacement.supersedes_atom_id in {atom.atom_id for atom in states}
 
 
+def test_checkpoint_failures_carry_forward_in_one_bounded_recent_avoid_ledger() -> None:
+    scope = _scope()
+    clock = [NOW]
+    checkpoints = CheckpointApplicationService(
+        ReferenceCheckpointRepository(), clock=lambda: clock[0]
+    )
+    semantic, _ = _service()
+    source = _evidence(1, NOW)
+    view = checkpoints.create(
+        CreateCheckpoint(
+            scope,
+            CheckpointContent(
+                task_objective="Complete the migration without repeating failed approaches.",
+                completed_work=(),
+                current_state="Migration remains active.",
+                remaining_work=("Try the next bounded approach.",),
+                decisions=(),
+                failures=("Approach 01 failed because the transaction was stale.",),
+                blockers=(),
+                relevant_files=(),
+                relevant_artifacts=(),
+                verification_performed=(),
+                token_estimate=100,
+            ),
+            (source,),
+        )
+    )
+    semantic.save_checkpoint_view(view, retention_days=180)
+    clock[0] += timedelta(seconds=1)
+    view = checkpoints.revise(
+        ReviseCheckpoint(
+            scope,
+            view.aggregate.checkpoint_id,
+            view.revision.revision_id,
+            replace(view.revision.content, failures=()),
+            (source,),
+        )
+    )
+    carried_result = semantic.save_checkpoint_view(view, retention_days=180)
+
+    carried = [
+        atom for atom in carried_result.checkpoint.atoms if atom.kind is SemanticAtomKind.FAILURE
+    ]
+    assert [atom.object_value for atom in carried] == [
+        "Approach 01 failed because the transaction was stale."
+    ]
+
+    latest_result = carried_result
+    for number in range(2, 19):
+        clock[0] += timedelta(seconds=1)
+        view = checkpoints.revise(
+            ReviseCheckpoint(
+                scope,
+                view.aggregate.checkpoint_id,
+                view.revision.revision_id,
+                replace(
+                    view.revision.content,
+                    failures=(f"Approach {number:02d} failed because the transaction was stale.",),
+                ),
+                (source,),
+            )
+        )
+        latest_result = semantic.save_checkpoint_view(view, retention_days=180)
+
+    rendered = semantic.recall_memory(
+        scope,
+        preferred_token_target=4_000,
+        maximum_token_ceiling=5_000,
+    )
+    failures = [
+        atom for atom in semantic.list_atoms(scope) if atom.kind is SemanticAtomKind.FAILURE
+    ]
+    active_failures = [
+        atom for atom in latest_result.checkpoint.atoms if atom.kind is SemanticAtomKind.FAILURE
+    ]
+    avoid_lines = [line for line in rendered.text.splitlines() if line.startswith("AVOID ")]
+
+    assert len(active_failures) == 16
+    assert all(dict(atom.qualifiers).get("critical_uncertainty") == "true" for atom in failures)
+    assert "Approach 01 failed" not in rendered.text
+    assert "Approach 02 failed" not in rendered.text
+    assert "Approach 03 failed" in rendered.text
+    assert "Approach 18 failed" in rendered.text
+    assert len(avoid_lines) == 1
+    assert avoid_lines[0].startswith("AVOID (already failed): ")
+    assert rendered.text.splitlines()[-1] == avoid_lines[0]
+
+
 def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -> None:
     scope = _scope()
     observations: list[SemanticLifecycleObservation] = []

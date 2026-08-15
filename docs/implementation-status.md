@@ -5665,3 +5665,13 @@ missing method and rejected MCP argument; 77 focused semantic, MCP, durability, 
 pass, as do formatting, linting, strict typing, and the 164-file architecture boundary check. The
 optional harness recognizes `SFp` for index-plus-query-pull measurement, but no live model run was
 authorized or performed.
+
+Task 1.4 carries forward checkpoint-projected failures even when the next public revision omits them,
+retains only the 16 most recent failure meanings, and keeps older audit atoms outside the current
+materialized checkpoint. Failure atoms carry the deterministic `critical_uncertainty=true` qualifier,
+are mandatory during compact selection, and render together as one final `AVOID (already failed):`
+line with attribution and evidence aliases. The red revision test first dropped the prior failure; its
+18-revision sequence now retains and renders approaches 03 through 18 only. All 48 focused semantic,
+SQLite, evaluation, long-horizon, and MCP durability tests pass with formatting, linting, strict
+source typing, and diff checks. `repeated_error_count` remains a harness measurement for a future
+authorized live run; no behavioral reduction is claimed from offline validation.
