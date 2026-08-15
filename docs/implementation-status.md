@@ -5630,3 +5630,9 @@ Task 0.2 corrects the preregistered harness so a prior unsuccessful approach is 
 on the old kind and the complete four-test long-horizon harness file now passes. This changes only
 measurement reachability for later bounded failure carry-forward; it does not change frozen results
 or claim a behavioral gain.
+
+Task 0.3 adds content-free `injected_context_tokens` to semantic lifecycle observations. Only the
+final evidence-bearing automatic context assembly records the bounded packet's token estimate;
+deterministic compile and recall operations retain zero, and model input/output tokens remain zero
+because Mnemo makes no model call. The focused test failed on the missing field, then all 33 semantic
+unit, SQLite, and lifecycle aggregation tests passed with formatting, linting, and strict typing.

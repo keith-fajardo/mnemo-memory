@@ -409,11 +409,18 @@ def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -
         events=(_event(scope, 1, "constraint: Never write without authorization."),),
     )
     service.recall_memory(scope)
+    item, _ = service.automatic_context_item(
+        scope,
+        preferred_token_target=600,
+        maximum_token_ceiling=800,
+    )
 
     assert saved.lifecycle is not None
     assert [item.operation for item in observations] == [
         "checkpoint_patch_apply",
         "checkpoint_recall",
+        "checkpoint_recall",
+        "automatic_context_assembly",
     ]
     for observation in observations:
         value = observation.to_dict()
@@ -425,6 +432,9 @@ def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -
         assert value["local_inference_duration_ns"] == 0
         assert value["human_intervention_count"] == 0
         assert value["external_spend_usd"] == 0.0
+    automatic = observations[-1].to_dict()
+    assert automatic["injected_context_tokens"] == item.token_estimate
+    assert automatic["injected_context_tokens"] > automatic["model_input_tokens"]
 
 
 def test_recall_rejects_atoms_after_source_retention_expires() -> None:

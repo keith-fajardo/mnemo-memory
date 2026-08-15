@@ -124,6 +124,7 @@ class SemanticLifecycleObservation:
     changed_event_count: int
     rendered_tokens: int
     rendered_bytes: int
+    injected_context_tokens: int = 0
     model_input_tokens: int = 0
     model_output_tokens: int = 0
     continuation_duration_ns: int = 0
@@ -148,6 +149,7 @@ class SemanticLifecycleObservation:
             self.changed_event_count,
             self.rendered_tokens,
             self.rendered_bytes,
+            self.injected_context_tokens,
             self.model_input_tokens,
             self.model_output_tokens,
             self.continuation_duration_ns,
@@ -174,6 +176,7 @@ class SemanticLifecycleObservation:
             "changed_event_count": self.changed_event_count,
             "rendered_tokens": self.rendered_tokens,
             "rendered_bytes": self.rendered_bytes,
+            "injected_context_tokens": self.injected_context_tokens,
             "model_input_tokens": self.model_input_tokens,
             "model_output_tokens": self.model_output_tokens,
             "continuation_duration_ns": self.continuation_duration_ns,
@@ -182,8 +185,9 @@ class SemanticLifecycleObservation:
             "external_spend_usd": self.external_spend_usd,
             "measurement_note": (
                 "stage durations are monotonic elapsed time; deterministic CPU uses process time; "
-                "zero model, continuation, inference, human, and spend values mean this operation "
-                "performed none of that work"
+                "injected context is recorded separately from model work; zero model, "
+                "continuation, inference, human, and spend values mean this operation performed "
+                "none of that work"
             ),
         }
 
@@ -377,6 +381,7 @@ class SemanticMemoryService:
         source_event_count: int,
         changed_event_count: int,
         rendering: RenderedSemanticCheckpoint,
+        injected_context_tokens: int = 0,
         notify: bool = True,
     ) -> SemanticLifecycleObservation:
         observation = SemanticLifecycleObservation(
@@ -388,6 +393,7 @@ class SemanticMemoryService:
             changed_event_count,
             rendering.measured_tokens,
             len(rendering.text.encode("utf-8")),
+            injected_context_tokens=injected_context_tokens,
         )
         if notify and self._lifecycle_observer is not None:
             with suppress(Exception):
@@ -708,6 +714,7 @@ class SemanticMemoryService:
             source_event_count=len(events),
             changed_event_count=0,
             rendering=replace(rendering, measured_tokens=measured, text=content),
+            injected_context_tokens=measured,
         )
         return item, provenance
 
