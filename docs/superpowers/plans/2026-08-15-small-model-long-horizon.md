@@ -220,6 +220,17 @@ The 7B failing does **not** falsify Mnemo. Evidence indicates the memory effect 
 
 **Optional frontier ceiling (F0):** the arm the original study never ran; run it if authorized to bound the top of the ladder.
 
+**Hardware fit — pick the rung your machine can actually run.** On Apple Silicon the RAM is *unified* (shared by macOS + GPU) and Metal wires down only ~2/3 of it by default, so the runnable model is smaller than raw RAM suggests; long-context KV cache adds several GB on top of the weights, and the fanless MacBook Air thermally throttles on sustained multi-session runs.
+
+| Machine | Comfortably runs | Practical primary |
+|---|---|---|
+| 16 GB Mac | 7-8B (~5 GB) | Qwen2.5-Coder-7B (floor only) |
+| **24 GB M4 Air** | 7B + **Qwen3-14B (~9 GB)**; Mistral-Small-24B (~15 GB) borderline/short-ctx | **Qwen3-14B** — Air-friendly primary; keeps the thinking-toggle so the Thinking-vs-Instruct experiment still runs at 14B |
+| 32 GB Mac | up to ~19-20 GB incl. Qwen3-30B-A3B / Qwen2.5-Coder-32B (short-moderate ctx) | Qwen3-30B-A3B-2507 (the designed primary) |
+| 48 GB+ Mac / 24 GB discrete GPU / hosted | 30B-32B at long (256K) context + a frontier ceiling arm | Qwen3-30B-A3B-2507 + frontier F0 |
+
+On a **24 GB M4 MacBook Air specifically**, the ~19 GB 30B primary and ~20 GB 32B ceiling do **not** fit comfortably: the weights alone exceed the ~16 GB default Metal limit, and once KV cache + macOS are added you swap or OOM (and the Air throttles). Slide the primary down to **Qwen3-14B** and run the 30B/32B rungs on a >=32 GB Mac (48 GB+ for long context), a discrete 24 GB GPU, or a hosted endpoint. The ladder *logic* is unchanged — only which rung is labelled "primary" and where the top rungs run.
+
 Record any substitution here, then re-run the preregistered gate per rung. (Full sourcing lives in the model-selection research; recency-flagged models — Qwen3.5, Gemma 4, Qwen3.6 — postdate Jan 2026 and need a local smoke test before trusting their benchmarks.)
 
 **What can be tested offline vs live:** deterministic pieces (render token counts, false-memory transport, verifier logic, the deterministic-ceiling diagnostic) are unit/offline-testable with **no** model and no authorization. Accuracy and model-token deltas need an **authorized live run** (Ollama + the chosen model) — treat live runs as gated, per the preregistration.
