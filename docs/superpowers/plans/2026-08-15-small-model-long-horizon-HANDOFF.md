@@ -25,6 +25,7 @@ You are implementing the **Small-Model Long-Horizon** plan for the `mnemo-memory
 **Validation:**
 - Unit-test the deterministic parts offline — render token counts, false-memory transport, verifier logic, and the zero-model-token deterministic-ceiling diagnostic — no model or authorization needed.
 - Accuracy and model-token deltas need an **authorized live Ollama run** on the **capability ladder** in the plan's "Model selection" section: the weak anchor `qwen2.5-coder:7b` plus the recommended mid / strong / reasoning-tuned small models. Re-run the preregistered gate per model; expect `SD − SI` to widen with model capability.
+- **Target eval machine is a 24 GB M4 MacBook Air.** On it the practical primary is **Qwen3-14B** (`qwen3:14b`) — the ~19 GB 30B primary and ~20 GB 32B ceiling do NOT fit comfortably (unified RAM + ~16 GB default Metal wired limit + long-context KV cache + fanless throttling). Run the 30B/32B rungs on a >=32 GB Mac (48 GB+ for long context), a discrete 24 GB GPU, or a hosted endpoint. See the plan's "Hardware fit" table.
 
 **Honest expectation to hold:** Phase 0/1 are token/safety wins and are accuracy-neutral by design; only Phase 2 enforcement can move task correctness, and only on constraint-backed fields. The reasoning ceiling is real (the 7B scored 0/30 with near-perfect memory) — proving Mnemo's value likely depends on running the right model from the ladder, not the 7B.
 
