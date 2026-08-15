@@ -5646,3 +5646,11 @@ arm retains an explicit factual baseline for comparison without changing the fro
 corpus. The new unit and harness assertions failed first; all 43 focused semantic, SQLite, MCP, and
 long-horizon tests pass with formatting, linting, and strict typing. No live model run was authorized
 or performed, so the expected false-memory reduction remains unmeasured rather than claimed.
+
+Task 1.2 trims the compact header to its schema marker and short checkpoint identity, renders
+meaning-first imperative cues while retaining attribution, confidence, qualifiers, and evidence,
+and places omission metadata before terminal constraints and next actions. The deterministic fixture
+fell from 249 to 195 conservative tokens (21.7%) while including one more fact; its UUID and numeric
+literal remain exact, every constraint starts with `MUST`, and the next action is the final content
+line. The assertion failed first on the legacy header; all 45 focused semantic rendering, viability,
+evaluation, and MCP durability tests pass with formatting, linting, and strict source typing.

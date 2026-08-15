@@ -597,6 +597,39 @@ def test_logical_and_literal_fidelity_survives_compact_rendering_exactly() -> No
     assert "…" not in compact.text
 
 
+def test_compact_render_bookends_terse_guardrails_and_preserves_literals() -> None:
+    scope = _scope()
+    service, _ = _service()
+    protected_id = "123e4567-e89b-12d3-a456-426614174000"
+    saved = service.save_checkpoint(
+        scope,
+        events=(
+            _event(scope, 1, "goal: Finish the migration safely."),
+            _event(
+                scope,
+                2,
+                f"constraint: Preserve job {protected_id} and exactly 42 items.",
+            ),
+            _event(scope, 3, "fact: The current migration target is SQLite."),
+            _event(
+                scope,
+                4,
+                "next_action: Run uv run pytest tests/unit/test_semantic_checkpoints.py.",
+            ),
+        ),
+    )
+    compact = saved.rendering
+    lines = compact.text.splitlines()
+
+    assert all(noise not in lines[0] for noise in ("n=", "target=", "omit="))
+    constraint = next(line for line in lines if protected_id in line)
+    assert constraint.startswith("MUST ")
+    assert "42 items" in constraint
+    assert lines[-1].startswith("DO ")
+    assert "Run uv run pytest tests/unit/test_semantic_checkpoints.py." in lines[-1]
+    assert compact.measured_tokens <= 199  # At least 20% below the 249-token legacy fixture.
+
+
 def test_old_active_constraint_survives_many_new_optional_events() -> None:
     scope = _scope()
     service, _ = _service()

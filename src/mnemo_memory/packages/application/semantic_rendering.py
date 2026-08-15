@@ -46,17 +46,17 @@ _KIND_ORDER = {
     SemanticAtomKind.INFERENCE: 8,
 }
 _COMPACT_TAG = {
-    SemanticAtomKind.GOAL: "G",
-    SemanticAtomKind.FACT: "F",
-    SemanticAtomKind.STATE: "S",
-    SemanticAtomKind.DECISION: "D",
-    SemanticAtomKind.CONSTRAINT: "C",
-    SemanticAtomKind.PREFERENCE: "P",
-    SemanticAtomKind.OPEN_QUESTION: "Q",
-    SemanticAtomKind.NEXT_ACTION: "N",
-    SemanticAtomKind.RESULT: "R",
-    SemanticAtomKind.FAILURE: "X",
-    SemanticAtomKind.INFERENCE: "I",
+    SemanticAtomKind.GOAL: "ACHIEVE",
+    SemanticAtomKind.FACT: "KNOW",
+    SemanticAtomKind.STATE: "NOW",
+    SemanticAtomKind.DECISION: "KEEP",
+    SemanticAtomKind.CONSTRAINT: "MUST",
+    SemanticAtomKind.PREFERENCE: "PREFER",
+    SemanticAtomKind.OPEN_QUESTION: "RESOLVE",
+    SemanticAtomKind.NEXT_ACTION: "DO",
+    SemanticAtomKind.RESULT: "DONE",
+    SemanticAtomKind.FAILURE: "AVOID",
+    SemanticAtomKind.INFERENCE: "MAYBE",
 }
 
 _PROTECTED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -417,11 +417,22 @@ def _assemble(
             mandatory_overrun,
         )
     ]
+    if mode is SemanticRendererProfile.COMPACT:
+        terminal_kinds = {SemanticAtomKind.CONSTRAINT, SemanticAtomKind.NEXT_ACTION}
+        body = tuple(atom for atom in selected if atom.kind not in terminal_kinds)
+        guardrails = tuple(atom for atom in selected if atom.kind in terminal_kinds)
+    else:
+        body = selected
+        guardrails = ()
     lines.extend(
-        _atom_line(atom, mode, atom_aliases, evidence_aliases, evidence_events) for atom in selected
+        _atom_line(atom, mode, atom_aliases, evidence_aliases, evidence_events) for atom in body
     )
     if omission is not None:
         lines.append(_omission_line(omission))
+    lines.extend(
+        _atom_line(atom, mode, atom_aliases, evidence_aliases, evidence_events)
+        for atom in guardrails
+    )
     rendered = "\n".join(lines)
     for _ in range(4):
         measured = counter.count(rendered)
@@ -456,11 +467,7 @@ def _header(
 ) -> str:
     checkpoint_id = str(checkpoint.checkpoint.checkpoint_id)
     if mode is SemanticRendererProfile.COMPACT:
-        return (
-            f"MNEMO_CP_V1 id={checkpoint_id[:8]} mode=compact tok={tokenizer_id} "
-            f"n={measured} target={preferred} max={maximum} in={included} omit={omitted} "
-            f"overrun={str(overrun).lower()}"
-        )
+        return f"MNEMO_CP_V1 id={checkpoint_id[:8]}"
     return (
         f"mnemo-checkpoint/{checkpoint.checkpoint.schema_version} checkpoint_id={checkpoint_id} "
         f"mode={mode.value} tokenizer={tokenizer_id} measured_tokens={measured} "
@@ -485,12 +492,10 @@ def _atom_line(
     )
     qualifiers = dict(atom.qualifiers)
     if mode is SemanticRendererProfile.COMPACT:
-        tag = "NOW" if atom.kind is SemanticAtomKind.STATE else _COMPACT_TAG[atom.kind]
-        details = [
-            f"{tag} {alias}",
+        metadata = [
+            alias,
             f"by={atom.subject}",
             f"confidence={atom.confidence:g}",
-            meaning,
         ]
         for key in (
             "epistemic",
@@ -501,11 +506,11 @@ def _atom_line(
             "authority_boundary",
         ):
             if key in qualifiers:
-                details.append(f"{key}={qualifiers[key]}")
-        details.append(f"e={sources}")
+                metadata.append(f"{key}={qualifiers[key]}")
+        metadata.append(f"e={sources}")
         if atom.supersedes_atom_id is not None:
-            details.append(f"supersedes={atom_aliases.get(atom.supersedes_atom_id, 'historical')}")
-        return " | ".join(details)
+            metadata.append(f"supersedes={atom_aliases.get(atom.supersedes_atom_id, 'historical')}")
+        return f"{_COMPACT_TAG[atom.kind]} {meaning} [{' '.join(metadata)}]"
     line = (
         f"{atom.kind.value} {alias} | subject={atom.subject} | predicate={atom.predicate} "
         f"| meaning={meaning} | confidence={atom.confidence:g} | evidence={sources}"
