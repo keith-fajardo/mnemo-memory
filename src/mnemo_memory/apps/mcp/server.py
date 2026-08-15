@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -36,6 +37,7 @@ from mnemo_memory.connectors.dbt.project_binding import (
 from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
 from mnemo_memory.packages.application import (
     CheckpointRuntime,
+    CheckpointView,
     LocalConfigurationError,
     LocalRuntimeError,
     PersonalSettingsError,
@@ -885,6 +887,18 @@ def _build_local_mcp_context_session(
         skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
         settings = PersonalSettingsStore(runtime.config.data_directory).load()
 
+        def after_checkpoint_save(view: CheckpointView) -> None:
+            # Source observation was already an optional fail-open callback. Keep it isolated so
+            # an unavailable projection does not prevent an enabled semantic checkpoint.
+            with suppress(Exception):
+                observer.observe(view)
+            if settings.experimental_semantic_memory_enabled:
+                assert runtime.semantic_memory_service is not None
+                runtime.semantic_memory_service.save_checkpoint_view(
+                    view,
+                    retention_days=settings.episodic_retention_days,
+                )
+
         def observe_checkpoint_save(
             scope: MemoryScope,
             operation: str,
@@ -944,7 +958,7 @@ def _build_local_mcp_context_session(
                 ),
                 runtime.repository,
             ),
-            observer.observe,
+            after_checkpoint_save,
             None if binding is None else binding.checkpoint_scope,
             current_dbt_source_state,
             skill_registry,

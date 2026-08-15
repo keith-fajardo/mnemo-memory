@@ -99,6 +99,17 @@ def _repositories(
     return events, SQLiteSemanticCheckpointRepository(path, base_directory=tmp_path), path
 
 
+class _TrackingSemanticRepository(SQLiteSemanticCheckpointRepository):
+    def __init__(self, path: Path, *, base_directory: Path) -> None:
+        super().__init__(path, base_directory=base_directory)
+        self.opened_connections: list[sqlite3.Connection] = []
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = super()._connect()
+        self.opened_connections.append(connection)
+        return connection
+
+
 def test_migration_31_is_additive_and_creates_semantic_tables(tmp_path: Path) -> None:
     repository, _, path = _repositories(tmp_path)
 
@@ -118,6 +129,16 @@ def test_migration_31_is_additive_and_creates_semantic_tables(tmp_path: Path) ->
         "semantic_compiled_events",
         "semantic_memory_atoms",
     }
+
+
+def test_semantic_repository_closes_read_connections(tmp_path: Path) -> None:
+    _, _, path = _repositories(tmp_path)
+    repository = _TrackingSemanticRepository(path, base_directory=tmp_path)
+
+    assert repository.get_current_semantic_checkpoint(_scope()) is None
+    assert len(repository.opened_connections) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        repository.opened_connections[0].execute("SELECT 1")
 
 
 def test_migration_31_rolls_back_atomically_and_retries(tmp_path: Path) -> None:

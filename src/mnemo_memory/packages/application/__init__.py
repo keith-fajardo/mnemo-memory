@@ -147,6 +147,7 @@ from .semantic_evaluation import (
 from .semantic_memory import (
     DeterministicMemoryCompiler,
     SemanticCheckpointSaveResult,
+    SemanticLifecycleObservation,
     SemanticMemoryApplicationError,
     SemanticMemoryService,
 )
@@ -333,6 +334,7 @@ __all__ = [
     "SemanticCheckpointEvaluation",
     "SemanticCheckpointSaveResult",
     "SemanticEvaluationExpectation",
+    "SemanticLifecycleObservation",
     "SemanticMemoryApplicationError",
     "SemanticMemoryService",
     "SemanticOmissionNotice",

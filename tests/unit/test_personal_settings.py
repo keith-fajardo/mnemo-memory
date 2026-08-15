@@ -27,6 +27,7 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
     assert settings.context_budget.active_task_checkpoint == 600
     assert settings.episodic_retention_days == 180
     assert settings.optional_model_enabled is False
+    assert settings.experimental_semantic_memory_enabled is False
     assert settings.model_provider is settings.model_id is None
     assert set(settings.to_dict()) == {
         "approved_event_capture_enabled",
@@ -38,6 +39,7 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
         "context_structural_tokens",
         "context_total_tokens",
         "episodic_retention_days",
+        "experimental_semantic_memory_enabled",
         "model_id",
         "model_provider",
         "optional_model_enabled",
@@ -53,6 +55,7 @@ def test_settings_store_atomically_round_trips_mode_0600(tmp_path: Path) -> None
     expected = PersonalSettings(
         repository_knowledge_sync_enabled=False,
         approved_event_capture_enabled=False,
+        experimental_semantic_memory_enabled=True,
         optional_model_enabled=True,
         model_provider="local-provider",
         model_id="local/model-1",
@@ -66,6 +69,17 @@ def test_settings_store_atomically_round_trips_mode_0600(tmp_path: Path) -> None
     path = tmp_path / "profile" / "settings.json"
     assert path.stat().st_mode & 0o777 == 0o600
     assert json.loads(path.read_text("utf-8")) == expected.to_dict()
+
+
+def test_settings_load_legacy_document_with_semantic_memory_disabled(tmp_path: Path) -> None:
+    store = PersonalSettingsStore(tmp_path / "profile")
+    store.save(PersonalSettings())
+    path = tmp_path / "profile" / "settings.json"
+    legacy = json.loads(path.read_text("utf-8"))
+    del legacy["experimental_semantic_memory_enabled"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    assert store.load().experimental_semantic_memory_enabled is False
 
 
 @pytest.mark.parametrize(

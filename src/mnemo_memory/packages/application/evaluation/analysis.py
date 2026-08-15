@@ -15,12 +15,14 @@ from .models import (
     EconomicAssumption,
     EvaluationConfig,
     EvaluationRun,
+    MetricClassification,
+    ThresholdStatus,
 )
 
 _MVS_WEIGHTS = {"TE": 0.20, "LM": 0.30, "TI": 0.20, "EV": 0.15, "MP": 0.10, "OP": 0.05}
 
 
-def token_efficiency_score(baseline_tokens: int, mnemo_tokens: int) -> float:
+def token_efficiency_score(baseline_tokens: float, mnemo_tokens: float) -> float:
     if baseline_tokens <= 0 or mnemo_tokens < 0:
         raise ValueError("token efficiency requires a positive baseline and non-negative candidate")
     return (baseline_tokens - mnemo_tokens) / baseline_tokens
@@ -143,8 +145,46 @@ def bootstrap_mean_interval(
     return (_percentile(means, 0.025), _percentile(means, 0.975))
 
 
+def bootstrap_cluster_mean_interval(
+    values: tuple[float, ...],
+    cluster_ids: tuple[str, ...],
+    *,
+    samples: int = 2000,
+    seed: int = 0,
+) -> tuple[float, float] | None:
+    """Bootstrap whole scenario families so deterministic rows are not treated as independent."""
+
+    if not values or len(values) != len(cluster_ids):
+        raise ValueError("cluster bootstrap requires aligned observations and cluster IDs")
+    if samples < 100:
+        raise ValueError("bootstrap requires at least 100 samples")
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for cluster_id, value in zip(cluster_ids, values, strict=True):
+        if not cluster_id:
+            raise ValueError("cluster bootstrap IDs must not be blank")
+        grouped[cluster_id].append(value)
+    cluster_names = tuple(sorted(grouped))
+    if len(cluster_names) < 2:
+        return None
+    generator = random.Random(seed)
+    means: list[float] = []
+    for _ in range(samples):
+        sampled_values = tuple(
+            value
+            for cluster_name in (generator.choice(cluster_names) for _ in range(len(cluster_names)))
+            for value in grouped[cluster_name]
+        )
+        means.append(statistics.fmean(sampled_values))
+    ordered = sorted(means)
+    return (_percentile(ordered, 0.025), _percentile(ordered, 0.975))
+
+
 def descriptive_statistics(
-    values: tuple[float, ...], *, bootstrap_samples: int, seed: int
+    values: tuple[float, ...],
+    *,
+    bootstrap_samples: int,
+    seed: int,
+    cluster_ids: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     if not values:
         return {
@@ -155,9 +195,32 @@ def descriptive_statistics(
             "p10": None,
             "p90": None,
             "confidence_interval_95": None,
+            "independence_unit": "scenario_family" if cluster_ids is not None else "observation",
+            "independent_unit_count": 0,
+            "confidence_interval_method": "not estimable",
         }
     ordered = sorted(values)
-    interval = bootstrap_mean_interval(values, samples=bootstrap_samples, seed=seed)
+    if cluster_ids is None:
+        interval: tuple[float, float] | None = bootstrap_mean_interval(
+            values, samples=bootstrap_samples, seed=seed
+        )
+        independence_unit = "observation"
+        independent_unit_count = len(values)
+        interval_method = "nonparametric bootstrap over observations"
+    else:
+        interval = bootstrap_cluster_mean_interval(
+            values,
+            cluster_ids,
+            samples=bootstrap_samples,
+            seed=seed,
+        )
+        independence_unit = "scenario_family"
+        independent_unit_count = len(set(cluster_ids))
+        interval_method = (
+            "paired cluster bootstrap over scenario families"
+            if interval is not None
+            else "not estimable from fewer than two scenario families"
+        )
     return {
         "run_count": len(values),
         "mean": statistics.fmean(values),
@@ -165,7 +228,10 @@ def descriptive_statistics(
         "standard_deviation": statistics.stdev(values) if len(values) > 1 else 0.0,
         "p10": _percentile(ordered, 0.10),
         "p90": _percentile(ordered, 0.90),
-        "confidence_interval_95": list(interval),
+        "confidence_interval_95": None if interval is None else list(interval),
+        "independence_unit": independence_unit,
+        "independent_unit_count": independent_unit_count,
+        "confidence_interval_method": interval_method,
     }
 
 
@@ -258,51 +324,61 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
         sorted(grouped.items(), key=lambda pair: pair[0].value)
     ):
         grades = [item.grade for item in items if item.grade is not None]
+        scenario_families = tuple(item.template_id for item in items)
         conditions[condition.value] = {
             "lifecycle_tokens": descriptive_statistics(
                 tuple(float(item.token_account.total) for item in items),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset,
+                cluster_ids=scenario_families,
             ),
             "context_tokens_per_reuse": descriptive_statistics(
                 tuple(float(item.context_tokens_per_reuse) for item in items),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 100,
+                cluster_ids=scenario_families,
             ),
             "lme_gated": descriptive_statistics(
                 tuple(float(item.lme_gated) for item in items if item.lme_gated is not None),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 200,
+                cluster_ids=scenario_families,
             ),
             "lme_ungated": descriptive_statistics(
                 tuple(float(item.lme_ungated) for item in items if item.lme_ungated is not None),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 300,
+                cluster_ids=scenario_families,
             ),
             "continuation_fidelity": descriptive_statistics(
                 tuple(item.continuation_fidelity for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 400,
+                cluster_ids=scenario_families,
             ),
             "required_knowledge_retention": descriptive_statistics(
                 tuple(item.required_knowledge_retention for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 450,
+                cluster_ids=scenario_families,
             ),
             "evidence_attribution_fidelity": descriptive_statistics(
                 tuple(item.evidence_attribution_fidelity for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 475,
+                cluster_ids=scenario_families,
             ),
             "retrieval_f1": descriptive_statistics(
                 tuple(item.retrieval_f1 for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 490,
+                cluster_ids=scenario_families,
             ),
             "task_success_proxy": descriptive_statistics(
                 tuple(item.task_success_proxy for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 500,
+                cluster_ids=scenario_families,
             ),
             "task_impact_proxy": descriptive_statistics(
                 tuple(
@@ -312,26 +388,31 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
                 ),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 600,
+                cluster_ids=scenario_families,
             ),
             "protected_span_fidelity": descriptive_statistics(
                 tuple(item.protected_span_fidelity for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 700,
+                cluster_ids=scenario_families,
             ),
             "constraint_retention": descriptive_statistics(
                 tuple(item.constraint_retention for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 800,
+                cluster_ids=scenario_families,
             ),
             "temporal_supersession_accuracy": descriptive_statistics(
                 tuple(item.temporal_supersession_accuracy for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 900,
+                cluster_ids=scenario_families,
             ),
             "false_memory_rate": descriptive_statistics(
                 tuple(item.false_memory_rate for item in grades),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 1000,
+                cluster_ids=scenario_families,
             ),
             "critical_violation_runs": sum(bool(item.critical_violations) for item in grades),
             "failure_categories": _failure_counts(grades),
@@ -339,6 +420,7 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
                 tuple(item.latency_ms for item in items),
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + offset + 1100,
+                cluster_ids=scenario_families,
             ),
             "successful_long_horizon_tasks_per_million_tokens": _success_per_million(items),
         }
@@ -386,20 +468,31 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
         production_gate=not critical_candidate,
     )
     noninferiority = _noninferiority(available, config)
-    threshold_table = _thresholds(conditions, paired, noninferiority, critical_candidate)
+    threshold_table = _thresholds(conditions, paired, critical_candidate)
+    threshold_summary = {
+        status.value: sum(item["status"] == status.value for item in threshold_table)
+        for status in ThresholdStatus
+    }
     verdict = "INSUFFICIENT EVIDENCE"
     return {
-        "schema_version": "mnemo-viability-results/1.0",
+        "schema_version": "mnemo-viability-results/1.1",
         "evidence_class": "deterministic_offline_synthetic",
         "run_count": len(runs),
         "available_run_count": len(available),
         "paired_observations_per_available_condition": len(available) // max(1, len(grouped)),
+        "primary_independence_unit": "scenario_family",
+        "independent_scenario_family_count": len({run.template_id for run in available}),
+        "confidence_interval_policy": (
+            "paired cluster bootstrap over scenario families; deterministic condition rows are "
+            "repeated measurements, not independent samples"
+        ),
         "conditions": conditions,
         "unavailable_conditions": unavailable,
         "by_horizon": horizon,
         "token_efficiency_by_horizon_reuse": _tes_by_horizon_reuse(available, config),
         "by_category": _by_category(available, config),
         "paired_comparisons": paired,
+        "lifecycle_tes_diagnostics": _lifecycle_tes_diagnostics(conditions, paired),
         "noninferiority": noninferiority,
         "pareto_points": points,
         "pareto_frontier": list(frontier),
@@ -407,7 +500,7 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
         "economic_scenarios": economics,
         "market_pull": {
             "score": None,
-            "status": "pending",
+            "status": ThresholdStatus.NOT_EVALUATED.value,
             "missing": [
                 "three credible design partners",
                 "two real pilots",
@@ -417,12 +510,15 @@ def aggregate_runs(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) ->
         },
         "operational_portability": {
             "score": operational,
+            "status": ThresholdStatus.NOT_EVALUATED.value,
             "live_model_families": 0,
             "provider_tokenizers": 0,
             "portability_claim_supported": False,
         },
         "mvs": {**viability, "dimensions": observed_dimensions},
+        "metric_classification_catalog": _metric_classification_catalog(),
         "thresholds": threshold_table,
+        "threshold_summary": threshold_summary,
         "verdict": verdict,
         "verdict_basis": (
             "Offline paired evidence measures context availability and lifecycle token estimates, "
@@ -468,23 +564,29 @@ def _paired_comparisons(
             - float(baseline_run.grade.task_success_proxy if baseline_run.grade else 0.0)
             for baseline_run, candidate_run in matched
         )
+        scenario_families = tuple(candidate_run.template_id for _, candidate_run in matched)
         key = f"{candidate.value}_vs_{baseline.value}"
         comparisons[key] = {
             "pair_count": len(matched),
+            "independent_scenario_family_count": len(set(scenario_families)),
+            "primary_independence_unit": "scenario_family",
             "token_delta_candidate_minus_baseline": descriptive_statistics(
                 token_deltas,
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + 2000 + offset,
+                cluster_ids=scenario_families,
             ),
             "token_efficiency_score": descriptive_statistics(
                 tes,
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + 2100 + offset,
+                cluster_ids=scenario_families,
             ),
             "task_success_proxy_delta": descriptive_statistics(
                 quality,
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + 2200 + offset,
+                cluster_ids=scenario_families,
             ),
         }
     return comparisons
@@ -492,23 +594,41 @@ def _paired_comparisons(
 
 def _noninferiority(runs: tuple[EvaluationRun, ...], config: EvaluationConfig) -> dict[str, object]:
     lookup = {(run.pair_id, run.condition): run for run in runs}
-    deltas = tuple(
-        _grade_success(lookup[(pair_id, ConditionId.MNEMO_RETRIEVAL)])
-        - _grade_success(lookup[(pair_id, ConditionId.FULL_HISTORY)])
+    matched = tuple(
+        (
+            lookup[(pair_id, ConditionId.FULL_HISTORY)],
+            lookup[(pair_id, ConditionId.MNEMO_RETRIEVAL)],
+        )
         for pair_id in sorted({run.pair_id for run in runs})
         if (pair_id, ConditionId.MNEMO_RETRIEVAL) in lookup
         and (pair_id, ConditionId.FULL_HISTORY) in lookup
         and lookup[(pair_id, ConditionId.MNEMO_RETRIEVAL)].grade is not None
         and lookup[(pair_id, ConditionId.FULL_HISTORY)].grade is not None
     )
+    deltas = tuple(
+        _grade_success(candidate) - _grade_success(baseline) for baseline, candidate in matched
+    )
     if not deltas:
         return {"status": "unavailable", "reason": "no paired runs"}
-    interval = bootstrap_mean_interval(
-        deltas, samples=config.bootstrap_samples, seed=config.seed + 3000
+    scenario_families = tuple(candidate.template_id for _, candidate in matched)
+    interval = bootstrap_cluster_mean_interval(
+        deltas,
+        scenario_families,
+        samples=config.bootstrap_samples,
+        seed=config.seed + 3000,
     )
+    if interval is None:
+        return {
+            "status": "not_evaluated",
+            "reason": "fewer than two independent scenario families",
+            "pair_count": len(deltas),
+            "independent_scenario_family_count": len(set(scenario_families)),
+        }
     return {
         "evidence_class": "offline_task_success_proxy",
         "pair_count": len(deltas),
+        "independent_scenario_family_count": len(set(scenario_families)),
+        "primary_independence_unit": "scenario_family",
         "margin": config.noninferiority_margin,
         "mean_delta": statistics.fmean(deltas),
         "confidence_interval_95": list(interval),
@@ -525,6 +645,12 @@ def _by_horizon(
         grouped[(run.horizon.value, run.condition.value)].append(run)
     output: dict[str, dict[str, object]] = defaultdict(dict)
     for offset, ((horizon, condition), items) in enumerate(sorted(grouped.items())):
+        token_statistics = descriptive_statistics(
+            tuple(float(item.token_account.total) for item in items),
+            bootstrap_samples=config.bootstrap_samples,
+            seed=config.seed + 4000 + offset,
+            cluster_ids=tuple(item.template_id for item in items),
+        )
         output[horizon][condition] = {
             "run_count": len(items),
             "lifecycle_tokens_mean": _mean(item.token_account.total for item in items),
@@ -532,13 +658,9 @@ def _by_horizon(
                 item.grade.task_success_proxy for item in items if item.grade is not None
             ),
             "lme_gated_mean": _mean(float(item.lme_gated or 0.0) for item in items),
-            "token_ci_95": list(
-                bootstrap_mean_interval(
-                    tuple(float(item.token_account.total) for item in items),
-                    samples=config.bootstrap_samples,
-                    seed=config.seed + 4000 + offset,
-                )
-            ),
+            "token_ci_95": token_statistics["confidence_interval_95"],
+            "independent_scenario_family_count": token_statistics["independent_unit_count"],
+            "confidence_interval_method": token_statistics["confidence_interval_method"],
         }
     return dict(output)
 
@@ -565,6 +687,7 @@ def _by_category(
                 tes,
                 bootstrap_samples=config.bootstrap_samples,
                 seed=config.seed + 5000 + offset,
+                cluster_ids=tuple(candidate.template_id for _, candidate in pairs),
             ),
             "lme_gated_mean": _mean(float(candidate.lme_gated or 0.0) for _, candidate in pairs),
             "task_success_proxy_mean": _mean(
@@ -580,23 +703,27 @@ def _tes_by_horizon_reuse(
     runs: tuple[EvaluationRun, ...], config: EvaluationConfig
 ) -> dict[str, dict[str, object]]:
     lookup = {(run.pair_id, run.condition): run for run in runs}
-    grouped: dict[tuple[str, int], list[float]] = defaultdict(list)
+    grouped: dict[tuple[str, int], list[tuple[float, str]]] = defaultdict(list)
     for pair_id in sorted({run.pair_id for run in runs}):
         baseline = lookup.get((pair_id, ConditionId.FULL_HISTORY))
         candidate = lookup.get((pair_id, ConditionId.MNEMO_RETRIEVAL))
         if baseline is None or candidate is None:
             continue
         grouped[(candidate.horizon.value, candidate.reuse_count)].append(
-            token_efficiency_score(
-                baseline.token_account.total,
-                candidate.token_account.total,
+            (
+                token_efficiency_score(
+                    baseline.token_account.total,
+                    candidate.token_account.total,
+                ),
+                candidate.template_id,
             )
         )
     return {
         f"{horizon}:reuse-{reuse_count}": descriptive_statistics(
-            tuple(values),
+            tuple(value for value, _ in values),
             bootstrap_samples=config.bootstrap_samples,
             seed=config.seed + 6000 + offset,
+            cluster_ids=tuple(template_id for _, template_id in values),
         )
         for offset, ((horizon, reuse_count), values) in enumerate(sorted(grouped.items()))
     }
@@ -650,10 +777,95 @@ def _break_even_summary(runs: tuple[EvaluationRun, ...]) -> dict[str, object]:
     }
 
 
+def _lifecycle_tes_diagnostics(
+    conditions: Mapping[str, Mapping[str, object]],
+    paired: Mapping[str, Mapping[str, object]],
+) -> dict[str, object]:
+    baseline_name = ConditionId.FULL_HISTORY.value
+    candidate_name = ConditionId.MNEMO_RETRIEVAL.value
+    comparison = paired.get(f"{candidate_name}_vs_{baseline_name}", {})
+    paired_median = _nested_metric(comparison, "token_efficiency_score", "median")
+    baseline_median = _nested_metric(
+        conditions.get(baseline_name, {}), "lifecycle_tokens", "median"
+    )
+    candidate_median = _nested_metric(
+        conditions.get(candidate_name, {}), "lifecycle_tokens", "median"
+    )
+    ratio_of_medians = (
+        None
+        if baseline_median is None or baseline_median <= 0 or candidate_median is None
+        else token_efficiency_score(baseline_median, candidate_median)
+    )
+    return {
+        "primary_reported_value": "median_of_paired_ratios",
+        "median_of_paired_ratios": paired_median,
+        "ratio_of_condition_medians": ratio_of_medians,
+        "baseline_condition_median_tokens": baseline_median,
+        "candidate_condition_median_tokens": candidate_median,
+        "interpretation": (
+            "The paired median and the ratio of marginal medians are distinct summaries and are "
+            "not expected to be arithmetically identical."
+        ),
+    }
+
+
+def _metric_classification_catalog() -> list[dict[str, str]]:
+    entries = (
+        (
+            "latency_ms; executed_external_calls; external_cost_incurred_usd; run/exclusion counts",
+            MetricClassification.ACTUALLY_OBSERVED,
+            "Recorded from executed local processes or append-only run bookkeeping.",
+        ),
+        (
+            "continuation_fidelity; required_knowledge_retention; constraint_retention; "
+            "protected_span_fidelity; temporal_supersession_accuracy; "
+            "evidence_attribution_fidelity; retrieval_precision/recall/F1; false_memory_rate; "
+            "critical violations; drift resistance; artifact hashes",
+            MetricClassification.DETERMINISTICALLY_MEASURED,
+            "Computed exactly from disclosed fixtures, outputs, evidence links, or artifact bytes.",
+        ),
+        (
+            "model_input; model_output; model completion content",
+            MetricClassification.MODEL_GENERATED,
+            "Applies only to an executed model condition; the offline baseline has none.",
+        ),
+        (
+            "lexical token-account fields; lifecycle_tokens; token deltas; LifecycleTES; "
+            "compression ratio; break-even reuse; monetary sensitivity; counterfactual cost",
+            MetricClassification.ESTIMATED,
+            "Uses the named deterministic lexical counter or disclosed economic assumptions, "
+            "not provider billing.",
+        ),
+        (
+            "task_success_proxy; task_impact_proxy; resume_speed_proxy; avoided_rework_proxy; "
+            "human_intervention_proxy; gated/ungated LME; MVS; successful tasks per million tokens",
+            MetricClassification.PROXY,
+            "Information availability or composite utility; not generated-agent task performance.",
+        ),
+        (
+            "retry_and_repair token equivalent; reuse-scaled lifecycle accounts; "
+            "synthetic scenario rows",
+            MetricClassification.SIMULATED,
+            "Counterfactual repeated work or controlled synthetic repetition, never actual "
+            "provider usage.",
+        ),
+        (
+            "live end-to-end task success; hidden-test accuracy; actual human intervention; "
+            "blinded quality; provider billing; frontier gap closure; market demand; "
+            "production portability",
+            MetricClassification.NOT_EVALUATED,
+            "No authorized empirical observation exists in the offline baseline.",
+        ),
+    )
+    return [
+        {"metric_or_family": metric, "classification": classification.value, "basis": basis}
+        for metric, classification, basis in entries
+    ]
+
+
 def _thresholds(
     conditions: Mapping[str, Mapping[str, object]],
     paired: Mapping[str, Mapping[str, object]],
-    noninferiority: Mapping[str, object],
     critical_candidate: bool,
 ) -> list[dict[str, object]]:
     candidate = conditions.get(ConditionId.MNEMO_RETRIEVAL.value, {})
@@ -672,46 +884,92 @@ def _thresholds(
         _threshold(
             "median lifecycle token savings >=30%",
             tes,
-            tes is not None and tes >= 0.30,
-            "measured offline estimate",
+            ThresholdStatus.NOT_EVALUATED
+            if tes is None
+            else ThresholdStatus.PASS
+            if tes >= 0.30
+            else ThresholdStatus.FAIL,
+            MetricClassification.ESTIMATED,
+            "median of paired offline lifecycle-token ratios",
         ),
-        _threshold("LME >=0.95", lme, lme is not None and lme >= 0.95, "measured deterministic"),
+        _threshold(
+            "LME >=0.95",
+            lme,
+            ThresholdStatus.NOT_EVALUATED
+            if lme is None
+            else ThresholdStatus.PASS
+            if lme >= 0.95
+            else ThresholdStatus.FAIL,
+            MetricClassification.PROXY,
+            "composite of deterministically measured memory-integrity dimensions",
+        ),
         _threshold(
             "critical retention and evidence integrity 100%",
             not critical_candidate,
-            not critical_candidate,
-            "measured deterministic",
+            ThresholdStatus.PASS if not critical_candidate else ThresholdStatus.FAIL,
+            MetricClassification.DETERMINISTICALLY_MEASURED,
+            "exact fixture and evidence-association checks",
         ),
         _threshold(
             "protected and temporal integrity 100%",
             min(float(protected or 0), float(temporal or 0)),
-            protected == 1.0 and temporal == 1.0,
-            "measured deterministic",
+            ThresholdStatus.NOT_EVALUATED
+            if protected is None or temporal is None
+            else ThresholdStatus.PASS
+            if protected == 1.0 and temporal == 1.0
+            else ThresholdStatus.FAIL,
+            MetricClassification.DETERMINISTICALLY_MEASURED,
+            "exact protected-span and supersession checks",
         ),
         _threshold(
             "task quality non-inferior within 5 points",
-            noninferiority.get("passes_proxy"),
-            False,
-            "live task quality unmeasured; proxy cannot pass production gate",
+            None,
+            ThresholdStatus.NOT_EVALUATED,
+            MetricClassification.NOT_EVALUATED,
+            "live generated-agent task quality was not measured; the offline proxy is separate",
         ),
         _threshold(
             "better than rolling summary at same budget",
             rolling_delta,
-            rolling_delta is not None and rolling_delta > 0,
-            "offline availability proxy; M1 and B2 share a 200-token memory policy",
+            ThresholdStatus.NOT_EVALUATED
+            if rolling_delta is None
+            else ThresholdStatus.PASS
+            if rolling_delta > 0
+            else ThresholdStatus.FAIL,
+            MetricClassification.PROXY,
+            "paired offline task-success availability proxy; M1 and B2 share a 200-token policy",
         ),
         _threshold(
             "cost per successful long-horizon task >=20% lower",
             None,
-            False,
-            "provider billing and live success unavailable",
+            ThresholdStatus.NOT_EVALUATED,
+            MetricClassification.NOT_EVALUATED,
+            "actual inference cost and live task success unavailable",
         ),
-        _threshold("market evidence threshold", None, False, "no design-partner or pilot evidence"),
+        _threshold(
+            "market evidence threshold",
+            None,
+            ThresholdStatus.NOT_EVALUATED,
+            MetricClassification.NOT_EVALUATED,
+            "no design-partner, usage, or pilot evidence",
+        ),
     ]
 
 
-def _threshold(name: str, value: object, passes: bool, evidence: str) -> dict[str, object]:
-    return {"threshold": name, "value": value, "passes": passes, "evidence": evidence}
+def _threshold(
+    name: str,
+    value: object,
+    status: ThresholdStatus,
+    classification: MetricClassification,
+    evidence: str,
+) -> dict[str, object]:
+    return {
+        "threshold": name,
+        "value": value,
+        "status": status.value,
+        "classification": classification.value,
+        "evidence": evidence,
+    }
 
 
 def _unavailable_conditions(runs: tuple[EvaluationRun, ...]) -> dict[str, str]:

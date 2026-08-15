@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from importlib import import_module
@@ -430,6 +430,9 @@ def _automatic_context_attachment(
                     procedure_profile=profile,
                 )
             )
+            settings = PersonalSettingsStore(data_directory).load()
+            if settings.experimental_semantic_memory_enabled:
+                packet = _experimental_semantic_session_packet(runtime, packet, scope)
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
         return None
     if (
@@ -440,6 +443,46 @@ def _automatic_context_attachment(
     ):
         return None
     return json.dumps(packet.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def _experimental_semantic_session_packet(
+    runtime: CheckpointRuntime,
+    packet: ContextPacket,
+    scope: MemoryScope,
+) -> ContextPacket:
+    """Replace only the active handoff with live M3 under the existing hard packet budget."""
+
+    legacy = packet.active_task_checkpoint
+    service = runtime.semantic_memory_service
+    if legacy is None or service is None:
+        return packet
+    non_checkpoint_tokens = packet.computed_total_tokens - legacy.token_estimate
+    available = min(
+        packet.budget.active_task_checkpoint,
+        packet.budget.total_limit - non_checkpoint_tokens,
+    )
+    if available < 1:
+        return packet
+    try:
+        item, provenance = service.automatic_context_item(
+            scope,
+            preferred_token_target=min(400, available),
+            maximum_token_ceiling=available,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return packet
+    notices = tuple(
+        provenance if notice.item_id == legacy.item_id else notice for notice in packet.provenance
+    )
+    if all(notice.item_id != item.item_id for notice in notices):
+        return packet
+    return replace(
+        packet,
+        declared_total_tokens=non_checkpoint_tokens + item.token_estimate,
+        producer_version="mnemo-application/0.1.0+experimental-semantic-m3",
+        active_task_checkpoint=item,
+        provenance=notices,
+    )
 
 
 def _automatic_prompt_context_result(

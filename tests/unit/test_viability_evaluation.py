@@ -18,6 +18,7 @@ from mnemo_memory.packages.application.evaluation import (
     ScenarioCorpus,
     TokenAccount,
     aggregate_runs,
+    bootstrap_cluster_mean_interval,
     bootstrap_mean_interval,
     break_even_reuse,
     build_condition_adapters,
@@ -221,6 +222,19 @@ def test_bootstrap_pareto_mvs_and_economic_sensitivity() -> None:
     first = bootstrap_mean_interval((1.0, 2.0, 3.0), samples=100, seed=7)
     second = bootstrap_mean_interval((1.0, 2.0, 3.0), samples=100, seed=7)
     assert first == second
+    clustered = bootstrap_cluster_mean_interval(
+        (1.0, 2.0, 100.0, 101.0),
+        ("family-a", "family-a", "family-b", "family-b"),
+        samples=100,
+        seed=7,
+    )
+    assert clustered is not None
+    assert (
+        bootstrap_cluster_mean_interval(
+            (1.0, 2.0), ("only-family", "only-family"), samples=100, seed=7
+        )
+        is None
+    )
     assert pareto_frontier(
         {
             "a": {"tokens": 10.0, "latency_ms": 1.0, "lme": 1.0, "success": 1.0},
@@ -322,6 +336,11 @@ def test_report_is_deterministic_and_saved_log_reaggregates(tmp_path: Path) -> N
         chart_paths=chart_paths,
     )
     assert first == second
+    assert "median of paired ratios" in first
+    assert "ratio of displayed condition" in first
+    assert "Task-success availability proxy" in first
+    assert "NOT EVALUATED" in first
+    assert "scenario templates—not those deterministic rows" in first
     destination = write_evaluation_artifacts(
         results_root=tmp_path,
         evaluation_run_id="artifact-unit",
@@ -370,5 +389,22 @@ def test_missing_market_and_live_usage_are_not_imputed() -> None:
     assert aggregate["market_pull"]["score"] is None
     assert aggregate["mvs"]["complete_score"] is None
     assert aggregate["operational_portability"]["live_model_families"] == 0
+    assert aggregate["market_pull"]["status"] == "NOT EVALUATED"
+    assert aggregate["operational_portability"]["status"] == "NOT EVALUATED"
+    assert aggregate["threshold_summary"]["NOT EVALUATED"] == 3
+    assert {item["status"] for item in aggregate["thresholds"]} <= {
+        "PASS",
+        "FAIL",
+        "NOT EVALUATED",
+    }
+    assert {item["classification"] for item in aggregate["metric_classification_catalog"]} == {
+        "Actually observed",
+        "Deterministically measured",
+        "Model-generated",
+        "Estimated",
+        "Proxy",
+        "Simulated",
+        "Not evaluated",
+    }
     assert aggregate["verdict"] == "INSUFFICIENT EVIDENCE"
     assert math.isfinite(float(aggregate["mvs"]["observed_dimensions_score"]))

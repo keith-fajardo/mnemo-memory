@@ -2,8 +2,9 @@
 
 Mnemo's semantic checkpoint slice follows one rule: store evidence without rewriting it, compile
 typed meaning from that evidence, save incremental changes, and retrieve only the whole meaning
-units needed for continuation. It is an additive personal-mode capability; the existing checkpoint
-MCP tools and automatic context attachment are unchanged.
+units needed for continuation. It remains an additive personal-mode capability. The stable MCP and
+automatic-context behavior is unchanged by default; an explicitly enabled experimental path is
+described below.
 
 ## Three distinct layers
 
@@ -94,8 +95,32 @@ identical output.
 `applyCheckpointPatch`, `getCheckpoint`, `recallMemory`, `inspectEvidence`,
 `materializeSnapshot`, `renderCheckpoint`, and `measureCheckpointTokens` through Python's existing
 snake-case convention. The personal checkpoint runtime composes this service against schema 31.
-This issue intentionally does not add MCP tools, route existing MCP saves through it, or replace
-live automatic context behavior.
+No semantic MCP tool is added. With `experimental_semantic_memory_enabled=false`, public checkpoint
+saves and live automatic context remain unchanged. When the personal setting is explicitly true,
+the existing public save callback projects the accepted checkpoint revision into evidence-bearing
+task events and the fresh-session hook may replace only the active checkpoint item with the current
+semantic rendering. The setting changes neither the agent model endpoint nor team mode.
+
+## Experimental live personal path
+
+The live projection runs only after a canonical public checkpoint revision succeeds. It groups the
+complete handoff into closed semantic kinds, records agent attribution and personal retention, and
+copies the revision's immutable evidence associations. A new revision removes prior
+checkpoint-derived atoms from the active view before deterministically activating the current
+snapshot; changed goals and decisions preserve supersession. Exact retry is idempotent.
+
+SessionStart first performs the normal exact-scope active-checkpoint selection. Semantic memory can
+replace that one item only if the legacy item exists, its evidence is not expired, and the compact
+whole-atom content plus exact alias-to-evidence trace fits the existing active and total budgets.
+The item remains untrusted evidence and identifies its semantic checkpoint in both item ID and
+provenance. Any error or over-budget mandatory state falls back to the unchanged legacy packet.
+Completed, abandoned, expired, missing-scope, or cross-scope checkpoints are never revived by the
+semantic ledger. See ADR 0048.
+
+Explicit checkpoint deletion enumerates only the generated event namespace for that exact logical
+checkpoint, commits the canonical checkpoint tombstone, and then applies normal task-event deletion
+tombstones. Their existing cascades remove semantic atoms, active references, and orphaned evidence.
+An interrupted cleanup is forward-recoverable by retrying the same deterministic deletion.
 
 ## Evaluation and production threshold
 
@@ -137,4 +162,4 @@ Known limitations: the evidence envelope intentionally stores no raw transcript 
 deterministic compiler supports explicit typing but not general natural-language contradiction;
 metadata revisions do not yet have a separate append-only version table; semantic persistence is
 not wired to PostgreSQL/team mode; no new deletion/export API is exposed for semantic checkpoints;
-and this rendering is not yet used by the live automatic hook.
+and the experimental live rendering is not a production default or evidence of behavioral value.

@@ -33,6 +33,24 @@ class MeasurementSource(StrEnum):
     NOT_AVAILABLE = "not_available"
 
 
+class MetricClassification(StrEnum):
+    """Closed evidence labels used by reports and raw metric catalogs."""
+
+    ACTUALLY_OBSERVED = "Actually observed"
+    DETERMINISTICALLY_MEASURED = "Deterministically measured"
+    MODEL_GENERATED = "Model-generated"
+    ESTIMATED = "Estimated"
+    PROXY = "Proxy"
+    SIMULATED = "Simulated"
+    NOT_EVALUATED = "Not evaluated"
+
+
+class ThresholdStatus(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_EVALUATED = "NOT EVALUATED"
+
+
 @dataclass(frozen=True, slots=True)
 class EventSpec:
     event_key: str

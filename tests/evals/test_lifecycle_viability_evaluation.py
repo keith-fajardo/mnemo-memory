@@ -25,6 +25,8 @@ def test_full_offline_viability_corpus_is_paired_reproducible_and_honest() -> No
     assert len(runs) == 18 * 3 * 7
     assert aggregate["available_run_count"] == 18 * 3 * 6
     assert aggregate["paired_observations_per_available_condition"] == 54
+    assert aggregate["primary_independence_unit"] == "scenario_family"
+    assert aggregate["independent_scenario_family_count"] == 6
     assert aggregate["verdict"] == "INSUFFICIENT EVIDENCE"
     assert aggregate["market_pull"]["score"] is None
     assert aggregate["operational_portability"]["portability_claim_supported"] is False
@@ -34,6 +36,33 @@ def test_full_offline_viability_corpus_is_paired_reproducible_and_honest() -> No
     assert len(aggregate["economic_scenarios"]) == 3
     assert len(aggregate["thresholds"]) == 8
     assert len(aggregate["token_efficiency_by_horizon_reuse"]) == 9
+    comparison = aggregate["paired_comparisons"]["M3_mnemo_adaptive_retrieval_vs_B0_full_history"]
+    assert comparison["pair_count"] == 54
+    assert comparison["independent_scenario_family_count"] == 6
+    assert (
+        comparison["token_efficiency_score"]["confidence_interval_method"]
+        == "paired cluster bootstrap over scenario families"
+    )
+    diagnostics = aggregate["lifecycle_tes_diagnostics"]
+    assert diagnostics["primary_reported_value"] == "median_of_paired_ratios"
+    assert diagnostics["median_of_paired_ratios"] != diagnostics["ratio_of_condition_medians"]
+    compact = aggregate["conditions"]["M1_mnemo_compact_200"]
+    rolling = aggregate["conditions"]["B2_rolling_summary"]
+    proxy_delta = aggregate["paired_comparisons"]["M1_mnemo_compact_200_vs_B2_rolling_summary"][
+        "task_success_proxy_delta"
+    ]["mean"]
+    assert (
+        proxy_delta == compact["task_success_proxy"]["mean"] - rolling["task_success_proxy"]["mean"]
+    )
+    assert (
+        proxy_delta
+        != compact["continuation_fidelity"]["mean"] - rolling["continuation_fidelity"]["mean"]
+    )
+    assert aggregate["threshold_summary"] == {
+        "PASS": 4,
+        "FAIL": 1,
+        "NOT EVALUATED": 3,
+    }
 
     for condition in (
         ConditionId.FULL_HISTORY,

@@ -30,10 +30,24 @@ provider-native compaction. B3 remains unavailable rather than being simulated.
 
 ## Evidence classes
 
-- `provider_reported`: usage returned by an authorized provider.
-- `tokenizer_estimate`: a named tokenizer or deterministic counter.
-- `offline_proxy`: a transparent information-availability or behavior proxy.
-- `not_available`: no authorized measurement exists.
+- **Actually observed:** executed wall-clock/process bookkeeping such as local latency, run counts,
+  call counts, exclusions, and incurred external spend.
+- **Deterministically measured:** byte-, fixture-, evidence-, or artifact-derived fidelity and
+  integrity results.
+- **Model-generated:** actual input/output from an executed model condition; the offline baseline
+  has none.
+- **Estimated:** named lexical token counts, lifecycle TES, break-even reuse, and disclosed economic
+  sensitivity assumptions.
+- **Proxy:** information-availability and composite metrics such as task-success proxy, Task Impact,
+  LME, and MVS.
+- **Simulated:** counterfactual retry/repair token equivalents, reuse scaling, and synthetic scenario
+  repetition.
+- **Not evaluated:** live task success, provider billing, blinded quality, market demand, and
+  production portability when no authorized observation exists.
+
+The raw token account retains its lower-level source value (`provider_reported`,
+`tokenizer_estimate`, `offline_proxy`, or `not_available`). The aggregate metric catalog applies the
+seven report classifications above without upgrading an estimate or proxy into an observation.
 
 The default run uses `mnemo/conservative-lexical-v1`. It records local text-processing equivalents
 for save input/output and validation even though deterministic local code is not provider-billed.
@@ -43,10 +57,13 @@ efficiency remains separate.
 ## Corpus and experimental controls
 
 `viability-corpus-v1` contains six original synthetic realistic workflow templates expanded across
-15-, 75-, and 225-event horizons. Three reuse counts produce 54 paired observations per available
-condition. Condition order rotates deterministically. Each adapter receives a fresh exact-scope
-store, identical task prompt, counter, and grader rubric. Ground-truth keys, expected answers, and
-fixture filenames are checked for leakage.
+15-, 75-, and 225-event horizons. The six templates are the primary independence units. Three reuse
+counts produce 54 paired deterministic rows per available condition, but those rows are repeated
+measurements within the six scenario-family clusters. Paired and condition-level confidence
+intervals resample whole scenario families. A category containing only one template reports its
+interval as not estimable. Condition order rotates deterministically. Each adapter receives a fresh
+exact-scope store, identical task prompt, counter, and grader rubric. Ground-truth keys, expected
+answers, and fixture filenames are checked for leakage.
 
 The deterministic continuation grader is condition-blind: its interface receives context,
 evidence associations, ground truth, token counts, and integrity metadata, but no condition ID. It
@@ -62,10 +79,26 @@ break-even reuse, gated and ungated LME, TI, economic sensitivity, and MVS. TE i
 an observed-dimension geometric score when EV or MP is missing; it never imputes a favorable score.
 Any critical memory violation zeros gated LME for that run and closes the production gate.
 
-Paired means, medians, sample standard deviation, P10/P90, deterministic bootstrap 95% confidence
-intervals, failure counts, paired deltas, five-point non-inferiority proxy, and a multi-objective
-Pareto frontier are emitted. Offline proxy non-inferiority cannot pass the production live-quality
-threshold.
+Paired means, medians, sample standard deviation, P10/P90, deterministic scenario-family-clustered
+bootstrap 95% confidence intervals, failure counts, paired deltas, five-point non-inferiority proxy,
+and a multi-objective Pareto frontier are emitted. Offline proxy non-inferiority cannot pass the
+production live-quality threshold.
+
+## Evidence-integrity correction
+
+The corrected append-only run `offline-20260812-57ec69f-integrity-001` resolves two presentation
+ambiguities without changing fixtures or thresholds:
+
+- The reported `+0.701` is the paired mean **task-success availability proxy** delta: M1 `1.000`
+  minus B2 `0.299`. The separately displayed **continuation-fidelity** means are M1 `0.810` and B2
+  `0.299`, whose difference is `0.511`.
+- The reported `-209.6%` is the median of 54 paired lifecycle-TES ratios. The ratio of the displayed
+  marginal medians is separately `1 - 42,681 / 13,615.5 = -213.5%`. Neither summary is substituted
+  for the other.
+
+The threshold table now emits only `PASS`, `FAIL`, or `NOT EVALUATED`. Its offline result is four
+passes, one failure, and three not-evaluated thresholds; unmeasured live quality, cost per successful
+task, and market demand are not counted as empirical failures.
 
 ## External authorization
 

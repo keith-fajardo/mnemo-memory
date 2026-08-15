@@ -238,6 +238,8 @@ def render_comprehensive_report(
     comparisons = cast(dict[str, dict[str, Any]], aggregate["paired_comparisons"])
     candidate_name = ConditionId.MNEMO_RETRIEVAL.value
     candidate = conditions[candidate_name]
+    compact = conditions[ConditionId.MNEMO_COMPACT.value]
+    rolling_summary = conditions[ConditionId.ROLLING_SUMMARY.value]
     full_comparison = comparisons[f"{candidate_name}_vs_{ConditionId.FULL_HISTORY.value}"]
     rolling_same_budget_comparison = comparisons[
         f"{ConditionId.MNEMO_COMPACT.value}_vs_{ConditionId.ROLLING_SUMMARY.value}"
@@ -246,6 +248,10 @@ def render_comprehensive_report(
         f"{candidate_name}_vs_{ConditionId.ROLLING_SUMMARY.value}"
     ]
     tes = _metric(full_comparison, "token_efficiency_score", "median")
+    tes_diagnostics = cast(dict[str, Any], aggregate["lifecycle_tes_diagnostics"])
+    ratio_of_medians = float(tes_diagnostics["ratio_of_condition_medians"])
+    baseline_median_tokens = float(tes_diagnostics["baseline_condition_median_tokens"])
+    candidate_median_tokens = float(tes_diagnostics["candidate_condition_median_tokens"])
     rolling_same_budget_delta = _metric(
         rolling_same_budget_comparison, "task_success_proxy_delta", "mean"
     )
@@ -256,7 +262,7 @@ def render_comprehensive_report(
     success = _metric(candidate, "task_success_proxy", "mean")
     break_even = cast(dict[str, dict[str, Any]], aggregate["break_even"])[candidate_name]
     thresholds = cast(list[dict[str, Any]], aggregate["thresholds"])
-    threshold_passes = sum(bool(item["passes"]) for item in thresholds)
+    threshold_summary = cast(dict[str, int], aggregate["threshold_summary"])
     failure_counts = cast(dict[str, int], candidate["failure_categories"])
     category = cast(dict[str, dict[str, Any]], aggregate["by_category"])
     best_category = max(
@@ -267,14 +273,19 @@ def render_comprehensive_report(
     )
     artifact_lines = "\n".join(f"- [{Path(path).name}]({path})" for path in chart_paths)
     threshold_rows = "\n".join(
-        f"| {item['threshold']} | {_fmt(item['value'])} | {'PASS' if item['passes'] else 'FAIL / UNMEASURED'} | {item['evidence']} |"
+        f"| {item['threshold']} | {_fmt(item['value'])} | {item['status']} | {item['classification']} | {item['evidence']} |"
         for item in thresholds
     )
+    classification_rows = "\n".join(
+        f"| {item['metric_or_family']} | {item['classification']} | {item['basis']} |"
+        for item in cast(list[dict[str, str]], aggregate["metric_classification_catalog"])
+    )
     condition_rows = "\n".join(
-        "| {name} | {tokens} | {cf} | {lme_value} | {violations} |".format(
+        "| {name} | {tokens} | {cf} | {success_proxy} | {lme_value} | {violations} |".format(
             name=name,
             tokens=_fmt(_metric(value, "lifecycle_tokens", "median")),
             cf=_fmt(_metric(value, "continuation_fidelity", "mean")),
+            success_proxy=_fmt(_metric(value, "task_success_proxy", "mean")),
             lme_value=_fmt(_metric(value, "lme_gated", "mean")),
             violations=value["critical_violation_runs"],
         )
@@ -301,16 +312,18 @@ Worktree state: `{environment.get("worktree_state")}`
 ## 1. Executive summary
 
 **Verdict: {aggregate["verdict"]}.** The harness executed {aggregate["available_run_count"]}
-available paired offline runs across {len(corpus.scenarios)} scenarios and three reuse levels.
-For M3, median estimated lifecycle TES versus full history was **{tes:.1%}**, gated LME was
+available condition rows across {aggregate["independent_scenario_family_count"]} independent
+scenario families, {len(corpus.scenarios)} materialized scenarios, and three reuse levels. For M3,
+the median of paired estimated lifecycle TES ratios versus full history was **{tes:.1%}**, gated LME was
 **{lme:.3f}**, and the offline continuation-success proxy was **{success:.3f}**. These are direct
 measurements of deterministic synthetic context availability and estimated token-equivalent
 processing, not live model task performance or provider billing.
 
 ## 2. Verdict: Proceed, Pivot, Stop, or Insufficient Evidence
 
-**INSUFFICIENT EVIDENCE.** Only {threshold_passes}/{len(thresholds)} provisional thresholds passed
-with the evidence available. Compression and deterministic retention can justify the next
+**INSUFFICIENT EVIDENCE.** The provisional table contains {threshold_summary["PASS"]} `PASS`,
+{threshold_summary["FAIL"]} `FAIL`, and {threshold_summary["NOT EVALUATED"]} `NOT EVALUATED`
+verdicts. Compression and deterministic retention can justify the next
 validation experiment, but cannot justify continued product investment by themselves.
 
 ## 3. Confidence level and strongest evidence
@@ -342,8 +355,10 @@ Each scenario/reuse pair ran every condition with a counterbalanced order and a 
 store. The deterministic grader never receives the condition ID. Shared task prompts, tokenizer,
 tools, seed, and rubric are fixed by fairness digest `{environment.get("fairness_control_digest")}`.
 There are {aggregate["paired_observations_per_available_condition"]} paired observations per
-available condition. Repetition is across scenario/horizon/reuse strata, not stochastic model
-sampling.
+available condition, but the six scenario templates—not those deterministic rows—are the primary
+independence unit. Confidence intervals for paired and condition-level metrics use a cluster
+bootstrap over whole scenario families. Repetition is across scenario/horizon/reuse strata, not
+stochastic model sampling.
 
 ## 7. Models, providers, configurations, budgets, and limitations
 
@@ -352,6 +367,15 @@ maximum external calls `{config.budget.maximum_external_calls}`, suite budget
 `${config.budget.maximum_suite_cost_usd:.2f}`. B3 provider-native compaction and the model semantic
 grader are unavailable, not simulated. All token values use `{config.token_counter_id}` and are
 estimates. External cost incurred: **$0.00**.
+
+### 7.1 Metric evidence classification
+
+The classifications below apply to the named raw and aggregate metric families. A metric is never
+upgraded merely because it appears in a deterministic report.
+
+| Metric or family | Classification | Basis |
+|---|---|---|
+{classification_rows}
 
 ## 8. Scenario corpus and ground truth
 
@@ -372,16 +396,20 @@ plus all controlled integrity challenges. Ground truth is never inserted into te
 
 ## 10. Token Efficiency results
 
-| Condition | Median lifecycle tokens | Continuation proxy | Gated LME | Critical-violation runs |
-|---|---:|---:|---:|---:|
+| Condition | Median lifecycle token estimate | Continuation fidelity | Task-success availability proxy | Gated LME proxy | Critical-violation rows |
+|---|---:|---:|---:|---:|---:|
 {condition_rows}
 
-M3 median TES versus full history is **{tes:.1%}** after save, validation, recall, retrieval, and
-retry estimates. Median positive token break-even is **{_fmt(break_even["median_reuses"])} reuses**;
+M3's primary descriptive TES is the **median of paired ratios: {tes:.1%}** after save, validation,
+recall, retrieval, and simulated retry equivalents. The separate **ratio of displayed condition
+medians is {ratio_of_medians:.1%}**: `1 - {_fmt(candidate_median_tokens)} /
+{_fmt(baseline_median_tokens)}`. These summaries answer different
+questions and are labelled separately. Median positive token break-even is
+**{_fmt(break_even["median_reuses"])} reuses**;
 {break_even["no_positive_break_even_count"]} scenarios had no positive break-even. Compression
 ratio is retained only as a diagnostic in per-run artifacts.
 
-| Horizon and reuse | Median M3 TES | Mean M3 TES | Mean 95% bootstrap CI |
+| Horizon and reuse | Median M3 TES | Mean M3 TES | Clustered mean 95% CI |
 |---|---:|---:|---:|
 {horizon_reuse_rows}
 
@@ -406,7 +434,15 @@ context but may omit useful evidence; M3 spends retrieval tokens for higher evid
 
 Task Impact is an **offline availability proxy**, not generated-agent performance. M3 mean proxy is
 **{_fmt(_metric(candidate, "task_impact_proxy", "mean"))}**. The same-policy 200-token M1-versus-B2
-task-success proxy delta is **{rolling_same_budget_delta:+.3f}**; M3-versus-B2 with adaptive context
+task-success proxy delta is **{rolling_same_budget_delta:+.3f}**, computed from M1 task-success
+proxy **{_fmt(_metric(compact, "task_success_proxy", "mean"))}** minus B2
+**{_fmt(_metric(rolling_summary, "task_success_proxy", "mean"))}**. The separate
+continuation-fidelity values displayed in Section 10 are M1
+**{_fmt(_metric(compact, "continuation_fidelity", "mean"))}** and B2
+**{_fmt(_metric(rolling_summary, "continuation_fidelity", "mean"))}**, whose difference is
+**{_fmt(_metric(compact, "continuation_fidelity", "mean") - _metric(rolling_summary, "continuation_fidelity", "mean"))}**;
+they are not inputs to the
+reported task-success delta. M3-versus-B2 with adaptive context
 and retrieval is **{rolling_retrieval_delta:+.3f}**. Resume speed is estimated from context size;
 avoided work from failed-approach retention; human intervention from blocker/next-action availability.
 
@@ -430,21 +466,21 @@ spans are graded independently.
 
 ## 16. Portability and generalization
 
-Portability is **unmeasured**: zero live model families and zero exact provider tokenizers were
+Portability is **NOT EVALUATED**: zero live model families and zero exact provider tokenizers were
 tested. CLI availability or an environment credential does not constitute evaluation authorization.
 Synthetic performance cannot establish cross-provider or small-model generalization.
 
 ## 17. Market validation status
 
-Market pull is pending. There are no repository-backed design-partner interviews, pilots,
+Market pull is **NOT EVALUATED**. There are no repository-backed design-partner interviews, pilots,
 retention cohorts, willingness-to-pay responses, or verified cost-avoidance records. The supplied
 pilot schema, usage schema, interview guide, and questionnaire define how to collect them without
 inventing MP.
 
 ## 18. Go/no-go threshold table
 
-| Threshold | Value | Result | Evidence class |
-|---|---:|---|---|
+| Threshold | Value | Result | Classification | Evidence |
+|---|---:|---|---|---|
 {threshold_rows}
 
 ## 19. Failure examples and root causes
@@ -513,7 +549,7 @@ Use a new run ID; the writer refuses to overwrite an existing result directory.
 
 - **High-cost, frequent problem?** Missing market and usage evidence.
 - **Better than rolling summary?** At the same 200-token memory policy, M1's offline availability delta is {rolling_same_budget_delta:+.3f}; M3's expanded-context delta is {rolling_retrieval_delta:+.3f}. Live task quality is unmeasured.
-- **Lower total tokens?** Estimated median TES versus B0 is {tes:.1%}, including local lifecycle overhead categories.
+- **Lower total tokens?** The estimated paired-ratio median TES versus B0 is {tes:.1%}; the ratio of condition medians is {ratio_of_medians:.1%}.
 - **Preserves task completion?** Deterministic context proxy is {success:.3f}; actual completion is unmeasured.
 - **Break-even?** Median {_fmt(break_even["median_reuses"])} reuses in scenarios with a positive denominator.
 - **Benefiting workloads?** Long, noisy, reused, evidence-sensitive handoffs are the hypothesis; short/single-use work may not amortize saves.

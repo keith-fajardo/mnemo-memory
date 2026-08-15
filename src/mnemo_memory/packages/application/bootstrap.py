@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from mnemo_memory.packages.application.checkpoints import CheckpointApplicationService
@@ -15,7 +16,10 @@ from mnemo_memory.packages.application.dbt import (
     DbtSourceFreshnessParserPort,
 )
 from mnemo_memory.packages.application.knowledge import KnowledgeDocumentApplicationService
-from mnemo_memory.packages.application.semantic_memory import SemanticMemoryService
+from mnemo_memory.packages.application.semantic_memory import (
+    SemanticLifecycleObservation,
+    SemanticMemoryService,
+)
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.domain import KnowledgeSyncPlanner
 from mnemo_memory.packages.storage import (
@@ -82,6 +86,7 @@ def build_checkpoint_runtime(
     dbt_catalog_parser: DbtCatalogParserPort | None = None,
     dbt_run_results_parser: DbtRunResultsParserPort | None = None,
     dbt_source_freshness_parser: DbtSourceFreshnessParserPort | None = None,
+    semantic_lifecycle_observer: Callable[[SemanticLifecycleObservation], object] | None = None,
 ) -> CheckpointRuntime:
     """Open the configured SQLite profile, migrate it, and compose canonical use cases."""
     try:
@@ -139,5 +144,6 @@ def build_checkpoint_runtime(
             repository,
             semantic_repository,
             clock=lambda: datetime.now(UTC),
+            lifecycle_observer=semantic_lifecycle_observer,
         ),
     )

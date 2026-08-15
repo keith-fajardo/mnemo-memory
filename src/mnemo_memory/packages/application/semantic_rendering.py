@@ -485,8 +485,20 @@ def _atom_line(
     )
     qualifiers = dict(atom.qualifiers)
     if mode is SemanticRendererProfile.COMPACT:
-        details = [f"{_COMPACT_TAG[atom.kind]} {alias}", f"by={atom.subject}", meaning]
-        for key in ("condition", "rationale", "uncertainty", "authority_boundary"):
+        details = [
+            f"{_COMPACT_TAG[atom.kind]} {alias}",
+            f"by={atom.subject}",
+            f"confidence={atom.confidence:g}",
+            meaning,
+        ]
+        for key in (
+            "epistemic",
+            "critical_uncertainty",
+            "condition",
+            "rationale",
+            "uncertainty",
+            "authority_boundary",
+        ):
             if key in qualifiers:
                 details.append(f"{key}={qualifiers[key]}")
         details.append(f"e={sources}")

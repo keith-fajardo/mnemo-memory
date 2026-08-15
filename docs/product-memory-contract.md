@@ -63,6 +63,16 @@ canonical resurrection. New live-history exports omit the deleted checkpoint. Po
 transfer, prior user-controlled exports, backups, scheduled retention, and remote deletion remain
 separate lifecycle boundaries.
 
+Personal mode may derive an experimental semantic handoff from an explicitly saved checkpoint only
+when the owner enables `experimental_semantic_memory_enabled`. The derivative retains the exact task
+scope, agent attribution, revision evidence, non-permanent retention, and source-event linkage. It
+is untrusted evidence and cannot become authentication, authorization, or current repository
+structure. A fresh-session substitution is permitted only while the canonical checkpoint remains
+active and while every supplied whole atom and its fact-to-evidence trace fit existing budgets.
+Correction, completion, abandonment, expiry, and explicit deletion must propagate to active
+semantic selection and all derivative payloads under Mnemo's control. The stable default and team
+checkpoint behavior remain unchanged.
+
 Team dbt manifests use the same minimized authoritative project-index contract as personal mode.
 PostgreSQL stores immutable exact-project snapshots, typed nodes and lineage edges, explicit
 activation history, and last-sync state behind forced row-level security. A project-keyed

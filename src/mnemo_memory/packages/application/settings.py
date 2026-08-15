@@ -27,6 +27,7 @@ _FIELDS = {
     "context_structural_tokens",
     "context_total_tokens",
     "episodic_retention_days",
+    "experimental_semantic_memory_enabled",
     "model_id",
     "model_provider",
     "optional_model_enabled",
@@ -42,6 +43,7 @@ class PersonalSettingsError(ValueError):
 class PersonalSettings:
     repository_knowledge_sync_enabled: bool = True
     approved_event_capture_enabled: bool = True
+    experimental_semantic_memory_enabled: bool = False
     optional_model_enabled: bool = False
     model_provider: str | None = None
     model_id: str | None = None
@@ -58,6 +60,7 @@ class PersonalSettings:
         for name in (
             "repository_knowledge_sync_enabled",
             "approved_event_capture_enabled",
+            "experimental_semantic_memory_enabled",
             "optional_model_enabled",
         ):
             if not isinstance(getattr(self, name), bool):
@@ -102,6 +105,7 @@ class PersonalSettings:
             "context_structural_tokens": self.context_structural_tokens,
             "context_total_tokens": self.context_total_tokens,
             "episodic_retention_days": self.episodic_retention_days,
+            "experimental_semantic_memory_enabled": self.experimental_semantic_memory_enabled,
             "model_id": self.model_id,
             "model_provider": self.model_provider,
             "optional_model_enabled": self.optional_model_enabled,
@@ -110,7 +114,11 @@ class PersonalSettings:
 
     @classmethod
     def from_dict(cls, value: object) -> Self:
-        if not isinstance(value, dict) or set(value) != _FIELDS:
+        if not isinstance(value, dict):
+            raise PersonalSettingsError("personal settings fields are invalid")
+        if set(value) == _FIELDS - {"experimental_semantic_memory_enabled"}:
+            value = {**value, "experimental_semantic_memory_enabled": False}
+        if set(value) != _FIELDS:
             raise PersonalSettingsError("personal settings fields are invalid")
         try:
             return cls(**value)

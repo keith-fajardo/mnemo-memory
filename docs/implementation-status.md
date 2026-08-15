@@ -5378,3 +5378,233 @@ Codex/Claude processes predated this installation, and no unrelated process was 
 a hot reload. The refreshed connection will use `0.1.0a21` for newly started MCP processes or the
 next agent session. Even after restart, automatic context behavior remains the existing public path;
 semantic M3 was packaged but intentionally not promoted into automatic attachment by this release.
+
+### Live semantic-memory value investigation — In progress
+
+The user explicitly approved a bounded investigation to repair and evaluate the semantic M3 path.
+This issue first corrects the existing lifecycle report's metric-label, arithmetic-presentation,
+independence-unit, evidence-class, and unmeasured-threshold defects. It then connects semantic
+checkpoint compilation and recall to the real personal MCP save and automatic fresh-session path
+behind an explicit experimental feature flag; the stable default must remain unchanged.
+
+The live-path gate requires exact task scope, authorization before retrieval, immutable evidence
+associations, protected literals and hard constraints, explicit uncertainty and attribution,
+supersession, deterministic fresh-session recall, a trace of the exact supplied facts and evidence,
+and safe rejection or marking of stale, poisoned, superseded, and cross-scope material. Relevant
+security and threat-model tests are required because this changes automatic attachment and memory
+mutation composition.
+
+Lifecycle instrumentation must keep actually observed model tokens, local inference time,
+deterministic CPU time, human intervention, and external spend separate from estimates and proxies.
+At most three optimization iterations may target one failed metric without a newly demonstrated root
+cause, and every optimization must rerun integrity tests. Thresholds and preregistered success
+margins may not be changed after results are inspected.
+
+The behavioral study may use only an already-installed local model and runtime unless the user
+separately authorizes a download or paid external call. Its primary estimand is SD minus SI across
+at least thirty byte-identical paired, genuinely fresh-session variants after power analysis, with
+hidden tests and no transcript or answer leakage. Frontier substitution, blinded human quality,
+market demand, portability, and other unavailable evidence must remain `NOT EVALUATED`.
+
+Acceptance requires separate supported verdicts for live-path integrity, behavioral value, and
+economic viability; append-only raw records; environment/model/configuration/seeds; artifact
+hashes; exclusions and failures; exact reproduction instructions; a before/after lifecycle
+breakdown; clustered or hierarchical statistics using scenario families as the primary independence
+unit; the complete repository gate; and a final `PROCEED`, `PIVOT`, `STOP`, or
+`INSUFFICIENT EVIDENCE` decision. This issue does not authorize release, deployment, installation,
+database migration, model download, paid provider calls, or invented human, billing, market, or
+provider-native evidence.
+
+#### Evidence-integrity checkpoint — Complete
+
+The pre-change focused baseline passed 155 tests and the existing offline harness completed 378
+rows, 324 available, with zero external calls or spend. Its report presentation conflated two
+different proxies: `+0.701` is M1 minus B2 for the task-success availability proxy (`1.000 -
+0.299`), while the displayed continuation-fidelity means differ by `+0.511` (`0.810 - 0.299`). The
+reported `-209.6%` is the median of 54 paired lifecycle-TES ratios; the ratio of the displayed
+condition medians is separately `-213.5%` (`1 - 42,681 / 13,615.5`).
+
+The corrected analysis uses the six scenario templates, rather than the 54 repeated
+horizon/reuse rows, as the primary independence units and resamples whole families for paired and
+condition confidence intervals. Every aggregate metric is classified as actually observed,
+deterministically measured, model-generated, estimated, proxy, simulated, or not evaluated.
+Thresholds now have only `PASS`, `FAIL`, or `NOT EVALUATED` status; the corrected offline result is
+four passes, one failure, and three not-evaluated thresholds.
+
+Append-only corrected run `offline-20260812-57ec69f-integrity-001` retained 378 rows and 324
+available results with an `INSUFFICIENT EVIDENCE` verdict. Its primary artifact SHA-256 hashes are:
+
+- raw JSONL: `d0d433bdda48c26547628ea314e1158dc436f770b22fe55a05a08a0e8c7c032f`;
+- aggregate JSON: `a6abb233456e67272cdc939cf71f7c7ec92dcfb898f148faa18821b41021917d`;
+- Markdown report: `2c1681382b122cb74f1899e0d26dc084a6e076d69570da58aaa9af71773f7962`;
+- reproducibility manifest: `d58aef5f72f11e55e1b57c83e35dfdc2b3d6632fe54fc268eec92644df60cf39`.
+
+Verification: 14 focused evaluation tests passed in 72.43 seconds; focused Ruff and mypy passed;
+`git diff --check` passed. This checkpoint corrects evidence interpretation only. It does not claim
+live-path integrity, behavioral improvement, persistent deliberation, context-rot mitigation,
+frontier substitution, token-economic value, or commercial viability.
+
+#### Pre-change live-path and lifecycle baseline — Complete
+
+Two production-boundary controls passed in 5.83 seconds: a public stdio MCP save/revise/restart flow
+and an independent fresh SessionStart hook process. The MCP profile retained three immutable
+checkpoint revision records and the hook profile retained one, but both profiles contained zero
+`task_activity_events`, zero `semantic_checkpoints`, and zero `semantic_memory_atoms`. The emitted
+fresh-session attachment therefore contained only the legacy checkpoint JSON, lifecycle event, and
+structural projection. It contained no `MNEMO_CP_V1` semantic rendering or semantic checkpoint
+provenance. This directly confirms that the evaluator-only event/compiler path was not exercised by
+real checkpoint saves or automatic fresh-session attachment before the change.
+
+The corrected offline baseline also identifies why all Mnemo variants appeared to cost about
+42,000 median lifecycle tokens. Across the 54 M3 rows, the mean estimated lifecycle total was
+60,101.4: 50,192.7 (83.5%) came from serializing every semantic atom and charging that deterministic
+validation text as hypothetical model-input tokens; 6,375.5 (10.6%) came from charging full usable
+history as checkpoint-save input; 441.6 (0.7%) from rendered checkpoint output; and 2,669.3 (4.4%)
+from reuse-scaled recall. Retrieval query/evidence added only 114.3 mean tokens. M1, M2, and M3
+shared the same cached full-history build, so changing the checkpoint ceiling affected only recall
+and moved total cost by roughly one percent. These are tokenizer estimates, not observed model
+usage or billing. Existing telemetry has only total save duration and content size; it cannot yet
+separate creation, validation, serialization, retrieval, assembly, and repair CPU time. That
+instrumentation gap is part of the approved next work rather than evidence of zero cost.
+
+#### Experimental live semantic path checkpoint — Engineering complete
+
+ADR 0048 records an explicit personal setting, `experimental_semantic_memory_enabled`, which
+defaults to false and reads legacy settings documents as false. The stable personal behavior, team
+composition, MCP tool surface, model endpoint, dependency graph, and SQLite schema remain unchanged.
+The local settings UI exposes the experimental consent toggle.
+
+When enabled, the real public MCP checkpoint callback now projects the accepted bounded revision at
+the existing save boundary. It creates at most one exact-task event per closed semantic kind,
+retains immutable revision evidence, agent-inference attribution, uncertainty, non-permanent
+retention, and deterministic checkpoint/revision source keys, then applies the existing validated
+semantic patch transaction. A new full checkpoint revision removes prior projection-only atoms from
+the active semantic snapshot while changed goals and decisions retain supersession. Exact retries
+process zero new events.
+
+The real SessionStart hook first performs normal legacy active selection and can replace only that
+one item with `MNEMO_CP_V1` when the flag is enabled, non-expired exact-scope evidence exists, and
+the result fits the existing 600-token active and total budgets. `MNEMO_EVIDENCE_TRACE` maps every
+included atom alias to the exact evidence UUIDs supplied to the model. Content remains cited
+untrusted evidence with agent epistemic class and confidence visible. Any error or budget overrun
+returns the unchanged legacy packet; terminal or expired checkpoints cannot be resurrected.
+
+The production-boundary regression starts the stdio MCP in a registered project, creates and
+revises a public checkpoint, writes a poison checkpoint in another scope, ends the process, and
+starts two independent fresh hook processes without transcript input. Both hooks return
+byte-identical semantic content. Required literals (`America/New_York`, idempotency key `K-42`,
+status `409`, the exact test command, `90 seconds`, negation, and authorization) survive; uncertainty
+is marked at confidence 0.5; the old UTC-only decision is absent and the replacement cites
+supersession; exact evidence and semantic provenance are present; cross-scope poison is absent.
+
+Explicit checkpoint deletion now discovers only generated events whose namespace contains that
+logical checkpoint ID, commits the canonical tombstone, and applies normal task-event deletion
+tombstones. Existing cascades remove atoms, active references, and orphaned evidence. A retry
+completes forward cleanup if interruption occurs between transactions. The end-to-end regression
+verifies post-deletion recall and a later fresh hook contain neither semantic nor legacy task state.
+
+Verification: 122 focused settings, semantic domain/SQLite/evaluation, deletion, production MCP,
+and automatic-hook tests passed in 31.31 seconds; the dedicated live end-to-end test passed in 2.75
+seconds; focused Ruff and mypy passed; `npm run architecture:check` passed for 164 product Python
+files. This proves the live transport and deterministic integrity mechanisms. A Gate 1 verdict still
+requires the saved append-only trace and a real fresh-session agent continuation observation; it
+does not yet establish behavioral gain or context-rot mitigation.
+
+#### Gate 1 live observation — FAIL
+
+Append-only run `live-20260812-57ec69f-gate1-002` exercised the public stdio MCP, ended the
+original process, invoked two independent SessionStart processes without transcript input, and
+then invoked the installed `qwen2.5-coder:7b` Q4_K_M model with only the fresh attachment. The live
+semantic transport achieved 100% preregistered critical content fidelity, zero critical false
+memories, byte-identical semantic content, valid exact evidence/provenance, scope-poison exclusion,
+and complete deletion propagation. Actual model usage was 2,743 input tokens and 92 output tokens;
+local inference took 57.38 seconds and external spend was zero.
+
+Gate 1 remains `FAIL` because the real fresh-model continuation met only four of seven fixed
+requirements. It preserved `K-42`, status `409`, `America/New_York`, and the exact command/time,
+but paraphrased the hard authorization constraint, represented uncertainty only as a boolean, and
+returned the wrong supersession-rejection flag. The scorer and threshold were not relaxed. Excluded
+run `live-20260812-57ec69f-gate1-001` is preserved with its pre-inference timeout: its synthetic
+project was nested under the repository, causing project discovery to scan the full worktree.
+
+#### Semantic lifecycle measurement and bounded optimization — Complete
+
+Thirty independent fresh SQLite profiles established the instrumented baseline. Prior M3 lifecycle
+numbers remain explicitly estimated counterfactual tokens: mean 60,101.4 total, including 50,192.7
+for deterministic atom text mislabeled as hypothetical validation input and 6,375.5 for full
+history. They are not observed model tokens or billing.
+
+Production application instrumentation now separates memory creation, validation, serialization,
+retrieval, context assembly, repair, persistence, deterministic process CPU, model input/output,
+continuation, local inference, human intervention, and external spend. It is content-free and
+observer-driven; default runtime behavior writes no new diagnostic state. Three bounded iterations
+were performed and then optimization stopped:
+
+1. persist only changed semantic kinds while retaining unchanged active atoms;
+2. reuse the already-read immutable history and compile only the current revision delta;
+3. reuse the recall's already-authorized, retention-filtered events during evidence assembly.
+
+The paired 30-profile comparison `comparison-20260812-baseline-vs-final-001` reports top-level
+semantic elapsed work 27.0% lower (95% paired profile-bootstrap CI -28.0% to -26.0%), checkpoint
+save work 15.1% lower by paired mean, and automatic-context work 49.0% lower (CI -49.3% to -48.6%).
+Rendered semantic content remained 399 tokens and the evidence-bearing automatic item remained 505
+tokens, so this is CPU/latency improvement rather than lifecycle-token savings. Focused semantic,
+SQLite, live MCP, and benchmark tests passed after every iteration; architecture remains clean.
+
+#### Local small-model long-horizon evaluation — Complete
+
+The checked-in preregistration fixes 30 independent telehealth scheduler variants, three stateless
+fresh sessions, six conditions (S0, SI, SR, SF, SD, SX), hidden behavioral checks, a +0.10 primary
+accuracy margin, paired variant bootstrap, exact McNemar success test, poison rule, and zero allowed
+SD critical false memories. F0 and blinded human review are `NOT EVALUATED` because neither budget
+nor reviewers were authorized.
+
+Excluded dry run `dry-20260812-qwen-001` found three malformed responses, all ending exactly at the
+240-token cap. Before final output, a documented mechanical amendment raised the cap to 320 and
+required concise rationale fields; no threshold, hidden check, seed, sample size, or scoring rule
+changed. Confirmation run `dry-20260812-qwen-002` completed all 18 sessions with zero malformed
+responses, cap hits, or invalid changes and recorded installed model digest
+`dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`. Final append-only run
+`final-20260812-qwen30-001` completed all 180 trajectories and 30 primary SD/SI pairs. SD minus SI
+hidden-test accuracy was +0.0311 with a 95% paired variant-bootstrap interval of +0.0156 to +0.0489
+and paired Cohen's dz 0.639. The effect is statistically supported but below the preregistered
++0.10 practical margin. SD and SI each achieved 0/30 end-to-end successes; the exact one-sided
+McNemar p-value is 1.0. SD introduced zero critical false memories and remained beyond active
+context, but 14/30 SX trajectories violated the all-variant poison safe-failure rule. Gate 2 is
+therefore `FAIL` without threshold revision.
+
+The final raw log contains 542 actual local model calls: 540 analyzed calls plus two orphaned calls
+from a file-descriptor-exhaustion interruption after trajectory 170. Exact resume skipped all
+completed condition/variant keys. The orphaned calls are excluded from effects but retained as
+1,934 observed tokens and 53.59 seconds of operational failure cost. There were zero final response
+parse failures, output-cap hits, invalid changes, transcript leaks, unavailable trajectories, paid
+calls, or human interventions.
+
+Root-cause review found that all five semantic SQLite read paths used the connection transaction
+context manager, which commits or rolls back but does not close the descriptor. They now use
+explicit closing. A regression proves a read connection is unusable after the operation; 11 focused
+semantic SQLite and long-horizon tests, formatting, lint, and typing pass. The frozen model evidence
+was not changed or regenerated.
+
+#### Terminal economics and decision — Complete
+
+SD used 99,237 actual model tokens versus SI's 69,068, so actual long-horizon `LifecycleTES` is
+-43.7%; local inference time was 3,317.89 versus 2,765.51 seconds. SF used 95,487 tokens versus
+S0's 67,014, for `LifecycleTES = -42.5%`. Every condition completed zero successful tasks, so token
+and inference cost per successful task are undefined rather than favorable. Neither the 30% token
+savings path nor the measured lower-cost-per-success path passed. Frontier gap closure is `NOT
+EVALUATED` because F0 was not authorized. Gate 3 is `FAIL` for the tested three-session local-Qwen
+telehealth-scheduler segment.
+
+The immutable terminal package is
+`evaluation-results/final-investigation-v1/investigation-20260812-final-002`; the checked-in summary
+is `docs/evaluations/memory-value-investigation.md`. Gate 1, Gate 2, and Gate 3 are each `FAIL`.
+Blinded quality, frontier substitution, market demand, and portability are `NOT EVALUATED`. The
+fixed decision logic yields `STOP`.
+
+The final aggregate gate passed with 1,097 tests and 27 expected skips. The dedicated PostgreSQL
+gate passed 26 tests with one opt-in load test skipped. Formatting, lint, strict typing, schema,
+dependency/provenance, architecture, and installed-package verification all passed. Final review
+found no dependency or lockfile change, no competing-product artifact, no secret, and no unrelated
+rewrite. This issue is complete; stop at this boundary and wait for explicit approval before any
+later issue, release, deployment, installation, or broader product claim.

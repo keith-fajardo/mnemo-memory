@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from mnemo_memory.packages.application import (
+    CheckpointApplicationService,
+    CreateCheckpoint,
     DeterministicMemoryCompiler,
+    ReviseCheckpoint,
+    SemanticLifecycleObservation,
+    SemanticMemoryApplicationError,
     SemanticMemoryService,
 )
 from mnemo_memory.packages.context_engine import (
@@ -18,6 +23,7 @@ from mnemo_memory.packages.context_engine import (
     reduce_checkpoint_phrases,
 )
 from mnemo_memory.packages.domain import (
+    CheckpointContent,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -50,6 +56,7 @@ from mnemo_memory.packages.domain import (
     apply_semantic_checkpoint_patch,
 )
 from mnemo_memory.packages.storage import (
+    ReferenceCheckpointRepository,
     ReferenceSemanticCheckpointRepository,
     ReferenceTaskActivityEventRepository,
     SemanticCheckpointNotFound,
@@ -318,6 +325,137 @@ def test_changed_goal_and_decision_supersede_without_erasing_history() -> None:
     assert sum(item.status is SemanticAtomStatus.SUPERSEDED for item in ledger) == 2
     assert len(ledger) == 4
     assert all(atom.source_event_ids for atom in ledger)
+
+
+def test_public_checkpoint_projection_replaces_state_and_preserves_audit_evidence() -> None:
+    scope = _scope()
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
+    semantic, _ = _service()
+    source = _evidence(1, NOW)
+    initial = checkpoints.create(
+        CreateCheckpoint(
+            scope,
+            CheckpointContent(
+                task_objective="Complete scheduling for tenant 042.",
+                completed_work=("Validated request hash aabbccddeeff0011.",),
+                current_state="Uncertain whether the provider can return 409.",
+                remaining_work=("Run `uv run pytest -q` within 90 seconds.",),
+                decisions=("Use UTC offsets only.",),
+                failures=("A duplicate request bypassed the idempotency key.",),
+                blockers=("Must not write without scheduler authorization.",),
+                relevant_files=("services/scheduling.py",),
+                relevant_artifacts=(),
+                verification_performed=("3 concurrency checks passed.",),
+                token_estimate=180,
+            ),
+            (source,),
+        )
+    )
+    first = semantic.save_checkpoint_view(initial, retention_days=180)
+    revised = checkpoints.revise(
+        ReviseCheckpoint(
+            scope,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            replace(
+                initial.revision.content,
+                decisions=(
+                    "Use IANA zone America/New_York; this supersedes the UTC-only decision.",
+                ),
+                remaining_work=("Run `uv run pytest -q` and inspect status 409.",),
+            ),
+            (source,),
+        )
+    )
+    second = semantic.save_checkpoint_view(revised, retention_days=180)
+    item, provenance = semantic.automatic_context_item(
+        scope, preferred_token_target=600, maximum_token_ceiling=800
+    )
+
+    assert first.processed_event_count == 8
+    assert second.processed_event_count == 2
+    assert "Use UTC offsets only." not in item.content
+    assert "America/New_York" in item.content
+    assert "Must not write without scheduler authorization." in item.content
+    assert "Uncertain whether the provider can return 409." in item.content
+    assert "epistemic=agent_inference" in item.content
+    assert "confidence=0.5" in item.content
+    assert "supersedes=" in item.content
+    assert "MNEMO_EVIDENCE_TRACE" in item.content
+    assert str(source.evidence_id) in item.content
+    assert provenance.item_id == item.item_id
+    assert provenance.source_reference.startswith("mnemo:semantic-checkpoint/")
+    assert (
+        sum(atom.status is SemanticAtomStatus.SUPERSEDED for atom in semantic.list_atoms(scope))
+        == 1
+    )
+    retry = semantic.save_checkpoint_view(revised, retention_days=180)
+    assert retry.idempotent is True
+    assert retry.processed_event_count == 0
+
+
+def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -> None:
+    scope = _scope()
+    observations: list[SemanticLifecycleObservation] = []
+    events = ReferenceTaskActivityEventRepository()
+    service = SemanticMemoryService(
+        events,
+        ReferenceSemanticCheckpointRepository(events),
+        clock=lambda: NOW,
+        lifecycle_observer=observations.append,
+    )
+    saved = service.save_checkpoint(
+        scope,
+        events=(_event(scope, 1, "constraint: Never write without authorization."),),
+    )
+    service.recall_memory(scope)
+
+    assert saved.lifecycle is not None
+    assert [item.operation for item in observations] == [
+        "checkpoint_patch_apply",
+        "checkpoint_recall",
+    ]
+    for observation in observations:
+        value = observation.to_dict()
+        assert observation.wall_duration_ns >= 0
+        assert observation.deterministic_cpu_ns >= 0
+        assert observation.stage_durations_ns
+        assert value["model_input_tokens"] == 0
+        assert value["model_output_tokens"] == 0
+        assert value["local_inference_duration_ns"] == 0
+        assert value["human_intervention_count"] == 0
+        assert value["external_spend_usd"] == 0.0
+
+
+def test_recall_rejects_atoms_after_source_retention_expires() -> None:
+    scope = _scope()
+    clock = [NOW]
+    events = ReferenceTaskActivityEventRepository()
+    service = SemanticMemoryService(
+        events,
+        ReferenceSemanticCheckpointRepository(events),
+        clock=lambda: clock[0],
+    )
+    source = _event(scope, 1, "fact: This short-lived fact must expire.")
+    expiring = replace(
+        source,
+        retention=RetentionSchedule(
+            RetentionPolicyId.from_string("80000000-0000-4000-8000-000000000002"),
+            False,
+            NOW,
+            NOW,
+            NOW,
+            None,
+            NOW + timedelta(minutes=1),
+        ),
+    )
+    service.save_checkpoint(scope, events=(expiring,))
+    clock[0] = NOW + timedelta(minutes=2)
+
+    with pytest.raises(SemanticCheckpointNotFound, match="no current evidence"):
+        service.recall_memory(scope)
+    with pytest.raises(SemanticMemoryApplicationError, match="EVIDENCE_EXPIRED"):
+        service.inspect_evidence(scope, (expiring.event_id,))
 
 
 def test_conflicting_speaker_claims_remain_distinct_and_attributed() -> None:

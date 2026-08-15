@@ -32,6 +32,14 @@ canonical packet), `rendered_context` (deterministic client-labeled line records
 retrieval, change ranking or budgets, call a model, or treat retrieved content as instructions.
 Automatic-memory hooks use the matching renderer for their configured client.
 
+Personal settings also expose `experimental_semantic_memory_enabled`, which is `false` by default.
+When explicitly enabled, a successful local public checkpoint save additionally compiles the
+accepted revision into exact-task semantic memory. A later SessionStart may replace only the active
+checkpoint item with a compact `MNEMO_CP_V1` handoff and `MNEMO_EVIDENCE_TRACE`. The replacement is
+still cited untrusted evidence, never changes the MCP tool surface or agent model endpoint, and
+falls back to the legacy checkpoint when it is absent, terminal, expired, invalid, or over budget.
+Team MCP composition does not use this experimental setting.
+
 `list_skills` requires `client` (`codex` or `claude-code`) and returns at most 32 current compatible
 skill metadata records without Markdown content. `get_skill` requires the same concrete client plus
 one exact bounded skill name and returns either that current checked-in revision or `null`. Its

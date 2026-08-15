@@ -1522,6 +1522,16 @@ cascades its association; an atom with no remaining source is erased and checkpo
 cascade. A payload-free compilation marker prevents remaining historical events from being
 reprocessed after a deleted head. Patch rows contain only operation and object IDs.
 
+The experimental personal live path additionally requires explicit settings consent, a successful
+canonical public checkpoint revision, and the same exact registered task scope used by the legacy
+active selector. Checkpoint fields are retained as agent-attributed inference rather than upgraded
+to user facts. Each revision replaces the prior checkpoint projection in the active semantic view;
+changed goals and decisions retain supersession. SessionStart can substitute the semantic item only
+while the legacy checkpoint is active and current, and only when whole atoms plus their exact
+fact-to-evidence trace fit existing packet budgets. Expired source schedules are filtered at read
+time before a purge. Failures return the legacy item, and team composition is unchanged. Explicit
+checkpoint deletion must propagate through its generated source events and semantic dependents.
+
 **Verification:** Pure-domain and repository tests cover broken evidence references, idempotent
 patches, supersession, exact-scope reads, and cross-task denial. Rendering tests cover negation,
 modality, approval conditions, uncertainty, commands, paths, UUIDs, hashes, dates, versions,
@@ -1529,12 +1539,20 @@ numbers, units, no intra-unit ellipses, structured omissions, deterministic outp
 overrun. SQLite tests reopen materialized delta/snapshot state. The held-out local corpus checks
 required-group and protected-span fidelity, inversions, false-memory probes, provenance, drift, and
 multiple tokenizer adapters.
+The live-path regression uses the real stdio MCP and two fresh hook processes, verifies flag-off
+compatibility, exact protected spans and evidence associations, agent-inference and uncertainty
+marking, supersession, deterministic output, cross-scope poison exclusion, and SQLite durability.
+Retention tests advance the clock past source expiry and require recall and evidence inspection to
+reject the atom. The end-to-end deletion step verifies that a canonical checkpoint tombstone is
+followed by generated task-event tombstones and removal of semantic atoms and active recall; exact
+retry is the documented recovery for an interruption between those transactions.
 
 **Residual risk:** Personal SQLite has no RLS and relies on exact-scope adapter queries and local
 file permissions. PostgreSQL/team persistence, semantic export/deletion APIs, general natural-
-language contradiction resolution, actual provider tokenizers, and cross-model fresh-session
-evaluation are not implemented in this slice. The compact format is not production-validated until
-the documented corpus and two-model thresholds pass.
+language contradiction resolution, actual provider tokenizers, deletion propagation for live
+checkpoint projections in external exports or backups, and powered small-model fresh-session
+evaluation remain incomplete. The experimental path is not a production default and the compact
+format is not production-validated until the documented live gates pass.
 
 ## Security gates and ownership
 

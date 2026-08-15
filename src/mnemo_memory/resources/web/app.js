@@ -254,6 +254,7 @@ byId("settings-form").addEventListener("submit", async (event) => {
   const value = {
     repository_knowledge_sync_enabled: form.elements.namedItem("repository_knowledge_sync_enabled").checked,
     approved_event_capture_enabled: form.elements.namedItem("approved_event_capture_enabled").checked,
+    experimental_semantic_memory_enabled: form.elements.namedItem("experimental_semantic_memory_enabled").checked,
     optional_model_enabled: enabled,
     model_provider: enabled ? form.elements.namedItem("model_provider").value.trim() : null,
     model_id: enabled ? form.elements.namedItem("model_id").value.trim() : null,

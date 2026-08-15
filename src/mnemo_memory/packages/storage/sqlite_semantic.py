@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from mnemo_memory.packages.domain import (
@@ -62,7 +62,7 @@ class SQLiteSemanticCheckpointRepository:
     def get_current_semantic_checkpoint(self, scope: MemoryScope) -> SemanticCheckpoint | None:
         self._require_scope(scope)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 row = connection.execute(
                     "SELECT payload_json FROM semantic_checkpoints WHERE scope_key = ? "
                     "ORDER BY generation DESC LIMIT 1",
@@ -83,7 +83,7 @@ class SQLiteSemanticCheckpointRepository:
     ) -> SemanticCheckpoint:
         self._require_scope(scope)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 row = connection.execute(
                     "SELECT payload_json FROM semantic_checkpoints "
                     "WHERE checkpoint_id = ? AND scope_key = ?",
@@ -102,7 +102,7 @@ class SQLiteSemanticCheckpointRepository:
     def list_semantic_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]:
         self._require_scope(scope)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 atoms = self._list_atoms(connection, scope)
         except sqlite3.Error as error:
             raise SemanticCheckpointStorageFailure(
@@ -113,7 +113,7 @@ class SQLiteSemanticCheckpointRepository:
     def list_compiled_semantic_event_ids(self, scope: MemoryScope) -> frozenset[EventId]:
         self._require_scope(scope)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 rows = connection.execute(
                     "SELECT marker.event_id, checkpoint.payload_json "
                     "FROM semantic_compiled_events AS marker "
@@ -135,7 +135,7 @@ class SQLiteSemanticCheckpointRepository:
     ) -> MaterializedSemanticCheckpoint:
         self._require_scope(scope)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 return self._materialize(connection, scope, checkpoint_id)
         except SemanticCheckpointNotFound:
             raise
