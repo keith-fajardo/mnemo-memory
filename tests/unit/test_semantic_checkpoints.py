@@ -578,8 +578,12 @@ def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -
         assert value["human_intervention_count"] == 0
         assert value["external_spend_usd"] == 0.0
     automatic = observations[-1].to_dict()
-    assert automatic["injected_context_tokens"] == item.token_estimate
-    assert automatic["injected_context_tokens"] > automatic["model_input_tokens"]
+    injected_tokens = automatic["injected_context_tokens"]
+    model_input_tokens = automatic["model_input_tokens"]
+    assert isinstance(injected_tokens, int)
+    assert isinstance(model_input_tokens, int)
+    assert injected_tokens == item.token_estimate
+    assert injected_tokens > model_input_tokens
 
 
 def test_recall_rejects_atoms_after_source_retention_expires() -> None:

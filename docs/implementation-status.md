@@ -5609,7 +5609,7 @@ found no dependency or lockfile change, no competing-product artifact, no secret
 rewrite. This issue is complete; stop at this boundary and wait for explicit approval before any
 later issue, release, deployment, installation, or broader product claim.
 
-### Small-model long-horizon Phase 0/1 — In progress
+### Small-model long-horizon Phase 0/1 — Complete
 
 The user explicitly approved the charter-safe Phase 0 enablers and Phase 1 token and false-memory
 work in `docs/superpowers/plans/2026-08-15-small-model-long-horizon.md`. These changes remain behind
@@ -5675,3 +5675,10 @@ line with attribution and evidence aliases. The red revision test first dropped 
 SQLite, evaluation, long-horizon, and MCP durability tests pass with formatting, linting, strict
 source typing, and diff checks. `repeated_error_count` remains a harness measurement for a future
 authorized live run; no behavioral reduction is claimed from offline validation.
+
+The final aggregate gate passed with 1,104 tests and 27 expected environment skips. The dedicated
+ephemeral PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting,
+strict typing, context-packet schema validation, dependency/provenance checks, the 164-file
+architecture boundary check, and installed-package verification all passed. No dependency or
+lockfile changed, no live model endpoint was called, and no deploy or release sequence ran. Phase 0
+and Phase 1 are complete; stop here until the maintainer explicitly approves charter-stretch Phase 2.
