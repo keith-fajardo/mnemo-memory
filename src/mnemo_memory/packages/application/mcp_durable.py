@@ -152,6 +152,7 @@ class DurableMcpContextPort:
             source_changes = request.get("source_changes")
             source_overview = request.get("source_overview")
             query = request.get("query")
+            memory_handle = request.get("memory_handle")
             recap_days = request.get("recap_days")
             knowledge_query = request.get("knowledge_query")
             semantic_knowledge_query = request.get("semantic_knowledge_query")
@@ -169,6 +170,8 @@ class DurableMcpContextPort:
                 raise ValueError("source_query must be a string")
             if query is not None and not isinstance(query, str):
                 raise ValueError("query must be a string")
+            if memory_handle is not None and not isinstance(memory_handle, str):
+                raise ValueError("memory_handle must be a string")
             if recap_days is not None and (
                 not isinstance(recap_days, int)
                 or isinstance(recap_days, bool)
@@ -342,6 +345,7 @@ class DurableMcpContextPort:
                 or dbt_changes is not None
                 or source_query is not None
                 or query is not None
+                or memory_handle is not None
                 or checkpoint_recap is not None
                 or impact is not None
                 or changes is not None
@@ -368,6 +372,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            memory_handle=memory_handle,
                             checkpoint_recap=checkpoint_recap,
                             source_query=source_query,
                             budget=budget,
@@ -404,6 +409,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            memory_handle=memory_handle,
                             checkpoint_recap=checkpoint_recap,
                             dbt_changes=changes_query,
                             source_query=source_query,
@@ -445,6 +451,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            memory_handle=memory_handle,
                             checkpoint_recap=checkpoint_recap,
                             dbt_freshness=freshness_query,
                             source_query=source_query,
@@ -521,6 +528,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            memory_handle=memory_handle,
                             checkpoint_recap=checkpoint_recap,
                             dbt_selector=selector_query,
                             source_query=source_query,
@@ -563,6 +571,7 @@ class DurableMcpContextPort:
                             scope=scope,
                             checkpoint_id=checkpoint,
                             query=query,
+                            memory_handle=memory_handle,
                             checkpoint_recap=checkpoint_recap,
                             dbt_test_coverage=coverage_query,
                             source_query=source_query,
@@ -634,6 +643,7 @@ class DurableMcpContextPort:
                         scope=scope,
                         checkpoint_id=checkpoint,
                         query=query,
+                        memory_handle=memory_handle,
                         checkpoint_recap=checkpoint_recap,
                         lineage=dbt_query,
                         source_query=source_query,
@@ -657,6 +667,7 @@ class DurableMcpContextPort:
                         scope=scope,
                         checkpoint_id=checkpoint,
                         query=query,
+                        memory_handle=memory_handle,
                         checkpoint_recap=checkpoint_recap,
                         budget=budget,
                         include_lifecycle_events=include_lifecycle_events,

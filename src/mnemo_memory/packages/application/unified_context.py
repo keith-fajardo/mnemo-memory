@@ -106,6 +106,8 @@ class SemanticMemoryContextPort(Protocol):
         self,
         scope: MemoryScope,
         *,
+        query_or_task: str = "",
+        handle: str | None = None,
         preferred_token_target: int,
         maximum_token_ceiling: int,
     ) -> tuple[ContextItem, ProvenanceNotice]: ...
@@ -469,6 +471,7 @@ class GetUnifiedContext:
     dbt_freshness: ContextDbtFreshnessQuery | None = None
     dbt_changes: ContextDbtChangesQuery | None = None
     query: str | None = None
+    memory_handle: str | None = None
 
     def __post_init__(self) -> None:
         if self.query is not None:
@@ -476,6 +479,11 @@ class GetUnifiedContext:
             if not query or len(query) > 512:
                 raise ValueError("context query must contain between 1 and 512 characters")
             object.__setattr__(self, "query", query)
+        if self.memory_handle is not None:
+            handle = self.memory_handle.strip()
+            if not handle or len(handle) > 96:
+                raise ValueError("memory handle must contain between 1 and 96 characters")
+            object.__setattr__(self, "memory_handle", handle)
         if (
             sum(
                 query is not None
@@ -605,6 +613,8 @@ class UnifiedContextService:
         try:
             item, provenance = self._semantic_memory.automatic_context_item(
                 request.scope,
+                query_or_task=request.query or "",
+                handle=request.memory_handle,
                 preferred_token_target=min(400, available),
                 maximum_token_ceiling=available,
             )

@@ -630,6 +630,63 @@ def test_compact_render_bookends_terse_guardrails_and_preserves_literals() -> No
     assert compact.measured_tokens <= 199  # At least 20% below the 249-token legacy fixture.
 
 
+def test_context_index_resolves_handles_and_queries_only_optional_matches() -> None:
+    scope = _scope()
+    service, _ = _service()
+    events = [
+        _event(scope, 1, "goal: Complete the bounded database migration."),
+        _event(scope, 2, "next_action: Verify the selected database slice."),
+        _event(scope, 3, "fact: SQLite transaction state is ready for tenant alpha."),
+    ]
+    events.extend(
+        _event(
+            scope,
+            seed,
+            f"fact: Historical Redis shard observation {seed} is unrelated background evidence.",
+        )
+        for seed in range(4, 15)
+    )
+    saved = service.save_checkpoint(scope, events=tuple(events))
+
+    index, provenance = service.automatic_context_index(scope)
+    checkpoint_id = str(saved.checkpoint.checkpoint.checkpoint_id)
+    handle = f"memory:{checkpoint_id[:8]}:fact"
+    full, _ = service.automatic_context_item(
+        scope,
+        preferred_token_target=2_000,
+        maximum_token_ceiling=2_000,
+    )
+    queried, _ = service.automatic_context_item(
+        scope,
+        query_or_task="SQLite transaction",
+        preferred_token_target=600,
+        maximum_token_ceiling=800,
+    )
+    fact_slice, _ = service.automatic_context_item(
+        scope,
+        handle=handle,
+        preferred_token_target=2_000,
+        maximum_token_ceiling=2_000,
+    )
+
+    assert index.content.startswith(f"MNEMO_INDEX_V1 rev={checkpoint_id[:8]}")
+    assert "goal1" in index.content
+    assert "fact12" in index.content
+    assert "next1" in index.content
+    assert f"handle=memory:{checkpoint_id[:8]}:<kind>" in index.content
+    assert index.token_estimate <= 80
+    assert index.token_estimate * 8 <= full.token_estimate
+    assert provenance.item_id == index.item_id
+    assert "SQLite transaction state" in queried.content
+    assert "Historical Redis shard" not in queried.content
+    assert "Complete the bounded database migration." in queried.content
+    assert "Verify the selected database slice." in queried.content
+    assert "SQLite transaction state" in fact_slice.content
+    assert "Historical Redis shard observation 14" in fact_slice.content
+    assert "Complete the bounded database migration." not in fact_slice.content
+    assert "Verify the selected database slice." not in fact_slice.content
+
+
 def test_old_active_constraint_survives_many_new_optional_events() -> None:
     scope = _scope()
     service, _ = _service()

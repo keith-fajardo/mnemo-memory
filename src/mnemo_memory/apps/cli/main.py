@@ -450,7 +450,7 @@ def _experimental_semantic_session_packet(
     packet: ContextPacket,
     scope: MemoryScope,
 ) -> ContextPacket:
-    """Replace only the active handoff with live M3 under the existing hard packet budget."""
+    """Replace the active handoff with a pull index under the existing hard packet budget."""
 
     legacy = packet.active_task_checkpoint
     service = runtime.semantic_memory_service
@@ -464,12 +464,10 @@ def _experimental_semantic_session_packet(
     if available < 1:
         return packet
     try:
-        item, provenance = service.automatic_context_item(
-            scope,
-            preferred_token_target=min(400, available),
-            maximum_token_ceiling=available,
-        )
+        item, provenance = service.automatic_context_index(scope)
     except (OSError, RuntimeError, TypeError, ValueError):
+        return packet
+    if item.token_estimate > available:
         return packet
     notices = tuple(
         provenance if notice.item_id == legacy.item_id else notice for notice in packet.provenance

@@ -5654,3 +5654,14 @@ fell from 249 to 195 conservative tokens (21.7%) while including one more fact; 
 literal remain exact, every constraint starts with `MUST`, and the next action is the final content
 line. The assertion failed first on the legacy header; all 45 focused semantic rendering, viability,
 evaluation, and MCP durability tests pass with formatting, linting, and strict source typing.
+
+Task 1.3 replaces the experimental SessionStart handoff body with a content-free semantic index that
+identifies the current revision, counts active atom kinds, and supplies the current handle shape.
+`get_context(memory_handle=...)` resolves one exact current kind slice as `untrusted_evidence`, while
+a transient natural-language query retains all mandatory atoms and filters optional atoms by literal
+term overlap without persistence. The dense unit fixture's index is 35 deterministic tokens versus
+1,005 for its full item (28.7x smaller and below the 80-token ceiling). The red tests first found the
+missing method and rejected MCP argument; 77 focused semantic, MCP, durability, and harness tests now
+pass, as do formatting, linting, strict typing, and the 164-file architecture boundary check. The
+optional harness recognizes `SFp` for index-plus-query-pull measurement, but no live model run was
+authorized or performed.

@@ -84,6 +84,24 @@ _CHECKPOINT_PROJECTION_RETENTION_POLICY = RetentionPolicyId(
     UUID("1a965f61-3ec5-4e67-bf83-4c6b58146ff7")
 )
 _CHECKPOINT_KIND_ORDER = {kind: index for index, kind in enumerate(_PRIORITY)}
+_MEMORY_HANDLE = re.compile(
+    r"^memory:(?P<checkpoint>[0-9a-f]{8}):"
+    r"(?P<kind>goal|fact|state|decision|constraint|preference|open_question|"
+    r"next_action|result|failure|inference)$"
+)
+_INDEX_KIND_LABEL = {
+    SemanticAtomKind.GOAL: "goal",
+    SemanticAtomKind.FACT: "fact",
+    SemanticAtomKind.STATE: "state",
+    SemanticAtomKind.DECISION: "decision",
+    SemanticAtomKind.CONSTRAINT: "constraint",
+    SemanticAtomKind.PREFERENCE: "preference",
+    SemanticAtomKind.OPEN_QUESTION: "question",
+    SemanticAtomKind.NEXT_ACTION: "next",
+    SemanticAtomKind.RESULT: "result",
+    SemanticAtomKind.FAILURE: "failure",
+    SemanticAtomKind.INFERENCE: "inference",
+}
 
 
 class SemanticMemoryApplicationError(RuntimeError):
@@ -618,10 +636,110 @@ class SemanticMemoryService:
             lifecycle,
         )
 
+    def automatic_context_index(
+        self,
+        scope: MemoryScope,
+    ) -> tuple[ContextItem, ProvenanceNotice]:
+        """Return a content-free current-checkpoint index for on-demand semantic pulls."""
+
+        wall_started = monotonic_ns()
+        cpu_started = process_time_ns()
+        stages: dict[str, int] = {}
+        stage_started = monotonic_ns()
+        current = self._checkpoints.get_current_semantic_checkpoint(scope)
+        if current is None:
+            raise SemanticCheckpointNotFound("semantic checkpoint was not found")
+        history = self._all_events(scope)
+        materialized = self._checkpoints.materialize_semantic_checkpoint(
+            scope, current.checkpoint_id
+        )
+        materialized = self._filter_expired_atoms(materialized, history)
+        if not materialized.atoms:
+            raise SemanticCheckpointNotFound("semantic checkpoint has no current evidence")
+        self._add_stage(stages, "retrieval", stage_started)
+
+        stage_started = monotonic_ns()
+        counts = {
+            kind: sum(atom.kind is kind for atom in materialized.atoms)
+            for kind in _CHECKPOINT_KIND_ORDER
+        }
+        count_text = ",".join(
+            f"{_INDEX_KIND_LABEL[kind]}{counts[kind]}"
+            for kind in _CHECKPOINT_KIND_ORDER
+            if counts[kind]
+        )
+        checkpoint_id = str(current.checkpoint_id)
+        content = (
+            f"MNEMO_INDEX_V1 rev={checkpoint_id[:8]} counts={count_text} "
+            f"handle=memory:{checkpoint_id[:8]}:<kind>"
+        )
+        measured = self._tokenizer.count(content)
+        if measured > 80:
+            raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_INDEX_BUDGET_EXCEEDED")
+        event_ids = {event_id for atom in materialized.atoms for event_id in atom.source_event_ids}
+        evidence_by_id = {
+            evidence.evidence_id: evidence
+            for event in history
+            if event.event_id in event_ids
+            for evidence in event.evidence_references
+        }
+        evidence = tuple(evidence_by_id[item] for item in sorted(evidence_by_id, key=str))
+        if not evidence:
+            raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_EVIDENCE_REQUIRED")
+        self._add_stage(stages, "context_assembly", stage_started)
+
+        stage_started = monotonic_ns()
+        latest = self._checkpoints.get_current_semantic_checkpoint(scope)
+        if latest is None or latest.checkpoint_id != current.checkpoint_id:
+            raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_CHECKPOINT_CHANGED")
+        item_id = f"semantic-checkpoint:{checkpoint_id}:index-m3"
+        item = ContextItem(
+            item_id=item_id,
+            item_type=ContextItemType.ACTIVE_TASK_CHECKPOINT,
+            source_scope=scope,
+            content=content,
+            content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+            token_estimate=measured,
+            evidence_references=evidence,
+            source_trust=SourceTrustClass.APPROVED_CHECKPOINT,
+            sensitivity=Sensitivity.NORMAL,
+            validity=ValidityState.CURRENT,
+            ranking=None,
+            conflict_state=ConflictState.NONE,
+            observed_at=current.created_at,
+        )
+        provenance = ProvenanceNotice(
+            provenance_id=f"provenance:{item_id}",
+            item_id=item_id,
+            source_reference=f"mnemo:semantic-checkpoint/{checkpoint_id}/index/live-m3",
+            source_digest=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            evidence_references=evidence,
+        )
+        self._add_stage(stages, "context_assembly", stage_started)
+        rendering = render_semantic_checkpoint(
+            materialized,
+            tokenizer=self._tokenizer,
+            evidence_events={event.event_id: event for event in history},
+            full_history_text=self._history_text(history),
+        )
+        self._lifecycle(
+            operation="automatic_context_index",
+            stages=stages,
+            wall_started=wall_started,
+            cpu_started=cpu_started,
+            source_event_count=len(history),
+            changed_event_count=0,
+            rendering=replace(rendering, measured_tokens=measured, text=content),
+            injected_context_tokens=measured,
+        )
+        return item, provenance
+
     def automatic_context_item(
         self,
         scope: MemoryScope,
         *,
+        query_or_task: str = "",
+        handle: str | None = None,
         preferred_token_target: int,
         maximum_token_ceiling: int,
     ) -> tuple[ContextItem, ProvenanceNotice]:
@@ -638,6 +756,8 @@ class SemanticMemoryService:
         for _ in range(3):
             rendering, recalled_events = self._recall_memory_with_events(
                 scope,
+                query_or_task=query_or_task,
+                handle=handle,
                 preferred_token_target=min(preferred_token_target, memory_ceiling),
                 maximum_token_ceiling=memory_ceiling,
                 mode=SemanticRendererProfile.COMPACT,
@@ -691,7 +811,8 @@ class SemanticMemoryService:
         current = self._checkpoints.get_current_semantic_checkpoint(scope)
         if current is None or str(current.checkpoint_id) != rendering.checkpoint_id:
             raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_CHECKPOINT_CHANGED")
-        item_id = f"semantic-checkpoint:{rendering.checkpoint_id}:live-m3"
+        suffix = "live-m3" if handle is None else f"live-m3-{handle.rsplit(':', 1)[-1]}"
+        item_id = f"semantic-checkpoint:{rendering.checkpoint_id}:{suffix}"
         item = ContextItem(
             item_id=item_id,
             item_type=ContextItemType.ACTIVE_TASK_CHECKPOINT,
@@ -911,6 +1032,7 @@ class SemanticMemoryService:
         scope: MemoryScope,
         *,
         query_or_task: str = "",
+        handle: str | None = None,
         preferred_token_target: int = DEFAULT_PREFERRED_TOKENS,
         maximum_token_ceiling: int = DEFAULT_MAXIMUM_TOKENS,
         mode: SemanticRendererProfile = SemanticRendererProfile.COMPACT,
@@ -928,6 +1050,19 @@ class SemanticMemoryService:
             scope, current.checkpoint_id
         )
         materialized = self._filter_expired_atoms(materialized, history)
+        if handle is not None:
+            match = _MEMORY_HANDLE.fullmatch(handle)
+            if match is None:
+                raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_HANDLE_INVALID")
+            if match.group("checkpoint") != str(current.checkpoint_id)[:8]:
+                raise SemanticMemoryApplicationError("MNEMO_SEMANTIC_HANDLE_STALE")
+            kind = SemanticAtomKind(match.group("kind"))
+            atoms = tuple(atom for atom in materialized.atoms if atom.kind is kind)
+            retained = {atom.atom_id for atom in atoms}
+            references = tuple(
+                reference for reference in materialized.references if reference.atom_id in retained
+            )
+            materialized = replace(materialized, atoms=atoms, references=references)
         if not materialized.atoms:
             raise SemanticCheckpointNotFound("semantic checkpoint has no current evidence")
         self._add_stage(stages, "retrieval", stage_started)

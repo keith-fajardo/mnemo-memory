@@ -1,6 +1,7 @@
 """Preregistered telehealth corpus, hidden grader, and paired analysis contracts."""
 
 from scripts.run_long_horizon_evaluation import (
+    _MNEMO,
     DEFAULT_CORPUS,
     _expected,
     _load_corpus,
@@ -85,3 +86,18 @@ def test_sf_fixed_routes_current_config_through_volatile_state() -> None:
     assert any(item.startswith("fact: Current config ") for item in factual.completed_work)
     assert fixed.current_state.startswith("state: Current config ")
     assert not any(item.startswith("fact: Current config ") for item in fixed.completed_work)
+
+
+def test_sfp_is_an_optional_index_and_pull_harness_condition() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    content = _memory_content(
+        condition="SFp",
+        variant=_variant(corpus, 0),
+        session=2,
+        config={"timezone": "America/New_York"},
+        public_history=[],
+        response=None,
+    )
+
+    assert "SFp" in _MNEMO
+    assert content.current_state.startswith("state: Current config ")

@@ -262,7 +262,13 @@ def render_semantic_checkpoint(
     evidence = evidence_events or {}
     ordered = _rank_atoms(checkpoint.atoms, query_or_task)
     mandatory = tuple(item for item in ordered if _mandatory(item))
-    optional = tuple(item for item in ordered if not _mandatory(item))
+    query_words = set(_QUERY_WORD.findall(query_or_task.lower()))
+    excluded_optional = tuple(
+        item for item in ordered if not _mandatory(item) and not _matches_query(item, query_words)
+    )
+    optional = tuple(
+        item for item in ordered if not _mandatory(item) and _matches_query(item, query_words)
+    )
     atom_aliases = {item.atom_id: f"A{index}" for index, item in enumerate(ordered, start=1)}
     event_ids = tuple(
         sorted(
@@ -276,7 +282,7 @@ def render_semantic_checkpoint(
     mandatory_text, _ = _assemble(
         checkpoint,
         tuple(selected),
-        (),
+        excluded_optional,
         mode,
         counter,
         atom_aliases,
@@ -291,7 +297,10 @@ def render_semantic_checkpoint(
     if not mandatory_overrun:
         for atom in optional:
             candidate = (*selected, atom)
-            remaining = tuple(item for item in optional if item not in candidate)
+            remaining = (
+                *excluded_optional,
+                *(item for item in optional if item not in candidate),
+            )
             text, _ = _assemble(
                 checkpoint,
                 candidate,
@@ -387,6 +396,15 @@ def _rank_atoms(
         return (_KIND_ORDER[atom.kind], -overlap, -atom.priority, str(atom.atom_id))
 
     return tuple(sorted(atoms, key=rank))
+
+
+def _matches_query(atom: SemanticMemoryAtom, query_words: set[str]) -> bool:
+    if not query_words:
+        return True
+    atom_words = set(
+        _QUERY_WORD.findall(f"{atom.subject} {atom.predicate} {atom.object_value}".lower())
+    )
+    return bool(query_words & atom_words)
 
 
 def _assemble(
