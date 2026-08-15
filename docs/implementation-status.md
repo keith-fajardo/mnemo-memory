@@ -5636,3 +5636,13 @@ final evidence-bearing automatic context assembly records the bounded packet's t
 deterministic compile and recall operations retain zero, and model input/output tokens remain zero
 because Mnemo makes no model call. The focused test failed on the missing field, then all 33 semantic
 unit, SQLite, and lifecycle aggregation tests passed with formatting, linting, and strict typing.
+
+Task 1.1 makes `current_state` irreducibly volatile: an explicit semantic prefix may refine its
+meaning but cannot promote it to `FACT`; changed STATE atoms use the existing deterministic
+supersession path and render with a `NOW` cue plus the historical supersession marker. The old value
+is absent from active context while its immutable audit atom remains. The harness now recognizes an
+optional `SF-fixed` arm that routes current configuration through STATE, while the original `SF`
+arm retains an explicit factual baseline for comparison without changing the frozen preregistered
+corpus. The new unit and harness assertions failed first; all 43 focused semantic, SQLite, MCP, and
+long-horizon tests pass with formatting, linting, and strict typing. No live model run was authorized
+or performed, so the expected false-memory reduction remains unmeasured rather than claimed.

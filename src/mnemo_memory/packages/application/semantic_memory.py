@@ -237,7 +237,13 @@ class DeterministicMemoryCompiler:
                 continue
             superseded = (
                 max(comparable, key=lambda atom: (atom.updated_at, str(atom.atom_id)))
-                if comparable and kind in {SemanticAtomKind.GOAL, SemanticAtomKind.DECISION}
+                if comparable
+                and kind
+                in {
+                    SemanticAtomKind.GOAL,
+                    SemanticAtomKind.DECISION,
+                    SemanticAtomKind.STATE,
+                }
                 else None
             )
             confidence = self._confidence(event, explicit, meaning)
@@ -562,7 +568,12 @@ class SemanticMemoryService:
             atom
             for atom in stale_projected
             if not (
-                atom.kind in {SemanticAtomKind.GOAL, SemanticAtomKind.DECISION}
+                atom.kind
+                in {
+                    SemanticAtomKind.GOAL,
+                    SemanticAtomKind.DECISION,
+                    SemanticAtomKind.STATE,
+                }
                 and atom.kind in pending_kinds
             )
         )
@@ -1026,18 +1037,28 @@ class SemanticMemoryService:
         content = revision.content
         grouped: dict[SemanticAtomKind, list[str]] = {}
 
-        def add(default_kind: SemanticAtomKind, values: tuple[str, ...]) -> None:
+        def add(
+            default_kind: SemanticAtomKind,
+            values: tuple[str, ...],
+            *,
+            allow_explicit_kind: bool = True,
+        ) -> None:
             for value in values:
                 explicit = _EXPLICIT_KIND.match(value)
                 kind = default_kind
                 meaning = value
                 if explicit is not None:
-                    kind = SemanticAtomKind(explicit.group(1).lower())
+                    if allow_explicit_kind:
+                        kind = SemanticAtomKind(explicit.group(1).lower())
                     meaning = explicit.group(2)
                 grouped.setdefault(kind, []).append(meaning)
 
         add(SemanticAtomKind.GOAL, (content.task_objective,))
-        add(SemanticAtomKind.STATE, (content.current_state,))
+        add(
+            SemanticAtomKind.STATE,
+            (content.current_state,),
+            allow_explicit_kind=False,
+        )
         add(SemanticAtomKind.RESULT, content.completed_work)
         add(SemanticAtomKind.NEXT_ACTION, content.remaining_work)
         add(SemanticAtomKind.DECISION, content.decisions)

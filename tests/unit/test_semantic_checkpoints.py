@@ -394,6 +394,63 @@ def test_public_checkpoint_projection_replaces_state_and_preserves_audit_evidenc
     assert retry.processed_event_count == 0
 
 
+def test_changed_current_state_is_volatile_and_supersedes_without_fact_authority() -> None:
+    scope = _scope()
+    checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
+    semantic, _ = _service()
+    source = _evidence(1, NOW)
+    initial = checkpoints.create(
+        CreateCheckpoint(
+            scope,
+            CheckpointContent(
+                task_objective="Keep the scheduler configuration current.",
+                completed_work=(),
+                current_state='fact: Current config {"timezone":"UTC+00:00"}',
+                remaining_work=(),
+                decisions=(),
+                failures=(),
+                blockers=(),
+                relevant_files=(),
+                relevant_artifacts=(),
+                verification_performed=(),
+                token_estimate=80,
+            ),
+            (source,),
+        )
+    )
+    semantic.save_checkpoint_view(initial, retention_days=180)
+    revised = checkpoints.revise(
+        ReviseCheckpoint(
+            scope,
+            initial.aggregate.checkpoint_id,
+            initial.revision.revision_id,
+            replace(
+                initial.revision.content,
+                current_state='fact: Current config {"timezone":"America/New_York"}',
+            ),
+            (source,),
+        )
+    )
+    semantic.save_checkpoint_view(revised, retention_days=180)
+    item, _ = semantic.automatic_context_item(
+        scope,
+        preferred_token_target=600,
+        maximum_token_ceiling=800,
+    )
+
+    assert 'Current config {"timezone":"UTC+00:00"}' not in item.content
+    assert 'Current config {"timezone":"America/New_York"}' in item.content
+    assert "NOW " in item.content
+    assert "supersedes=" in item.content
+    atoms = semantic.list_atoms(scope)
+    assert all(atom.kind is not SemanticAtomKind.FACT for atom in atoms)
+    states = [atom for atom in atoms if atom.kind is SemanticAtomKind.STATE]
+    assert len(states) == 2
+    replacement = next(atom for atom in states if atom.supersedes_atom_id is not None)
+    assert replacement.object_value == 'Current config {"timezone":"America/New_York"}'
+    assert replacement.supersedes_atom_id in {atom.atom_id for atom in states}
+
+
 def test_semantic_lifecycle_observations_separate_cpu_stages_from_model_work() -> None:
     scope = _scope()
     observations: list[SemanticLifecycleObservation] = []

@@ -51,7 +51,7 @@ DEFAULT_CORPUS = ROOT / "tests" / "fixtures" / "evals" / "telehealth-long-horizo
 DEFAULT_RESULTS = ROOT / "evaluation-results" / "long-horizon-v1"
 _ID_NAMESPACE = UUID("5cf4463d-46a7-4e65-8e9d-7875d131b555")
 _DELIBERATIVE = frozenset({"SI", "SD", "SX"})
-_MNEMO = frozenset({"SF", "SD", "SX"})
+_MNEMO = frozenset({"SF", "SF-fixed", "SD", "SX"})
 _CRITICAL_FIELDS = frozenset(
     {
         "authorization_role",
@@ -334,7 +334,11 @@ def _memory_content(
         f"constraint: authorize as {variant['authorization_role']} before lookup; preserve "
         f"tenant idempotency key {variant['idempotency_key']}.",
     )
-    current = "fact: Current config " + json.dumps(config, sort_keys=True, separators=(",", ":"))
+    current_config = "Current config " + json.dumps(config, sort_keys=True, separators=(",", ":"))
+    current = f"state: {current_config}"
+    if condition == "SF":
+        facts = (*facts, f"fact: {current_config}")
+        current = f"state: Factual checkpoint baseline at session {session}."
     decisions: tuple[str, ...] = ()
     failures: tuple[str, ...] = ()
     if condition in {"SD", "SX"} and response is not None:

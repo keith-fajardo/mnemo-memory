@@ -58,3 +58,30 @@ def test_failed_approach_is_encoded_as_failure_memory() -> None:
     )
 
     assert content.failures == ("failure: uncertainty=retry after stale cache",)
+
+
+def test_sf_fixed_routes_current_config_through_volatile_state() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    config = {"timezone": "America/New_York"}
+
+    factual = _memory_content(
+        condition="SF",
+        variant=variant,
+        session=2,
+        config=config,
+        public_history=[],
+        response=None,
+    )
+    fixed = _memory_content(
+        condition="SF-fixed",
+        variant=variant,
+        session=2,
+        config=config,
+        public_history=[],
+        response=None,
+    )
+
+    assert any(item.startswith("fact: Current config ") for item in factual.completed_work)
+    assert fixed.current_state.startswith("state: Current config ")
+    assert not any(item.startswith("fact: Current config ") for item in fixed.completed_work)

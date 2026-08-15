@@ -485,8 +485,9 @@ def _atom_line(
     )
     qualifiers = dict(atom.qualifiers)
     if mode is SemanticRendererProfile.COMPACT:
+        tag = "NOW" if atom.kind is SemanticAtomKind.STATE else _COMPACT_TAG[atom.kind]
         details = [
-            f"{_COMPACT_TAG[atom.kind]} {alias}",
+            f"{tag} {alias}",
             f"by={atom.subject}",
             f"confidence={atom.confidence:g}",
             meaning,
