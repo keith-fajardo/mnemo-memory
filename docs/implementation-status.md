@@ -5624,3 +5624,9 @@ fits the existing active and total budgets. Any disabled flag, missing evidence,
 projection error, or budget failure retains the legacy packet. The focused live semantic regression
 failed first on the legacy `checkpoint:` item, then passed with `MNEMO_CP_V1` untrusted evidence;
 the complete six-test MCP durability file passes.
+
+Task 0.2 corrects the preregistered harness so a prior unsuccessful approach is compiled from a
+`failure:` checkpoint field rather than the weakest `inference:` kind. The focused assertion failed
+on the old kind and the complete four-test long-horizon harness file now passes. This changes only
+measurement reachability for later bounded failure carry-forward; it does not change frozen results
+or claim a behavioral gain.

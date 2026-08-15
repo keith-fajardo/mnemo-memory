@@ -4,6 +4,7 @@ from scripts.run_long_horizon_evaluation import (
     DEFAULT_CORPUS,
     _expected,
     _load_corpus,
+    _memory_content,
     _valid_changes,
     _variant,
     hidden_checks,
@@ -43,3 +44,17 @@ def test_model_changes_are_closed_to_the_preregistered_schema() -> None:
     )
     assert accepted == {"atomic_reservation": True}
     assert invalid == 2
+
+
+def test_failed_approach_is_encoded_as_failure_memory() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    content = _memory_content(
+        condition="SD",
+        variant=_variant(corpus, 0),
+        session=2,
+        config={},
+        public_history=[],
+        response={"changes": {}, "uncertainty": "retry after stale cache"},
+    )
+
+    assert content.failures == ("failure: uncertainty=retry after stale cache",)

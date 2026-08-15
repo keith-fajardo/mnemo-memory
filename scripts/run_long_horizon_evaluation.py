@@ -345,7 +345,7 @@ def _memory_content(
             for name, value in sorted(cast(dict[str, object], response.get("changes", {})).items())
         )[:8]
         uncertainty = str(response.get("uncertainty", ""))[:240]
-        failures = (f"inference: uncertainty={uncertainty}",) if uncertainty else ()
+        failures = (f"failure: uncertainty={uncertainty}",) if uncertainty else ()
     return CheckpointContent(
         task_objective=f"Maintain safe scheduling for {variant['variant_id']} across sessions.",
         completed_work=facts,
