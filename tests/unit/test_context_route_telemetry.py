@@ -30,7 +30,7 @@ from mnemo_memory.packages.telemetry import (
     LocalCheckpointSaveTelemetryStore,
 )
 
-NOW = datetime(2026, 8, 8, 2, 0, tzinfo=UTC)
+NOW = datetime.now(UTC).replace(microsecond=0)
 SCOPE = AutomaticRouteScope(
     owner_id="11111111-1111-4111-8111-111111111111",
     workspace_id="22222222-2222-4222-8222-222222222222",
