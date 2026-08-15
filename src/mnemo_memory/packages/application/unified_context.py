@@ -99,6 +99,18 @@ class SemanticKnowledgeRetrieverPort(Protocol):
     ) -> tuple[tuple[CurrentKnowledgeDocumentSection, float], ...]: ...
 
 
+class SemanticMemoryContextPort(Protocol):
+    """Flag-gated provider of one evidence-backed semantic checkpoint item."""
+
+    def automatic_context_item(
+        self,
+        scope: MemoryScope,
+        *,
+        preferred_token_target: int,
+        maximum_token_ceiling: int,
+    ) -> tuple[ContextItem, ProvenanceNotice]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _RankedKnowledgeMatch:
     match: KnowledgeDocumentSectionMatch
@@ -517,6 +529,7 @@ class UnifiedContextService:
         procedures: ProjectProcedureRegistry | None = None,
         dbt_code_excerpts: DbtCodeExcerptReaderPort | None = None,
         skills: ProjectSkillRegistry | None = None,
+        semantic_memory: SemanticMemoryContextPort | None = None,
     ) -> None:
         self._checkpoints = checkpoints
         self._dbt = dbt
@@ -527,6 +540,7 @@ class UnifiedContextService:
         self._procedures = procedures
         self._dbt_code_excerpts = dbt_code_excerpts
         self._skills = skills
+        self._semantic_memory = semantic_memory
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
         packet = self._checkpoints.get_context(
@@ -539,6 +553,7 @@ class UnifiedContextService:
                 request.include_approved_events,
             )
         )
+        packet = self._with_semantic_checkpoint(packet, request)
         packet = self._with_checkpoint_recap(packet, request)
         packet = self._with_checkpoint_source_observation(packet, request)
         packet = self._with_requested_knowledge(packet, request)
@@ -573,6 +588,41 @@ class UnifiedContextService:
         if request.dbt_changes is not None:
             return self._with_dbt_changes(packet, request)
         return self._with_requested_source_facts(packet, request)
+
+    def _with_semantic_checkpoint(
+        self, packet: ContextPacket, request: GetUnifiedContext
+    ) -> ContextPacket:
+        legacy = packet.active_task_checkpoint
+        if legacy is None or self._semantic_memory is None:
+            return packet
+        non_checkpoint_tokens = packet.computed_total_tokens - legacy.token_estimate
+        available = min(
+            packet.budget.active_task_checkpoint,
+            packet.budget.total_limit - non_checkpoint_tokens,
+        )
+        if available < 1:
+            return packet
+        try:
+            item, provenance = self._semantic_memory.automatic_context_item(
+                request.scope,
+                preferred_token_target=min(400, available),
+                maximum_token_ceiling=available,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return packet
+        notices = tuple(
+            provenance if notice.item_id == legacy.item_id else notice
+            for notice in packet.provenance
+        )
+        if all(notice.item_id != item.item_id for notice in notices):
+            return packet
+        return replace(
+            packet,
+            declared_total_tokens=non_checkpoint_tokens + item.token_estimate,
+            producer_version="mnemo-application/0.1.0+experimental-semantic-m3",
+            active_task_checkpoint=item,
+            provenance=notices,
+        )
 
     def _with_checkpoint_recap(
         self, packet: ContextPacket, request: GetUnifiedContext

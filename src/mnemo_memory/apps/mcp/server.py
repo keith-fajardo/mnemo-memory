@@ -955,6 +955,11 @@ def _build_local_mcp_context_session(
                     KnowledgeDocumentProcedureRegistry(runtime.knowledge_document_repository),
                     DbtLocalCodeExcerptReader(dbt_bindings, lambda: datetime.now(UTC)),
                     skill_registry,
+                    (
+                        runtime.semantic_memory_service
+                        if settings.experimental_semantic_memory_enabled
+                        else None
+                    ),
                 ),
                 runtime.repository,
             ),

@@ -387,6 +387,13 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
             )
         )
         assert revised["revision_number"] == 2
+        read_packet = ContextPacket.from_dict(structured(process.tool("get_context", {})))
+        assert read_packet.active_task_checkpoint is not None
+        assert read_packet.active_task_checkpoint.item_id.startswith("semantic-checkpoint:")
+        assert "MNEMO_CP_V1" in read_packet.active_task_checkpoint.content
+        assert (
+            read_packet.active_task_checkpoint.content_representation.value == "untrusted_evidence"
+        )
         poison = process.tool(
             "save_checkpoint",
             save_payload(

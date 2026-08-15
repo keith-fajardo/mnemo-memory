@@ -5608,3 +5608,19 @@ dependency/provenance, architecture, and installed-package verification all pass
 found no dependency or lockfile change, no competing-product artifact, no secret, and no unrelated
 rewrite. This issue is complete; stop at this boundary and wait for explicit approval before any
 later issue, release, deployment, installation, or broader product claim.
+
+### Small-model long-horizon Phase 0/1 — In progress
+
+The user explicitly approved the charter-safe Phase 0 enablers and Phase 1 token and false-memory
+work in `docs/superpowers/plans/2026-08-15-small-model-long-horizon.md`. These changes remain behind
+`experimental_semantic_memory_enabled`, whose stable default stays false. They must not proxy an
+agent model, persist transcripts or model reasoning, or be represented as task-accuracy gains.
+Phase 2 deterministic enforcement and Phase 3 decomposition remain outside this issue and require
+separate approval.
+
+Task 0.1 now lets the production MCP `get_context` read path replace only its selected legacy active
+checkpoint with the exact-scope semantic item when the experimental flag is enabled and the item
+fits the existing active and total budgets. Any disabled flag, missing evidence, terminal state,
+projection error, or budget failure retains the legacy packet. The focused live semantic regression
+failed first on the legacy `checkpoint:` item, then passed with `MNEMO_CP_V1` untrusted evidence;
+the complete six-test MCP durability file passes.
