@@ -5682,3 +5682,17 @@ strict typing, context-packet schema validation, dependency/provenance checks, t
 architecture boundary check, and installed-package verification all passed. No dependency or
 lockfile changed, no live model endpoint was called, and no deploy or release sequence ran. Phase 0
 and Phase 1 are complete; stop here until the maintainer explicitly approves charter-stretch Phase 2.
+
+### Small-model long-horizon Phase 2 — In progress
+
+The maintainer explicitly approved all of Phase 2, including the separately highlighted Task 2.2
+reconcile boundary. Phase 2 remains behind `experimental_semantic_memory_enabled`; verifier and
+reconcile outputs are untrusted consistency evidence, never approval, and may neither execute nor
+persist an agent candidate. Mnemo still never proxies, wraps, or reruns the agent model endpoint.
+
+Task 2.0 canonicalizes only explicitly structured CONSTRAINT and DECISION meanings matching a
+bounded lowercase `field = value` grammar into exact `field=value` atoms. Natural-language
+constraints remain unchanged, so the compiler does not guess a field or authority from prose. The
+focused assertion failed first on preserved whitespace, then passed alongside supersession and
+protected-literal rendering regressions with formatting, linting, strict source typing, and diff
+checks.

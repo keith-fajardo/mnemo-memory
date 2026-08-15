@@ -66,6 +66,7 @@ _EXPLICIT_KIND = re.compile(
 _UNCERTAINTY = re.compile(r"\b(?:uncertain|possibly|probably|likely|might|may)\b", re.I)
 _CONDITION = re.compile(r"\b(?:if|unless|only after|provided that|when)\b", re.I)
 _AUTHORITY = re.compile(r"\b(?:approve|approval|authority|authorized|permission|consent)\b", re.I)
+_FIELD_VALUE = re.compile(r"^([a-z][a-z0-9_]{0,63})\s*=\s*(\S(?:.*\S)?)$", re.DOTALL)
 _PRIORITY = {
     SemanticAtomKind.GOAL: 100,
     SemanticAtomKind.CONSTRAINT: 100,
@@ -234,6 +235,7 @@ class DeterministicMemoryCompiler:
         operations: list[SemanticPatchOperation] = []
         for event in events:
             kind, meaning, explicit = self._classify(event)
+            meaning = self._normalize_field_value(kind, meaning)
             predicate = self._predicate(kind, explicit)
             qualifiers = self._qualifiers(event, kind, meaning, explicit)
             comparable = tuple(
@@ -334,6 +336,15 @@ class DeterministicMemoryCompiler:
                 SemanticAtomKind.OPEN_QUESTION: "unresolved",
             }.get(kind, "states")
         return "observed" if kind is SemanticAtomKind.RESULT else "reported"
+
+    @staticmethod
+    def _normalize_field_value(kind: SemanticAtomKind, meaning: str) -> str:
+        if kind not in {SemanticAtomKind.CONSTRAINT, SemanticAtomKind.DECISION}:
+            return meaning
+        structured = _FIELD_VALUE.fullmatch(meaning.strip())
+        if structured is None:
+            return meaning
+        return f"{structured.group(1)}={structured.group(2)}"
 
     @staticmethod
     def _qualifiers(

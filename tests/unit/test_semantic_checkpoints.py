@@ -327,6 +327,29 @@ def test_changed_goal_and_decision_supersede_without_erasing_history() -> None:
     assert all(atom.source_event_ids for atom in ledger)
 
 
+def test_structured_constraint_is_canonical_field_value_without_guessing_from_prose() -> None:
+    scope = _scope()
+    service, _ = _service()
+    saved = service.save_checkpoint(
+        scope,
+        events=(
+            _event(scope, 1, "constraint: timezone_mode = iana"),
+            _event(scope, 2, "constraint: Never deploy without explicit approval."),
+            _event(scope, 3, "decision: conflict_status = 409"),
+        ),
+    )
+    by_kind = {
+        kind: [atom.object_value for atom in saved.checkpoint.atoms if atom.kind is kind]
+        for kind in (SemanticAtomKind.CONSTRAINT, SemanticAtomKind.DECISION)
+    }
+
+    assert by_kind[SemanticAtomKind.CONSTRAINT] == [
+        "timezone_mode=iana",
+        "Never deploy without explicit approval.",
+    ]
+    assert by_kind[SemanticAtomKind.DECISION] == ["conflict_status=409"]
+
+
 def test_public_checkpoint_projection_replaces_state_and_preserves_audit_evidence() -> None:
     scope = _scope()
     checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)
