@@ -1116,7 +1116,12 @@ def _mcnemar(rows: list[dict[str, object]], left: str, right: str) -> dict[str, 
     return {"wins": wins, "losses": losses, "discordant": discordant, "one_sided_p": p_value}
 
 
-def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, object]:
+def analyze(
+    rows: list[dict[str, object]],
+    corpus: dict[str, Any],
+    *,
+    expected_variant_count: int | None = None,
+) -> dict[str, object]:
     available = [row for row in rows if row.get("available") is True]
     conditions: dict[str, object] = {}
     for condition in cast(list[str], corpus["conditions"]):
@@ -1206,9 +1211,11 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
         starting_hashes.setdefault(cast(str, row["variant_id"]), set()).add(
             cast(str, row["starting_state_sha256"])
         )
-    paired_start_pass = len(starting_hashes) == cast(int, corpus["variant_count"]) and all(
-        len(values) == 1 for values in starting_hashes.values()
-    )
+    paired_start_pass = len(starting_hashes) == (
+        expected_variant_count
+        if expected_variant_count is not None
+        else cast(int, corpus["variant_count"])
+    ) and all(len(values) == 1 for values in starting_hashes.values())
     leakage_pass = all(
         not bool(row.get("transcript_leakage_detected"))
         and not bool(row.get("hidden_grader_rendered"))
@@ -1358,7 +1365,7 @@ def run(
                 flush=True,
             )
     rows = _read_jsonl(raw_trajectories)
-    analysis = analyze(rows, corpus)
+    analysis = analyze(rows, corpus, expected_variant_count=variant_count)
     analysis["run_id"] = run_id
     analysis["run_role"] = run_role
     analysis["variant_count"] = variant_count

@@ -311,6 +311,44 @@ def test_sv_minus_sd_has_a_separate_ten_point_accuracy_gate() -> None:
     assert result["passes_margin"] is True
 
 
+def test_dry_run_start_integrity_uses_the_requested_variant_count() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    base: dict[str, object] = {
+        "variant_id": "telehealth-01",
+        "available": True,
+        "hidden_test_accuracy": 1.0,
+        "end_to_end_success": True,
+        "decision_accuracy": 1.0,
+        "regression_free_completion": True,
+        "critical_false_memory_count": 0,
+        "hypothesis_precision": 1.0,
+        "hypothesis_recall": 1.0,
+        "repeated_error_count": 0,
+        "self_correction_count": 1,
+        "supersession_handled": True,
+        "memory_precision": 1.0,
+        "memory_recall": 1.0,
+        "memory_f1": 1.0,
+        "exact_value_integrity_rate": 1.0,
+        "calibration_brier": 0.0,
+        "actual_prompt_tokens": 1,
+        "actual_output_tokens": 1,
+        "actual_latency_ns": 1,
+        "third_session_beyond_active_context": True,
+        "poison_safe": True,
+        "starting_state_sha256": "sha256:identical",
+        "transcript_leakage_detected": False,
+        "hidden_grader_rendered": False,
+    }
+    rows = [{**base, "condition": condition} for condition in ("S0", "SI", "SF", "SD")]
+
+    result = evaluation.analyze(rows, corpus, expected_variant_count=1)
+
+    gate_checks = result["gate_2_checks"]
+    assert isinstance(gate_checks, dict)
+    assert gate_checks["byte_identical_paired_start"] is True
+
+
 def test_zero_model_token_deterministic_ceiling_reconciles_constraint_backed_checks() -> None:
     corpus = _load_corpus(DEFAULT_CORPUS)
     variant = _variant(corpus, 0)
