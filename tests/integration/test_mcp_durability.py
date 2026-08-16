@@ -352,7 +352,7 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
                 bound_payload(
                     task_objective="Schedule tenant 042 safely across fresh sessions.",
                     current_state="Uncertain whether the provider can return status 409.",
-                    decisions=["Use UTC offsets only."],
+                    decisions=["timezone_mode=offset"],
                     blockers=[
                         "Must not write without scheduler authorization and idempotency key K-42."
                     ],
@@ -372,9 +372,7 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
                     expected_revision_id=created["checkpoint_revision_id"],
                     task_objective="Schedule tenant 042 safely across fresh sessions.",
                     current_state="Uncertain whether the provider can return status 409.",
-                    decisions=[
-                        "Use IANA zone America/New_York; this supersedes the UTC-only decision."
-                    ],
+                    decisions=["timezone_mode=America/New_York"],
                     blockers=[
                         "Must not write without scheduler authorization and idempotency key K-42."
                     ],
@@ -406,6 +404,26 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
         assert decision_packet.active_task_checkpoint is not None
         assert "America/New_York" in decision_packet.active_task_checkpoint.content
         assert "idempotency key K-42" not in decision_packet.active_task_checkpoint.content
+        verification = structured(
+            process.tool(
+                "verify_against_memory",
+                {"candidate": {"timezone_mode": "Pacific/Pago_Pago"}},
+            )
+        )
+        assert verification["content_representation"] == "untrusted_evidence"
+        assert verification["status"] == "mismatch"
+        assert verification["note"] == "Consistency check only; not approval"
+        violations = cast(list[dict[str, object]], verification["violations"])
+        assert violations == [
+            {
+                "field": "timezone_mode",
+                "candidate_value": "Pacific/Pago_Pago",
+                "remembered_value": "America/New_York",
+                "memory_kind": "decision",
+                "memory_atom_id": violations[0]["memory_atom_id"],
+                "memory_confidence": 0.6,
+            }
+        ]
         poison = process.tool(
             "save_checkpoint",
             save_payload(
@@ -423,6 +441,7 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
         assert runtime.semantic_memory_service is not None
         atoms = runtime.semantic_memory_service.list_atoms(binding.checkpoint_scope)
         assert atoms
+        assert all("Pacific/Pago_Pago" not in atom.object_value for atom in atoms)
         assert sum(atom.status.value == "superseded" for atom in atoms) == 1
         with sqlite3.connect(runtime.repository.path) as connection:
             assert connection.execute("SELECT count(*) FROM task_activity_events").fetchone()[0] > 0

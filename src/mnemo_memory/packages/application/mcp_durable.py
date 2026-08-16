@@ -34,6 +34,9 @@ from mnemo_memory.packages.application.checkpoints import (
     estimate_checkpoint_tokens,
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
+from mnemo_memory.packages.application.semantic_verification import (
+    verify_candidate_against_memory,
+)
 from mnemo_memory.packages.application.unified_context import (
     ContextCheckpointRecapQuery,
     ContextDbtChangesQuery,
@@ -64,6 +67,7 @@ from mnemo_memory.packages.domain import (
     ProjectId,
     ProjectSkill,
     ScopeLevel,
+    SemanticMemoryAtom,
     SessionId,
     SourceStateFingerprint,
     TaskId,
@@ -76,6 +80,10 @@ from mnemo_memory.packages.storage import ProjectSkillRegistry
 
 class UnifiedContextPort(Protocol):
     def get_context(self, request: GetUnifiedContext) -> ContextPacket: ...
+
+
+class SemanticVerificationPort(Protocol):
+    def active_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]: ...
 
 
 class DurableMcpContextPort:
@@ -100,6 +108,7 @@ class DurableMcpContextPort:
             Callable[[MemoryScope, str, str, str | None, int, int | None, bool | None], object]
             | None
         ) = None,
+        semantic_memory: SemanticVerificationPort | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -113,6 +122,7 @@ class DurableMcpContextPort:
         self._approved_event_capture_enabled = approved_event_capture_enabled
         self._checkpoint_evidence_resolver = checkpoint_evidence_resolver
         self._checkpoint_save_observer = checkpoint_save_observer
+        self._semantic_memory = semantic_memory
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -720,6 +730,25 @@ class DurableMcpContextPort:
                 "scope": scope.to_dict(),
                 "skill": None if skill is None else _skill_detail(skill),
             }
+        except Exception as error:
+            raise _mcp_error(error) from error
+
+    def verify_against_memory(self, request: dict[str, object]) -> dict[str, object]:
+        """Return a transient deterministic consistency report without persisting a candidate."""
+
+        try:
+            if self._semantic_memory is None:
+                raise ValueError("experimental semantic verification is disabled")
+            scope = _scope(request, self._default_scope)
+            candidate = request.get("candidate")
+            if not isinstance(candidate, Mapping):
+                raise ValueError("candidate must be an object")
+            maximum_mismatches = _integer(request.get("maximum_mismatches", 16))
+            return verify_candidate_against_memory(
+                self._semantic_memory.active_atoms(scope),
+                candidate,
+                maximum_mismatches=maximum_mismatches,
+            ).to_dict()
         except Exception as error:
             raise _mcp_error(error) from error
 

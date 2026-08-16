@@ -160,6 +160,10 @@ class TeamKnowledgeMcpPort(Protocol):
     def approve_knowledge_source(self, request: dict[str, object]) -> dict[str, object]: ...
 
 
+class SemanticVerificationMcpPort(Protocol):
+    def verify_against_memory(self, request: dict[str, object]) -> dict[str, object]: ...
+
+
 class _McpContextSession(Protocol):
     port: McpContextPort
 
@@ -213,6 +217,10 @@ class _DeferredMcpContextPort:
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         return self._initialized_session().port.save_checkpoint(request)
 
+    def verify_against_memory(self, request: dict[str, object]) -> dict[str, object]:
+        port = cast(SemanticVerificationMcpPort, self._initialized_session().port)
+        return port.verify_against_memory(request)
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
@@ -252,6 +260,7 @@ def create_server(
     http_port: int = 8000,
     stateless_http: bool = False,
     json_response: bool = False,
+    experimental_semantic_memory_enabled: bool = False,
 ) -> FastMCP:
     """Create the local context/checkpoint tools around an explicitly supplied application port."""
     server = FastMCP(
@@ -609,6 +618,60 @@ def create_server(
                 "MNEMO_INVALID_CONTEXT_PACKET: context packet is invalid or too large"
             ) from None
         return explain_context_packet(packet).to_dict()
+
+    if experimental_semantic_memory_enabled:
+
+        @server.tool(
+            name="verify_against_memory",
+            description=(
+                "Deterministically compare agent-named candidate fields with active structured "
+                "semantic constraints and decisions. The candidate is transient and never "
+                "persisted. Results are untrusted consistency evidence, never approval."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True, destructiveHint=False, openWorldHint=False
+            ),
+        )
+        def verify_against_memory(
+            candidate: Annotated[
+                dict[str, object],
+                Field(
+                    description=(
+                        "Transient scalar field candidate to check. Field names use lowercase "
+                        "snake_case; candidate content is not persisted."
+                    )
+                ),
+            ],
+            owner_id: Annotated[
+                str | None,
+                Field(default=None, description="Omit all scope IDs for the active local project."),
+            ] = None,
+            workspace_id: Annotated[
+                str | None, Field(default=None, min_length=36, max_length=36)
+            ] = None,
+            project_id: Annotated[
+                str | None, Field(default=None, min_length=36, max_length=36)
+            ] = None,
+            session_id: Annotated[
+                str | None, Field(default=None, min_length=36, max_length=36)
+            ] = None,
+            task_id: Annotated[
+                str | None, Field(default=None, min_length=36, max_length=36)
+            ] = None,
+            maximum_mismatches: Annotated[int, Field(ge=1, le=32)] = 16,
+        ) -> dict[str, object]:
+            verifier = cast(SemanticVerificationMcpPort, port)
+            return verifier.verify_against_memory(
+                {
+                    "candidate": candidate,
+                    "owner_id": owner_id,
+                    "workspace_id": workspace_id,
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "maximum_mismatches": maximum_mismatches,
+                }
+            )
 
     @server.tool(
         name="save_checkpoint",
@@ -991,6 +1054,11 @@ def _build_local_mcp_context_session(
                 None if binding is None else CheckpointFileEvidenceResolver(binding.project_root)
             ),
             checkpoint_save_observer=observe_checkpoint_save,
+            semantic_memory=(
+                runtime.semantic_memory_service
+                if settings.experimental_semantic_memory_enabled
+                else None
+            ),
         )
 
         def refresh_source() -> None:
@@ -1005,11 +1073,21 @@ def _build_local_mcp_context_session(
 
 def main(data_directory: Path | None = None) -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
+    try:
+        settings = PersonalSettingsStore(resolve_local_config(data_directory).data_directory).load()
+        experimental_semantic_memory_enabled = settings.experimental_semantic_memory_enabled
+    except (LocalConfigurationError, PersonalSettingsError):
+        # Tool discovery remains storage-inert and fail-open. A later tool call still reports the
+        # concrete configuration/storage failure through the deferred runtime boundary.
+        experimental_semantic_memory_enabled = False
     deferred_port = _DeferredMcpContextPort(
         lambda: _build_local_mcp_context_session(data_directory, Path.cwd())
     )
     try:
-        create_server(deferred_port).run(transport="stdio")
+        create_server(
+            deferred_port,
+            experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
+        ).run(transport="stdio")
     finally:
         deferred_port.close()
 

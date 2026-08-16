@@ -473,6 +473,18 @@ class SemanticMemoryService:
     def list_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]:
         return self._checkpoints.list_semantic_atoms(scope)
 
+    def active_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]:
+        """Return only current, unexpired atoms from the exact scoped checkpoint."""
+
+        current = self._checkpoints.get_current_semantic_checkpoint(scope)
+        if current is None:
+            raise SemanticCheckpointNotFound("semantic checkpoint was not found")
+        history = self._all_events(scope)
+        materialized = self._checkpoints.materialize_semantic_checkpoint(
+            scope, current.checkpoint_id
+        )
+        return self._filter_expired_atoms(materialized, history).atoms
+
     def materialize_snapshot(
         self, scope: MemoryScope, checkpoint_id: CheckpointId
     ) -> MaterializedSemanticCheckpoint:

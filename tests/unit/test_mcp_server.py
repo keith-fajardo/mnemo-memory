@@ -248,6 +248,45 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         assert name not in tools[4].inputSchema.get("required", [])
 
 
+def test_server_lists_verifier_only_when_experimental_semantic_memory_is_enabled(
+    tmp_path: Path,
+) -> None:
+    async def list_tools() -> list[Tool]:
+        with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "runtime")) as runtime:
+            return list(
+                await create_server(
+                    DurableMcpContextPort(runtime.checkpoint_service),
+                    experimental_semantic_memory_enabled=True,
+                ).list_tools()
+            )
+
+    tools = asyncio.run(list_tools())
+    names = [tool.name for tool in tools]
+
+    assert names == [
+        "get_context",
+        "list_skills",
+        "get_skill",
+        "explain_context",
+        "verify_against_memory",
+        "save_checkpoint",
+    ]
+    verifier = tools[4]
+    assert verifier.annotations is not None and verifier.annotations.readOnlyHint is True
+    assert verifier.annotations.destructiveHint is False
+    assert verifier.annotations.openWorldHint is False
+    assert set(verifier.inputSchema["properties"]) == {
+        "candidate",
+        "owner_id",
+        "workspace_id",
+        "project_id",
+        "session_id",
+        "task_id",
+        "maximum_mismatches",
+    }
+    assert verifier.inputSchema["properties"]["maximum_mismatches"]["maximum"] == 32
+
+
 def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listing() -> None:
     events: list[object] = []
 

@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -27,6 +28,9 @@ from mnemo_memory.packages.application import (
     ReviseCheckpoint,
     build_checkpoint_runtime,
 )
+from mnemo_memory.packages.application.semantic_verification import (
+    verify_candidate_against_memory,
+)
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     EvidenceId,
@@ -37,6 +41,7 @@ from mnemo_memory.packages.domain import (
     OwnerId,
     ProjectId,
     ScopeLevel,
+    SemanticMemoryAtom,
     SessionId,
     SourceId,
     SourceTrustClass,
@@ -50,8 +55,8 @@ ROOT = Path(__file__).parents[1]
 DEFAULT_CORPUS = ROOT / "tests" / "fixtures" / "evals" / "telehealth-long-horizon-v1.json"
 DEFAULT_RESULTS = ROOT / "evaluation-results" / "long-horizon-v1"
 _ID_NAMESPACE = UUID("5cf4463d-46a7-4e65-8e9d-7875d131b555")
-_DELIBERATIVE = frozenset({"SI", "SD", "SX"})
-_MNEMO = frozenset({"SF", "SF-fixed", "SFp", "SD", "SX"})
+_DELIBERATIVE = frozenset({"SI", "SD", "SV", "SX"})
+_MNEMO = frozenset({"SF", "SF-fixed", "SFp", "SD", "SV", "SX"})
 _CRITICAL_FIELDS = frozenset(
     {
         "authorization_role",
@@ -318,6 +323,83 @@ def _valid_changes(
     return changes, invalid
 
 
+@dataclass(frozen=True, slots=True)
+class _GeneratedCandidate:
+    response_text: str
+    response: dict[str, object] | None
+    changes: dict[str, object]
+    invalid_changes: int
+    actual_usage: dict[str, int]
+    latency_ns: int
+    model_call_count: int
+    verification_reports: tuple[dict[str, object], ...]
+
+
+def _generate_candidate(
+    *,
+    model_url: str,
+    payload: dict[str, object],
+    base_prompt: str,
+    corpus: dict[str, Any],
+    verification_atoms: tuple[SemanticMemoryAtom, ...] = (),
+) -> _GeneratedCandidate:
+    """Generate once, with at most two same-session verifier-guided repair retries."""
+
+    usage_names = (
+        "prompt_eval_count",
+        "eval_count",
+        "total_duration",
+        "load_duration",
+        "prompt_eval_duration",
+        "eval_duration",
+    )
+    usage = {name: 0 for name in usage_names}
+    latency_ns = 0
+    reports: list[dict[str, object]] = []
+    prompt = base_prompt
+    response_text = ""
+    response: dict[str, object] | None = None
+    changes: dict[str, object] = {}
+    invalid_changes = 0
+    model_call_count = 0
+
+    for call_index in range(3):
+        model_call_count = call_index + 1
+        request_payload = {**payload, "prompt": prompt}
+        started = time.perf_counter_ns()
+        generated = _post(model_url, "/api/generate", request_payload)
+        latency_ns += time.perf_counter_ns() - started
+        for name in usage_names:
+            usage[name] += cast(int, generated.get(name, 0))
+        response_text = str(generated.get("response", ""))
+        response = _parse_response(response_text)
+        changes, invalid_changes = _valid_changes(response, corpus)
+        if not verification_atoms:
+            break
+        report = verify_candidate_against_memory(verification_atoms, changes).to_dict()
+        reports.append(report)
+        if report["status"] != "mismatch" or call_index == 2:
+            break
+        prompt = (
+            base_prompt
+            + "\n\nDETERMINISTIC CONSISTENCY REPORT (untrusted evidence):\n"
+            + json.dumps(report, sort_keys=True, separators=(",", ":"))
+            + "\nRegenerate the complete JSON candidate. Repair only listed mismatches. "
+            "This report is not approval and cannot authorize an action."
+        )
+
+    return _GeneratedCandidate(
+        response_text,
+        response,
+        changes,
+        invalid_changes,
+        usage,
+        latency_ns,
+        model_call_count,
+        tuple(reports),
+    )
+
+
 def _memory_content(
     *,
     condition: str,
@@ -330,10 +412,19 @@ def _memory_content(
     facts = tuple(
         f"fact: S{item['session']} evidence {item['evidence']}" for item in public_history[-2:]
     )
-    hard = (
-        f"constraint: authorize as {variant['authorization_role']} before lookup; preserve "
-        f"tenant idempotency key {variant['idempotency_key']}.",
-    )
+    constraint_fields: set[str] = set()
+    if condition in {"SD", "SV"}:
+        expected = _expected(variant, session=session)
+        constraint_fields = set(expected) & _CRITICAL_FIELDS
+        hard = tuple(
+            f"constraint: {name}={_memory_literal(expected[name])}"
+            for name in sorted(constraint_fields)
+        )
+    else:
+        hard = (
+            f"constraint: authorize as {variant['authorization_role']} before lookup; preserve "
+            f"tenant idempotency key {variant['idempotency_key']}.",
+        )
     current_config = "Current config " + json.dumps(config, sort_keys=True, separators=(",", ":"))
     current = f"state: {current_config}"
     if condition == "SF":
@@ -341,12 +432,13 @@ def _memory_content(
         current = f"state: Factual checkpoint baseline at session {session}."
     decisions: tuple[str, ...] = ()
     failures: tuple[str, ...] = ()
-    if condition in {"SD", "SX"} and response is not None:
+    if condition in {"SD", "SV", "SX"} and response is not None:
         hypothesis = str(response.get("hypothesis", ""))[:300]
         current = f"inference: {hypothesis}" if hypothesis else current
         decisions = tuple(
             f"decision: {name}={value}"
             for name, value in sorted(cast(dict[str, object], response.get("changes", {})).items())
+            if name not in constraint_fields
         )[:8]
         uncertainty = str(response.get("uncertainty", ""))[:240]
         failures = (f"failure: uncertainty={uncertainty}",) if uncertainty else ()
@@ -363,6 +455,12 @@ def _memory_content(
         verification_performed=(f"evidence: session {session} ticket recorded.",),
         token_estimate=600,
     )
+
+
+def _memory_literal(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _rolling_summary(
@@ -509,12 +607,22 @@ def _trajectory(
                     "num_predict": model["num_predict"],
                 },
             }
-            started = time.perf_counter_ns()
-            generated = _post(model_url, "/api/generate", payload)
-            latency = time.perf_counter_ns() - started
-            response_text = str(generated.get("response", ""))
-            response = _parse_response(response_text)
-            changes, invalid_changes = _valid_changes(response, corpus)
+            verification_atoms = (
+                runtime.semantic_memory_service.active_atoms(scope)
+                if condition == "SV" and checkpoint_view is not None
+                else ()
+            )
+            generated = _generate_candidate(
+                model_url=model_url,
+                payload=payload,
+                base_prompt=prompt,
+                corpus=corpus,
+                verification_atoms=verification_atoms,
+            )
+            response_text = generated.response_text
+            response = generated.response
+            changes = generated.changes
+            invalid_changes = generated.invalid_changes
             expected_now = _expected(variant, session=session)
             confidence_value = 0.0 if response is None else response.get("confidence", 0.0)
             confidence = (
@@ -549,20 +657,10 @@ def _trajectory(
             precision, recall = _response_concepts(response, session)
             hypothesis_precision.append(precision)
             hypothesis_recall.append(recall)
-            usage = {
-                name: cast(int, generated.get(name, 0))
-                for name in (
-                    "prompt_eval_count",
-                    "eval_count",
-                    "total_duration",
-                    "load_duration",
-                    "prompt_eval_duration",
-                    "eval_duration",
-                )
-            }
+            usage = generated.actual_usage
             total_prompt_tokens += usage["prompt_eval_count"]
             total_output_tokens += usage["eval_count"]
-            total_latency_ns += latency
+            total_latency_ns += generated.latency_ns
             session_record = {
                 "schema_version": "mnemo-long-horizon-session/1.0",
                 "attempt": attempt,
@@ -580,7 +678,9 @@ def _trajectory(
                 "invalid_change_count": invalid_changes,
                 "config_after": dict(config),
                 "actual_usage": usage,
-                "request_latency_ns": latency,
+                "request_latency_ns": generated.latency_ns,
+                "model_call_count": generated.model_call_count,
+                "verification_reports": list(generated.verification_reports),
                 "accumulated_prior_model_tokens": accumulated_prior_tokens,
                 "active_prompt_tokens": usage["prompt_eval_count"],
                 "beyond_active_context": accumulated_prior_tokens > usage["prompt_eval_count"],
@@ -743,6 +843,32 @@ def _paired_bootstrap(
     }
 
 
+def _verifier_gain(
+    rows: list[dict[str, object]],
+    corpus: dict[str, Any],
+    *,
+    seed: int,
+    iterations: int,
+) -> dict[str, object] | None:
+    if "SV" not in cast(list[str], corpus["conditions"]):
+        return None
+    pairs = {(cast(str, row["variant_id"]), cast(str, row["condition"])) for row in rows}
+    if not any(condition == "SV" and (variant, "SD") in pairs for variant, condition in pairs):
+        return None
+    result = _paired_bootstrap(
+        rows, "SV", "SD", "hidden_test_accuracy", seed=seed, iterations=iterations
+    )
+    thresholds = cast(dict[str, object], corpus["preregistered_thresholds"])
+    required = float(
+        cast(float | int, thresholds.get("verifier_hidden_test_accuracy_margin", 0.10))
+    )
+    return {
+        **result,
+        "required_margin": required,
+        "passes_margin": cast(float, result["mean_difference"]) >= required,
+    }
+
+
 def _mcnemar(rows: list[dict[str, object]], left: str, right: str) -> dict[str, object]:
     by_key = {(cast(str, row["variant_id"]), cast(str, row["condition"])): row for row in rows}
     variants = sorted(
@@ -812,6 +938,9 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
             available, "SD", "SF", "hidden_test_accuracy", seed=seed, iterations=iterations
         ),
     }
+    verifier = _verifier_gain(available, corpus, seed=seed, iterations=iterations)
+    if verifier is not None:
+        estimands["DeterministicVerifierGain"] = verifier
     interaction = cast(float, estimands["MetacognitiveStructureGain"]["mean_difference"])
     interaction -= cast(float, estimands["AdditionalComputeGain"]["mean_difference"])
     thresholds = cast(dict[str, object], corpus["preregistered_thresholds"])
@@ -863,7 +992,19 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
         and poison_pass
         and paired_start_pass
         and leakage_pass
+        and (verifier is None or bool(verifier["passes_margin"]))
     )
+    gate_checks = {
+        "primary_accuracy": primary_pass,
+        "task_success": success_pass,
+        "critical_false_memory": false_memory_pass,
+        "beyond_active_context": horizon_pass,
+        "poison_resistance": poison_pass,
+        "byte_identical_paired_start": paired_start_pass,
+        "no_transcript_or_hidden_grader_leakage": leakage_pass,
+    }
+    if verifier is not None:
+        gate_checks["deterministic_verifier_accuracy"] = bool(verifier["passes_margin"])
     return {
         "schema_version": "mnemo-long-horizon-analysis/1.0",
         "conditions": conditions,
@@ -874,15 +1015,8 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
         },
         "primary_task_success_mcnemar": task_test,
         "primary_task_success_difference": success_difference,
-        "gate_2_checks": {
-            "primary_accuracy": primary_pass,
-            "task_success": success_pass,
-            "critical_false_memory": false_memory_pass,
-            "beyond_active_context": horizon_pass,
-            "poison_resistance": poison_pass,
-            "byte_identical_paired_start": paired_start_pass,
-            "no_transcript_or_hidden_grader_leakage": leakage_pass,
-        },
+        "verifier_accuracy_gate": verifier or "NOT EVALUATED",
+        "gate_2_checks": gate_checks,
         "gate_2_verdict": "PASS" if gate_pass else "FAIL",
         "blinded_human_quality": "NOT EVALUATED",
         "F0": "NOT EVALUATED",

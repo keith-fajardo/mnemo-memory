@@ -5696,3 +5696,21 @@ constraints remain unchanged, so the compiler does not guess a field or authorit
 focused assertion failed first on preserved whitespace, then passed alongside supersession and
 protected-literal rendering regressions with formatting, linting, strict source typing, and diff
 checks.
+
+Task 2.1 adds a pure deterministic verifier for active structured CONSTRAINT, DECISION, and
+explicit authority-boundary atoms. It reports only bounded mismatches as `untrusted_evidence`,
+leaves prose, prior guesses, unsupported values, and conflicting remembered literals
+unverifiable, and always states `Consistency check only; not approval`. The MCP tool is registered
+only when `experimental_semantic_memory_enabled` is true; the default tool surface remains
+unchanged. A fresh-process durability test proves a candidate mismatch is returned without being
+persisted. The optional `SV` harness condition is `SD` plus at most two same-session verifier-guided
+repair retries, aggregates every real model call's token and latency use, and evaluates `SV - SD`
+against a separate +0.10 accuracy margin. Offline tests confirmed the three-call ceiling, report
+transport, grouped structured constraints, mismatch capping, conflict abstention, stable default
+tool surface, and candidate non-persistence. No live model endpoint was called.
+
+The complete Task 2.1 gate passed 1,113 tests with 27 expected skips. The ephemeral PostgreSQL gate
+passed 26 tests with one opt-in load test skipped; formatting, linting, strict typing, context-packet
+schema validation, dependency/provenance checks, the 165-file architecture boundary check, and
+installed-package verification also passed. No dependency, lockfile, schema, deploy, or release
+sequence changed.
