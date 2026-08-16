@@ -233,6 +233,13 @@ On a **24 GB M4 MacBook Air specifically**, the ~19 GB 30B primary and ~20 GB 32
 
 Record any substitution here, then re-run the preregistered gate per rung. (Full sourcing lives in the model-selection research; recency-flagged models — Qwen3.5, Gemma 4, Qwen3.6 — postdate Jan 2026 and need a local smoke test before trusting their benchmarks.)
 
+**Authorized 2026-08-16 execution on the 24 GB M4 Air:** run the installed
+`qwen2.5-coder:7b` weak anchor plus `qwen3:14b` in both non-thinking single-JSON and thinking
+two-phase-JSON modes. Do not run the 30B/32B rungs on this machine. The Phase 2 corpus retains the
+original six conditions and adds `SF-fixed`, `SFp`, and `SV`, with the original 30-variant thresholds
+plus the separately registered `SV - SD >= +0.10` verifier margin. Live artifacts must not store
+prompts, response bodies, or model reasoning.
+
 **What can be tested offline vs live:** deterministic pieces (render token counts, false-memory transport, verifier logic, the deterministic-ceiling diagnostic) are unit/offline-testable with **no** model and no authorization. Accuracy and model-token deltas need an **authorized live run** (Ollama + the chosen model) — treat live runs as gated, per the preregistration.
 
 ---

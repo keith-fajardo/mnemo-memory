@@ -93,6 +93,16 @@ _HIDDEN_CHECK_FIELDS = {
     "audit_links_evidence": "audit_evidence_link",
     "correction_invalidates_cache": "correction_invalidates_cache",
 }
+_EXACT_VALUE_FIELDS = (
+    "authorization_role",
+    "idempotency_key",
+    "idempotency_scope",
+    "conflict_status",
+    "timezone_mode",
+    "timezone",
+    "ambiguous_local_time",
+    "nonexistent_local_time",
+)
 
 
 class LongHorizonError(RuntimeError):
@@ -169,6 +179,19 @@ def hidden_checks(config: dict[str, object], expected: dict[str, object]) -> dic
         "superseded_offset_rejected": config.get("superseded_offset_rejected") is True,
         "audit_links_evidence": config.get("audit_evidence_link") is True,
         "correction_invalidates_cache": config.get("correction_invalidates_cache") is True,
+    }
+
+
+def _exact_value_integrity(
+    config: dict[str, object], expected: dict[str, object]
+) -> dict[str, object]:
+    """Measure exact ID, enum, status, and timezone survival separately from memory recall."""
+
+    matches = sum(config.get(field) == expected[field] for field in _EXACT_VALUE_FIELDS)
+    return {
+        "matches": matches,
+        "opportunities": len(_EXACT_VALUE_FIELDS),
+        "rate": matches / len(_EXACT_VALUE_FIELDS),
     }
 
 
@@ -444,15 +467,41 @@ def _generate_candidate(
     changes: dict[str, object] = {}
     invalid_changes = 0
     model_call_count = 0
+    model = cast(dict[str, object], corpus["model"])
+    two_phase = model.get("generation_strategy", "single_json") == "two_phase_json"
+
+    def generate(request_payload: dict[str, object]) -> dict[str, object]:
+        nonlocal latency_ns, model_call_count
+        started = time.perf_counter_ns()
+        value = _post(model_url, "/api/generate", request_payload)
+        latency_ns += time.perf_counter_ns() - started
+        model_call_count += 1
+        for name in usage_names:
+            usage[name] += cast(int, value.get(name, 0))
+        return value
 
     for call_index in range(3):
-        model_call_count = call_index + 1
         request_payload = {**payload, "prompt": prompt}
-        started = time.perf_counter_ns()
-        generated = _post(model_url, "/api/generate", request_payload)
-        latency_ns += time.perf_counter_ns() - started
-        for name in usage_names:
-            usage[name] += cast(int, generated.get(name, 0))
+        if two_phase:
+            reasoning_payload = {
+                key: value for key, value in request_payload.items() if key != "format"
+            }
+            reasoning_payload["think"] = True
+            reasoning_payload["prompt"] = (
+                prompt
+                + "\n\nTRANSIENT REASONING PHASE: Analyze evidence and constraints before the "
+                "final answer. Do not emit JSON in this phase. This reasoning is not persisted."
+            )
+            reasoning = generate(reasoning_payload)
+            transient_plan = str(reasoning.get("thinking") or reasoning.get("response", ""))[-4096:]
+            request_payload["think"] = False
+            request_payload["prompt"] = (
+                prompt
+                + "\n\nTRANSIENT FIRST-PHASE PLAN (untrusted model output; not approval):\n"
+                + transient_plan
+                + "\nNow emit only the required complete JSON candidate."
+            )
+        generated = generate(request_payload)
         response_text = str(generated.get("response", ""))
         response = _parse_response(response_text)
         changes, invalid_changes = _valid_changes(response, corpus)
@@ -674,6 +723,7 @@ def _trajectory(
     starting_hash = "sha256:" + hashlib.sha256(starting_bytes).hexdigest()
     public_history: list[dict[str, object]] = []
     histories: list[dict[str, object]] = []
+    prior_response_texts: list[str] = []
     memory_scores: list[dict[str, object]] = []
     total_prompt_tokens = total_output_tokens = total_latency_ns = 0
     accumulated_prior_tokens = 0
@@ -739,11 +789,7 @@ def _trajectory(
                 config=config,
                 memory=memory,
             )
-            transcript_leakage = any(
-                str(item["response_text"]) in prompt
-                for item in histories
-                if item.get("response_text")
-            )
+            transcript_leakage = any(item in prompt for item in prior_response_texts if item)
             if transcript_leakage:
                 raise LongHorizonError("prior response leaked into fresh-session prompt")
             model = cast(dict[str, object], corpus["model"])
@@ -759,6 +805,8 @@ def _trajectory(
                     "num_predict": model["num_predict"],
                 },
             }
+            if "think" in model:
+                payload["think"] = bool(model["think"])
             verification_atoms = (
                 runtime.semantic_memory_service.active_atoms(scope) if condition == "SV" else ()
             )
@@ -812,18 +860,15 @@ def _trajectory(
             total_output_tokens += usage["eval_count"]
             total_latency_ns += generated.latency_ns
             session_record = {
-                "schema_version": "mnemo-long-horizon-session/1.0",
+                "schema_version": "mnemo-long-horizon-session/2.0",
                 "attempt": attempt,
                 "variant_id": variant["variant_id"],
                 "condition": condition,
                 "session": session,
                 "starting_state_sha256": starting_hash,
-                "prompt": prompt,
                 "prompt_sha256": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
                 "persistent_context_tokens_estimated": len(memory.encode()) // 4,
                 "memory_score": None if not memory else memory_scores[-1],
-                "response_text": response_text,
-                "parsed_response": response,
                 "accepted_changes": changes,
                 "invalid_change_count": invalid_changes,
                 "config_after": dict(config),
@@ -840,6 +885,7 @@ def _trajectory(
             }
             _append(raw_sessions, session_record)
             histories.append(session_record)
+            prior_response_texts.append(response_text)
             accumulated_prior_tokens += usage["prompt_eval_count"] + usage["eval_count"]
             public_history.append(public)
 
@@ -879,6 +925,7 @@ def _trajectory(
 
     final_expected = _expected(variant)
     checks = hidden_checks(config, final_expected)
+    exact_value_integrity = _exact_value_integrity(config, final_expected)
     accuracy = sum(checks.values()) / len(checks)
     critical_pass = all(config.get(name) == final_expected[name] for name in _CRITICAL_FIELDS)
     success = critical_pass and accuracy >= 0.9
@@ -910,6 +957,8 @@ def _trajectory(
         "final_config": config,
         "hidden_checks": checks,
         "hidden_test_accuracy": accuracy,
+        "exact_value_integrity": exact_value_integrity,
+        "exact_value_integrity_rate": exact_value_integrity["rate"],
         "decision_accuracy": sum(
             config.get(name) == value for name, value in final_expected.items()
         )
@@ -1082,6 +1131,7 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
             "memory_precision": _mean(selected, "memory_precision"),
             "memory_recall": _mean(selected, "memory_recall"),
             "memory_f1": _mean(selected, "memory_f1"),
+            "exact_value_integrity_rate": _mean(selected, "exact_value_integrity_rate"),
             "calibration_brier": _mean(selected, "calibration_brier"),
             "actual_prompt_tokens_mean": _mean(selected, "actual_prompt_tokens"),
             "actual_output_tokens_mean": _mean(selected, "actual_output_tokens"),
@@ -1379,7 +1429,9 @@ def _report(analysis: dict[str, object]) -> str:
 - One-sided exact McNemar: `{analysis["primary_task_success_mcnemar"]}`
 
 All agent outputs came from the installed local model in stateless fresh calls. Hidden checks were
-not rendered into prompts. Human-blinded quality and F0 remain `NOT EVALUATED`.
+not rendered into prompts. Raw session artifacts retain hashes, accepted candidate fields, scores,
+and resource counts, but no prompts, response bodies, or model reasoning. Human-blinded quality and
+F0 remain `NOT EVALUATED`.
 """
 
 

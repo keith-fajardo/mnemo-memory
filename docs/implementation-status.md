@@ -5749,3 +5749,21 @@ with one opt-in load test skipped. Formatting, linting, strict typing, schema, d
 165-file architecture, and installed-package checks all passed. No live model endpoint, deploy,
 release, dependency, lockfile, or schema was touched. Phase 2 is complete; Phase 3 remains outside
 scope and requires a separately approved longer-horizon target.
+
+### Small-model long-horizon Phase 2 capability ladder — In progress
+
+The maintainer explicitly authorized live Ollama accuracy and model-token measurement on the 24 GB
+M4 Air. The hardware substitution uses the already-installed `qwen2.5-coder:7b` weak anchor and
+`qwen3:14b` as the practical primary in both non-thinking single-JSON and thinking two-phase-JSON
+modes; the 30B/32B rungs remain excluded from this machine. Three immutable corpus variants preserve
+the original six conditions and thresholds while adding `SF-fixed`, `SFp`, `SV`, and the separate
+`SV - SD >= +0.10` margin.
+
+Before any call, two red tests exposed live-harness boundary failures. Raw session artifacts stored
+full prompts and rationale-bearing response bodies, and the runner forced thinking plus strict JSON
+into one call. The harness now keeps prompts and first-phase reasoning transient, persists only
+content-free hashes, accepted candidate fields, deterministic reports, scores, tokens, and latency,
+and aggregates both real provider calls for two-phase generation. A separate exact-value integrity
+rate measures ID, enum, status, and timezone survival independently of memory recall F1. All 15
+focused long-horizon tests, formatting, linting, and strict typing pass. Model download and live dry
+runs remain in progress; no result or benefit is claimed yet.

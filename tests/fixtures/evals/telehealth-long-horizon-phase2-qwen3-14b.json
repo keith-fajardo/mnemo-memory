@@ -1,0 +1,185 @@
+{
+    "schema_version": "mnemo-telehealth-long-horizon/1.0",
+    "corpus_id": "telehealth-scheduler-phase2-qwen3-14b-instruct-20260816",
+    "seed": 8122026,
+    "model": {
+        "identifier": "qwen3:14b",
+        "temperature": 0,
+        "num_ctx": 4096,
+        "num_predict": 320,
+        "think": false,
+        "generation_strategy": "single_json"
+    },
+    "conditions": [
+        "S0",
+        "SI",
+        "SR",
+        "SF",
+        "SD",
+        "SX",
+        "SF-fixed",
+        "SFp",
+        "SV"
+    ],
+    "variant_count": 30,
+    "timezones": [
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "America/Phoenix",
+        "America/Anchorage",
+        "Pacific/Honolulu",
+        "Europe/London",
+        "Europe/Paris",
+        "Europe/Berlin",
+        "Europe/Madrid",
+        "Europe/Rome",
+        "Europe/Amsterdam",
+        "Europe/Warsaw",
+        "Europe/Athens",
+        "Asia/Manila",
+        "Asia/Tokyo",
+        "Asia/Seoul",
+        "Asia/Singapore",
+        "Asia/Kolkata",
+        "Asia/Dubai",
+        "Australia/Sydney",
+        "Australia/Melbourne",
+        "Pacific/Auckland",
+        "America/Toronto",
+        "America/Vancouver",
+        "America/Sao_Paulo",
+        "America/Mexico_City",
+        "Africa/Johannesburg",
+        "Africa/Nairobi"
+    ],
+    "authorization_roles": [
+        "scheduler",
+        "clinician",
+        "coordinator"
+    ],
+    "conflict_statuses": [
+        409,
+        422,
+        423
+    ],
+    "initial_config": {
+        "timezone_mode": "offset",
+        "timezone": "UTC+00:00",
+        "authorization_role": "viewer",
+        "authorize_before_lookup": false,
+        "idempotency_key": "unset",
+        "idempotency_scope": "global",
+        "idempotent_replay": false,
+        "conflict_status": 500,
+        "atomic_reservation": false,
+        "rollback_on_provider_failure": false,
+        "ambiguous_local_time": "earlier",
+        "nonexistent_local_time": "shift_forward",
+        "superseded_offset_rejected": false,
+        "audit_evidence_link": false,
+        "correction_invalidates_cache": false
+    },
+    "allowed_values": {
+        "timezone_mode": [
+            "offset",
+            "iana"
+        ],
+        "authorization_role": [
+            "scheduler",
+            "clinician",
+            "coordinator"
+        ],
+        "authorize_before_lookup": [
+            true,
+            false
+        ],
+        "idempotency_scope": [
+            "tenant",
+            "global"
+        ],
+        "idempotent_replay": [
+            true,
+            false
+        ],
+        "atomic_reservation": [
+            true,
+            false
+        ],
+        "rollback_on_provider_failure": [
+            true,
+            false
+        ],
+        "ambiguous_local_time": [
+            "reject",
+            "earlier",
+            "later"
+        ],
+        "nonexistent_local_time": [
+            "reject",
+            "shift_forward"
+        ],
+        "superseded_offset_rejected": [
+            true,
+            false
+        ],
+        "audit_evidence_link": [
+            true,
+            false
+        ],
+        "correction_invalidates_cache": [
+            true,
+            false
+        ]
+    },
+    "sessions": [
+        {
+            "session": 1,
+            "ticket_template": "Tenant {tenant_id} needs appointment creation. The currently approved interim representation is a fixed UTC offset. Only role {authorization_role} may schedule, and authorization must occur before any appointment lookup. Retries carry exact idempotency key {idempotency_key}, scoped to the tenant, and must replay the same successful response.",
+            "evidence_template": "Product note PN-{variant_number}: offset-only is interim; authorization and idempotency are hard constraints.",
+            "revealed_fields": [
+                "timezone_mode",
+                "authorization_role",
+                "authorize_before_lookup",
+                "idempotency_key",
+                "idempotency_scope",
+                "idempotent_replay"
+            ]
+        },
+        {
+            "session": 2,
+            "ticket_template": "A concurrency regression let two requests reserve the same provider slot. Reservation must be atomic. If the downstream provider fails, roll back the reservation. A confirmed collision returns status {conflict_status}; do not treat the earlier uncertain provider-status hypothesis as evidence.",
+            "evidence_template": "Trace TR-{variant_number}: two commits entered the non-atomic check-then-write window; rollback was absent.",
+            "revealed_fields": [
+                "atomic_reservation",
+                "rollback_on_provider_failure",
+                "conflict_status"
+            ]
+        },
+        {
+            "session": 3,
+            "ticket_template": "Decision DR-{variant_number} supersedes the offset-only note: use exact IANA zone {timezone}. Reject ambiguous and nonexistent local times. Preserve the verified authorization, idempotency, concurrency, rollback, and conflict behavior. Audit records must link evidence, and applying a correction must invalidate cached projections.",
+            "evidence_template": "DST incident DI-{variant_number} reproduced offset drift; security review confirmed pre-lookup authorization; correction test found a stale cache.",
+            "revealed_fields": [
+                "timezone_mode",
+                "timezone",
+                "ambiguous_local_time",
+                "nonexistent_local_time",
+                "superseded_offset_rejected",
+                "audit_evidence_link",
+                "correction_invalidates_cache"
+            ]
+        }
+    ],
+    "preregistered_thresholds": {
+        "primary_hidden_test_accuracy_margin": 0.1,
+        "primary_ci_lower_bound": 0.0,
+        "task_success_margin": 0.1,
+        "mcnemar_one_sided_alpha": 0.05,
+        "critical_false_memories_allowed_in_sd": 0,
+        "minimum_primary_pairs": 30,
+        "bootstrap_iterations": 10000,
+        "verifier_hidden_test_accuracy_margin": 0.1
+    }
+}
