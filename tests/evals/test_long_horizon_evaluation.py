@@ -24,6 +24,7 @@ from scripts.run_long_horizon_evaluation import (
     _generate_candidate,
     _load_corpus,
     _memory_content,
+    _repository_corpus_path,
     _trusted_constraint_events,
     _valid_changes,
     _variant,
@@ -80,6 +81,20 @@ def test_phase2_capability_ladder_corpora_keep_gates_and_record_generation_modes
         "think": True,
         "generation_strategy": "two_phase_json",
     }
+
+
+def test_repository_relative_corpus_path_is_normalized_before_provenance(
+    tmp_path: Path,
+) -> None:
+    relative = PHASE2_CORPORA["qwen2.5-coder:7b"]
+
+    assert _repository_corpus_path(relative) == relative.resolve()
+    try:
+        _repository_corpus_path(tmp_path / "outside.json")
+    except evaluation.LongHorizonError as error:
+        assert str(error) == "evaluation corpus must be inside the repository"
+    else:
+        raise AssertionError("an external corpus path must be rejected")
 
 
 def test_hidden_grader_requires_every_safety_and_supersession_behavior() -> None:

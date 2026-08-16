@@ -5767,3 +5767,11 @@ and aggregates both real provider calls for two-phase generation. A separate exa
 rate measures ID, enum, status, and timezone survival independently of memory recall F1. All 15
 focused long-horizon tests, formatting, linting, and strict typing pass. Model download and live dry
 runs remain in progress; no result or benefit is claimed yet.
+
+Excluded 7B dry run `dry-20260816-qwen25coder7b-phase2-001` completed all nine trajectories but
+failed while recording provenance because an explicitly supplied repository-relative corpus path
+was compared directly to the absolute repository root. Its model rows remain append-only evidence,
+but the run is not analyzable evidence without a complete manifest. A red path test now requires
+repository-relative inputs to resolve inside the repository and rejects outside paths before any
+model call; all 16 focused harness tests, formatting, linting, and strict typing pass. The dry run
+will restart under a new immutable ID rather than rewriting the excluded directory.

@@ -109,6 +109,13 @@ class LongHorizonError(RuntimeError):
     pass
 
 
+def _repository_corpus_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if not resolved.is_relative_to(ROOT):
+        raise LongHorizonError("evaluation corpus must be inside the repository")
+    return resolved
+
+
 def _load_corpus(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if value.get("schema_version") != "mnemo-telehealth-long-horizon/1.0":
@@ -1268,6 +1275,7 @@ def run(
     model_url: str = "http://127.0.0.1:11434",
     resume: bool = False,
 ) -> tuple[Path, dict[str, object]]:
+    corpus_path = _repository_corpus_path(corpus_path)
     corpus = _load_corpus(corpus_path)
     maximum = cast(int, corpus["variant_count"])
     if not 1 <= variant_count <= maximum:
