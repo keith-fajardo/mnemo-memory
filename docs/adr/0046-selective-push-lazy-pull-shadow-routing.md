@@ -1,8 +1,9 @@
-# ADR 0046: Measure selective push and lazy pull before changing live memory attachment
+# ADR 0046: Selective push and lazy pull routing for automatic memory attachment
 
 ## Status
 
-Accepted for the explicitly approved shadow-policy issue.
+Accepted. Initially shadow-only; live promotion is limited to the separately approved experimental
+semantic-memory Phase 2 gate described below.
 
 ## Context
 
@@ -24,7 +25,7 @@ not remove irrelevant attachment text from the downstream model context.
 
 ## Decision
 
-Mnemo keeps the live ADR 0045 route unchanged and evaluates a separate content-free shadow action:
+Mnemo computes a separate content-free deterministic action:
 
 - `none` for deterministic no-memory and narrowly recognized current-output follow-ups;
 - `push_structure`, `push_long_term`, or `push_both` when deterministic rules or explicitly taught
@@ -32,34 +33,44 @@ Mnemo keeps the live ADR 0045 route unchanged and evaluates a separate content-f
 - `lazy_pull` when a need remains unresolved.
 
 `lazy_pull` represents this fixed 30-token estimate: “Mnemo did not attach durable context. If prior
-project decisions or structure could change the answer, call get_context.” The hint is not attached
-live in this issue. It reuses the existing authorized, scoped `get_context` tool and does not add a
-second tool description to every model context. A proposed push remains within the existing shared
-1,300-token ceiling; the hint estimate must remain at most 40 tokens.
+project decisions or structure could change the answer, call get_context.” It reuses the existing
+authorized, scoped `get_context` tool and does not add a second tool description to every model
+context. A proposed push remains within the existing shared 1,300-token ceiling; the hint estimate
+must remain at most 40 tokens.
+
+The stable path remains unchanged when `experimental_semantic_memory_enabled=false`. When the flag
+is true, a `UserPromptSubmit` hook promotes the deterministic action: `none` does not retrieve or
+attach a slice, `lazy_pull` attaches only the fixed hint, and a push retrieves and renders one
+existing route-selected slice within the action and route ceilings. The gate is a hook decision; it
+does not proxy, invoke, wrap, or rerun the agent model. The SessionStart path is not suppressed by
+this prompt gate and retains the compact semantic index as its minimum attachment whenever current
+semantic evidence is eligible, so the experiment never replaces that index with silent nothing.
 
 Automatic trace hooks use only deterministic routing and explicitly authorized learned phrases.
 They do not load or invoke Potion. The pinned Potion adapter remains an explicit local evaluation
 asset, outside the hook critical path. No result automatically teaches, promotes, forgets, or
 changes a route.
 
-New trace events add only a closed shadow action, proposed token count, and shadow duration. JSON
-and table views compute combined routing time while retaining the old semantic/Potion fields for
-historical records. A later `get_context` call is observed only as the closed `context_recall` tool
-category. Prompts, paths, payloads, queries, results, embeddings, scores, and reasoning remain
-prohibited.
+New trace events add only a closed action, proposed token count, and routing duration. A promoted
+event additionally records a boolean gate marker and the deterministically measured injected
+context tokens. JSON diagnostics report those tokens separately from Mnemo model tokens, which are
+zero because the gate is deterministic. Actual downstream agent token deltas and break-even reuse
+remain explicitly unevaluated until an authorized live model comparison supplies them. A later
+`get_context` call is observed only as the closed `context_recall` tool category. Prompts, paths,
+payloads, queries, results, embeddings, scores, and reasoning remain prohibited.
 
 ## Consequences
 
-Trace mode no longer incurs Potion model latency. The shadow record can compare current live token
-cost with a concrete selective-push/lazy-pull counterfactual without withholding context. Historical
-events remain readable, and users can still label the observed route as helpful, noise, or missing.
+Trace mode no longer incurs Potion model latency. Historical events remain readable, and users can
+still label the observed route as helpful, noise, or missing. The experimental live gate avoids
+retrieval work for deterministic `none` and `lazy_pull` outcomes and supplies measured injection
+costs for a later authorized paired comparison.
 
-The shadow proposal does not prove answer quality or causation. Narrow current-output phrases can be
-wrong after compaction, and an eventual agent pull can add latency or miss relevant memory. Live
-promotion therefore requires a later approved issue with a user-authorized, secret-safe,
-production-like evaluation set measuring answer quality, miss rate, tokens, and latency. A model,
-cache, Redis service, or automatic learning loop is not justified unless that simpler policy fails
-the agreed gates.
+The promoted proposal does not prove answer quality or causation. Narrow current-output phrases can
+be wrong after compaction, and an eventual agent pull can add latency or miss relevant memory. Live
+model-token savings, answer quality, miss rate, and break-even therefore require the separately
+authorized, secret-safe evaluation ladder. A model, cache, Redis service, or automatic learning
+loop is not justified by this deterministic gate.
 
 ## Evidence
 
@@ -69,4 +80,4 @@ the agreed gates.
 - [Large Language Models Can Be Easily Distracted by Irrelevant Context](https://proceedings.mlr.press/v202/shi23a.html) measures degradation from irrelevant input.
 
 These sources motivate evaluation dimensions; they do not validate Mnemo's thresholds or production
-quality. Mnemo's promotion decision must come from its own controlled evidence.
+quality. Any behavioral or economic claim must come from Mnemo's own controlled evidence.

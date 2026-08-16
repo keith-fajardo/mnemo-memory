@@ -87,6 +87,7 @@ from mnemo_memory.packages.storage.contracts import (
     KnowledgeDocumentRepository,
     ProjectProcedureRegistry,
     ProjectSkillRegistry,
+    SemanticCheckpointRepositoryError,
     SourceStructureRepository,
 )
 
@@ -618,7 +619,13 @@ class UnifiedContextService:
                 preferred_token_target=min(400, available),
                 maximum_token_ceiling=available,
             )
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except (
+            OSError,
+            RuntimeError,
+            SemanticCheckpointRepositoryError,
+            TypeError,
+            ValueError,
+        ):
             return packet
         notices = tuple(
             provenance if notice.item_id == legacy.item_id else notice

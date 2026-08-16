@@ -4,6 +4,7 @@ import pytest
 
 from mnemo_memory.packages.application.context_routing import (
     AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
+    AutomaticContextLiveAttachment,
     AutomaticContextNeed,
     AutomaticContextRoute,
     AutomaticContextRouteReason,
@@ -14,6 +15,7 @@ from mnemo_memory.packages.application.context_routing import (
     LearnedRoutePhrase,
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
+    gate_automatic_context_injection,
     plan_automatic_context_needs,
 )
 
@@ -278,3 +280,37 @@ def test_shadow_policy_proposes_none_for_current_output_and_lazy_pull_when_unkno
     assert uncertain.action is AutomaticContextShadowAction.LAZY_PULL
     assert uncertain.structural_need is uncertain.long_term_need is AutomaticContextNeed.UNKNOWN
     assert 0 < uncertain.estimated_attachment_tokens <= 40
+
+
+def test_live_gate_maps_no_unknown_and_yes_without_loading_suppressed_slices() -> None:
+    loaded: list[str] = []
+
+    def load_slice() -> str:
+        loaded.append("slice")
+        return "selected bounded slice"
+
+    no_memory = gate_automatic_context_injection(
+        plan_automatic_context_needs("This is the output; what is your conclusion?"),
+        load_slice,
+    )
+    unknown = gate_automatic_context_injection(
+        plan_automatic_context_needs("finance reconciliation variance"),
+        load_slice,
+    )
+    needed = gate_automatic_context_injection(
+        plan_automatic_context_needs("Use the decision from our previous session."),
+        load_slice,
+    )
+
+    assert no_memory == AutomaticContextLiveAttachment(AutomaticContextShadowAction.NONE, None, 0)
+    assert unknown == AutomaticContextLiveAttachment(
+        AutomaticContextShadowAction.LAZY_PULL,
+        AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
+        (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4,
+    )
+    assert needed == AutomaticContextLiveAttachment(
+        AutomaticContextShadowAction.PUSH_LONG_TERM,
+        "selected bounded slice",
+        (len("selected bounded slice") + 3) // 4,
+    )
+    assert loaded == ["slice"]

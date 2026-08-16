@@ -128,12 +128,15 @@ from mnemo_memory.packages.application.command_wrapper import (
     merge_command_hooks,
 )
 from mnemo_memory.packages.application.context_routing import (
+    AutomaticContextLiveAttachment,
     AutomaticContextRoute,
     AutomaticContextRouteDecision,
+    AutomaticContextShadowAction,
     AutomaticContextShadowPlan,
     CompactMemoryRoute,
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
+    gate_automatic_context_injection,
     plan_automatic_context_needs,
 )
 from mnemo_memory.packages.application.services import LifecycleService
@@ -488,6 +491,8 @@ def _automatic_prompt_context_result(
     scope: MemoryScope,
     prompt: str,
     client: ClientName,
+    *,
+    experimental_semantic_memory_enabled: bool = False,
 ) -> _AutomaticPromptContextResult:
     """Select and execute one bounded route without persisting the transient prompt."""
 
@@ -553,7 +558,11 @@ def _automatic_prompt_context_result(
                     runtime.knowledge_document_repository,
                     FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
                 )
-            service = _automatic_prompt_context_service(runtime, semantic)
+            service = _automatic_prompt_context_service(
+                runtime,
+                semantic,
+                include_semantic_memory=experimental_semantic_memory_enabled,
+            )
             request = _automatic_prompt_context_request(
                 scope,
                 query_prompt,
@@ -564,7 +573,11 @@ def _automatic_prompt_context_result(
             try:
                 packet = service.get_context(request)
             except LocalEmbeddingError:
-                packet = _automatic_prompt_context_service(runtime, None).get_context(
+                packet = _automatic_prompt_context_service(
+                    runtime,
+                    None,
+                    include_semantic_memory=experimental_semantic_memory_enabled,
+                ).get_context(
                     _automatic_prompt_context_request(
                         scope,
                         query_prompt,
@@ -639,6 +652,8 @@ def _automatic_route_query(prompt: str, decision: AutomaticContextRouteDecision)
 def _automatic_prompt_context_service(
     runtime: CheckpointRuntime,
     semantic: LocalSemanticKnowledgeRetriever | None,
+    *,
+    include_semantic_memory: bool = False,
 ) -> UnifiedContextEngine:
     return UnifiedContextEngine(
         UnifiedContextService(
@@ -648,6 +663,7 @@ def _automatic_prompt_context_service(
             runtime.repository,
             runtime.knowledge_document_repository,
             semantic_knowledge=semantic,
+            semantic_memory=(runtime.semantic_memory_service if include_semantic_memory else None),
         ),
         runtime.repository,
     )
@@ -770,23 +786,58 @@ def _automatic_prompt_context_for_hook(
 ) -> PromptContextAttachment:
     """Render one selected route and persist only content-free cost metadata."""
 
-    result = _automatic_prompt_context_result(data_directory, scope, prompt, client)
-    rendered: str | None = None
-    canonical_tokens = 0
-    if result.packet is not None:
-        canonical_tokens = result.packet.declared_total_tokens
-        rendered = render_automatic_context_packet(
-            result.packet,
-            client,
-            result.decision.maximum_attachment_tokens,
+    try:
+        experimental_live_gate = (
+            PersonalSettingsStore(data_directory).load().experimental_semantic_memory_enabled
         )
-    elif result.skill_candidates:
-        rendered = _render_skill_discovery(result.skill_candidates, client)
-    elif result.decision.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS:
-        rendered = _render_local_diagnostics_guidance(client)
+    except (OSError, TypeError, ValueError):
+        experimental_live_gate = False
+
+    trace = (
+        _automatic_shadow_trace(data_directory, scope, prompt) if experimental_live_gate else None
+    )
+    live_attachment: AutomaticContextLiveAttachment | None
+    if trace is not None and trace.plan.action in {
+        AutomaticContextShadowAction.NONE,
+        AutomaticContextShadowAction.LAZY_PULL,
+    }:
+        started = monotonic()
+        decision = choose_automatic_context_route(bounded_automatic_context_prompt(prompt))
+        result = _AutomaticPromptContextResult(
+            decision,
+            None,
+            (),
+            _elapsed_milliseconds(started),
+        )
+        live_attachment = gate_automatic_context_injection(trace.plan, lambda: None)
+        rendered = live_attachment.context
+        canonical_tokens = 0
+    else:
+        result = _automatic_prompt_context_result(
+            data_directory,
+            scope,
+            prompt,
+            client,
+            experimental_semantic_memory_enabled=experimental_live_gate,
+        )
+        maximum_tokens = result.decision.maximum_attachment_tokens
+        if trace is not None:
+            maximum_tokens = min(maximum_tokens, trace.plan.estimated_attachment_tokens)
+        rendered, canonical_tokens = _render_automatic_prompt_result(result, client, maximum_tokens)
+        live_attachment = (
+            None
+            if trace is None
+            else gate_automatic_context_injection(trace.plan, lambda: rendered)
+        )
+        if live_attachment is not None:
+            rendered = live_attachment.context
 
     if result.failed:
         outcome = AutomaticRouteOutcome.ERROR
+    elif live_attachment is not None and (
+        live_attachment.action is AutomaticContextShadowAction.NONE
+    ):
+        outcome = AutomaticRouteOutcome.NO_ATTACHMENT
     elif result.skill_candidates:
         outcome = AutomaticRouteOutcome.CANDIDATE
     elif result.packet is not None or rendered is not None:
@@ -805,11 +856,8 @@ def _automatic_prompt_context_for_hook(
     if diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.OFF:
         return PromptContextAttachment(rendered)
 
-    trace = (
-        _automatic_shadow_trace(data_directory, scope, prompt)
-        if diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.TRACE
-        else None
-    )
+    if trace is None and diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.TRACE:
+        trace = _automatic_shadow_trace(data_directory, scope, prompt)
     event_id = uuid4()
     characters = 0 if rendered is None else len(rendered)
     event = AutomaticRouteEvent(
@@ -845,6 +893,10 @@ def _automatic_prompt_context_for_hook(
             else trace.plan.semantic_route.value
         ),
         semantic_latency_ms=0,
+        live_gate_applied=live_attachment is not None,
+        injected_context_tokens=(
+            0 if live_attachment is None else live_attachment.injected_context_tokens
+        ),
     )
     try:
         LocalAutomaticRouteTelemetryStore(
@@ -853,6 +905,25 @@ def _automatic_prompt_context_for_hook(
     except (AutomaticRouteTelemetryError, OSError, ValueError):
         return PromptContextAttachment(rendered)
     return PromptContextAttachment(rendered, event_id)
+
+
+def _render_automatic_prompt_result(
+    result: _AutomaticPromptContextResult,
+    client: ClientName,
+    maximum_tokens: int,
+) -> tuple[str | None, int]:
+    """Render one already-selected slice without re-reading transient prompt data."""
+
+    if result.packet is not None:
+        return (
+            render_automatic_context_packet(result.packet, client, maximum_tokens),
+            result.packet.declared_total_tokens,
+        )
+    if result.skill_candidates:
+        return _render_skill_discovery(result.skill_candidates, client), 0
+    if result.decision.route is AutomaticContextRoute.LOCAL_DIAGNOSTICS:
+        return _render_local_diagnostics_guidance(client), 0
+    return None, 0
 
 
 def _render_skill_discovery(
@@ -3089,7 +3160,7 @@ def memory_route_diagnostics_status(
 
 def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
     shadow_duration_ms = max(event.shadow_duration_ms, event.semantic_latency_ms)
-    return {
+    value: dict[str, object] = {
         "event_id": str(event.event_id),
         "observed_at": event.observed_at.astimezone(UTC).isoformat(),
         "live_route": event.route,
@@ -3116,6 +3187,16 @@ def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
         "tool_calls": dict(event.tool_calls),
         "feedback": None if event.feedback is None else event.feedback.value,
     }
+    if event.live_gate_applied:
+        value["token_account"] = {
+            "classification": "deterministically_measured",
+            "injected_context_tokens": event.injected_context_tokens,
+            "mnemo_model_input_tokens": 0,
+            "mnemo_model_output_tokens": 0,
+            "break_even_reuse": None,
+            "break_even_status": "requires_authorized_actual_agent_model_token_delta",
+        }
+    return value
 
 
 class _RouteDiagnosticsOutputFormat(str, Enum):

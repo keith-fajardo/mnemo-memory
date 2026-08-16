@@ -5683,7 +5683,7 @@ architecture boundary check, and installed-package verification all passed. No d
 lockfile changed, no live model endpoint was called, and no deploy or release sequence ran. Phase 0
 and Phase 1 are complete; stop here until the maintainer explicitly approves charter-stretch Phase 2.
 
-### Small-model long-horizon Phase 2 — In progress
+### Small-model long-horizon Phase 2 — Complete
 
 The maintainer explicitly approved all of Phase 2, including the separately highlighted Task 2.2
 reconcile boundary. Phase 2 remains behind `experimental_semantic_memory_enabled`; verifier and
@@ -5715,7 +5715,7 @@ schema validation, dependency/provenance checks, the 165-file architecture bound
 installed-package verification also passed. No dependency, lockfile, schema, deploy, or release
 sequence changed.
 
-Task 2.2 is in progress under the maintainer's explicit reconcile approval. Its deterministic
+Task 2.2 implements the maintainer's explicitly approved reconcile boundary. Its deterministic
 branch returns a candidate copy only when the agent named the field and active structured memory
 has one non-conflicting stored literal at confidence 0.9 or higher. Stored strings are copied
 verbatim; low-confidence memory remains report-only, and no result is applied, executed, or
@@ -5731,3 +5731,21 @@ constraint-backed hidden checks. The complete gate passed 1,119 tests with 27 ex
 ephemeral PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting,
 strict typing, schema, dependency/provenance, 165-file architecture, and installed-package checks
 all passed. No real model endpoint, deploy, release, dependency, lockfile, or schema was touched.
+
+Task 2.3 promotes the existing deterministic two-axis planner only when
+`experimental_semantic_memory_enabled=true`. `none` and `lazy_pull` outcomes do not open the
+checkpoint runtime or retrieve a context slice; the former attaches nothing and the latter emits
+only the fixed 30-token `get_context` hint. A push renders one existing route-selected slice under
+both the route ceiling and the planner's shared 1,300-token allocation. The stable flag-off path is
+unchanged, and the independent SessionStart path retains the compact semantic index as its floor.
+Promoted route telemetry stores only a gate boolean and deterministically measured injected-context
+tokens. JSON diagnostics keep Mnemo model tokens at zero and label downstream model-token delta and
+break-even reuse as requiring a separately authorized live comparison. Prompts, slices, tool
+payloads, and reasoning are not stored. The red hook test first attempted the suppressed runtime
+read; 119 focused routing, telemetry, automatic-memory, context-engine, and fresh-process MCP tests
+now pass, including YES slice bounds and the SessionStart index regression. The final aggregate gate
+passed 1,122 tests with 27 expected environment skips; the ephemeral PostgreSQL gate passed 26 tests
+with one opt-in load test skipped. Formatting, linting, strict typing, schema, dependency/provenance,
+165-file architecture, and installed-package checks all passed. No live model endpoint, deploy,
+release, dependency, lockfile, or schema was touched. Phase 2 is complete; Phase 3 remains outside
+scope and requires a separately approved longer-horizon target.

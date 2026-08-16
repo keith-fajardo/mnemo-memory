@@ -176,6 +176,8 @@ class AutomaticRouteEvent:
     semantic_route: str | None = None
     semantic_latency_ms: int = 0
     feedback: AutomaticRouteFeedback | None = None
+    live_gate_applied: bool = False
+    injected_context_tokens: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, UUID) or self.event_id.version != 4:
@@ -210,6 +212,7 @@ class AutomaticRouteEvent:
             self.shadow_estimated_tokens,
             self.shadow_duration_ms,
             self.semantic_latency_ms,
+            self.injected_context_tokens,
         ):
             if (
                 not isinstance(value, int)
@@ -291,6 +294,12 @@ class AutomaticRouteEvent:
             raise ValueError("automatic route semantic route is invalid")
         if self.feedback is not None and not isinstance(self.feedback, AutomaticRouteFeedback):
             raise TypeError("automatic route feedback is invalid")
+        if not isinstance(self.live_gate_applied, bool):
+            raise TypeError("automatic route live gate flag is invalid")
+        if not self.live_gate_applied and self.injected_context_tokens:
+            raise ValueError("automatic route injected tokens require the live gate")
+        if self.live_gate_applied and self.shadow_action is None:
+            raise ValueError("automatic route live gate requires a deterministic plan")
 
     def with_tool_observation(
         self, category: AutomaticRouteToolCategory, result_characters: int | None
@@ -393,6 +402,13 @@ class AutomaticRouteEvent:
                     "feedback": None if self.feedback is None else self.feedback.value,
                 }
             )
+        if self.live_gate_applied:
+            value.update(
+                {
+                    "live_gate_applied": True,
+                    "injected_context_tokens": self.injected_context_tokens,
+                }
+            )
         return value
 
     @classmethod
@@ -435,10 +451,12 @@ class AutomaticRouteEvent:
             "shadow_estimated_tokens",
             "shadow_duration_ms",
         }
+        live_gate = {"live_gate_applied", "injected_context_tokens"}
         if not isinstance(value, dict) or frozenset(value) not in {
             frozenset(required),
             frozenset(required | shadow),
             frozenset(required | shadow_v2),
+            frozenset(required | shadow_v2 | live_gate),
         }:
             raise ValueError("automatic route event is invalid")
         tool_calls = value["tool_calls"]
@@ -499,6 +517,8 @@ class AutomaticRouteEvent:
             semantic_route,
             _integer(value.get("semantic_latency_ms", 0)),
             None if feedback is None else AutomaticRouteFeedback(feedback),
+            _boolean(value.get("live_gate_applied", False)),
+            _integer(value.get("injected_context_tokens", 0)),
         )
 
 

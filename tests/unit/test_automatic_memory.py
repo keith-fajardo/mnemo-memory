@@ -54,9 +54,13 @@ from mnemo_memory.packages.application.checkpoints import (
     ReviseCheckpoint,
 )
 from mnemo_memory.packages.application.config import LocalConfig
-from mnemo_memory.packages.application.context_routing import CompactMemoryRoute
+from mnemo_memory.packages.application.context_routing import (
+    AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
+    CompactMemoryRoute,
+)
 from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
+from mnemo_memory.packages.application.settings import PersonalSettings, PersonalSettingsStore
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
 from mnemo_memory.packages.domain import (
     CheckpointContent,
@@ -1362,6 +1366,78 @@ def test_lazy_pull_correlates_get_context_as_a_closed_tool_category(tmp_path: Pa
     assert event.shadow_action == "lazy_pull"
     assert dict(event.tool_calls) == {"context_recall": 1}
     assert "finance" not in LocalAutomaticRouteTelemetryStore(data).path.read_text(encoding="utf-8")
+
+
+def test_experimental_live_gate_suppresses_no_and_lazy_pull_without_loading_slices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    PersonalSettingsStore(data).save(PersonalSettings(experimental_semantic_memory_enabled=True))
+
+    def reject_slice(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("NO and UNKNOWN must not load a context slice")
+
+    monkeypatch.setattr(cli, "_automatic_prompt_context_result", reject_slice)
+    no_prompt = "This is the output; what is your conclusion? private-no-marker-21d4"
+    unknown_prompt = "finance reconciliation variance private-unknown-marker-06c7"
+
+    no_memory = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, no_prompt, "codex"
+    )
+    lazy_pull = cli._automatic_prompt_context_for_hook(
+        data, binding.checkpoint_scope, unknown_prompt, "codex"
+    )
+
+    assert no_memory.context is None
+    assert lazy_pull.context == AUTOMATIC_CONTEXT_LAZY_PULL_HINT
+    events = LocalAutomaticRouteTelemetryStore(data).events(
+        cli._automatic_route_scope(binding.checkpoint_scope)
+    )
+    assert [event.live_gate_applied for event in events] == [True, True]
+    by_action = {event.shadow_action: event for event in events}
+    assert by_action["none"].injected_context_tokens == 0
+    lazy_event = by_action["lazy_pull"]
+    assert lazy_event.injected_context_tokens == (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4
+    token_account = cast(dict[str, object], cli._route_event_view(lazy_event)["token_account"])
+    assert token_account == {
+        "classification": "deterministically_measured",
+        "injected_context_tokens": (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4,
+        "mnemo_model_input_tokens": 0,
+        "mnemo_model_output_tokens": 0,
+        "break_even_reuse": None,
+        "break_even_status": "requires_authorized_actual_agent_model_token_delta",
+    }
+    encoded = LocalAutomaticRouteTelemetryStore(data).path.read_text(encoding="utf-8")
+    assert no_prompt not in encoded and unknown_prompt not in encoded
+
+
+def test_experimental_live_gate_pushes_one_bounded_selected_slice(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    _create_test_handoff(data, binding, objective="Honor the remembered decision.")
+    PersonalSettingsStore(data).save(PersonalSettings(experimental_semantic_memory_enabled=True))
+
+    attached = cli._automatic_prompt_context_for_hook(
+        data,
+        binding.checkpoint_scope,
+        "Use the decision from our previous session.",
+        "codex",
+    )
+
+    assert attached.context is not None
+    assert attached.context.startswith("MNEMO_CONTEXT_V1")
+    assert (len(attached.context) + 3) // 4 <= 700
+    event = LocalAutomaticRouteTelemetryStore(data).events(
+        cli._automatic_route_scope(binding.checkpoint_scope)
+    )[0]
+    assert event.live_gate_applied is True
+    assert event.shadow_action == "push_long_term"
+    assert event.injected_context_tokens == (len(attached.context) + 3) // 4
 
 
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(

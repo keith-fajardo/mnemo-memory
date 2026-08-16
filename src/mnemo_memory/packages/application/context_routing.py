@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
@@ -242,7 +243,7 @@ class AutomaticContextNeed(StrEnum):
 
 
 class AutomaticContextShadowAction(StrEnum):
-    """One closed shadow action; it never changes the live attachment route."""
+    """One closed deterministic action, promoted only by the experimental live gate."""
 
     NONE = "none"
     PUSH_STRUCTURE = "push_structure"
@@ -274,7 +275,7 @@ class LearnedRoutePhrase:
 
 @dataclass(frozen=True, slots=True)
 class AutomaticContextShadowPlan:
-    """Content-free two-axis proposal that cannot change the live attachment route."""
+    """Content-free two-axis proposal, inert unless the experimental live gate promotes it."""
 
     structural_need: AutomaticContextNeed
     long_term_need: AutomaticContextNeed
@@ -345,6 +346,41 @@ class AutomaticContextShadowPlan:
             raise ValueError("shadow semantic result is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class AutomaticContextLiveAttachment:
+    """One flag-gated deterministic attachment decision and its measured context cost."""
+
+    action: AutomaticContextShadowAction
+    context: str | None
+    injected_context_tokens: int
+
+
+def gate_automatic_context_injection(
+    plan: AutomaticContextShadowPlan,
+    slice_loader: Callable[[], str | None],
+) -> AutomaticContextLiveAttachment:
+    """Map NO to nothing, UNKNOWN to a hint, and YES to one bounded selected slice."""
+
+    if not isinstance(plan, AutomaticContextShadowPlan) or not callable(slice_loader):
+        raise TypeError("automatic context live gate input is invalid")
+    if plan.action is AutomaticContextShadowAction.NONE:
+        return AutomaticContextLiveAttachment(plan.action, None, 0)
+    if plan.action is AutomaticContextShadowAction.LAZY_PULL:
+        return AutomaticContextLiveAttachment(
+            plan.action,
+            AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
+            _LAZY_PULL_ESTIMATED_TOKENS,
+        )
+    context = slice_loader()
+    if context is not None and (not isinstance(context, str) or not context):
+        raise TypeError("automatic context live slice is invalid")
+    return AutomaticContextLiveAttachment(
+        plan.action,
+        context,
+        0 if context is None else (len(context) + 3) // 4,
+    )
+
+
 def normalize_learned_route_phrase(phrase: str) -> str:
     """Normalize an explicit phrase for deterministic matching and exact forgetting."""
 
@@ -365,7 +401,7 @@ def plan_automatic_context_needs(
     learned_phrases: tuple[LearnedRoutePhrase, ...] = (),
     semantic_router: CompactMemoryRouter | None = None,
 ) -> AutomaticContextShadowPlan:
-    """Plan independent needs without changing the current live attachment route."""
+    """Plan independent needs without itself changing the live attachment route."""
 
     bounded = bounded_automatic_context_prompt(prompt)
     if any(not isinstance(item, LearnedRoutePhrase) for item in learned_phrases):
