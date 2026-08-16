@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pytest import MonkeyPatch, approx
 
@@ -11,6 +12,7 @@ from mnemo_memory.packages.domain import (
     EventId,
     SemanticAtomKind,
     SemanticMemoryAtom,
+    TaskActivityActor,
 )
 from scripts import run_long_horizon_evaluation as evaluation
 from scripts.run_long_horizon_evaluation import (
@@ -21,9 +23,11 @@ from scripts.run_long_horizon_evaluation import (
     _generate_candidate,
     _load_corpus,
     _memory_content,
+    _trusted_constraint_events,
     _valid_changes,
     _variant,
     _verifier_gain,
+    deterministic_ceiling_diagnostic,
     hidden_checks,
 )
 
@@ -194,3 +198,107 @@ def test_sv_minus_sd_has_a_separate_ten_point_accuracy_gate() -> None:
     assert result["mean_difference"] == approx(0.2)
     assert result["required_margin"] == 0.10
     assert result["passes_margin"] is True
+
+
+def test_zero_model_token_deterministic_ceiling_reconciles_constraint_backed_checks() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    expected = _expected(variant)
+    scope = evaluation._scope(str(variant["variant_id"]), "SV")
+    atoms = tuple(
+        SemanticMemoryAtom.create(
+            scope=scope,
+            kind=(
+                SemanticAtomKind.DECISION
+                if name == "timezone_mode"
+                else SemanticAtomKind.CONSTRAINT
+            ),
+            subject="user",
+            predicate=f"requires:{name}",
+            object_value=f"{name}={evaluation._memory_literal(value)}",
+            source_event_ids=(EventId.from_string(f"60000000-0000-4000-8000-{index:012d}"),),
+            created_at=datetime(2026, 8, 16, tzinfo=UTC),
+            confidence=0.9,
+        )
+        for index, (name, value) in enumerate(sorted(expected.items()), start=1)
+    )
+
+    diagnostic = deterministic_ceiling_diagnostic(
+        candidate=dict(corpus["initial_config"]),
+        expected=expected,
+        atoms=atoms,
+    )
+
+    assert diagnostic["model_call_count"] == 0
+    assert diagnostic["model_input_tokens"] == 0
+    assert diagnostic["model_output_tokens"] == 0
+    assert diagnostic["hidden_test_accuracy_after"] == 1.0
+    assert diagnostic["constraint_backed_accuracy"] == 1.0
+
+
+def test_sv_and_sd_persist_only_publicly_revealed_constraints_as_user_evidence() -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    public = evaluation._session_public(corpus, variant, 1)
+
+    sd = _trusted_constraint_events(variant=variant, condition="SD", public=public)
+    sv = _trusted_constraint_events(variant=variant, condition="SV", public=public)
+
+    assert [event.summary for event in sv] == [event.summary for event in sd]
+    assert all(event.actor is TaskActivityActor.USER for event in sv)
+    assert {event.summary for event in sv} == {
+        (
+            "constraint: authorization_role=scheduler ; authorize_before_lookup=true ; "
+            "idempotency_key=IDEM-001-07919 ; idempotency_scope=tenant ; "
+            "idempotent_replay=true"
+        ),
+        "decision: timezone_mode=offset",
+    }
+
+
+def test_offline_sv_trajectory_verifies_current_constraints_and_emits_ceiling(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    calls = 0
+
+    def fake_post(_base_url: str, _path: str, payload: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        prompt = str(payload["prompt"])
+        session = next(number for number in (1, 2, 3) if f"SESSION: {number} of 3" in prompt)
+        return {
+            "response": json.dumps(
+                {
+                    "changes": _expected(variant, session=session),
+                    "analysis_summary": "checked public constraints",
+                    "hypothesis": "apply exact evidence",
+                    "evidence_used": [f"session-{session}"],
+                    "uncertainty": "none",
+                    "next_action": "save candidate",
+                    "confidence": 1.0,
+                }
+            ),
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+    monkeypatch.setattr(evaluation, "_post", fake_post)
+    raw_sessions = tmp_path / "sessions.jsonl"
+    trajectory = evaluation._trajectory(
+        corpus=corpus,
+        variant=variant,
+        condition="SV",
+        model_url="http://127.0.0.1:11434",
+        raw_sessions=raw_sessions,
+        attempt=1,
+    )
+
+    records = evaluation._read_jsonl(raw_sessions)
+    assert calls == 3
+    assert [record["model_call_count"] for record in records] == [1, 1, 1]
+    diagnostic = trajectory["deterministic_ceiling_diagnostic"]
+    assert isinstance(diagnostic, dict)
+    assert diagnostic["model_call_count"] == 0
+    assert diagnostic["hidden_test_accuracy_after"] == 1.0

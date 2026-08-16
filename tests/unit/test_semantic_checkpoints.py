@@ -350,6 +350,27 @@ def test_structured_constraint_is_canonical_field_value_without_guessing_from_pr
     assert by_kind[SemanticAtomKind.DECISION] == ["conflict_status=409"]
 
 
+def test_structured_decisions_supersede_only_the_same_named_field() -> None:
+    scope = _scope()
+    service, _ = _service()
+    saved = service.save_checkpoint(
+        scope,
+        events=(
+            _event(scope, 1, "decision: timezone_mode=offset"),
+            _event(scope, 2, "decision: conflict_status=409"),
+            _event(scope, 3, "decision: timezone_mode=iana"),
+        ),
+    )
+
+    assert sorted(atom.object_value for atom in saved.checkpoint.atoms) == [
+        "conflict_status=409",
+        "timezone_mode=iana",
+    ]
+    assert (
+        sum(atom.status is SemanticAtomStatus.SUPERSEDED for atom in service.list_atoms(scope)) == 1
+    )
+
+
 def test_public_checkpoint_projection_replaces_state_and_preserves_audit_evidence() -> None:
     scope = _scope()
     checkpoints = CheckpointApplicationService(ReferenceCheckpointRepository(), clock=lambda: NOW)

@@ -744,10 +744,14 @@ class DurableMcpContextPort:
             if not isinstance(candidate, Mapping):
                 raise ValueError("candidate must be an object")
             maximum_mismatches = _integer(request.get("maximum_mismatches", 16))
+            reconcile = request.get("reconcile", False)
+            if not isinstance(reconcile, bool):
+                raise ValueError("reconcile must be a boolean")
             return verify_candidate_against_memory(
                 self._semantic_memory.active_atoms(scope),
                 candidate,
                 maximum_mismatches=maximum_mismatches,
+                reconcile=reconcile,
             ).to_dict()
         except Exception as error:
             raise _mcp_error(error) from error

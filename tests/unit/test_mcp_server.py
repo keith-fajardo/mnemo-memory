@@ -283,8 +283,10 @@ def test_server_lists_verifier_only_when_experimental_semantic_memory_is_enabled
         "session_id",
         "task_id",
         "maximum_mismatches",
+        "reconcile",
     }
     assert verifier.inputSchema["properties"]["maximum_mismatches"]["maximum"] == 32
+    assert verifier.inputSchema["properties"]["reconcile"]["default"] is False
 
 
 def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listing() -> None:

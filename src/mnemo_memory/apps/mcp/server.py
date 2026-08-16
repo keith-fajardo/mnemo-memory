@@ -659,6 +659,16 @@ def create_server(
                 str | None, Field(default=None, min_length=36, max_length=36)
             ] = None,
             maximum_mismatches: Annotated[int, Field(ge=1, le=32)] = 16,
+            reconcile: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Return a candidate copy with only agent-named, uniquely remembered "
+                        "fields at confidence 0.9 or higher replaced by the stored literal. "
+                        "The result is not applied or executed."
+                    )
+                ),
+            ] = False,
         ) -> dict[str, object]:
             verifier = cast(SemanticVerificationMcpPort, port)
             return verifier.verify_against_memory(
@@ -670,6 +680,7 @@ def create_server(
                     "session_id": session_id,
                     "task_id": task_id,
                     "maximum_mismatches": maximum_mismatches,
+                    "reconcile": reconcile,
                 }
             )
 

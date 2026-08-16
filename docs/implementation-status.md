@@ -5714,3 +5714,20 @@ passed 26 tests with one opt-in load test skipped; formatting, linting, strict t
 schema validation, dependency/provenance checks, the 165-file architecture boundary check, and
 installed-package verification also passed. No dependency, lockfile, schema, deploy, or release
 sequence changed.
+
+Task 2.2 is in progress under the maintainer's explicit reconcile approval. Its deterministic
+branch returns a candidate copy only when the agent named the field and active structured memory
+has one non-conflicting stored literal at confidence 0.9 or higher. Stored strings are copied
+verbatim; low-confidence memory remains report-only, and no result is applied, executed, or
+persisted. The harness now includes a zero-model-call ceiling diagnostic that reconciles only
+publicly revealed, user-attributed constraint fields, deterministically restores JSON scalar types
+for the hidden checker, and separately reports zero model calls/tokens plus overall and
+constraint-backed accuracy.
+
+Task 2.2 is complete. The offline `SV` trajectory test supplied three stubbed generation results
+(one per session, no retry for an already consistent candidate) and proved the
+separate ceiling diagnostic used zero model calls and zero model tokens while restoring all 15
+constraint-backed hidden checks. The complete gate passed 1,119 tests with 27 expected skips; the
+ephemeral PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting,
+strict typing, schema, dependency/provenance, 165-file architecture, and installed-package checks
+all passed. No real model endpoint, deploy, release, dependency, lockfile, or schema was touched.

@@ -42,6 +42,7 @@ def _atom(
     *,
     kind: SemanticAtomKind = SemanticAtomKind.CONSTRAINT,
     qualifiers: tuple[tuple[str, str], ...] = (),
+    confidence: float = 0.9,
 ) -> SemanticMemoryAtom:
     return SemanticMemoryAtom.create(
         scope=_scope(),
@@ -52,7 +53,7 @@ def _atom(
         source_event_ids=(EventId.from_string(f"60000000-0000-4000-8000-{seed:012d}"),),
         created_at=NOW,
         qualifiers=qualifiers,
-        confidence=0.9,
+        confidence=confidence,
         priority=100,
     )
 
@@ -143,3 +144,35 @@ def test_checkpoint_grouped_structured_constraints_are_compared_individually() -
 
     assert report.status == "mismatch"
     assert [violation.field for violation in report.violations] == ["authorization_role"]
+
+
+def test_reconcile_copies_only_agent_named_high_confidence_remembered_literals() -> None:
+    report = verify_candidate_against_memory(
+        (
+            _atom(1, "timezone_mode=iana"),
+            _atom(2, "conflict_status=409"),
+        ),
+        {"timezone_mode": "offset", "unchanged_note": "agent-owned"},
+        reconcile=True,
+    )
+
+    reconciled = report.to_dict()["reconciled_candidate"]
+    assert isinstance(reconciled, dict)
+    assert reconciled == {
+        "timezone_mode": "iana",
+        "unchanged_note": "agent-owned",
+    }
+    assert report.to_dict()["reconciled_fields"] == ["timezone_mode"]
+    assert "conflict_status" not in reconciled
+
+
+def test_reconcile_abstains_below_the_high_confidence_floor() -> None:
+    report = verify_candidate_against_memory(
+        (_atom(1, "timezone_mode=iana", confidence=0.89),),
+        {"timezone_mode": "offset"},
+        reconcile=True,
+    )
+
+    assert report.status == "mismatch"
+    assert report.to_dict()["reconciled_candidate"] == {"timezone_mode": "offset"}
+    assert report.to_dict()["reconciled_fields"] == []

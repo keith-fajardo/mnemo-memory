@@ -424,6 +424,19 @@ def test_experimental_live_m3_survives_public_save_and_fresh_hook_processes(
                 "memory_confidence": 0.6,
             }
         ]
+        low_confidence_reconcile = structured(
+            process.tool(
+                "verify_against_memory",
+                {
+                    "candidate": {"timezone_mode": "Pacific/Pago_Pago"},
+                    "reconcile": True,
+                },
+            )
+        )
+        assert low_confidence_reconcile["reconciled_candidate"] == {
+            "timezone_mode": "Pacific/Pago_Pago"
+        }
+        assert low_confidence_reconcile["reconciled_fields"] == []
         poison = process.tool(
             "save_checkpoint",
             save_payload(

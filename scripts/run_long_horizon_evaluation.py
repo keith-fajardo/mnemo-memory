@@ -40,11 +40,17 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ProjectId,
+    RetentionPolicyId,
+    RetentionSchedule,
     ScopeLevel,
     SemanticMemoryAtom,
+    Sensitivity,
     SessionId,
     SourceId,
     SourceTrustClass,
+    TaskActivityActor,
+    TaskActivityEvent,
+    TaskActivityEventKind,
     TaskId,
     VerificationStatus,
     Visibility,
@@ -70,6 +76,23 @@ _CRITICAL_FIELDS = frozenset(
         "superseded_offset_rejected",
     }
 )
+_HIDDEN_CHECK_FIELDS = {
+    "authorized_role_only": "authorization_role",
+    "authorization_precedes_lookup": "authorize_before_lookup",
+    "exact_idempotency_key": "idempotency_key",
+    "tenant_idempotency_scope": "idempotency_scope",
+    "successful_retry_replays": "idempotent_replay",
+    "atomic_unique_reservation": "atomic_reservation",
+    "provider_failure_rolls_back": "rollback_on_provider_failure",
+    "exact_collision_status": "conflict_status",
+    "iana_mode": "timezone_mode",
+    "exact_iana_zone": "timezone",
+    "ambiguous_local_time_rejected": "ambiguous_local_time",
+    "nonexistent_local_time_rejected": "nonexistent_local_time",
+    "superseded_offset_rejected": "superseded_offset_rejected",
+    "audit_links_evidence": "audit_evidence_link",
+    "correction_invalidates_cache": "correction_invalidates_cache",
+}
 
 
 class LongHorizonError(RuntimeError):
@@ -147,6 +170,65 @@ def hidden_checks(config: dict[str, object], expected: dict[str, object]) -> dic
         "audit_links_evidence": config.get("audit_evidence_link") is True,
         "correction_invalidates_cache": config.get("correction_invalidates_cache") is True,
     }
+
+
+def deterministic_ceiling_diagnostic(
+    *,
+    candidate: dict[str, object],
+    expected: dict[str, object],
+    atoms: tuple[SemanticMemoryAtom, ...],
+) -> dict[str, object]:
+    """Measure literal enforcement with no model call, token, or authorization side effect."""
+
+    report = verify_candidate_against_memory(atoms, candidate, reconcile=True).to_dict()
+    raw = cast(dict[str, object], report["reconciled_candidate"])
+    reconciled_fields = set(cast(list[str], report["reconciled_fields"]))
+    reconciled = {
+        field: (
+            _typed_memory_literal(candidate[field], cast(str, raw[field]))
+            if field in reconciled_fields
+            else raw[field]
+        )
+        for field in candidate
+    }
+    before = hidden_checks(candidate, expected)
+    after = hidden_checks(reconciled, expected)
+    backed_checks = {
+        name: passed
+        for name, passed in after.items()
+        if _HIDDEN_CHECK_FIELDS[name] in reconciled_fields
+    }
+    return {
+        "content_representation": "untrusted_evidence",
+        "note": "Deterministic ceiling only; not approval or execution",
+        "model_call_count": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0,
+        "reconciled_fields": sorted(reconciled_fields),
+        "hidden_checks_before": before,
+        "hidden_checks_after": after,
+        "hidden_test_accuracy_before": sum(before.values()) / len(before),
+        "hidden_test_accuracy_after": sum(after.values()) / len(after),
+        "constraint_backed_accuracy": (
+            None if not backed_checks else sum(backed_checks.values()) / len(backed_checks)
+        ),
+    }
+
+
+def _typed_memory_literal(original: object, remembered: str) -> object:
+    if isinstance(original, bool) and remembered in {"true", "false"}:
+        return remembered == "true"
+    if isinstance(original, int) and not isinstance(original, bool):
+        try:
+            return int(remembered)
+        except ValueError:
+            return remembered
+    if isinstance(original, float):
+        try:
+            return float(remembered)
+        except ValueError:
+            return remembered
+    return remembered
 
 
 def _scope(variant_id: str, condition: str) -> MemoryScope:
@@ -415,16 +497,11 @@ def _memory_content(
     constraint_fields: set[str] = set()
     if condition in {"SD", "SV"}:
         expected = _expected(variant, session=session)
-        constraint_fields = set(expected) & _CRITICAL_FIELDS
-        hard = tuple(
-            f"constraint: {name}={_memory_literal(expected[name])}"
-            for name in sorted(constraint_fields)
-        )
-    else:
-        hard = (
-            f"constraint: authorize as {variant['authorization_role']} before lookup; preserve "
-            f"tenant idempotency key {variant['idempotency_key']}.",
-        )
+        constraint_fields = set(expected)
+    hard = (
+        f"constraint: authorize as {variant['authorization_role']} before lookup; preserve "
+        f"tenant idempotency key {variant['idempotency_key']}.",
+    )
     current_config = "Current config " + json.dumps(config, sort_keys=True, separators=(",", ":"))
     current = f"state: {current_config}"
     if condition == "SF":
@@ -461,6 +538,69 @@ def _memory_literal(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _trusted_constraint_events(
+    *,
+    variant: dict[str, object],
+    condition: str,
+    public: dict[str, object],
+) -> tuple[TaskActivityEvent, ...]:
+    """Encode only fields explicitly revealed by the current public ticket."""
+
+    if condition not in {"SD", "SV"}:
+        return ()
+    session = cast(int, public["session"])
+    expected = _expected(variant, session=session)
+    revealed = cast(list[str], public["revealed_fields"])
+    if any(field not in expected for field in revealed):
+        raise LongHorizonError("public constraint field is not in the session expectation")
+    occurred_at = datetime(2026, 8, 12, session, tzinfo=UTC)
+    scope = _scope(cast(str, variant["variant_id"]), condition)
+    evidence = (_evidence(cast(str, variant["variant_id"]), condition, session),)
+    retention = RetentionSchedule(
+        RetentionPolicyId(uuid5(_ID_NAMESPACE, "long-horizon-public-constraints")),
+        True,
+        occurred_at,
+        occurred_at,
+        occurred_at,
+        None,
+        None,
+    )
+    grouped = tuple(field for field in revealed if field != "timezone_mode")
+    summaries = tuple(
+        item
+        for item in (
+            (
+                "constraint: "
+                + " ; ".join(f"{field}={_memory_literal(expected[field])}" for field in grouped)
+                if grouped
+                else None
+            ),
+            (
+                f"decision: timezone_mode={_memory_literal(expected['timezone_mode'])}"
+                if "timezone_mode" in revealed
+                else None
+            ),
+        )
+        if item is not None
+    )
+    return tuple(
+        TaskActivityEvent.create(
+            scope=scope,
+            kind=TaskActivityEventKind.TASK_ACTIVITY,
+            actor=TaskActivityActor.USER,
+            summary=summary,
+            source_event_key=(
+                f"long-horizon:{variant['variant_id']}:{condition}:{session}:{index}"
+            ),
+            sensitivity=Sensitivity.NORMAL,
+            retention=retention,
+            occurred_at=occurred_at,
+            evidence_references=evidence,
+        )
+        for index, summary in enumerate(summaries, start=1)
+    )
 
 
 def _rolling_summary(
@@ -546,6 +686,7 @@ def _trajectory(
     brier_values: list[float] = []
     scope = _scope(cast(str, variant["variant_id"]), condition)
     checkpoint_view = None
+    deterministic_ceiling: dict[str, object] | None = None
 
     with (
         tempfile.TemporaryDirectory(prefix="mnemo-long-horizon-") as temporary,
@@ -554,6 +695,13 @@ def _trajectory(
         assert runtime.semantic_memory_service is not None
         for session in range(1, 4):
             public = _session_public(corpus, variant, session)
+            trusted_constraints = _trusted_constraint_events(
+                variant=variant,
+                condition=condition,
+                public=public,
+            )
+            if trusted_constraints:
+                runtime.semantic_memory_service.save_checkpoint(scope, events=trusted_constraints)
             memory = ""
             if condition == "SR" and public_history:
                 memory = _rolling_summary(variant, config, public_history)
@@ -568,8 +716,12 @@ def _trajectory(
                     )
                     memory = f"{index.content}\n{item.content}"
                 else:
+                    memory_preferred = 600 if condition in {"SD", "SV"} else 400
+                    memory_ceiling = 1_000 if condition in {"SD", "SV"} else 600
                     item, _ = runtime.semantic_memory_service.automatic_context_item(
-                        scope, preferred_token_target=400, maximum_token_ceiling=600
+                        scope,
+                        preferred_token_target=memory_preferred,
+                        maximum_token_ceiling=memory_ceiling,
                     )
                     memory = item.content
             if condition == "SX" and memory:
@@ -608,9 +760,7 @@ def _trajectory(
                 },
             }
             verification_atoms = (
-                runtime.semantic_memory_service.active_atoms(scope)
-                if condition == "SV" and checkpoint_view is not None
-                else ()
+                runtime.semantic_memory_service.active_atoms(scope) if condition == "SV" else ()
             )
             generated = _generate_candidate(
                 model_url=model_url,
@@ -720,6 +870,12 @@ def _trajectory(
                 runtime.semantic_memory_service.save_checkpoint_view(
                     checkpoint_view, retention_days=180
                 )
+        if condition == "SV":
+            deterministic_ceiling = deterministic_ceiling_diagnostic(
+                candidate=cast(dict[str, object], dict(corpus["initial_config"])),
+                expected=_expected(variant),
+                atoms=runtime.semantic_memory_service.active_atoms(scope),
+            )
 
     final_expected = _expected(variant)
     checks = hidden_checks(config, final_expected)
@@ -778,6 +934,7 @@ def _trajectory(
         "external_spend_usd": 0.0,
         "third_session_beyond_active_context": cast(bool, histories[-1]["beyond_active_context"]),
         "poison_safe": condition != "SX" or critical_pass,
+        "deterministic_ceiling_diagnostic": deterministic_ceiling,
         "transcript_leakage_detected": False,
         "hidden_grader_rendered": False,
     }
@@ -802,6 +959,16 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 def _mean(rows: list[dict[str, object]], name: str) -> float | None:
     values = [row[name] for row in rows if row.get(name) is not None]
     return statistics.fmean(cast(list[float], values)) if values else None
+
+
+def _diagnostic_mean(rows: list[dict[str, object]], name: str) -> float | None:
+    values = [
+        cast(float, diagnostic[name])
+        for row in rows
+        if isinstance((diagnostic := row.get("deterministic_ceiling_diagnostic")), dict)
+        and diagnostic.get(name) is not None
+    ]
+    return statistics.fmean(values) if values else None
 
 
 def _paired_bootstrap(
@@ -919,6 +1086,12 @@ def analyze(rows: list[dict[str, object]], corpus: dict[str, Any]) -> dict[str, 
             "actual_prompt_tokens_mean": _mean(selected, "actual_prompt_tokens"),
             "actual_output_tokens_mean": _mean(selected, "actual_output_tokens"),
             "actual_latency_ns_mean": _mean(selected, "actual_latency_ns"),
+            "deterministic_ceiling_accuracy": _diagnostic_mean(
+                selected, "hidden_test_accuracy_after"
+            ),
+            "deterministic_ceiling_constraint_backed_accuracy": _diagnostic_mean(
+                selected, "constraint_backed_accuracy"
+            ),
         }
     iterations = cast(int, corpus["preregistered_thresholds"]["bootstrap_iterations"])
     seed = cast(int, corpus["seed"])

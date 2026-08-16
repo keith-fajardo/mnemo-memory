@@ -236,7 +236,7 @@ class DeterministicMemoryCompiler:
         for event in events:
             kind, meaning, explicit = self._classify(event)
             meaning = self._normalize_field_value(kind, meaning)
-            predicate = self._predicate(kind, explicit)
+            predicate = self._predicate(kind, explicit, meaning)
             qualifiers = self._qualifiers(event, kind, meaning, explicit)
             comparable = tuple(
                 atom
@@ -326,15 +326,22 @@ class DeterministicMemoryCompiler:
         return SemanticAtomKind.INFERENCE, event.summary, False
 
     @staticmethod
-    def _predicate(kind: SemanticAtomKind, explicit: bool) -> str:
+    def _predicate(kind: SemanticAtomKind, explicit: bool, meaning: str) -> str:
         if explicit:
-            return {
+            predicate = {
                 SemanticAtomKind.GOAL: "objective",
                 SemanticAtomKind.DECISION: "decided",
                 SemanticAtomKind.CONSTRAINT: "requires",
                 SemanticAtomKind.NEXT_ACTION: "will_do",
                 SemanticAtomKind.OPEN_QUESTION: "unresolved",
             }.get(kind, "states")
+            structured = _FIELD_VALUE.fullmatch(meaning)
+            if structured is not None and kind in {
+                SemanticAtomKind.CONSTRAINT,
+                SemanticAtomKind.DECISION,
+            }:
+                return f"{predicate}:{structured.group(1)}"
+            return predicate
         return "observed" if kind is SemanticAtomKind.RESULT else "reported"
 
     @staticmethod

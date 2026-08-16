@@ -51,9 +51,11 @@ class SemanticVerificationReport:
     violation_count: int
     truncated: bool
     unverifiable_fields: tuple[str, ...]
+    reconciled_candidate: tuple[tuple[str, object], ...] | None = None
+    reconciled_fields: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "content_representation": "untrusted_evidence",
             "status": self.status,
             "violations": [violation.to_dict() for violation in self.violations],
@@ -62,6 +64,10 @@ class SemanticVerificationReport:
             "unverifiable_fields": list(self.unverifiable_fields),
             "note": _CONSISTENCY_NOTE,
         }
+        if self.reconciled_candidate is not None:
+            value["reconciled_candidate"] = dict(self.reconciled_candidate)
+            value["reconciled_fields"] = list(self.reconciled_fields)
+        return value
 
 
 def verify_candidate_against_memory(
@@ -69,6 +75,7 @@ def verify_candidate_against_memory(
     candidate: Mapping[str, object],
     *,
     maximum_mismatches: int = 16,
+    reconcile: bool = False,
 ) -> SemanticVerificationReport:
     """Compare agent-named scalar fields without inferring from prose or prior guesses."""
 
@@ -80,6 +87,8 @@ def verify_candidate_against_memory(
         raise ValueError("maximum_mismatches must be between 1 and 32")
     if not isinstance(candidate, Mapping):
         raise TypeError("candidate must be an object")
+    if not isinstance(reconcile, bool):
+        raise TypeError("reconcile must be a boolean")
     if len(candidate) > 64:
         raise ValueError("candidate must contain at most 64 fields")
     fields = tuple(candidate)
@@ -95,6 +104,8 @@ def verify_candidate_against_memory(
 
     violations: list[SemanticVerificationViolation] = []
     unverifiable: list[str] = []
+    reconciled = dict(candidate)
+    reconciled_fields: list[str] = []
     for field in sorted(fields):
         candidate_value = _scalar_literal(candidate[field])
         remembered = predicates.get(field, [])
@@ -107,7 +118,7 @@ def verify_candidate_against_memory(
             continue
         source = min(
             (atom for value, atom in remembered if value == remembered_value),
-            key=lambda atom: str(atom.atom_id),
+            key=lambda atom: (-atom.confidence, str(atom.atom_id)),
         )
         violations.append(
             SemanticVerificationViolation(
@@ -119,6 +130,9 @@ def verify_candidate_against_memory(
                 source.confidence,
             )
         )
+        if reconcile and source.confidence >= 0.9:
+            reconciled[field] = remembered_value
+            reconciled_fields.append(field)
 
     violation_count = len(violations)
     bounded = tuple(violations[:maximum_mismatches])
@@ -129,6 +143,8 @@ def verify_candidate_against_memory(
         violation_count,
         violation_count > len(bounded),
         tuple(unverifiable),
+        tuple((field, reconciled[field]) for field in sorted(reconciled)) if reconcile else None,
+        tuple(reconciled_fields),
     )
 
 
