@@ -5863,3 +5863,31 @@ to a saving. The Task 3 tests failed first because the analysis APIs were absent
 tests now pass in 147.74 seconds, including real-hook grading and two independent byte-identical,
 payload-free reports. Ruff and strict mypy pass. No immutable evaluation result, live call,
 dependency, schema, default, deploy, or release changed; Task 4 offline validation remains next.
+
+Task 4 offline validation is complete. The first immutable attempt,
+`offline-20260818-lifecycle-token-break-even-001`, was stopped and excluded with zero raw or failure
+rows after a real-path check found that its temporary projects lived beneath the evaluated Git
+repository. Mnemo therefore discovered the enclosing repository root, repeatedly scanned real
+source structure, and would have contaminated MR with non-fixture context. A red regression required
+system-temporary work with no enclosing `.git`; the runner now enforces that boundary before creating
+synthetic projects. The excluded directory was preserved without rewriting.
+
+The corrected immutable run,
+`evaluation-results/lifecycle-token-break-even-v1/offline-20260818-lifecycle-token-break-even-002`,
+completed 72 rows with zero failures and verdict `PROVISIONAL`. Conservative cumulative estimated
+input tokens were FH 10,845 versus MR 59,924 at session 1 (-452.55% savings), FH 522,294 versus MR
+633,177 at session 10 (-21.23%), and FH 4,131,657 versus MR 1,924,944 at session 30 (53.41%). The
+first observed preregistered break-even horizon is therefore 30, not 1 or 10. All six families had
+FH=MR=1 and NM=0 required-fact availability, perfect protected-literal and evidence-attribution
+fidelity, zero critical false memories, and zero cross-scope disclosures. Mnemo made zero model
+calls and used zero model input/output tokens. The run counted 723,625 delivered context tokens and
+322,525 duplicate tokens avoided; those are conservative local measurements, not provider billing.
+The paired six-family 95% interval [0.5269, 0.5425] is descriptive sensitivity only.
+
+All six artifact hashes verify, the raw file has 72 append-only rows, the failure file is empty, and
+a read-only privacy scan found zero source-task-prompt, source-event-summary, or rendered-context
+matches across the six artifacts. Sixty-three offline semantic checkpoint, verifier, SQLite,
+context-packet, lifecycle benchmark, and routing tests pass. No live Ollama call was made: actual
+provider tokens and model-generated task quality remain `NOT EVALUATED`, with 36 expected provider
+calls and zero included, failed, or orphaned. The preregistered final `PASS` therefore remains
+unavailable until the maintainer separately authorizes live calibration; no threshold was changed.

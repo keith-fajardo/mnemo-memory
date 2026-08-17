@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -62,6 +64,17 @@ _CROSS_SCOPE_CANARY = "CROSS-SCOPE-CANARY"
 
 class LifecycleTokenBreakEvenError(RuntimeError):
     """Safe evaluation failure that contains no transient payload."""
+
+
+@contextmanager
+def isolated_evaluation_work_directory() -> Iterator[Path]:
+    """Yield system-temporary work that cannot inherit an enclosing evaluated Git root."""
+
+    with TemporaryDirectory(prefix="mnemo-lifecycle-work-") as temporary:
+        work_directory = Path(temporary).resolve() / "work"
+        if any((parent / ".git").exists() for parent in work_directory.parents):
+            raise LifecycleTokenBreakEvenError("evaluation work directory is not isolated")
+        yield work_directory
 
 
 def _sha256_text(value: str) -> str:
@@ -1122,10 +1135,10 @@ def run_offline_evaluation(
     expected_count = 6 * 3 * 4
     if len(completed) < expected_count:
         try:
-            with TemporaryDirectory(prefix=".lifecycle-work-", dir=output_directory) as temporary:
+            with isolated_evaluation_work_directory() as work_directory:
                 rows = build_offline_rows(
                     repository_root,
-                    Path(temporary) / "work",
+                    work_directory,
                     prompt_marker=prompt_marker,
                     response_marker=response_marker,
                     reasoning_marker=reasoning_marker,

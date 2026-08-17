@@ -23,6 +23,7 @@ from scripts.run_lifecycle_token_break_even import (
     analyze_lifecycle_rows,
     build_offline_rows,
     decide_lifecycle_verdict,
+    isolated_evaluation_work_directory,
     model_token_savings,
     provider_call_accounting,
     render_lifecycle_report,
@@ -252,6 +253,12 @@ def test_production_hook_composition_delivers_one_bounded_uncertainty_hint(
     assert ConservativeTokenCounter().count(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) <= 40
     hook.handle(session_start)
     assert AUTOMATIC_CONTEXT_LAZY_PULL_HINT in json.dumps(hook.handle(uncertain), sort_keys=True)
+
+
+def test_offline_work_directory_cannot_inherit_the_evaluated_repository_root() -> None:
+    with isolated_evaluation_work_directory() as work_directory:
+        assert not work_directory.is_relative_to(ROOT)
+        assert not any((parent / ".git").exists() for parent in work_directory.parents)
 
 
 def test_offline_artifacts_are_private_immutable_resumable_and_deterministic(
