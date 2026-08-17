@@ -9,7 +9,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Event, Thread
+from threading import Barrier, Event, Thread
 from typing import cast
 from uuid import UUID
 
@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 from mnemo_memory.apps.cli import main as cli
 from mnemo_memory.connectors.automatic_memory.client_config import (
+    ClientName,
     disable_client_hooks,
     enable_client_hooks,
 )
@@ -895,6 +896,261 @@ def test_prompt_delivery_observer_receives_only_final_hook_output_counts(tmp_pat
     assert delivered == [(event_id, len(output), len(output.encode("utf-8")), False)]
 
 
+def test_exact_same_session_prompt_context_is_delivered_once_and_counted_as_duplicate(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    first_event = UUID("11111111-1111-4111-8111-111111111111")
+    second_event = UUID("22222222-2222-4222-8222-222222222222")
+    event_ids = iter((first_event, second_event))
+    base_key = "sha256:" + "a" * 64
+    delivered: list[tuple[UUID, int, int, bool]] = []
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "private bounded context", next(event_ids), (base_key,)
+        ),
+        delivery_telemetry_observer=lambda *metrics: delivered.append(metrics),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    first = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the saved decision.",
+        }
+    )
+    duplicate = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the saved decision again.",
+        }
+    )
+
+    output = cast(dict[str, object], first["hookSpecificOutput"])["additionalContext"]
+    assert isinstance(output, str)
+    assert duplicate == {}
+    assert delivered == [
+        (first_event, len(output), len(output.encode("utf-8")), False),
+        (second_event, 0, 0, True),
+    ]
+    encoded_state = (data / "automatic-memory-session-state.json").read_text(encoding="utf-8")
+    state = json.loads(encoded_state)
+    delivery_keys = state["s1"]["delivered_context_keys"]
+    assert len(delivery_keys) == 1
+    assert delivery_keys[0].startswith("sha256:")
+    assert base_key not in encoded_state
+    assert "private bounded context" not in encoded_state
+    assert "Use the saved decision" not in encoded_state
+
+
+def test_changed_delivery_identity_is_not_suppressed_in_the_same_session(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    first_key = "sha256:" + "a" * 64
+    changed_key = "sha256:" + "b" * 64
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, prompt: PromptContextAttachment(
+            "changed context" if "changed" in prompt else "initial context",
+            delivery_keys=(changed_key if "changed" in prompt else first_key,),
+        ),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+
+    first = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the prior decision.",
+        }
+    )
+    duplicate = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the prior decision.",
+        }
+    )
+    changed = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the changed decision.",
+        }
+    )
+
+    assert first
+    assert duplicate == {}
+    changed_output = cast(dict[str, object], changed["hookSpecificOutput"])
+    assert "changed context" in str(changed_output["additionalContext"])
+
+
+@pytest.mark.parametrize("client", ["codex", "claude-code"])
+@pytest.mark.parametrize("dirty", [False, True])
+def test_precompact_clears_only_delivery_keys_and_allows_safe_redelivery(
+    tmp_path: Path, client: str, dirty: bool
+) -> None:
+    project = tmp_path / f"repo-{client}-{dirty}"
+    project.mkdir()
+    data = tmp_path / f"data-{client}-{dirty}"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    key = "sha256:" + "a" * 64
+    hook = AutomaticMemoryHook(
+        data,
+        cast(ClientName, client),
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "bounded context", delivery_keys=(key,)
+        ),
+    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    first = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the previous handoff.",
+        }
+    )
+    if dirty:
+        hook.handle(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "s1",
+                "cwd": str(project),
+                "tool_name": "Edit",
+            }
+        )
+
+    hook.handle({"hook_event_name": "PreCompact", "session_id": "s1", "cwd": str(project)})
+    state = json.loads((data / "automatic-memory-session-state.json").read_text(encoding="utf-8"))
+    assert "delivered_context_keys" not in state["s1"]
+    assert state["s1"]["dirty"] is dirty
+    second = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use the previous handoff after compaction.",
+        }
+    )
+
+    assert first
+    assert second
+    assert "bounded context" in str(second)
+
+
+def test_delivery_identity_isolated_by_scope_client_and_session(tmp_path: Path) -> None:
+    first_project = tmp_path / "first"
+    second_project = tmp_path / "second"
+    first_project.mkdir()
+    second_project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(first_project)
+    LocalMemoryProjectBindingStore(data).enable(second_project)
+    key = "sha256:" + "a" * 64
+
+    def hook(client: str) -> AutomaticMemoryHook:
+        return AutomaticMemoryHook(
+            data,
+            cast(ClientName, client),
+            prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+                "bounded context", delivery_keys=(key,)
+            ),
+        )
+
+    codex = hook("codex")
+    first = codex.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "shared",
+            "cwd": str(first_project),
+            "prompt": "Use saved memory.",
+        }
+    )
+    other_scope = codex.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "shared",
+            "cwd": str(second_project),
+            "prompt": "Use saved memory.",
+        }
+    )
+    other_client = hook("claude-code").handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "shared",
+            "cwd": str(first_project),
+            "prompt": "Use saved memory.",
+        }
+    )
+    other_session = codex.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "other",
+            "cwd": str(first_project),
+            "prompt": "Use saved memory.",
+        }
+    )
+
+    assert first and other_scope and other_client and other_session
+
+
+def test_corrupt_delivery_key_state_fails_open_to_redelivery(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    data.mkdir(exist_ok=True)
+    state_path = data / "automatic-memory-session-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "s1": {
+                    "dirty": False,
+                    "saved": False,
+                    "checkpoint_marker": None,
+                    "delivered_context_keys": ["private-corrupt-key-body"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "bounded context", delivery_keys=("sha256:" + "a" * 64,)
+        ),
+    )
+
+    result = hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use saved memory.",
+        }
+    )
+
+    assert result
+    assert "private-corrupt-key-body" not in state_path.read_text(encoding="utf-8")
+
+
 def test_rejected_prompt_attachment_records_zero_delivery(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -1392,7 +1648,10 @@ def test_experimental_live_gate_suppresses_no_and_lazy_pull_without_loading_slic
     )
 
     assert no_memory.context is None
+    assert no_memory.delivery_keys == ()
     assert lazy_pull.context == AUTOMATIC_CONTEXT_LAZY_PULL_HINT
+    assert len(lazy_pull.delivery_keys) == 1
+    assert lazy_pull.delivery_keys[0].startswith("sha256:")
     events = LocalAutomaticRouteTelemetryStore(data).events(
         cli._automatic_route_scope(binding.checkpoint_scope)
     )
@@ -1430,6 +1689,8 @@ def test_experimental_live_gate_pushes_one_bounded_selected_slice(tmp_path: Path
     )
 
     assert attached.context is not None
+    assert len(attached.delivery_keys) == 1
+    assert attached.delivery_keys[0].startswith("sha256:")
     assert attached.context.startswith("MNEMO_CONTEXT_V1")
     assert (len(attached.context) + 3) // 4 <= 700
     event = LocalAutomaticRouteTelemetryStore(data).events(
@@ -1438,6 +1699,182 @@ def test_experimental_live_gate_pushes_one_bounded_selected_slice(tmp_path: Path
     assert event.live_gate_applied is True
     assert event.shadow_action == "push_long_term"
     assert event.injected_context_tokens == (len(attached.context) + 3) // 4
+
+
+def test_experimental_cli_hook_suppresses_exact_redelivery_and_resets_on_session_start(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    _create_test_handoff(data, binding, objective="Honor the remembered decision.")
+    PersonalSettingsStore(data).save(PersonalSettings(experimental_semantic_memory_enabled=True))
+    LocalAutomaticRouteDiagnosticsSettingsStore(data).save(
+        AutomaticRouteDiagnosticsSettings(AutomaticRouteDiagnosticsMode.TRACE, 7)
+    )
+    prompt_event: dict[str, object] = {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "same-session",
+        "cwd": str(project),
+        "prompt": "Use the decision from our previous session.",
+    }
+    _run_hook_process(
+        data,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "same-session",
+            "cwd": str(project),
+        },
+    )
+
+    first = _run_hook_process(data, prompt_event)
+    duplicate = _run_hook_process(data, prompt_event)
+    _run_hook_process(
+        data,
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "same-session",
+            "source": "compact",
+            "cwd": str(project),
+        },
+    )
+    after_reset = _run_hook_process(data, prompt_event)
+
+    assert "MNEMO_CONTEXT_V1" in str(first)
+    assert duplicate == {}
+    assert "MNEMO_CONTEXT_V1" in str(after_reset)
+    events = LocalAutomaticRouteTelemetryStore(data).events(
+        cli._automatic_route_scope(binding.checkpoint_scope)
+    )
+    assert len(events) == 3
+    assert [event.duplicate_render for event in events] == [False, True, False]
+    assert events[0].rendered_estimated_tokens > 0
+    assert events[1].rendered_characters == 0
+    assert events[1].rendered_bytes == 0
+    assert events[1].rendered_estimated_tokens == 0
+
+
+def test_stable_flag_off_prompt_context_never_activates_delivery_deduplication(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    _create_test_handoff(data, binding, objective="Honor the stable handoff.")
+
+    first = cli._automatic_prompt_context_for_hook(
+        data,
+        binding.checkpoint_scope,
+        "Use the decision from our previous session.",
+        "codex",
+    )
+    second = cli._automatic_prompt_context_for_hook(
+        data,
+        binding.checkpoint_scope,
+        "Use the decision from our previous session.",
+        "codex",
+    )
+
+    assert first.context is not None
+    assert second.context is not None
+    assert first.delivery_keys == second.delivery_keys == ()
+
+
+def test_bounded_delivery_key_eviction_fails_toward_later_redelivery(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+
+    def load(_scope: MemoryScope, prompt: str) -> PromptContextAttachment:
+        index = int(prompt.rsplit(" ", 1)[-1])
+        return PromptContextAttachment(
+            f"bounded context {index}", delivery_keys=("sha256:" + f"{index:064x}",)
+        )
+
+    hook = AutomaticMemoryHook(data, "codex", prompt_context_loader=load)
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    for index in range(40):
+        assert hook.handle(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s1",
+                "cwd": str(project),
+                "prompt": f"Use memory {index}",
+            }
+        )
+
+    state = json.loads((data / "automatic-memory-session-state.json").read_text(encoding="utf-8"))
+    assert len(state["s1"]["delivered_context_keys"]) == 32
+    assert hook.handle(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "cwd": str(project),
+            "prompt": "Use memory 0",
+        }
+    )
+
+
+def test_delivery_state_write_failure_and_concurrent_stale_reads_overdeliver(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    target = tmp_path / "unsafe-state-target"
+    state_path = data / "automatic-memory-session-state.json"
+    state_path.symlink_to(target)
+    key = "sha256:" + "a" * 64
+    failing_hook = AutomaticMemoryHook(
+        data,
+        "codex",
+        prompt_context_loader=lambda _scope, _prompt: PromptContextAttachment(
+            "bounded context", delivery_keys=(key,)
+        ),
+    )
+    event = {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "write-failure",
+        "cwd": str(project),
+        "prompt": "Use saved memory.",
+    }
+
+    assert failing_hook.handle(event)
+    assert failing_hook.handle(event)
+    state_path.unlink()
+
+    barrier = Barrier(2)
+
+    def load(_scope: MemoryScope, _prompt: str) -> PromptContextAttachment:
+        barrier.wait(timeout=2)
+        return PromptContextAttachment("bounded context", delivery_keys=(key,))
+
+    concurrent_hook = AutomaticMemoryHook(data, "codex", prompt_context_loader=load)
+    outputs: list[dict[str, object]] = []
+
+    def deliver() -> None:
+        outputs.append(
+            concurrent_hook.handle(
+                {
+                    **event,
+                    "session_id": "concurrent",
+                }
+            )
+        )
+
+    first = Thread(target=deliver)
+    second = Thread(target=deliver)
+    first.start()
+    second.start()
+    first.join(timeout=3)
+    second.join(timeout=3)
+
+    assert len(outputs) == 2
+    assert all(output for output in outputs)
 
 
 def test_fresh_hook_process_accepts_only_a_persisted_handoff_and_attaches_it(

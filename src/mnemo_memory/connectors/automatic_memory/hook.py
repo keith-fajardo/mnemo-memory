@@ -30,7 +30,10 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
     exclusive_local_file_lock,
 )
-from mnemo_memory.packages.application.context_routing import bounded_automatic_context_prompt
+from mnemo_memory.packages.application.context_routing import (
+    bounded_automatic_context_prompt,
+    is_exact_automatic_context_redelivery,
+)
 from mnemo_memory.packages.application.dbt import (
     DbtApplicationError,
     DbtManifestApplicationService,
@@ -77,6 +80,8 @@ _MAX_IMPACT_CUE_DEPENDENTS = 6
 _MAX_DBT_IMPACT_CUES = 3
 _MAX_DBT_IMPACT_CUE_NODES = 6
 _MAX_ATTACHED_CONTEXT_CHARACTERS = 16_000
+_MAX_ATTACHMENT_DELIVERY_KEYS = 16
+_MAX_SESSION_DELIVERY_KEYS = 32
 _CHECKPOINT_MARKER_UNAVAILABLE = "unavailable"
 _ContextLoader = Callable[[MemoryScope], str | None]
 
@@ -87,6 +92,15 @@ class PromptContextAttachment:
 
     context: str | None
     telemetry_event_id: UUID | None = None
+    delivery_keys: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        keys = tuple(self.delivery_keys)
+        if len(keys) > _MAX_ATTACHMENT_DELIVERY_KEYS or any(
+            not _valid_delivery_key(key) for key in keys
+        ):
+            raise ValueError("prompt context delivery keys are invalid")
+        object.__setattr__(self, "delivery_keys", keys)
 
 
 _PromptContextLoader = Callable[[MemoryScope, str], str | PromptContextAttachment | None]
@@ -129,7 +143,8 @@ class AutomaticMemoryHook:
         if binding is None:
             return self._safe_output("MNEMO_MEMORY_PROJECT_UNENABLED")
 
-        state = _SessionStateStore(self.data_directory).get(session_id)
+        state_store = _SessionStateStore(self.data_directory)
+        state = state_store.get(session_id)
         tool_name = event.get("tool_name")
         if event_name == "PostToolUse" and isinstance(tool_name, str):
             if state.telemetry_event_id is not None and self.tool_telemetry_observer is not None:
@@ -158,7 +173,7 @@ class AutomaticMemoryHook:
                 self._refresh_project_knowledge(binding)
                 refreshed = self._refresh_source_structure(binding)
                 git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
-                _SessionStateStore(self.data_directory).save(
+                state_store.save(
                     session_id,
                     dirty=False,
                     saved=True,
@@ -167,6 +182,7 @@ class AutomaticMemoryHook:
                     git_clean_commit_id=git_clean_commit_id,
                     telemetry_event_id=state.telemetry_event_id,
                     dirty_reminder_sent=False,
+                    delivered_context_keys=state.delivered_context_keys,
                 )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
@@ -184,7 +200,7 @@ class AutomaticMemoryHook:
                     if state.dirty
                     else self._current_checkpoint_marker(binding.checkpoint_scope)
                 )
-                _SessionStateStore(self.data_directory).save(
+                state_store.save(
                     session_id,
                     dirty=True,
                     saved=False,
@@ -193,6 +209,7 @@ class AutomaticMemoryHook:
                     git_clean_commit_id=state.git_clean_commit_id,
                     telemetry_event_id=state.telemetry_event_id,
                     dirty_reminder_sent=(state.dirty_reminder_sent if state.dirty else False),
+                    delivered_context_keys=state.delivered_context_keys,
                 )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
@@ -201,7 +218,7 @@ class AutomaticMemoryHook:
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
             git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
-            _SessionStateStore(self.data_directory).save(
+            state_store.save(
                 session_id,
                 dirty=False,
                 saved=False,
@@ -210,6 +227,7 @@ class AutomaticMemoryHook:
                 git_clean_commit_id=git_clean_commit_id,
                 telemetry_event_id=None,
                 dirty_reminder_sent=False,
+                delivered_context_keys=(),
             )
             attached_context = self._attached_context(binding.checkpoint_scope)
             return self._context_output(
@@ -234,11 +252,48 @@ class AutomaticMemoryHook:
                 self._refresh_project_knowledge(binding)
                 refreshed = self._refresh_source_structure(binding)
             prompt_attachment = self._attached_prompt_context(binding.checkpoint_scope, event)
-            prompt_context = prompt_attachment.context
+            candidate_keys = _scoped_delivery_keys(
+                binding.checkpoint_scope,
+                self.client,
+                session_id,
+                prompt_attachment.delivery_keys,
+            )
+            duplicate = prompt_attachment.context is not None and (
+                is_exact_automatic_context_redelivery(candidate_keys, state.delivered_context_keys)
+            )
+            prompt_context = None if duplicate else prompt_attachment.context
             should_remind = state.dirty and not state.saved and not state.dirty_reminder_sent
+            if duplicate and prompt_attachment.telemetry_event_id is not None:
+                self._observe_delivery(prompt_attachment.telemetry_event_id, None, duplicate=True)
+            elif prompt_attachment.telemetry_event_id is not None and prompt_context is None:
+                self._observe_delivery(prompt_attachment.telemetry_event_id, None)
+            if should_remind:
+                output = self._context_output(
+                    _dirty_session_instruction(refreshed),
+                    event_name="UserPromptSubmit",
+                    attached_context=prompt_context,
+                    telemetry_event_id=(
+                        None if duplicate else prompt_attachment.telemetry_event_id
+                    ),
+                )
+            elif prompt_context is not None:
+                output = self._context_output(
+                    "Mnemo attached bounded project memory relevant to this request.",
+                    event_name="UserPromptSubmit",
+                    attached_context=prompt_context,
+                    telemetry_event_id=prompt_attachment.telemetry_event_id,
+                )
+            else:
+                output = {}
+            delivered_context_keys = state.delivered_context_keys
+            if prompt_context is not None and candidate_keys:
+                delivered_context_keys = _merge_delivery_keys(
+                    delivered_context_keys, candidate_keys
+                )
             # Replace, rather than retain, route correlation at every prompt boundary. A prompt
-            # with no new event must not attribute later tool calls to the preceding request.
-            _SessionStateStore(self.data_directory).save(
+            # with no new event must not attribute later tool calls to the preceding request. Save
+            # delivery identities only after a nonempty hook output was constructed for return.
+            state_store.save(
                 session_id,
                 dirty=state.dirty,
                 saved=state.saved,
@@ -247,24 +302,23 @@ class AutomaticMemoryHook:
                 git_clean_commit_id=state.git_clean_commit_id,
                 telemetry_event_id=prompt_attachment.telemetry_event_id,
                 dirty_reminder_sent=state.dirty_reminder_sent or should_remind,
+                delivered_context_keys=delivered_context_keys,
             )
-            if prompt_attachment.telemetry_event_id is not None and prompt_context is None:
-                self._observe_delivery(prompt_attachment.telemetry_event_id, None)
-            if should_remind:
-                return self._context_output(
-                    _dirty_session_instruction(refreshed),
-                    event_name="UserPromptSubmit",
-                    attached_context=prompt_context,
-                    telemetry_event_id=prompt_attachment.telemetry_event_id,
-                )
-            if prompt_context is not None:
-                return self._context_output(
-                    "Mnemo attached bounded project memory relevant to this request.",
-                    event_name="UserPromptSubmit",
-                    attached_context=prompt_context,
-                    telemetry_event_id=prompt_attachment.telemetry_event_id,
-                )
-            return {}
+            return output
+        if event_name == "PreCompact":
+            # A compaction can retain the opaque client session ID while discarding attached
+            # context. Clear only delivery identities before the dirty-only reminder branch.
+            state_store.save(
+                session_id,
+                dirty=state.dirty,
+                saved=state.saved,
+                checkpoint_marker=state.checkpoint_marker,
+                git_source_digest=state.git_source_digest,
+                git_clean_commit_id=state.git_clean_commit_id,
+                telemetry_event_id=state.telemetry_event_id,
+                dirty_reminder_sent=state.dirty_reminder_sent,
+                delivered_context_keys=(),
+            )
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
                 return {}
@@ -344,7 +398,9 @@ class AutomaticMemoryHook:
             }
         }
 
-    def _observe_delivery(self, event_id: UUID, instruction: str | None) -> None:
+    def _observe_delivery(
+        self, event_id: UUID, instruction: str | None, *, duplicate: bool = False
+    ) -> None:
         """Share only final output sizes with telemetry, never the rendered context itself."""
 
         if self.delivery_telemetry_observer is None:
@@ -352,7 +408,7 @@ class AutomaticMemoryHook:
         characters = 0 if instruction is None else len(instruction)
         encoded_bytes = 0 if instruction is None else len(instruction.encode("utf-8"))
         with suppress(Exception):
-            self.delivery_telemetry_observer(event_id, characters, encoded_bytes, False)
+            self.delivery_telemetry_observer(event_id, characters, encoded_bytes, duplicate)
 
     def _attached_context(self, scope: MemoryScope) -> str | None:
         """Load only a bounded, already-sanitized packet; hook failures stay fail-open."""
@@ -629,6 +685,7 @@ class _SessionState:
     git_clean_commit_id: str | None = None
     telemetry_event_id: UUID | None = None
     dirty_reminder_sent: bool = False
+    delivered_context_keys: tuple[str, ...] = ()
 
 
 class _SessionStateStore:
@@ -649,6 +706,7 @@ class _SessionStateStore:
         git_source_digest = value.get("git_source_digest")
         git_clean_commit_id = value.get("git_clean_commit_id")
         telemetry_event_id = value.get("telemetry_event_id")
+        raw_delivery_keys = value.get("delivered_context_keys")
         if not _valid_git_baseline(git_source_digest, git_clean_commit_id):
             git_source_digest = None
             git_clean_commit_id = None
@@ -660,6 +718,13 @@ class _SessionStateStore:
             parsed_telemetry_event_id = None
         if parsed_telemetry_event_id is not None and parsed_telemetry_event_id.version != 4:
             parsed_telemetry_event_id = None
+        delivered_context_keys = (
+            tuple(raw_delivery_keys)
+            if isinstance(raw_delivery_keys, list)
+            and len(raw_delivery_keys) <= _MAX_SESSION_DELIVERY_KEYS
+            and all(_valid_delivery_key(key) for key in raw_delivery_keys)
+            else ()
+        )
         return _SessionState(
             value.get("dirty") is True,
             value.get("saved") is True,
@@ -668,6 +733,7 @@ class _SessionStateStore:
             git_clean_commit_id,
             parsed_telemetry_event_id,
             value.get("dirty_reminder_sent") is True,
+            delivered_context_keys,
         )
 
     def save(
@@ -681,6 +747,7 @@ class _SessionStateStore:
         git_clean_commit_id: str | None = None,
         telemetry_event_id: UUID | None = None,
         dirty_reminder_sent: bool = False,
+        delivered_context_keys: tuple[str, ...] = (),
     ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
@@ -697,6 +764,9 @@ class _SessionStateStore:
                     session["telemetry_event_id"] = str(telemetry_event_id)
                 if dirty_reminder_sent:
                     session["dirty_reminder_sent"] = True
+                sanitized_delivery_keys = _merge_delivery_keys((), delivered_context_keys)
+                if sanitized_delivery_keys:
+                    session["delivered_context_keys"] = list(sanitized_delivery_keys)
                 values[session_id] = session
                 # Bounded state avoids making lifecycle metadata a long-term activity log.
                 if len(values) > 128:
@@ -706,9 +776,9 @@ class _SessionStateStore:
             return
 
     def _read(self) -> dict[str, object]:
-        if not self._path.exists():
-            return {}
         if self._path.is_symlink():
+            return {}
+        if not self._path.exists():
             return {}
         try:
             value = json.loads(self._path.read_text(encoding="utf-8"))
@@ -719,7 +789,7 @@ class _SessionStateStore:
     def _write(self, values: dict[str, object]) -> None:
         try:
             self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if self._path.exists() and self._path.is_symlink():
+            if self._path.is_symlink():
                 return
             with NamedTemporaryFile(
                 "w", encoding="utf-8", dir=self._directory, delete=False
@@ -815,6 +885,48 @@ def _handoff_scope_key(scope: MemoryScope) -> str:
     return sha256(
         json.dumps(scope.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _valid_delivery_key(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("sha256:")
+        and len(value) == 71
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _scoped_delivery_keys(
+    scope: MemoryScope,
+    client: ClientName,
+    session_id: str,
+    base_keys: tuple[str, ...],
+) -> tuple[str, ...]:
+    scope_digest = _handoff_scope_key(scope)
+    return tuple(
+        "sha256:"
+        + sha256(
+            json.dumps(
+                {
+                    "version": "mnemo-automatic-delivery-v1",
+                    "client": client,
+                    "scope_digest": scope_digest,
+                    "client_session_id": session_id,
+                    "base_key": base_key,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        for base_key in base_keys
+    )
+
+
+def _merge_delivery_keys(existing: tuple[str, ...], additions: tuple[str, ...]) -> tuple[str, ...]:
+    if any(not _valid_delivery_key(key) for key in (*existing, *additions)):
+        return ()
+    ordered = dict.fromkeys((*existing, *additions))
+    return tuple(ordered)[-_MAX_SESSION_DELIVERY_KEYS:]
 
 
 def _clean_git_baseline(refreshed: _SourceRefresh) -> tuple[str | None, str | None]:

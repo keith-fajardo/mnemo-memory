@@ -16,8 +16,19 @@ from mnemo_memory.packages.application.context_routing import (
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
     gate_automatic_context_injection,
+    is_exact_automatic_context_redelivery,
     plan_automatic_context_needs,
 )
+
+
+def test_exact_context_redelivery_requires_a_nonempty_fully_delivered_key_set() -> None:
+    first = "sha256:" + "a" * 64
+    second = "sha256:" + "b" * 64
+
+    assert is_exact_automatic_context_redelivery((first,), (first,)) is True
+    assert is_exact_automatic_context_redelivery((first, second), (second, first)) is True
+    assert is_exact_automatic_context_redelivery((first, second), (first,)) is False
+    assert is_exact_automatic_context_redelivery((), (first, second)) is False
 
 
 def test_exact_lookup_prefers_no_attachment_and_direct_inspection() -> None:

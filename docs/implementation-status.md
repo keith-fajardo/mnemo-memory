@@ -5802,3 +5802,14 @@ memory-necessity contamination checks, the 30% total-model-token gate, artifact 
 limits, and the separate live-authorization boundary. The fixture-contract tests failed first
 because both artifacts were absent, then all three passed after adding the schedule and
 preregistration. No product behavior, model endpoint, dependency, schema, or frozen result changed.
+
+Task 1 adds experimental-only exact redelivery suppression. The CLI derives one opaque SHA-256
+identity from the rendered slice plus canonical item/provenance digests; the hook scopes it again by
+client, exact memory scope, and opaque client session. At most 32 hashes are stored, SessionStart and
+every PreCompact clear them, and corrupt state, write failure, concurrency, or eviction biases toward
+duplicate delivery instead of missing context. The stable flag-off path emits no keys. Suppressed
+routes remain retrieval hits but finalize telemetry with zero delivered tokens and a duplicate flag.
+The red tests first failed on the absent pure redelivery decision; all 111 focused routing, hook, and
+telemetry tests now pass with formatting, linting, strict typing, and the 165-file architecture gate.
+A fail-open regression also corrected the state writer so a broken symlink cannot be replaced. No
+model call, dependency, migration, default change, frozen result rewrite, deploy, or release occurred.

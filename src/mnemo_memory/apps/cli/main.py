@@ -327,6 +327,8 @@ _AUTOMATIC_PROMPT_CONTEXT_BUDGET = ContextBudget(
     total_limit=1_300,
 )
 
+_AUTOMATIC_PROMPT_DELIVERY_IDENTITY_VERSION = "mnemo-automatic-render-v1"
+
 
 @dataclass(frozen=True, slots=True)
 class _AutomaticPromptContextResult:
@@ -832,6 +834,13 @@ def _automatic_prompt_context_for_hook(
         if live_attachment is not None:
             rendered = live_attachment.context
 
+    delivery_keys = _automatic_prompt_delivery_keys(
+        result,
+        rendered,
+        live_attachment,
+        client,
+    )
+
     if result.failed:
         outcome = AutomaticRouteOutcome.ERROR
     elif live_attachment is not None and (
@@ -852,9 +861,9 @@ def _automatic_prompt_context_for_hook(
     try:
         diagnostic_settings = LocalAutomaticRouteDiagnosticsSettingsStore(data_directory).load()
     except (AutomaticRouteTelemetryError, OSError, TypeError, ValueError):
-        return PromptContextAttachment(rendered)
+        return PromptContextAttachment(rendered, delivery_keys=delivery_keys)
     if diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.OFF:
-        return PromptContextAttachment(rendered)
+        return PromptContextAttachment(rendered, delivery_keys=delivery_keys)
 
     if trace is None and diagnostic_settings.mode is AutomaticRouteDiagnosticsMode.TRACE:
         trace = _automatic_shadow_trace(data_directory, scope, prompt)
@@ -903,8 +912,43 @@ def _automatic_prompt_context_for_hook(
             data_directory, retention_days=diagnostic_settings.retention_days
         ).record(event)
     except (AutomaticRouteTelemetryError, OSError, ValueError):
-        return PromptContextAttachment(rendered)
-    return PromptContextAttachment(rendered, event_id)
+        return PromptContextAttachment(rendered, delivery_keys=delivery_keys)
+    return PromptContextAttachment(rendered, event_id, delivery_keys)
+
+
+def _automatic_prompt_delivery_keys(
+    result: _AutomaticPromptContextResult,
+    rendered: str | None,
+    live_attachment: AutomaticContextLiveAttachment | None,
+    client: ClientName,
+) -> tuple[str, ...]:
+    """Derive one content-free identity only for the experimental live attachment."""
+
+    if rendered is None or live_attachment is None:
+        return ()
+    if live_attachment.action is AutomaticContextShadowAction.LAZY_PULL:
+        item_provenance: tuple[tuple[str, str], ...] = ()
+    elif result.packet is not None:
+        provenance_by_item = {notice.item_id: notice for notice in result.packet.provenance}
+        item_provenance = tuple(
+            (item.item_id, provenance_by_item[item.item_id].source_digest)
+            for item in result.packet.items
+        )
+    else:
+        return ()
+    material = json.dumps(
+        {
+            "version": _AUTOMATIC_PROMPT_DELIVERY_IDENTITY_VERSION,
+            "client": client,
+            "action": live_attachment.action.value,
+            "producer_version": None if result.packet is None else result.packet.producer_version,
+            "items": item_provenance,
+            "rendered_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ("sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest(),)
 
 
 def _render_automatic_prompt_result(

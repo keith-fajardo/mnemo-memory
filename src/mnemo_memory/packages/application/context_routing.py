@@ -259,6 +259,14 @@ AUTOMATIC_CONTEXT_LAZY_PULL_HINT = (
 _LAZY_PULL_ESTIMATED_TOKENS = (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4
 
 
+def is_exact_automatic_context_redelivery(
+    candidate_keys: tuple[str, ...], delivered_keys: tuple[str, ...]
+) -> bool:
+    """Return true only when every nonempty candidate identity was already delivered."""
+
+    return bool(candidate_keys) and frozenset(candidate_keys).issubset(delivered_keys)
+
+
 @dataclass(frozen=True, slots=True)
 class LearnedRoutePhrase:
     """One already-authorized normalized project phrase supplied by a scoped adapter."""
