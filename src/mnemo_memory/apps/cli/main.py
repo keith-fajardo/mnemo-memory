@@ -3484,6 +3484,55 @@ def memory_route_diagnostics_purge(
     )
 
 
+def build_automatic_memory_hook(config: LocalConfig, client: ClientName) -> AutomaticMemoryHook:
+    """Compose the production automatic-memory hook for one trusted local client."""
+
+    def expire_due_checkpoints(binding: MemoryProjectBinding) -> None:
+        retention_days = PersonalSettingsStore(config.data_directory).load().episodic_retention_days
+        with build_checkpoint_runtime(config) as runtime:
+            CheckpointRetentionService(runtime.repository).expire_due(
+                binding.checkpoint_scope,
+                as_of=datetime.now(UTC),
+                retention_days=retention_days,
+            )
+
+    return AutomaticMemoryHook(
+        config.data_directory,
+        client,
+        context_loader=lambda scope: _render_automatic_context_attachment(
+            _automatic_context_attachment(config.data_directory, scope, client),
+            client,
+        ),
+        prompt_context_loader=lambda scope, prompt: _automatic_prompt_context_for_hook(
+            config.data_directory,
+            scope,
+            prompt,
+            client,
+        ),
+        knowledge_refresher=lambda binding: _refresh_project_knowledge(
+            config.data_directory, binding
+        ),
+        knowledge_status_loader=lambda binding: _project_knowledge_document_count(
+            config.data_directory, binding
+        ),
+        retention_sweeper=expire_due_checkpoints,
+        tool_telemetry_observer=lambda event_id, tool_name: _record_automatic_route_tool(
+            config.data_directory, event_id, tool_name
+        ),
+        delivery_telemetry_observer=(
+            lambda event_id, characters, encoded_bytes, duplicate: (
+                _record_automatic_route_delivery(
+                    config.data_directory,
+                    event_id,
+                    characters,
+                    encoded_bytes,
+                    duplicate,
+                )
+            )
+        ),
+    )
+
+
 @app.command("automatic-memory-hook", hidden=True)
 def automatic_memory_hook(
     client: str = typer.Option(..., "--client"),
@@ -3495,55 +3544,7 @@ def automatic_memory_hook(
     try:
         raw = json.load(sys.stdin)
         config = resolve_local_config(data_dir)
-
-        def expire_due_checkpoints(binding: MemoryProjectBinding) -> None:
-            retention_days = (
-                PersonalSettingsStore(config.data_directory).load().episodic_retention_days
-            )
-            with build_checkpoint_runtime(config) as runtime:
-                CheckpointRetentionService(runtime.repository).expire_due(
-                    binding.checkpoint_scope,
-                    as_of=datetime.now(UTC),
-                    retention_days=retention_days,
-                )
-
-        hook = AutomaticMemoryHook(
-            config.data_directory,
-            cast(ClientName, client),
-            context_loader=lambda scope: _render_automatic_context_attachment(
-                _automatic_context_attachment(
-                    config.data_directory, scope, cast(ClientName, client)
-                ),
-                cast(ClientName, client),
-            ),
-            prompt_context_loader=lambda scope, prompt: _automatic_prompt_context_for_hook(
-                config.data_directory,
-                scope,
-                prompt,
-                cast(ClientName, client),
-            ),
-            knowledge_refresher=lambda binding: _refresh_project_knowledge(
-                config.data_directory, binding
-            ),
-            knowledge_status_loader=lambda binding: _project_knowledge_document_count(
-                config.data_directory, binding
-            ),
-            retention_sweeper=expire_due_checkpoints,
-            tool_telemetry_observer=lambda event_id, tool_name: _record_automatic_route_tool(
-                config.data_directory, event_id, tool_name
-            ),
-            delivery_telemetry_observer=(
-                lambda event_id, characters, encoded_bytes, duplicate: (
-                    _record_automatic_route_delivery(
-                        config.data_directory,
-                        event_id,
-                        characters,
-                        encoded_bytes,
-                        duplicate,
-                    )
-                )
-            ),
-        )
+        hook = build_automatic_memory_hook(config, cast(ClientName, client))
         result = hook.handle(raw)
     except (OSError, ValueError, json.JSONDecodeError):
         result = {"systemMessage": "MNEMO_MEMORY_HOOK_UNAVAILABLE"}

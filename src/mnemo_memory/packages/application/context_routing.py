@@ -253,7 +253,7 @@ class AutomaticContextShadowAction(StrEnum):
 
 
 AUTOMATIC_CONTEXT_LAZY_PULL_HINT = (
-    "Mnemo did not attach durable context. If prior project decisions or structure could change "
+    "Mnemo did not attach durable context. If prior decisions or structure could change "
     "the answer, call get_context."
 )
 _LAZY_PULL_ESTIMATED_TOKENS = (len(AUTOMATIC_CONTEXT_LAZY_PULL_HINT) + 3) // 4

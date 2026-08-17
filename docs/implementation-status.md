@@ -5813,3 +5813,30 @@ The red tests first failed on the absent pure redelivery decision; all 111 focus
 telemetry tests now pass with formatting, linting, strict typing, and the 165-file architecture gate.
 A fail-open regression also corrected the state writer so a broken symlink cannot be replaced. No
 model call, dependency, migration, default change, frozen result rewrite, deploy, or release occurred.
+
+Task 2 adds the payload-free offline lifecycle driver and extracts one production hook-composition
+helper so the CLI and evaluation use the same SessionStart, UserPromptSubmit, retrieval, rendering,
+telemetry, and retention adapters. Across all six preregistered families, the driver executes 30
+client sessions and materializes 72 paired FH/RS/NM/MR horizon rows. FH receives the growing public
+history while MR persists only the fixture's explicit checkpoint-event references; current input,
+starting state, and lifecycle schedule hashes are identical across conditions. Scored required-fact
+availability is FH=MR=1 and NM=0. Model prompts, rendered memory, simulated response/reasoning
+markers, and source bodies remain transient; append-and-fsync rows store hashes, counts, fixture
+keys, deterministic grades, and zero Mnemo model tokens. Run creation is exclusive, configuration is
+immutable, completed row keys resume without rewriting, failures are sanitized, and manifests hash
+all derived artifacts and inputs. Two independent runs produced byte-identical aggregate JSON.
+
+The first Task 2 test failed because the driver module did not exist. Real-hook probes then rejected
+two invalid constructions rather than weakening the gate: storing unrelated synthetic background
+conversation as durable memory overloaded the semantic slice, and the dbt task wording correctly
+selected the authoritative structural route instead of prior memory. The final schedule stores only
+explicit checkpoint events and uses the fixture's generic explicit prior-handoff request for every
+condition, so no protected fact leaks into current input. A separate regression found that the fixed
+uncertainty hint was 41 tokens under the repository's conservative counter despite being 30 under
+the legacy character estimate; removing one redundant word reduced it to 38 without changing the
+route or trust instruction. The seven lifecycle evaluation tests pass in 147.96 seconds, including
+privacy, resume, and two-run determinism; 126 affected routing, hook, telemetry, and rendering tests
+also pass. Ruff, strict mypy, diff hygiene, and the 165-file architecture gate pass. No external or
+model call, dependency, migration, stable default, frozen result rewrite, deploy, or release
+occurred. Honest break-even formulas and verdict/report generation remain Task 3; no token-savings
+percentage or provider-token verdict is claimed yet.
