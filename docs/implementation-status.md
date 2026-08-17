@@ -5775,3 +5775,20 @@ but the run is not analyzable evidence without a complete manifest. A red path t
 repository-relative inputs to resolve inside the repository and rejects outside paths before any
 model call; all 16 focused harness tests, formatting, linting, and strict typing pass. The dry run
 will restart under a new immutable ID rather than rewriting the excluded directory.
+
+A post-run forensic review of the immutable Qwen3-14B result found that the original `SV - SD`
+comparison did not isolate verifier value. `SV` verified only the current response delta, so a
+constraint-backed error already present in the accumulated configuration could survive when the
+next response omitted that field. Separately, all paired `SD` and `SV` prompts had different hashes
+because the condition/scope identity and run-local checkpoint and semantic-event identities leaked
+into model input. Two red regressions reproduced both failures. The harness now verifies the merged
+accumulated candidate and uses the `SD` control identity for pre-report `SV` context. An
+evaluation-only rendering of that production context retains every visible atom and evidence
+reference while deterministically ordering tied lines and aliases and replacing the run-local
+checkpoint ID with a visible-content digest. With no verifier intervention, all three `SD` and `SV`
+session prompts are byte-identical. All 19 focused harness tests plus targeted formatting, linting,
+and strict typing pass. Existing result directories remain unchanged, and this correction made no
+model call. The complete gate passed 1,130 tests with 27 expected environment skips; the ephemeral
+PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting, strict
+typing, schema, dependency/provenance, 165-file architecture, and installed-package checks all
+passed. No dependency, lockfile, schema, production renderer, deploy, or release sequence changed.

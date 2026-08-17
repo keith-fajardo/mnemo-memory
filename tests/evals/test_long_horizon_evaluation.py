@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from pytest import MonkeyPatch, approx
 
@@ -244,6 +245,65 @@ def test_sv_is_sd_plus_at_most_two_verifier_repair_retries(monkeypatch: MonkeyPa
     assert "Consistency check only; not approval" in calls[2]
 
 
+def test_sv_verifies_accumulated_candidate_before_accepting_current_changes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    scope = evaluation._scope(str(variant["variant_id"]), "SV")
+    atom = SemanticMemoryAtom.create(
+        scope=scope,
+        kind=SemanticAtomKind.CONSTRAINT,
+        subject="user",
+        predicate="requires",
+        object_value="idempotent_replay=true",
+        source_event_ids=(EventId.from_string("60000000-0000-4000-8000-000000000002"),),
+        created_at=datetime(2026, 8, 16, tzinfo=UTC),
+    )
+    calls = 0
+
+    def fake_post(_base_url: str, _path: str, _payload: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        changes: dict[str, object] = {} if calls == 1 else {"idempotent_replay": True}
+        return {
+            "response": json.dumps(
+                {
+                    "changes": changes,
+                    "analysis_summary": "checked",
+                    "hypothesis": "repair accumulated candidate",
+                    "evidence_used": [],
+                    "uncertainty": "none",
+                    "next_action": "apply",
+                    "confidence": 1.0,
+                }
+            ),
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+    monkeypatch.setattr(evaluation, "_post", fake_post)
+    generated = _generate_candidate(
+        model_url="http://127.0.0.1:11434",
+        payload={"model": "fixture", "prompt": "BASE"},
+        base_prompt="BASE",
+        corpus=corpus,
+        verification_atoms=(atom,),
+        verification_candidate_base={"idempotent_replay": False},
+    )
+
+    assert calls == generated.model_call_count == 2
+    assert generated.changes["idempotent_replay"] is True
+    assert [report["status"] for report in generated.verification_reports] == [
+        "mismatch",
+        "consistent",
+    ]
+    first_violations = cast(
+        list[dict[str, object]], generated.verification_reports[0]["violations"]
+    )
+    assert first_violations[0]["field"] == "idempotent_replay"
+
+
 def test_thinking_mode_reasons_transiently_then_emits_json_without_format_tax(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -403,6 +463,68 @@ def test_sv_and_sd_persist_only_publicly_revealed_constraints_as_user_evidence()
         ),
         "decision: timezone_mode=offset",
     }
+
+
+def test_sv_and_sd_use_byte_identical_prompts_before_any_verifier_report(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    corpus = _load_corpus(DEFAULT_CORPUS)
+    variant = _variant(corpus, 0)
+    active_condition = ""
+    prompts: dict[str, list[str]] = {"SD": [], "SV": []}
+
+    def fake_post(_base_url: str, _path: str, payload: dict[str, object]) -> dict[str, object]:
+        prompt = str(payload["prompt"])
+        prompts[active_condition].append(prompt)
+        session = next(number for number in (1, 2, 3) if f"SESSION: {number} of 3" in prompt)
+        return {
+            "response": json.dumps(
+                {
+                    "changes": _expected(variant, session=session),
+                    "analysis_summary": "checked",
+                    "hypothesis": "apply exact evidence",
+                    "evidence_used": [f"session-{session}"],
+                    "uncertainty": "none",
+                    "next_action": "apply",
+                    "confidence": 1.0,
+                }
+            ),
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+    monkeypatch.setattr(evaluation, "_post", fake_post)
+    for condition in ("SD", "SV"):
+        active_condition = condition
+        evaluation._trajectory(
+            corpus=corpus,
+            variant=variant,
+            condition=condition,
+            model_url="http://127.0.0.1:11434",
+            raw_sessions=tmp_path / f"{condition}.jsonl",
+            attempt=1,
+        )
+
+    assert len(prompts["SD"]) == len(prompts["SV"]) == 3
+    for session, (sd_prompt, sv_prompt) in enumerate(
+        zip(prompts["SD"], prompts["SV"], strict=True),
+        start=1,
+    ):
+        differing_lines = [
+            (line_number, sd_line, sv_line)
+            for line_number, (sd_line, sv_line) in enumerate(
+                zip(sd_prompt.splitlines(), sv_prompt.splitlines(), strict=True),
+                start=1,
+            )
+            if sd_line != sv_line
+        ]
+        assert not differing_lines, "\n".join(
+            [f"session={session}"]
+            + [
+                f"line={line_number}\nSD={sd_line}\nSV={sv_line}"
+                for line_number, sd_line, sv_line in differing_lines
+            ]
+        )
 
 
 def test_offline_sv_trajectory_verifies_current_constraints_and_emits_ceiling(
