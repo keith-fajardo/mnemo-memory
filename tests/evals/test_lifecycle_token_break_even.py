@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -20,8 +20,14 @@ from mnemo_memory.packages.application.context_routing import AUTOMATIC_CONTEXT_
 from mnemo_memory.packages.application.semantic_rendering import ConservativeTokenCounter
 from scripts.run_lifecycle_token_break_even import (
     LifecycleTokenBreakEvenError,
+    analyze_lifecycle_rows,
     build_offline_rows,
+    decide_lifecycle_verdict,
+    model_token_savings,
+    provider_call_accounting,
+    render_lifecycle_report,
     run_offline_evaluation,
+    tokens_per_success,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -186,6 +192,15 @@ def test_offline_rows_pair_conditions_and_require_prior_only_memory(
         assert by_condition["FH"]["required_prior_fact_available"] is True
         assert by_condition["MR"]["required_prior_fact_available"] is True
         assert by_condition["NM"]["required_prior_fact_available"] is False
+        assert by_condition["FH"]["required_knowledge_retention"] == 1.0
+        assert by_condition["MR"]["required_knowledge_retention"] == 1.0
+        assert by_condition["NM"]["required_knowledge_retention"] == 0.0
+        assert by_condition["FH"]["protected_literal_fidelity"] == 1.0
+        assert by_condition["MR"]["protected_literal_fidelity"] == 1.0
+        assert by_condition["FH"]["evidence_attribution_fidelity"] == 1.0
+        assert by_condition["MR"]["evidence_attribution_fidelity"] == 1.0
+        assert all(row["critical_false_memory_count"] == 0 for row in group)
+        assert all(row["cross_scope_disclosure_count"] == 0 for row in group)
         assert (
             by_condition["FH"]["required_prior_event_keys"]
             == by_condition["MR"]["required_prior_event_keys"]
@@ -290,6 +305,18 @@ def test_offline_artifacts_are_private_immutable_resumable_and_deterministic(
         for relative_path, digest in manifest["artifact_sha256"].items():
             assert sha256((run_directory / relative_path).read_bytes()).hexdigest() == digest
 
+        report = (run_directory / "report.md").read_text(encoding="utf-8")
+        for label in (
+            "Delivered context tokens",
+            "Downstream estimated model tokens",
+            "Downstream actual provider tokens",
+            "Mnemo model tokens",
+            "Local deterministic work",
+            "Model-generated task quality",
+            "descriptive sensitivity",
+        ):
+            assert label in report
+
     assert (first / "aggregate.json").read_bytes() == (second / "aggregate.json").read_bytes()
     before = (first / "raw-sessions.jsonl").read_bytes()
     assert (
@@ -314,3 +341,151 @@ def test_offline_artifacts_are_private_immutable_resumable_and_deterministic(
             response_marker=response_marker,
             reasoning_marker=reasoning_marker,
         )
+
+
+def _metric_row(
+    family: str,
+    condition: str,
+    horizon: int,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    actual: bool,
+    available: bool | None = None,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "scenario_family": family,
+        "condition": condition,
+        "horizon": horizon,
+        "attempt": 1,
+        "memory_necessity_valid": True,
+        "required_prior_fact_available": available,
+        "required_knowledge_retention": None if available is None else float(available),
+        "protected_literal_fidelity": None if available is None else float(available),
+        "evidence_attribution_fidelity": None if available is None else float(available),
+        "critical_false_memory_count": 0,
+        "cross_scope_disclosure_count": 0,
+        "downstream_prompt_estimated_tokens": input_tokens,
+        "downstream_output_estimated_tokens": output_tokens,
+        "cumulative_downstream_prompt_estimated_tokens": input_tokens,
+        "cumulative_downstream_output_estimated_tokens": output_tokens,
+        "mnemo_model_tokens": {"input": 0, "output": 0},
+        "local_deterministic_work": {"tokenizer_equivalent_calls": horizon, "model_calls": 0},
+        "lifecycle": {
+            "delivered_context_tokens": 50 * horizon if condition == "MR" else 0,
+            "duplicate_tokens_avoided": 10 * horizon if condition == "MR" else 0,
+        },
+    }
+    if actual:
+        row["downstream_prompt_actual_tokens"] = input_tokens
+        row["downstream_output_actual_tokens"] = output_tokens
+        row["provider_call_status"] = "included"
+    return row
+
+
+def _verdict_rows(*, actual: bool, mr_input: int = 600) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        _metric_row(
+            f"family-{index}",
+            condition,
+            30,
+            {"FH": 1_000, "MR": mr_input, "NM": 300}[condition],
+            {"FH": 100, "MR": 60, "NM": 40}[condition],
+            actual=actual and condition in {"FH", "MR"},
+            available={"FH": True, "MR": True, "NM": False}[condition],
+        )
+        for index in range(6)
+        for condition in ("FH", "MR", "NM")
+    )
+
+
+def test_lifecycle_formulas_separate_inputs_totals_break_even_and_local_work() -> None:
+    savings = model_token_savings(100, 20, 60, 10)
+    assert savings["model_input_savings"] == pytest.approx(0.4)
+    assert savings["total_model_token_savings"] == pytest.approx(5 / 12)
+    assert model_token_savings(0, 0, 0, 0) == {
+        "model_input_savings": None,
+        "total_model_token_savings": None,
+    }
+    assert tokens_per_success(1_000, 4) == 250.0
+    assert tokens_per_success(1_000, 0) is None
+
+    rows = tuple(
+        _metric_row(
+            "family-a",
+            condition,
+            horizon,
+            (
+                {"FH": 100, "MR": 120}[condition]
+                if horizon == 1
+                else {"FH": 500, "MR": 300}[condition]
+            ),
+            10,
+            actual=False,
+            available=None if horizon == 1 else True,
+        )
+        for horizon in (1, 10, 30)
+        for condition in ("FH", "MR")
+    )
+    analysis = analyze_lifecycle_rows(rows)
+    estimated = cast(dict[str, Any], analysis["estimated"])
+    long_horizon = cast(dict[str, Any], estimated["long_horizon"])
+    local_work = cast(dict[str, Any], analysis["local_deterministic_work"])
+
+    assert estimated["observed_break_even_horizon"] == 10
+    assert long_horizon["model_input_savings"] == 0.4
+    assert long_horizon["paired_lifecycle_tes"] == pytest.approx(200 / 510)
+    assert analysis["duplicate_tokens_avoided"] == 300
+    assert analysis["mnemo_model_tokens"] == {"input": 0, "output": 0}
+    assert local_work["model_calls"] == 0
+
+    expected = (("family-a", "FH", 30, 1), ("family-a", "MR", 30, 1))
+    accounting = provider_call_accounting(
+        expected,
+        (
+            {"key": expected[0], "status": "included"},
+            {"key": expected[1], "status": "failed"},
+            {"key": ("orphan", "MR", 30, 1), "status": "included"},
+        ),
+    )
+    assert accounting == {"expected": 2, "included": 1, "failed": 1, "orphaned": 1}
+
+
+def test_lifecycle_verdict_requires_valid_memory_and_complete_actual_counts() -> None:
+    offline = _verdict_rows(actual=False)
+    assert decide_lifecycle_verdict(offline)["verdict"] == "PROVISIONAL"
+    assert decide_lifecycle_verdict(())["verdict"] == "NOT EVALUATED"
+
+    live = _verdict_rows(actual=True)
+    passed = decide_lifecycle_verdict(live)
+    assert passed["verdict"] == "PASS"
+    assert passed["task_quality"] == "NOT EVALUATED"
+
+    leaked = [dict(row) for row in live]
+    leaked[0]["memory_necessity_valid"] = False
+    assert decide_lifecycle_verdict(tuple(leaked))["verdict"] == "INVALID"
+
+    missing = [dict(row) for row in live]
+    next(row for row in missing if row["condition"] == "MR")["required_prior_fact_available"] = (
+        False
+    )
+    assert decide_lifecycle_verdict(tuple(missing))["verdict"] == "INVALID"
+
+    too_expensive = _verdict_rows(actual=True, mr_input=800)
+    assert decide_lifecycle_verdict(too_expensive)["verdict"] == "FAIL"
+    assert (
+        decide_lifecycle_verdict(live, task_quality={"FH": 0.90, "MR": 0.80})["verdict"] == "FAIL"
+    )
+
+
+def test_lifecycle_report_labels_evidence_without_significance_claims() -> None:
+    analysis = analyze_lifecycle_rows(_verdict_rows(actual=False))
+    report = render_lifecycle_report(analysis)
+
+    assert "PROVISIONAL" in report
+    assert "Downstream estimated model tokens" in report
+    assert "Downstream actual provider tokens" in report
+    assert "Mnemo model tokens" in report
+    assert "Model-generated task quality" in report
+    assert "descriptive sensitivity" in report
+    assert "significant" not in report.casefold()

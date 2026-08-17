@@ -27,18 +27,24 @@ from mnemo_memory.packages.application import (
     resolve_local_config,
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.application.evaluation.analysis import descriptive_statistics
 from mnemo_memory.packages.application.evaluation.conditions import (
     build_domain_events,
     render_event,
     rolling_natural_language_summary,
 )
+from mnemo_memory.packages.application.evaluation.graders import DeterministicContinuationGrader
 from mnemo_memory.packages.application.evaluation.models import (
     EventSpec,
+    GroundTruth,
     Horizon,
     Scenario,
     load_corpus,
 )
-from mnemo_memory.packages.application.semantic_rendering import ConservativeTokenCounter
+from mnemo_memory.packages.application.semantic_rendering import (
+    ConservativeTokenCounter,
+    detect_protected_spans,
+)
 from mnemo_memory.packages.domain import CheckpointContent, MemoryScope
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteScope,
@@ -51,6 +57,7 @@ _CONDITIONS = ("FH", "RS", "NM", "MR")
 _STARTING_STATE = "No prior-session fact is carried in the current implementation state."
 _RUN_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _TOKEN_COUNTER = ConservativeTokenCounter()
+_CROSS_SCOPE_CANARY = "CROSS-SCOPE-CANARY"
 
 
 class LifecycleTokenBreakEvenError(RuntimeError):
@@ -210,6 +217,29 @@ def _memory_necessity_valid(
     return required_meaning.casefold() not in carried.casefold()
 
 
+def _probe_ground_truth(required_meaning: str, evidence_key: str) -> GroundTruth:
+    """Build a condition-blind one-fact probe from the referenced source event."""
+
+    return GroundTruth(
+        required_active_facts=(required_meaning,),
+        required_constraints=(),
+        current_goals=(),
+        current_decisions=(),
+        superseded_decisions=(),
+        failed_approaches=(),
+        unresolved_questions=(),
+        next_actions=(),
+        protected_spans=tuple(span.value for span in detect_protected_spans(required_meaning)),
+        relevant_evidence=(evidence_key,),
+        critical_evidence=(evidence_key,),
+        irrelevant_or_obsolete=(),
+        expected_continuation=(),
+        critical_facts=(required_meaning,),
+        forbidden_facts=(_CROSS_SCOPE_CANARY,),
+        retrieval_required=(required_meaning,),
+    )
+
+
 def _family_rows(
     work_directory: Path,
     fixture: dict[str, Any],
@@ -242,6 +272,8 @@ def _family_rows(
     required_summary = spec_by_key[seed_event_key].summary
     _, separator, required_meaning = required_summary.partition(":")
     required_meaning = required_meaning.strip() if separator else required_summary
+    probe_truth = _probe_ground_truth(required_meaning, seed_event_key)
+    grader = DeterministicContinuationGrader()
 
     with build_checkpoint_runtime(config) as runtime:
         runtime.checkpoint_service.create(
@@ -275,6 +307,7 @@ def _family_rows(
         "precompact_count": 0,
         "precompact_reset_count": 0,
         "delivered_context_tokens": 0,
+        "duplicate_tokens_avoided": 0,
         "mnemo_model_call_count": 0,
     }
     captured: dict[int, dict[str, dict[str, object]]] = {}
@@ -313,6 +346,7 @@ def _family_rows(
         if start_context is not None:
             mr_context.append(start_context)
             lifecycle["delivered_context_tokens"] += _TOKEN_COUNTER.count(start_context)
+        prior_delivery_tokens = 0
 
         for hook_event in cast(list[dict[str, Any]], session["events"]):
             if hook_event["hook_event_name"] != "UserPromptSubmit":
@@ -346,6 +380,10 @@ def _family_rows(
                 lifecycle["self_contained_attachment_tokens"] += emitted_tokens
             elif emitted is not None:
                 lifecycle["detail_delivery_count"] += 1
+            if purpose == "prior_memory_need" and emitted is not None:
+                prior_delivery_tokens = emitted_tokens
+            elif purpose in {"repeat_prior_memory_need", "changed_memory_need"} and emitted is None:
+                lifecycle["duplicate_tokens_avoided"] += prior_delivery_tokens
             if emitted is not None:
                 mr_context.append(emitted)
                 lifecycle["delivered_context_tokens"] += emitted_tokens
@@ -405,6 +443,25 @@ def _family_rows(
             }
             if condition != "MR":
                 condition_lifecycle = {name: 0 for name in condition_lifecycle}
+            evidence_keys = required_keys
+            full_history_prompt = _assemble_model_prompt(
+                current_input,
+                _full_history(available_events),
+            )
+            grade = grader.grade(
+                context=model_prompt,
+                evidence_event_keys=evidence_keys,
+                ground_truth=probe_truth,
+                context_tokens=measured,
+                full_history_tokens=_TOKEN_COUNTER.count(full_history_prompt),
+                deterministic=True,
+                drift_resistance=1.0,
+                omission_notice_valid=True,
+            )
+            cross_scope_disclosure_count = int(_CROSS_SCOPE_CANARY in model_prompt)
+            false_memory_count = sum(
+                int(value in model_prompt) for value in probe_truth.forbidden_facts
+            )
             captured[session_number][condition] = {
                 "schema_version": "mnemo-lifecycle-token-break-even-row/1.0",
                 "condition": condition,
@@ -419,6 +476,7 @@ def _family_rows(
                 "downstream_prompt_estimated_tokens": measured,
                 "downstream_output_estimated_tokens": 0,
                 "cumulative_downstream_prompt_estimated_tokens": cumulative_tokens[condition],
+                "cumulative_downstream_output_estimated_tokens": 0,
                 "downstream_model_call_count": prompt_counts[condition],
                 "mnemo_model_tokens": {"input": 0, "output": 0},
                 "measurement_source": "tokenizer_estimate",
@@ -426,6 +484,19 @@ def _family_rows(
                 "memory_necessity_valid": valid,
                 "required_prior_fact_available": required_available,
                 "required_prior_event_keys": required_keys,
+                "required_knowledge_retention": (
+                    grade.required_knowledge_retention if scored else None
+                ),
+                "protected_literal_fidelity": grade.protected_span_fidelity if scored else None,
+                "evidence_attribution_fidelity": (
+                    grade.evidence_attribution_fidelity if scored else None
+                ),
+                "temporal_supersession_accuracy": (
+                    grade.temporal_supersession_accuracy if scored else None
+                ),
+                "critical_false_memory_count": false_memory_count,
+                "cross_scope_disclosure_count": cross_scope_disclosure_count,
+                "critical_violation_count": len(grade.critical_violations),
                 "lifecycle": condition_lifecycle,
                 "local_deterministic_work": {
                     "tokenizer_equivalent_calls": prompt_counts[condition],
@@ -508,6 +579,13 @@ def _write_json(path: Path, value: object) -> None:
         os.fsync(handle.fileno())
 
 
+def _write_text(path: Path, value: str) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(value)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _append_row(path: Path, row: dict[str, Any]) -> None:
     payload = _canonical_json(row) + "\n"
     with path.open("a", encoding="utf-8") as handle:
@@ -537,25 +615,446 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, int, int]:
     )
 
 
-def _aggregate(rows: tuple[dict[str, Any], ...]) -> dict[str, object]:
-    condition_totals = {
-        condition: sum(
-            int(row["cumulative_downstream_prompt_estimated_tokens"])
-            for row in rows
-            if row["condition"] == condition
-        )
-        for condition in _CONDITIONS
-    }
+def _nonnegative_number(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{label} must be a non-negative number")
+    return float(value)
+
+
+def model_token_savings(
+    baseline_input: int | float,
+    baseline_output: int | float,
+    candidate_input: int | float,
+    candidate_output: int | float,
+) -> dict[str, float | None]:
+    """Return input-only and total savings without inventing a zero denominator."""
+
+    baseline_input_value = _nonnegative_number(baseline_input, "baseline input")
+    baseline_output_value = _nonnegative_number(baseline_output, "baseline output")
+    candidate_input_value = _nonnegative_number(candidate_input, "candidate input")
+    candidate_output_value = _nonnegative_number(candidate_output, "candidate output")
+    baseline_total = baseline_input_value + baseline_output_value
+    candidate_total = candidate_input_value + candidate_output_value
     return {
-        "schema_version": "mnemo-lifecycle-token-break-even-aggregate/1.0",
-        "evidence_status": "offline_tokenizer_estimate_only",
+        "model_input_savings": (
+            None
+            if baseline_input_value == 0
+            else 1.0 - candidate_input_value / baseline_input_value
+        ),
+        "total_model_token_savings": (
+            None if baseline_total == 0 else 1.0 - candidate_total / baseline_total
+        ),
+    }
+
+
+def tokens_per_success(total_tokens: int | float, successful_tasks: int) -> float | None:
+    total = _nonnegative_number(total_tokens, "total tokens")
+    if isinstance(successful_tasks, bool) or not isinstance(successful_tasks, int):
+        raise TypeError("successful task count must be an integer")
+    if successful_tasks < 0:
+        raise ValueError("successful task count cannot be negative")
+    return None if successful_tasks == 0 else total / successful_tasks
+
+
+def provider_call_accounting(
+    expected_keys: tuple[tuple[str, str, int, int], ...],
+    calls: tuple[dict[str, object], ...],
+) -> dict[str, int]:
+    """Count included, failed, and unexpected provider calls without prompt payloads."""
+
+    expected = set(expected_keys)
+    included = 0
+    failed = 0
+    orphaned = 0
+    for call in calls:
+        raw_key = call.get("key")
+        key = tuple(raw_key) if isinstance(raw_key, (list, tuple)) else ()
+        if key not in expected:
+            orphaned += 1
+        elif call.get("status") == "included":
+            included += 1
+        else:
+            failed += 1
+    return {
+        "expected": len(expected),
+        "included": included,
+        "failed": failed,
+        "orphaned": orphaned,
+    }
+
+
+def _paired_token_totals(
+    rows: tuple[dict[str, Any], ...],
+    *,
+    horizon: int,
+    source: str,
+) -> dict[str, dict[str, int]] | None:
+    selected = tuple(
+        row
+        for row in rows
+        if int(row.get("horizon", -1)) == horizon and row.get("condition") in {"FH", "MR"}
+    )
+    by_condition: dict[str, dict[tuple[str, int], dict[str, Any]]] = {"FH": {}, "MR": {}}
+    for row in selected:
+        condition = str(row["condition"])
+        key = (str(row["scenario_family"]), int(row.get("attempt", 1)))
+        if key in by_condition[condition]:
+            return None
+        by_condition[condition][key] = row
+    if not by_condition["FH"] or set(by_condition["FH"]) != set(by_condition["MR"]):
+        return None
+    input_field = f"downstream_prompt_{source}_tokens"
+    output_field = f"downstream_output_{source}_tokens"
+    if source == "estimated" and all(
+        "cumulative_downstream_prompt_estimated_tokens" in row
+        and "cumulative_downstream_output_estimated_tokens" in row
+        for condition_rows in by_condition.values()
+        for row in condition_rows.values()
+    ):
+        input_field = "cumulative_downstream_prompt_estimated_tokens"
+        output_field = "cumulative_downstream_output_estimated_tokens"
+    if source == "actual" and any(
+        row.get("provider_call_status") != "included"
+        or input_field not in row
+        or output_field not in row
+        for condition_rows in by_condition.values()
+        for row in condition_rows.values()
+    ):
+        return None
+    if any(
+        input_field not in row or output_field not in row
+        for condition_rows in by_condition.values()
+        for row in condition_rows.values()
+    ):
+        return None
+    totals: dict[str, dict[str, int]] = {}
+    for condition, condition_rows in by_condition.items():
+        input_tokens = sum(int(row[input_field]) for row in condition_rows.values())
+        output_tokens = sum(int(row[output_field]) for row in condition_rows.values())
+        totals[condition] = {
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": input_tokens + output_tokens,
+        }
+    return totals
+
+
+def _token_source_analysis(rows: tuple[dict[str, Any], ...], source: str) -> dict[str, object]:
+    horizons = sorted(
+        {
+            int(row["horizon"])
+            for row in rows
+            if row.get("condition") in {"FH", "MR"} and "horizon" in row
+        }
+    )
+    by_horizon: dict[str, dict[str, object]] = {}
+    break_even: int | None = None
+    for horizon in horizons:
+        totals = _paired_token_totals(rows, horizon=horizon, source=source)
+        if totals is None:
+            continue
+        savings = model_token_savings(
+            totals["FH"]["input"],
+            totals["FH"]["output"],
+            totals["MR"]["input"],
+            totals["MR"]["output"],
+        )
+        total_savings = savings["total_model_token_savings"]
+        if break_even is None and total_savings is not None and total_savings >= 0:
+            break_even = horizon
+        by_horizon[str(horizon)] = {
+            "FH": totals["FH"],
+            "MR": totals["MR"],
+            **savings,
+            "paired_lifecycle_tes": total_savings,
+        }
+    long_horizon = by_horizon.get(str(max(horizons))) if horizons else None
+    return {
+        "measurement_source": source,
+        "by_horizon": by_horizon,
+        "observed_break_even_horizon": break_even,
+        "long_horizon": long_horizon,
+    }
+
+
+def _family_sensitivity(rows: tuple[dict[str, Any], ...]) -> dict[str, object]:
+    if not rows:
+        return descriptive_statistics((), bootstrap_samples=2_000, seed=20260818)
+    horizon = max(int(row["horizon"]) for row in rows)
+    selected = tuple(
+        row
+        for row in rows
+        if int(row["horizon"]) == horizon and row.get("condition") in {"FH", "MR"}
+    )
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in selected:
+        grouped.setdefault(str(row["scenario_family"]), {})[str(row["condition"])] = row
+    values: list[float] = []
+    families: list[str] = []
+    for family in sorted(grouped):
+        conditions = grouped[family]
+        if set(conditions) != {"FH", "MR"}:
+            continue
+        fh = conditions["FH"]
+        mr = conditions["MR"]
+        savings = model_token_savings(
+            int(
+                fh.get(
+                    "cumulative_downstream_prompt_estimated_tokens",
+                    fh["downstream_prompt_estimated_tokens"],
+                )
+            ),
+            int(
+                fh.get(
+                    "cumulative_downstream_output_estimated_tokens",
+                    fh["downstream_output_estimated_tokens"],
+                )
+            ),
+            int(
+                mr.get(
+                    "cumulative_downstream_prompt_estimated_tokens",
+                    mr["downstream_prompt_estimated_tokens"],
+                )
+            ),
+            int(
+                mr.get(
+                    "cumulative_downstream_output_estimated_tokens",
+                    mr["downstream_output_estimated_tokens"],
+                )
+            ),
+        )["total_model_token_savings"]
+        if savings is None:
+            continue
+        values.append(savings)
+        families.append(family)
+    result = descriptive_statistics(
+        tuple(values),
+        bootstrap_samples=2_000,
+        seed=20260818,
+        cluster_ids=tuple(families),
+    )
+    result["interpretation"] = (
+        "descriptive sensitivity over scenario families; no population inference"
+    )
+    return result
+
+
+def _availability_control_valid(rows: tuple[dict[str, Any], ...]) -> tuple[bool, bool]:
+    scored = tuple(row for row in rows if row.get("required_prior_fact_available") is not None)
+    grouped: dict[tuple[str, int], dict[str, dict[str, Any]]] = {}
+    for row in scored:
+        grouped.setdefault((str(row["scenario_family"]), int(row["horizon"])), {})[
+            str(row["condition"])
+        ] = row
+    complete_groups = tuple(
+        conditions for conditions in grouped.values() if {"FH", "MR", "NM"} <= set(conditions)
+    )
+    if not complete_groups:
+        return False, False
+    valid = all(
+        conditions["FH"]["required_prior_fact_available"] is True
+        and conditions["MR"]["required_prior_fact_available"] is True
+        and conditions["NM"]["required_prior_fact_available"] is False
+        for conditions in complete_groups
+    )
+    return True, valid
+
+
+def decide_lifecycle_verdict(
+    rows: tuple[dict[str, Any], ...],
+    *,
+    task_quality: dict[str, float] | None = None,
+) -> dict[str, object]:
+    """Apply preregistered gates without upgrading estimated evidence to provider evidence."""
+
+    if not rows:
+        return {
+            "verdict": "NOT EVALUATED",
+            "task_quality": "NOT EVALUATED",
+            "provider_token_counts_complete": False,
+        }
+    if any(row.get("memory_necessity_valid") is not True for row in rows):
+        return {
+            "verdict": "INVALID",
+            "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
+            "provider_token_counts_complete": False,
+        }
+    control_complete, control_valid = _availability_control_valid(rows)
+    if control_complete and not control_valid:
+        return {
+            "verdict": "INVALID",
+            "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
+            "provider_token_counts_complete": False,
+        }
+    if not control_complete:
+        return {
+            "verdict": "NOT EVALUATED",
+            "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
+            "provider_token_counts_complete": False,
+        }
+
+    scored_memory = tuple(
+        row
+        for row in rows
+        if row.get("condition") in {"FH", "MR"}
+        and row.get("required_prior_fact_available") is not None
+    )
+    fidelity_gate = bool(scored_memory) and all(
+        row.get("required_knowledge_retention") == 1.0
+        and row.get("protected_literal_fidelity") == 1.0
+        and row.get("evidence_attribution_fidelity") == 1.0
+        for row in scored_memory
+    )
+    safety_gate = all(
+        int(row.get("critical_false_memory_count", 0)) == 0
+        and int(row.get("cross_scope_disclosure_count", 0)) == 0
+        for row in rows
+    )
+    quality_status = "NOT EVALUATED"
+    quality_gate = True
+    if task_quality is not None:
+        if set(task_quality) != {"FH", "MR"} or any(
+            not 0.0 <= value <= 1.0 for value in task_quality.values()
+        ):
+            raise ValueError("task quality must contain normalized FH and MR accuracy")
+        quality_status = "PASS" if task_quality["MR"] >= task_quality["FH"] - 0.02 else "FAIL"
+        quality_gate = quality_status == "PASS"
+
+    provider_rows = tuple(row for row in rows if row.get("condition") in {"FH", "MR"})
+    provider_complete = bool(provider_rows) and all(
+        row.get("provider_call_status") == "included"
+        and "downstream_prompt_actual_tokens" in row
+        and "downstream_output_actual_tokens" in row
+        for row in provider_rows
+    )
+    source = "actual" if provider_complete else "estimated"
+    token_analysis = _token_source_analysis(rows, source)
+    long_horizon = cast(dict[str, object] | None, token_analysis["long_horizon"])
+    savings = None if long_horizon is None else long_horizon.get("total_model_token_savings")
+    savings_gate = isinstance(savings, (int, float)) and savings >= 0.30
+    gates_pass = fidelity_gate and safety_gate and quality_gate and savings_gate
+    verdict = (
+        ("PASS" if gates_pass else "FAIL")
+        if provider_complete
+        else ("PROVISIONAL" if gates_pass else "FAIL")
+    )
+    return {
+        "verdict": verdict,
+        "task_quality": quality_status,
+        "provider_token_counts_complete": provider_complete,
+        "savings_gate": savings_gate,
+        "fidelity_gate": fidelity_gate,
+        "safety_gate": safety_gate,
+        "quality_gate": quality_gate,
+    }
+
+
+def analyze_lifecycle_rows(rows: tuple[dict[str, Any], ...]) -> dict[str, object]:
+    """Aggregate paired lifecycle observations at the scenario-family independence unit."""
+
+    horizons = sorted({int(row["horizon"]) for row in rows if "horizon" in row})
+    long_horizon = max(horizons) if horizons else None
+    long_rows = tuple(row for row in rows if row.get("horizon") == long_horizon)
+    mr_long = tuple(row for row in long_rows if row.get("condition") == "MR")
+    mnemo_model_tokens = {
+        "input": sum(
+            int(cast(dict[str, Any], row["mnemo_model_tokens"])["input"]) for row in long_rows
+        ),
+        "output": sum(
+            int(cast(dict[str, Any], row["mnemo_model_tokens"])["output"]) for row in long_rows
+        ),
+    }
+    local_work = {
+        "tokenizer_equivalent_calls": sum(
+            int(cast(dict[str, Any], row["local_deterministic_work"])["tokenizer_equivalent_calls"])
+            for row in long_rows
+        ),
+        "model_calls": sum(
+            int(cast(dict[str, Any], row["local_deterministic_work"])["model_calls"])
+            for row in long_rows
+        ),
+    }
+    result: dict[str, object] = {
         "row_count": len(rows),
         "scenario_family_count": len({str(row["scenario_family"]) for row in rows}),
-        "conditions": list(_CONDITIONS),
-        "horizons": sorted({int(row["horizon"]) for row in rows}),
-        "cumulative_prompt_estimated_token_observation_sum": condition_totals,
-        "mnemo_model_tokens": {"input": 0, "output": 0},
-        "task_quality": "NOT EVALUATED",
+        "conditions": sorted({str(row["condition"]) for row in rows}),
+        "horizons": horizons,
+        "estimated": _token_source_analysis(rows, "estimated"),
+        "actual": _token_source_analysis(rows, "actual"),
+        "delivered_context_tokens": sum(
+            int(cast(dict[str, Any], row["lifecycle"]).get("delivered_context_tokens", 0))
+            for row in mr_long
+        ),
+        "duplicate_tokens_avoided": sum(
+            int(cast(dict[str, Any], row["lifecycle"]).get("duplicate_tokens_avoided", 0))
+            for row in mr_long
+        ),
+        "mnemo_model_tokens": mnemo_model_tokens,
+        "local_deterministic_work": local_work,
+        "paired_family_sensitivity": _family_sensitivity(rows),
+        "provider_call_accounting": provider_call_accounting(
+            tuple(
+                (
+                    str(row["scenario_family"]),
+                    str(row["condition"]),
+                    int(row["horizon"]),
+                    int(row.get("attempt", 1)),
+                )
+                for row in rows
+                if row.get("condition") in {"FH", "MR"}
+            ),
+            tuple(
+                {
+                    "key": (
+                        str(row["scenario_family"]),
+                        str(row["condition"]),
+                        int(row["horizon"]),
+                        int(row.get("attempt", 1)),
+                    ),
+                    "status": str(row["provider_call_status"]),
+                }
+                for row in rows
+                if row.get("condition") in {"FH", "MR"} and "provider_call_status" in row
+            ),
+        ),
+    }
+    result.update(decide_lifecycle_verdict(rows))
+    return result
+
+
+def render_lifecycle_report(analysis: dict[str, object]) -> str:
+    """Render one concise report whose labels preserve the evidence boundary."""
+
+    estimated = cast(dict[str, object], analysis["estimated"])
+    actual = cast(dict[str, object], analysis["actual"])
+    estimated_long = estimated.get("long_horizon")
+    actual_long = actual.get("long_horizon")
+    sensitivity = cast(dict[str, object], analysis["paired_family_sensitivity"])
+    return (
+        "# Lifecycle token break-even\n\n"
+        f"Verdict: **{analysis['verdict']}**\n\n"
+        "| Measurement | Result |\n"
+        "|---|---|\n"
+        f"| Delivered context tokens | {analysis['delivered_context_tokens']} |\n"
+        f"| Downstream estimated model tokens | {_canonical_json(estimated_long)} |\n"
+        f"| Downstream actual provider tokens | "
+        f"{'NOT EVALUATED' if actual_long is None else _canonical_json(actual_long)} |\n"
+        f"| Mnemo model tokens | {_canonical_json(analysis['mnemo_model_tokens'])} |\n"
+        f"| Local deterministic work | {_canonical_json(analysis['local_deterministic_work'])} |\n"
+        f"| Provider call accounting | {_canonical_json(analysis['provider_call_accounting'])} |\n"
+        f"| Deterministic quality proxy | required-fact and fidelity gates: "
+        f"{analysis.get('fidelity_gate', 'NOT EVALUATED')} |\n"
+        f"| Model-generated task quality | {analysis['task_quality']} |\n\n"
+        "The paired family interval is a descriptive sensitivity summary over the six "
+        "preregistered scenario families, not a population inference. "
+        f"Interval: {_canonical_json(sensitivity.get('confidence_interval_95'))}.\n"
+    )
+
+
+def _aggregate(rows: tuple[dict[str, Any], ...]) -> dict[str, object]:
+    return {
+        "schema_version": "mnemo-lifecycle-token-break-even-aggregate/1.0",
+        **analyze_lifecycle_rows(rows),
     }
 
 
@@ -565,6 +1064,7 @@ def _write_manifest(repository_root: Path, run_directory: Path) -> None:
         "evaluation-config.json",
         "failures.jsonl",
         "raw-sessions.jsonl",
+        "report.md",
     )
     manifest = {
         "schema_version": "mnemo-lifecycle-token-break-even-manifest/1.0",
@@ -650,7 +1150,9 @@ def run_offline_evaluation(
     persisted = _read_rows(raw_path)
     if len(persisted) != expected_count:
         raise LifecycleTokenBreakEvenError("offline evaluation row set is incomplete")
-    _write_json(run_directory / "aggregate.json", _aggregate(persisted))
+    aggregate = _aggregate(persisted)
+    _write_json(run_directory / "aggregate.json", aggregate)
+    _write_text(run_directory / "report.md", render_lifecycle_report(aggregate))
     _write_manifest(repository_root, run_directory)
     return run_directory
 

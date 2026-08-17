@@ -5840,3 +5840,26 @@ also pass. Ruff, strict mypy, diff hygiene, and the 165-file architecture gate p
 model call, dependency, migration, stable default, frozen result rewrite, deploy, or release
 occurred. Honest break-even formulas and verdict/report generation remain Task 3; no token-savings
 percentage or provider-token verdict is claimed yet.
+
+Task 3 adds pure model-input and total-token savings formulas, cumulative estimated lifecycle
+accounting, actual-provider accounting, observed sampled break-even, duplicate-token avoidance,
+tokens-per-success with an undefined zero-success result, local deterministic work, and explicit
+included/failed/orphaned provider-call counts. The analysis pairs FH/MR by family and horizon and
+bootstraps whole scenario-family observations only; its six-family interval is labelled descriptive
+sensitivity with no population inference. A condition-blind `DeterministicContinuationGrader`
+derives its one-fact probe from each fixture event in process memory and persists only numeric
+required-knowledge, protected-literal, evidence-attribution, temporal, false-memory, disclosure, and
+violation grades. It never writes the protected source value or grader truth.
+
+The verdict is `INVALID` for contamination or a failed FH=MR=1/NM=0 necessity control,
+`NOT EVALUATED` without usable evidence, at most `PROVISIONAL` for tokenizer-only evidence, and
+`PASS` only with complete included provider counts, at least 30% MR-versus-FH savings, perfect
+required-fact/fidelity gates, zero critical false memories or cross-scope disclosures, and any
+applicable model-generated quality comparison within the preregistered 0.02 margin. The JSON
+analysis and Markdown report separately label delivered context, downstream estimated tokens,
+downstream actual provider tokens, zero Mnemo model tokens, local deterministic work, deterministic
+quality, model-generated quality, and provider-call accounting. No missing actual count is promoted
+to a saving. The Task 3 tests failed first because the analysis APIs were absent; all ten lifecycle
+tests now pass in 147.74 seconds, including real-hook grading and two independent byte-identical,
+payload-free reports. Ruff and strict mypy pass. No immutable evaluation result, live call,
+dependency, schema, default, deploy, or release changed; Task 4 offline validation remains next.
