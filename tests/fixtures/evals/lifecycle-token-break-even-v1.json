@@ -1,0 +1,383 @@
+{
+  "schema_version": "mnemo-lifecycle-token-break-even/1.0",
+  "fixture_id": "lifecycle-token-break-even-v1",
+  "source_corpus": "tests/fixtures/evals/viability-corpus-v1.json",
+  "provenance": {
+    "classification": "original_mnemo_synthetic_schedule",
+    "originality_attestation": "Original Mnemo evaluation schedule referencing existing Mnemo-owned synthetic event keys; no production, personal, secret, or competitor content."
+  },
+  "seed": 20260818,
+  "conditions": ["FH", "RS", "NM", "MR"],
+  "horizons": [1, 10, 30],
+  "maximum_prompt_events_per_client_session": 4,
+  "scenario_families": [
+    {
+      "template_id": "software-release",
+      "seed_event_key": "sw-fact",
+      "changed_event_key": "sw-artifact"
+    },
+    {
+      "template_id": "incident-handoff",
+      "seed_event_key": "inc-evidence",
+      "changed_event_key": "inc-decision"
+    },
+    {
+      "template_id": "customer-case",
+      "seed_event_key": "case-evidence",
+      "changed_event_key": "case-decision"
+    },
+    {
+      "template_id": "strategy-research",
+      "seed_event_key": "rs-evidence",
+      "changed_event_key": "rs-decision"
+    },
+    {
+      "template_id": "multi-agent-coordination",
+      "seed_event_key": "ma-evidence",
+      "changed_event_key": "ma-decision"
+    },
+    {
+      "template_id": "dbt-data-handoff",
+      "seed_event_key": "dbt-evidence",
+      "changed_event_key": "dbt-decision"
+    }
+  ],
+  "sessions": [
+    {
+      "session_number": 1,
+      "client_session_id": "lifecycle-01",
+      "scored_reuse": false,
+      "checkpoint_event_ref": "seed_event_key",
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 2,
+      "client_session_id": "lifecycle-02",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 3,
+      "client_session_id": "lifecycle-03",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 4,
+      "client_session_id": "lifecycle-04",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 5,
+      "client_session_id": "lifecycle-05",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 6,
+      "client_session_id": "lifecycle-06",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 7,
+      "client_session_id": "lifecycle-07",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 8,
+      "client_session_id": "lifecycle-08",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 9,
+      "client_session_id": "lifecycle-09",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 10,
+      "client_session_id": "lifecycle-10",
+      "scored_reuse": true,
+      "checkpoint_event_ref": "changed_event_key",
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "changed_memory_need", "query_ref": "changed_event_key"},
+        {"hook_event_name": "PreCompact"}
+      ]
+    },
+    {
+      "session_number": 11,
+      "client_session_id": "lifecycle-11",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 12,
+      "client_session_id": "lifecycle-12",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 13,
+      "client_session_id": "lifecycle-13",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 14,
+      "client_session_id": "lifecycle-14",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 15,
+      "client_session_id": "lifecycle-15",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 16,
+      "client_session_id": "lifecycle-16",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 17,
+      "client_session_id": "lifecycle-17",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 18,
+      "client_session_id": "lifecycle-18",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 19,
+      "client_session_id": "lifecycle-19",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 20,
+      "client_session_id": "lifecycle-20",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"},
+        {"hook_event_name": "PreCompact"}
+      ]
+    },
+    {
+      "session_number": 21,
+      "client_session_id": "lifecycle-21",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 22,
+      "client_session_id": "lifecycle-22",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 23,
+      "client_session_id": "lifecycle-23",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 24,
+      "client_session_id": "lifecycle-24",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 25,
+      "client_session_id": "lifecycle-25",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 26,
+      "client_session_id": "lifecycle-26",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 27,
+      "client_session_id": "lifecycle-27",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 28,
+      "client_session_id": "lifecycle-28",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 29,
+      "client_session_id": "lifecycle-29",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"}
+      ]
+    },
+    {
+      "session_number": 30,
+      "client_session_id": "lifecycle-30",
+      "scored_reuse": true,
+      "events": [
+        {"hook_event_name": "SessionStart"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "self_contained"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "prior_memory_need", "query_ref": "seed_event_key"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "repeat_prior_memory_need", "same_delivery_as": "prior_memory_need"},
+        {"hook_event_name": "UserPromptSubmit", "purpose": "changed_memory_need", "query_ref": "changed_event_key"}
+      ]
+    }
+  ]
+}

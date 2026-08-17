@@ -5792,3 +5792,13 @@ model call. The complete gate passed 1,130 tests with 27 expected environment sk
 PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting, strict
 typing, schema, dependency/provenance, 165-file architecture, and installed-package checks all
 passed. No dependency, lockfile, schema, production renderer, deploy, or release sequence changed.
+
+### Lifecycle token break-even — In progress
+
+The maintainer approved the reviewed lifecycle-aware token-saving issue. Task 0 preregisters the
+FH, RS, NM, and real-hook MR conditions before implementation, references all six existing original
+synthetic scenario families without copying their truth text, and freezes 1/10/30-session horizons,
+memory-necessity contamination checks, the 30% total-model-token gate, artifact privacy, statistical
+limits, and the separate live-authorization boundary. The fixture-contract tests failed first
+because both artifacts were absent, then all three passed after adding the schedule and
+preregistration. No product behavior, model endpoint, dependency, schema, or frozen result changed.
