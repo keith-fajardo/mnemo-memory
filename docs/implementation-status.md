@@ -5793,7 +5793,7 @@ PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, l
 typing, schema, dependency/provenance, 165-file architecture, and installed-package checks all
 passed. No dependency, lockfile, schema, production renderer, deploy, or release sequence changed.
 
-### Lifecycle token break-even — In progress
+### Lifecycle token break-even — Complete offline; live calibration awaits separate approval
 
 The maintainer approved the reviewed lifecycle-aware token-saving issue. Task 0 preregisters the
 FH, RS, NM, and real-hook MR conditions before implementation, references all six existing original
@@ -5891,3 +5891,10 @@ context-packet, lifecycle benchmark, and routing tests pass. No live Ollama call
 provider tokens and model-generated task quality remain `NOT EVALUATED`, with 36 expected provider
 calls and zero included, failed, or orphaned. The preregistered final `PASS` therefore remains
 unavailable until the maintainer separately authorizes live calibration; no threshold was changed.
+
+The complete repository gate passed after the corrected immutable run: 1,154 tests passed with 27
+expected environment skips; the ephemeral PostgreSQL gate passed 26 tests with one opt-in load test
+skipped. Formatting, linting, strict typing, schema, dependency/provenance, 165-file architecture,
+and installed-package checks all passed. No dependency, lockfile, schema, stable default, deploy, or
+release sequence changed. This issue stops at the approved offline boundary; a live `qwen3:14b`
+calibration remains a separately authorized follow-up rather than part of the completed claim.
