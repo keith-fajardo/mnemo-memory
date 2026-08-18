@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+import scripts.run_lifecycle_token_break_even as lifecycle_runner
 from mnemo_memory.apps.cli.main import build_automatic_memory_hook
 from mnemo_memory.packages.application import (
     PersonalSettings,
@@ -25,8 +27,10 @@ from scripts.run_lifecycle_token_break_even import (
     decide_lifecycle_verdict,
     isolated_evaluation_work_directory,
     model_token_savings,
+    preflight_ollama_calibration,
     provider_call_accounting,
     render_lifecycle_report,
+    run_live_evaluation,
     run_offline_evaluation,
     tokens_per_success,
 )
@@ -347,6 +351,226 @@ def test_offline_artifacts_are_private_immutable_resumable_and_deterministic(
             prompt_marker=prompt_marker,
             response_marker=response_marker,
             reasoning_marker=reasoning_marker,
+        )
+
+
+def _fake_ollama_request(
+    calls: list[tuple[str, str, dict[str, Any] | None]],
+) -> Callable[[str, str, dict[str, Any] | None, float], dict[str, Any]]:
+    def request(
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        assert timeout_seconds > 0
+        calls.append((method, path, payload))
+        if path == "/api/tags":
+            return {
+                "models": [
+                    {
+                        "name": "qwen3:14b",
+                        "model": "qwen3:14b",
+                        "digest": "a" * 64,
+                        "size": 9_276_198_565,
+                        "details": {
+                            "parameter_size": "14.8B",
+                            "quantization_level": "Q4_K_M",
+                            "context_length": 40_960,
+                        },
+                    }
+                ]
+            }
+        if path == "/api/show":
+            assert payload == {"model": "qwen3:14b", "verbose": False}
+            return {
+                "model_info": {"qwen3.context_length": 40_960},
+                "details": {"parameter_size": "14.8B", "quantization_level": "Q4_K_M"},
+            }
+        assert path == "/api/generate"
+        assert payload is not None
+        assert payload["model"] == "qwen3:14b"
+        assert payload["stream"] is False
+        assert payload["think"] is False
+        assert payload["options"] == {
+            "temperature": 0,
+            "num_predict": 8,
+            "num_ctx": 40_960,
+        }
+        prompt = str(payload["prompt"])
+        prompt_tokens = 500 if "PRIVATE-LIVE-MR" in prompt else 1_000
+        if prompt == "Reply OK.":
+            prompt_tokens = 3
+        return {
+            "model": "qwen3:14b",
+            "response": "PRIVATE-LIVE-RESPONSE",
+            "thinking": "PRIVATE-LIVE-REASONING",
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": prompt_tokens,
+            "eval_count": 8,
+            "total_duration": 12_000,
+            "load_duration": 2_000,
+            "prompt_eval_duration": 5_000,
+            "eval_duration": 5_000,
+        }
+
+    return request
+
+
+def test_live_preflight_requires_exact_installed_model_and_bounded_non_thinking_call() -> None:
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+    result = preflight_ollama_calibration(
+        "http://127.0.0.1:11434",
+        request_json=_fake_ollama_request(calls),
+    )
+
+    assert result == {
+        "provider": "ollama",
+        "model": "qwen3:14b",
+        "model_digest": "a" * 64,
+        "model_size_bytes": 9_276_198_565,
+        "parameter_size": "14.8B",
+        "quantization": "Q4_K_M",
+        "context_window": 40_960,
+        "thinking": False,
+        "temperature": 0,
+        "maximum_generated_tokens": 8,
+        "prompt_eval_count": 3,
+        "eval_count": 8,
+        "provider_total_duration_ns": 12_000,
+    }
+    assert [path for _, path, _ in calls] == ["/api/tags", "/api/show", "/api/generate"]
+
+    with pytest.raises(LifecycleTokenBreakEvenError, match="loopback"):
+        preflight_ollama_calibration(
+            "https://example.com",
+            request_json=_fake_ollama_request([]),
+        )
+
+    def absent_model(
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        del method, payload, timeout_seconds
+        assert path == "/api/tags"
+        return {"models": []}
+
+    with pytest.raises(LifecycleTokenBreakEvenError, match="not installed"):
+        preflight_ollama_calibration(
+            "http://127.0.0.1:11434",
+            request_json=absent_model,
+        )
+
+
+def test_live_run_is_private_bounded_append_only_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = tuple(
+        _metric_row(
+            family,
+            condition,
+            horizon,
+            100,
+            0,
+            actual=False,
+            available=(
+                None
+                if horizon == 1
+                else {"FH": True, "MR": True, "RS": True, "NM": False}[condition]
+            ),
+        )
+        for family in (f"family-{index}" for index in range(6))
+        for horizon in (1, 10, 30)
+        for condition in ("FH", "RS", "NM", "MR")
+    )
+    prompts = {
+        (str(row["scenario_family"]), str(row["condition"]), int(row["horizon"]), 1): (
+            f"PRIVATE-LIVE-{row['condition']}-{row['scenario_family']}-{row['horizon']}"
+        )
+        for row in rows
+        if row["condition"] in {"FH", "MR"}
+    }
+    monkeypatch.setattr(
+        lifecycle_runner,
+        "_build_live_material",
+        lambda repository_root, work_directory: (rows, prompts),
+    )
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+    request = _fake_ollama_request(calls)
+    output_directory = tmp_path / "live-runs"
+    run_directory = run_live_evaluation(
+        ROOT,
+        output_directory,
+        run_id="live-a",
+        model_url="http://127.0.0.1:11434",
+        request_json=request,
+    )
+
+    generate_calls = [call for call in calls if call[1] == "/api/generate"]
+    assert len(generate_calls) == 37
+    raw_rows = tuple(
+        json.loads(line)
+        for line in (run_directory / "raw-sessions.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert len(raw_rows) == 72
+    provider_rows = [row for row in raw_rows if row["condition"] in {"FH", "MR"}]
+    assert len(provider_rows) == 36
+    assert all(row["provider_call_status"] == "included" for row in provider_rows)
+    assert all(row["downstream_output_actual_tokens"] == 8 for row in provider_rows)
+    assert all("provider" in row and "prompt" not in row for row in provider_rows)
+
+    artifact_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(run_directory.iterdir())
+        if path.is_file()
+    )
+    assert "PRIVATE-LIVE-FH" not in artifact_text
+    assert "PRIVATE-LIVE-MR" not in artifact_text
+    assert "PRIVATE-LIVE-RESPONSE" not in artifact_text
+    assert "PRIVATE-LIVE-REASONING" not in artifact_text
+    assert _load_json(run_directory / "aggregate.json")["verdict"] == "PASS"
+    assert _load_json(run_directory / "aggregate.json")["provider_call_accounting"] == {
+        "expected": 36,
+        "included": 36,
+        "failed": 0,
+        "orphaned": 0,
+    }
+    config = _load_json(run_directory / "evaluation-config.json")
+    assert config["model_calls_authorized"] is True
+    assert config["maximum_primary_calls"] == 36
+    assert config["maximum_preflight_calls"] == 1
+    assert config["model"] == "qwen3:14b"
+
+    manifest = _load_json(run_directory / "reproducibility-manifest.json")
+    for relative_path, digest in manifest["artifact_sha256"].items():
+        assert sha256((run_directory / relative_path).read_bytes()).hexdigest() == digest
+
+    before = (run_directory / "raw-sessions.jsonl").read_bytes()
+    generate_count = len(generate_calls)
+    assert (
+        run_live_evaluation(
+            ROOT,
+            output_directory,
+            run_id="live-a",
+            model_url="http://127.0.0.1:11434",
+            request_json=request,
+            resume=True,
+        )
+        == run_directory
+    )
+    assert (run_directory / "raw-sessions.jsonl").read_bytes() == before
+    assert len([call for call in calls if call[1] == "/api/generate"]) == generate_count
+    with pytest.raises(LifecycleTokenBreakEvenError, match="already exists"):
+        run_live_evaluation(
+            ROOT,
+            output_directory,
+            run_id="live-a",
+            model_url="http://127.0.0.1:11434",
+            request_json=request,
         )
 
 

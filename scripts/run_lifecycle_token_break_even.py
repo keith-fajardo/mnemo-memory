@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Run the offline, payload-free lifecycle token break-even construction.
+"""Run the payload-free lifecycle token break-even construction and calibration.
 
-The runner invokes Mnemo's production hook composition but never invokes a model. Prompts and
-rendered memory exist only in process memory; persisted rows contain hashes, counts, and grades.
+The offline path invokes Mnemo's production hook composition without a model. The separately
+authorized live path sends only transient sampled prompts to loopback Ollama. Prompts, responses,
+reasoning, and rendered memory remain in process memory; artifacts contain hashes, counts, and
+grades only.
 """
 
 from __future__ import annotations
@@ -12,12 +14,17 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Iterator
+import shutil
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, cast
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from mnemo_memory.apps.cli.main import build_automatic_memory_hook
 from mnemo_memory.packages.application import (
@@ -60,10 +67,224 @@ _STARTING_STATE = "No prior-session fact is carried in the current implementatio
 _RUN_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _TOKEN_COUNTER = ConservativeTokenCounter()
 _CROSS_SCOPE_CANARY = "CROSS-SCOPE-CANARY"
+_OLLAMA_MODEL = "qwen3:14b"
+_OLLAMA_CONTEXT_WINDOW = 40_960
+_OLLAMA_MAXIMUM_GENERATED_TOKENS = 8
+_LIVE_PRIMARY_CALL_LIMIT = 36
+_LIVE_PREFLIGHT_CALL_LIMIT = 1
+_LIVE_WALL_CLOCK_SECONDS = 90 * 60
+
+OllamaRequest = Callable[[str, str, dict[str, Any] | None, float], dict[str, Any]]
+LivePromptKey = tuple[str, str, int, int]
 
 
 class LifecycleTokenBreakEvenError(RuntimeError):
     """Safe evaluation failure that contains no transient payload."""
+
+
+def _validated_loopback_url(model_url: str) -> str:
+    parsed = urlparse(model_url)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise LifecycleTokenBreakEvenError("Ollama calibration requires a plain loopback URL")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise LifecycleTokenBreakEvenError("Ollama loopback URL is invalid") from None
+    if port is None:
+        raise LifecycleTokenBreakEvenError("Ollama loopback URL requires an explicit port")
+    return model_url.rstrip("/")
+
+
+def _ollama_http_request(model_url: str) -> OllamaRequest:
+    base_url = _validated_loopback_url(model_url)
+
+    def request_json(
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        body = None if payload is None else _canonical_json(payload).encode("utf-8")
+        request = Request(
+            f"{base_url}{path}",
+            data=body,
+            method=method,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                raw = response.read(8 * 1024 * 1024 + 1)
+        except (HTTPError, URLError, TimeoutError, OSError):
+            raise LifecycleTokenBreakEvenError("Ollama request failed") from None
+        if len(raw) > 8 * 1024 * 1024:
+            raise LifecycleTokenBreakEvenError("Ollama response exceeded the safe size limit")
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise LifecycleTokenBreakEvenError("Ollama returned invalid JSON") from None
+        if not isinstance(value, dict):
+            raise LifecycleTokenBreakEvenError("Ollama returned an invalid object")
+        return cast(dict[str, Any], value)
+
+    return request_json
+
+
+def _nonnegative_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise LifecycleTokenBreakEvenError(f"Ollama {label} is invalid")
+    return value
+
+
+def _installed_ollama_model(
+    request_json: OllamaRequest,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    tags = request_json("GET", "/api/tags", None, timeout_seconds)
+    models = tags.get("models")
+    if not isinstance(models, list):
+        raise LifecycleTokenBreakEvenError("Ollama model inventory is invalid")
+    matches = tuple(
+        cast(dict[str, Any], value)
+        for value in models
+        if isinstance(value, dict)
+        and value.get("name") == _OLLAMA_MODEL
+        and value.get("model") == _OLLAMA_MODEL
+    )
+    if len(matches) != 1:
+        raise LifecycleTokenBreakEvenError("exact qwen3:14b model is not installed")
+    model = matches[0]
+    digest = model.get("digest")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise LifecycleTokenBreakEvenError("Ollama model digest is invalid")
+    details = model.get("details")
+    if not isinstance(details, dict):
+        raise LifecycleTokenBreakEvenError("Ollama model details are invalid")
+    size = _nonnegative_int(model.get("size"), "model size")
+    show = request_json(
+        "POST",
+        "/api/show",
+        {"model": _OLLAMA_MODEL, "verbose": False},
+        timeout_seconds,
+    )
+    model_info = show.get("model_info")
+    if not isinstance(model_info, dict):
+        raise LifecycleTokenBreakEvenError("Ollama model context metadata is invalid")
+    context_lengths = tuple(
+        value
+        for key, value in model_info.items()
+        if isinstance(key, str)
+        and key.endswith(".context_length")
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    )
+    tag_context = details.get("context_length")
+    if isinstance(tag_context, int) and not isinstance(tag_context, bool):
+        context_lengths += (tag_context,)
+    if not context_lengths or max(context_lengths) < _OLLAMA_CONTEXT_WINDOW:
+        raise LifecycleTokenBreakEvenError(
+            "qwen3:14b context window is below the frozen requirement"
+        )
+    parameter_size = details.get("parameter_size")
+    quantization = details.get("quantization_level")
+    if not isinstance(parameter_size, str) or not isinstance(quantization, str):
+        raise LifecycleTokenBreakEvenError("Ollama model identity metadata is invalid")
+    return {
+        "provider": "ollama",
+        "model": _OLLAMA_MODEL,
+        "model_digest": digest,
+        "model_size_bytes": size,
+        "parameter_size": parameter_size,
+        "quantization": quantization,
+        "context_window": _OLLAMA_CONTEXT_WINDOW,
+        "thinking": False,
+        "temperature": 0,
+        "maximum_generated_tokens": _OLLAMA_MAXIMUM_GENERATED_TOKENS,
+    }
+
+
+def _ollama_generate_payload(prompt: str) -> dict[str, Any]:
+    return {
+        "model": _OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "think": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": _OLLAMA_MAXIMUM_GENERATED_TOKENS,
+            "num_ctx": _OLLAMA_CONTEXT_WINDOW,
+        },
+    }
+
+
+def _validated_generation_metadata(
+    response: dict[str, Any],
+    *,
+    request_latency_ns: int,
+    model: dict[str, Any],
+) -> dict[str, Any]:
+    if response.get("model") != _OLLAMA_MODEL or response.get("done") is not True:
+        raise LifecycleTokenBreakEvenError("Ollama generation did not complete with qwen3:14b")
+    prompt_tokens = _nonnegative_int(response.get("prompt_eval_count"), "prompt token count")
+    output_tokens = _nonnegative_int(response.get("eval_count"), "output token count")
+    if output_tokens > _OLLAMA_MAXIMUM_GENERATED_TOKENS:
+        raise LifecycleTokenBreakEvenError("Ollama exceeded the generated-token limit")
+    provider_duration = _nonnegative_int(response.get("total_duration"), "total duration")
+    return {
+        **model,
+        "prompt_eval_count": prompt_tokens,
+        "eval_count": output_tokens,
+        "request_latency_ns": request_latency_ns,
+        "provider_total_duration_ns": provider_duration,
+    }
+
+
+def _generate_with_ollama(
+    prompt: str,
+    *,
+    request_json: OllamaRequest,
+    model: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    started = time.monotonic_ns()
+    response = request_json(
+        "POST",
+        "/api/generate",
+        _ollama_generate_payload(prompt),
+        timeout_seconds,
+    )
+    latency = time.monotonic_ns() - started
+    return _validated_generation_metadata(response, request_latency_ns=latency, model=model)
+
+
+def preflight_ollama_calibration(
+    model_url: str,
+    *,
+    request_json: OllamaRequest | None = None,
+    timeout_seconds: float = 300.0,
+) -> dict[str, Any]:
+    """Verify exact local model identity and make the single bounded smoke call."""
+
+    _validated_loopback_url(model_url)
+    transport = request_json if request_json is not None else _ollama_http_request(model_url)
+    model = _installed_ollama_model(transport, timeout_seconds=timeout_seconds)
+    generated = _generate_with_ollama(
+        "Reply OK.",
+        request_json=transport,
+        model=model,
+        timeout_seconds=timeout_seconds,
+    )
+    generated.pop("request_latency_ns")
+    return generated
 
 
 @contextmanager
@@ -260,6 +481,7 @@ def _family_rows(
     scenario: Scenario,
     *,
     prompt_marker: str,
+    primary_prompt_sink: dict[LivePromptKey, str] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     template_id = str(family["template_id"])
     seed_event_key = str(family["seed_event_key"])
@@ -475,7 +697,7 @@ def _family_rows(
             false_memory_count = sum(
                 int(value in model_prompt) for value in probe_truth.forbidden_facts
             )
-            captured[session_number][condition] = {
+            row = {
                 "schema_version": "mnemo-lifecycle-token-break-even-row/1.0",
                 "condition": condition,
                 "scenario_family": template_id,
@@ -517,6 +739,9 @@ def _family_rows(
                 },
                 "stored_payload_fields": (),
             }
+            captured[session_number][condition] = row
+            if primary_prompt_sink is not None and condition in {"FH", "MR"}:
+                primary_prompt_sink[(template_id, condition, session_number, 1)] = model_prompt
 
     return tuple(
         cast(dict[str, Any], captured[horizon][condition])
@@ -532,6 +757,7 @@ def build_offline_rows(
     prompt_marker: str = "",
     response_marker: str = "",
     reasoning_marker: str = "",
+    _primary_prompt_sink: dict[LivePromptKey, str] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Construct paired rows using real hooks and zero model calls."""
 
@@ -563,9 +789,35 @@ def build_offline_rows(
                 value,
                 scenario,
                 prompt_marker=prompt_marker,
+                primary_prompt_sink=_primary_prompt_sink,
             )
         )
     return tuple(rows)
+
+
+def _build_live_material(
+    repository_root: Path,
+    work_directory: Path,
+) -> tuple[tuple[dict[str, Any], ...], dict[LivePromptKey, str]]:
+    prompts: dict[LivePromptKey, str] = {}
+    rows = build_offline_rows(
+        repository_root,
+        work_directory,
+        _primary_prompt_sink=prompts,
+    )
+    expected = {
+        (
+            str(row["scenario_family"]),
+            str(row["condition"]),
+            int(row["horizon"]),
+            int(row.get("attempt", 1)),
+        )
+        for row in rows
+        if row.get("condition") in {"FH", "MR"}
+    }
+    if len(rows) != 72 or len(expected) != _LIVE_PRIMARY_CALL_LIMIT or set(prompts) != expected:
+        raise LifecycleTokenBreakEvenError("live evaluation material is incomplete")
+    return rows, prompts
 
 
 def _run_configuration(repository_root: Path, run_id: str) -> dict[str, object]:
@@ -581,6 +833,34 @@ def _run_configuration(repository_root: Path, run_id: str) -> dict[str, object]:
         "tokenizer_id": _TOKEN_COUNTER.tokenizer_id,
         "model_calls_authorized": False,
         "model_calls_made": 0,
+    }
+
+
+def _live_run_configuration(
+    repository_root: Path,
+    run_id: str,
+    model: dict[str, Any],
+) -> dict[str, object]:
+    return {
+        "schema_version": "mnemo-lifecycle-token-break-even-config/1.0",
+        "evaluation_mode": "live_token_calibration",
+        "run_id": run_id,
+        "fixture": _FIXTURE.as_posix(),
+        "fixture_sha256": _sha256_file(repository_root / _FIXTURE),
+        "source_corpus": _SOURCE_CORPUS.as_posix(),
+        "source_corpus_sha256": _sha256_file(repository_root / _SOURCE_CORPUS),
+        "runner_sha256": _sha256_file(Path(__file__).resolve()),
+        "tokenizer_id": _TOKEN_COUNTER.tokenizer_id,
+        "model_calls_authorized": True,
+        "model": str(model["model"]),
+        "model_digest": str(model["model_digest"]),
+        "context_window": int(model["context_window"]),
+        "thinking": False,
+        "temperature": 0,
+        "maximum_generated_tokens": _OLLAMA_MAXIMUM_GENERATED_TOKENS,
+        "maximum_primary_calls": _LIVE_PRIMARY_CALL_LIMIT,
+        "maximum_preflight_calls": _LIVE_PREFLIGHT_CALL_LIMIT,
+        "wall_clock_limit_seconds": _LIVE_WALL_CLOCK_SECONDS,
     }
 
 
@@ -626,6 +906,147 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, int, int]:
         int(row["horizon"]),
         int(row["attempt"]),
     )
+
+
+def _provider_key(row: dict[str, Any]) -> LivePromptKey:
+    return (
+        str(row["scenario_family"]),
+        str(row["condition"]),
+        int(row["horizon"]),
+        int(row.get("attempt", 1)),
+    )
+
+
+def _provider_journal_states(path: Path) -> dict[tuple[object, ...], dict[str, Any]]:
+    states: dict[tuple[object, ...], dict[str, Any]] = {}
+    for row in _read_rows(path):
+        key = row.get("key")
+        if not isinstance(key, list) or not key:
+            raise LifecycleTokenBreakEvenError("provider call journal is invalid")
+        normalized = tuple(key)
+        status = row.get("status")
+        if status not in {"started", "included", "failed"}:
+            raise LifecycleTokenBreakEvenError("provider call journal status is invalid")
+        previous = states.get(normalized)
+        if previous is not None and previous.get("status") in {"included", "failed"}:
+            raise LifecycleTokenBreakEvenError("provider call journal contains a terminal replay")
+        states[normalized] = row
+    return states
+
+
+def _safe_provider_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "provider",
+        "model",
+        "model_digest",
+        "model_size_bytes",
+        "parameter_size",
+        "quantization",
+        "context_window",
+        "thinking",
+        "temperature",
+        "maximum_generated_tokens",
+        "prompt_eval_count",
+        "eval_count",
+        "request_latency_ns",
+        "provider_total_duration_ns",
+    }
+    metadata = {key: value[key] for key in sorted(allowed) if key in value}
+    required = {
+        "provider",
+        "model",
+        "model_digest",
+        "context_window",
+        "thinking",
+        "temperature",
+        "maximum_generated_tokens",
+        "prompt_eval_count",
+        "eval_count",
+        "provider_total_duration_ns",
+    }
+    if not required <= set(metadata):
+        raise LifecycleTokenBreakEvenError("provider metadata is incomplete")
+    return metadata
+
+
+def _journal_provider_call(
+    journal_path: Path,
+    failure_path: Path,
+    *,
+    key: tuple[object, ...],
+    prompt: str,
+    request_json: OllamaRequest,
+    model: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    _append_row(
+        journal_path,
+        {
+            "schema_version": "mnemo-lifecycle-provider-call/1.0",
+            "key": key,
+            "status": "started",
+        },
+    )
+    try:
+        metadata = _safe_provider_metadata(
+            _generate_with_ollama(
+                prompt,
+                request_json=request_json,
+                model=model,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+    except Exception as error:
+        _append_row(
+            journal_path,
+            {
+                "schema_version": "mnemo-lifecycle-provider-call/1.0",
+                "key": key,
+                "status": "failed",
+                "error_code": "OLLAMA_GENERATION_FAILED",
+                "error_type": type(error).__name__,
+            },
+        )
+        _append_row(
+            failure_path,
+            {
+                "schema_version": "mnemo-lifecycle-token-break-even-failure/1.0",
+                "error_code": "OLLAMA_GENERATION_FAILED",
+                "error_type": type(error).__name__,
+                "provider_key": key,
+            },
+        )
+        raise LifecycleTokenBreakEvenError("live provider call failed") from None
+    _append_row(
+        journal_path,
+        {
+            "schema_version": "mnemo-lifecycle-provider-call/1.0",
+            "key": key,
+            "status": "included",
+            "provider": metadata,
+        },
+    )
+    return metadata
+
+
+def _terminal_provider_metadata(
+    state: dict[str, Any] | None,
+    *,
+    key_label: str,
+) -> dict[str, Any] | None:
+    if state is None:
+        return None
+    status = state.get("status")
+    if status == "included":
+        provider = state.get("provider")
+        if not isinstance(provider, dict):
+            raise LifecycleTokenBreakEvenError("included provider call metadata is invalid")
+        return _safe_provider_metadata(cast(dict[str, Any], provider))
+    if status == "started":
+        raise LifecycleTokenBreakEvenError(
+            f"{key_label} provider call is orphaned; refusing replay"
+        )
+    raise LifecycleTokenBreakEvenError(f"{key_label} provider call previously failed")
 
 
 def _nonnegative_number(value: object, label: str) -> float:
@@ -1072,13 +1493,25 @@ def _aggregate(rows: tuple[dict[str, Any], ...]) -> dict[str, object]:
 
 
 def _write_manifest(repository_root: Path, run_directory: Path) -> None:
-    artifact_names = (
+    artifact_names = [
         "aggregate.json",
         "evaluation-config.json",
         "failures.jsonl",
         "raw-sessions.jsonl",
         "report.md",
-    )
+    ]
+    journal_path = run_directory / "provider-calls.jsonl"
+    if journal_path.exists():
+        artifact_names.append("provider-calls.jsonl")
+    failed_provider_calls = 0
+    orphaned_provider_calls = 0
+    if journal_path.exists():
+        states = _provider_journal_states(journal_path)
+        primary = {key: value for key, value in states.items() if key != ("preflight",)}
+        failed_provider_calls = sum(value.get("status") == "failed" for value in primary.values())
+        orphaned_provider_calls = sum(
+            value.get("status") == "started" for value in primary.values()
+        )
     manifest = {
         "schema_version": "mnemo-lifecycle-token-break-even-manifest/1.0",
         "artifact_sha256": {name: _sha256_file(run_directory / name) for name in artifact_names},
@@ -1088,8 +1521,8 @@ def _write_manifest(repository_root: Path, run_directory: Path) -> None:
             "scripts/run_lifecycle_token_break_even.py": _sha256_file(Path(__file__).resolve()),
         },
         "excluded_provider_calls": 0,
-        "failed_provider_calls": 0,
-        "orphaned_provider_calls": 0,
+        "failed_provider_calls": failed_provider_calls,
+        "orphaned_provider_calls": orphaned_provider_calls,
     }
     _write_json(run_directory / "reproducibility-manifest.json", manifest)
 
@@ -1170,19 +1603,219 @@ def run_offline_evaluation(
     return run_directory
 
 
+def _remaining_live_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise LifecycleTokenBreakEvenError("live calibration reached the 90-minute wall-clock cap")
+    return min(300.0, remaining)
+
+
+def _validate_completed_live_run(repository_root: Path, run_directory: Path) -> bool:
+    required = (
+        "aggregate.json",
+        "evaluation-config.json",
+        "reproducibility-manifest.json",
+        "report.md",
+    )
+    if any(not (run_directory / name).is_file() for name in required):
+        return False
+    config = _load_object(run_directory / "evaluation-config.json")
+    if (
+        config.get("evaluation_mode") != "live_token_calibration"
+        or config.get("fixture_sha256") != _sha256_file(repository_root / _FIXTURE)
+        or config.get("source_corpus_sha256") != _sha256_file(repository_root / _SOURCE_CORPUS)
+        or config.get("runner_sha256") != _sha256_file(Path(__file__).resolve())
+    ):
+        raise LifecycleTokenBreakEvenError("completed live evaluation inputs changed")
+    manifest = _load_object(run_directory / "reproducibility-manifest.json")
+    artifacts = manifest.get("artifact_sha256")
+    if not isinstance(artifacts, dict):
+        raise LifecycleTokenBreakEvenError("live evaluation manifest is invalid")
+    for name, digest in artifacts.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(digest, str)
+            or not (run_directory / name).is_file()
+            or _sha256_file(run_directory / name) != digest
+        ):
+            raise LifecycleTokenBreakEvenError("completed live evaluation artifact changed")
+    aggregate = _load_object(run_directory / "aggregate.json")
+    accounting = aggregate.get("provider_call_accounting")
+    if accounting != {
+        "expected": _LIVE_PRIMARY_CALL_LIMIT,
+        "included": _LIVE_PRIMARY_CALL_LIMIT,
+        "failed": 0,
+        "orphaned": 0,
+    }:
+        raise LifecycleTokenBreakEvenError("completed live evaluation is incomplete")
+    return True
+
+
+def run_live_evaluation(
+    repository_root: Path,
+    output_directory: Path,
+    *,
+    run_id: str,
+    model_url: str,
+    resume: bool = False,
+    request_json: OllamaRequest | None = None,
+) -> Path:
+    """Run the authorized 36+1 loopback token calibration without persisting payloads."""
+
+    if not _RUN_ID.fullmatch(run_id):
+        raise LifecycleTokenBreakEvenError("run id is invalid")
+    _validated_loopback_url(model_url)
+    repository_root = repository_root.resolve()
+    output_directory = output_directory.resolve()
+    output_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run_directory = output_directory / run_id
+    if run_directory.exists() and not resume:
+        raise LifecycleTokenBreakEvenError("evaluation run already exists")
+    if run_directory.exists() and _validate_completed_live_run(repository_root, run_directory):
+        return run_directory
+
+    deadline = time.monotonic() + _LIVE_WALL_CLOCK_SECONDS
+    transport = request_json if request_json is not None else _ollama_http_request(model_url)
+    model = _installed_ollama_model(
+        transport,
+        timeout_seconds=_remaining_live_timeout(deadline),
+    )
+    configuration = _live_run_configuration(repository_root, run_id, model)
+    if run_directory.exists():
+        existing = _load_object(run_directory / "evaluation-config.json")
+        if existing != configuration:
+            raise LifecycleTokenBreakEvenError("evaluation resume configuration changed")
+    else:
+        try:
+            run_directory.mkdir(mode=0o700)
+        except FileExistsError as error:
+            raise LifecycleTokenBreakEvenError("evaluation run already exists") from error
+        _write_json(run_directory / "evaluation-config.json", configuration)
+        for name in ("raw-sessions.jsonl", "failures.jsonl", "provider-calls.jsonl"):
+            with (run_directory / name).open("x", encoding="utf-8"):
+                pass
+
+    if shutil.disk_usage(repository_root).free <= 0:
+        raise LifecycleTokenBreakEvenError("live calibration has no available disk space")
+    raw_path = run_directory / "raw-sessions.jsonl"
+    failure_path = run_directory / "failures.jsonl"
+    journal_path = run_directory / "provider-calls.jsonl"
+    states = _provider_journal_states(journal_path)
+    preflight_key: tuple[object, ...] = ("preflight",)
+    preflight = _terminal_provider_metadata(states.get(preflight_key), key_label="preflight")
+    if preflight is None:
+        _journal_provider_call(
+            journal_path,
+            failure_path,
+            key=preflight_key,
+            prompt="Reply OK.",
+            request_json=transport,
+            model=model,
+            timeout_seconds=_remaining_live_timeout(deadline),
+        )
+
+    with isolated_evaluation_work_directory() as work_directory:
+        rows, prompts = _build_live_material(repository_root, work_directory)
+    if len(rows) != 72 or len(prompts) != _LIVE_PRIMARY_CALL_LIMIT:
+        raise LifecycleTokenBreakEvenError("live evaluation material is incomplete")
+
+    persisted = _read_rows(raw_path)
+    completed: set[LivePromptKey] = set()
+    for row in persisted:
+        key = _provider_key(row)
+        if key in completed:
+            raise LifecycleTokenBreakEvenError("live evaluation contains a duplicate row")
+        completed.add(key)
+    first_primary_verified = any(row.get("condition") in {"FH", "MR"} for row in persisted)
+    states = _provider_journal_states(journal_path)
+    for row in rows:
+        key = _provider_key(row)
+        if key in completed:
+            continue
+        if row.get("condition") not in {"FH", "MR"}:
+            _append_row(raw_path, {**row, "run_id": run_id})
+            completed.add(key)
+            continue
+        prompt = prompts.get(key)
+        if prompt is None:
+            raise LifecycleTokenBreakEvenError("live provider prompt is unavailable")
+        journal_key: tuple[object, ...] = key
+        metadata = _terminal_provider_metadata(
+            states.get(journal_key),
+            key_label="primary",
+        )
+        if metadata is None:
+            primary_started = sum(len(value) == 4 for value in states)
+            if primary_started >= _LIVE_PRIMARY_CALL_LIMIT:
+                raise LifecycleTokenBreakEvenError("live primary call limit reached")
+            metadata = _journal_provider_call(
+                journal_path,
+                failure_path,
+                key=journal_key,
+                prompt=prompt,
+                request_json=transport,
+                model=model,
+                timeout_seconds=_remaining_live_timeout(deadline),
+            )
+            states = _provider_journal_states(journal_path)
+        enriched = {
+            **row,
+            "run_id": run_id,
+            "measurement_source": "provider_actual",
+            "downstream_prompt_actual_tokens": int(metadata["prompt_eval_count"]),
+            "downstream_output_actual_tokens": int(metadata["eval_count"]),
+            "provider_call_status": "included",
+            "provider": metadata,
+        }
+        _append_row(raw_path, enriched)
+        completed.add(key)
+        if not first_primary_verified:
+            last = _read_rows(raw_path)[-1]
+            if _provider_key(last) != key or last.get("provider_call_status") != "included":
+                raise LifecycleTokenBreakEvenError(
+                    "first live primary call was not durably recorded"
+                )
+            first_primary_verified = True
+
+    persisted = _read_rows(raw_path)
+    if len(persisted) != 72 or len({_provider_key(row) for row in persisted}) != 72:
+        raise LifecycleTokenBreakEvenError("live evaluation row set is incomplete")
+    provider_rows = tuple(row for row in persisted if row.get("condition") in {"FH", "MR"})
+    if len(provider_rows) != _LIVE_PRIMARY_CALL_LIMIT or any(
+        row.get("provider_call_status") != "included" for row in provider_rows
+    ):
+        raise LifecycleTokenBreakEvenError("live provider row set is incomplete")
+    aggregate = _aggregate(persisted)
+    _write_json(run_directory / "aggregate.json", aggregate)
+    _write_text(run_directory / "report.md", render_lifecycle_report(aggregate))
+    _write_manifest(repository_root, run_directory)
+    return run_directory
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id")
     parser.add_argument("--repository-root", type=Path, default=Path.cwd())
     parser.add_argument("--output-directory", type=Path, default=Path("evaluation-results"))
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--live", action="store_true")
+    parser.add_argument("--model-url", default="http://127.0.0.1:11434")
     args = parser.parse_args()
-    run_directory = run_offline_evaluation(
-        args.repository_root,
-        args.output_directory,
-        run_id=args.run_id,
-        resume=args.resume,
-    )
+    if args.live:
+        run_directory = run_live_evaluation(
+            args.repository_root,
+            args.output_directory,
+            run_id=args.run_id,
+            model_url=args.model_url,
+            resume=args.resume,
+        )
+    else:
+        run_directory = run_offline_evaluation(
+            args.repository_root,
+            args.output_directory,
+            run_id=args.run_id,
+            resume=args.resume,
+        )
     print(run_directory)
     return 0
 
