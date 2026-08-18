@@ -5971,3 +5971,22 @@ retain only event keys, hashes, counts, grades, and operation counts. The red te
 because the runner module was absent; all four contract/baseline tests now pass, and Ruff plus strict
 mypy are clean. No Mnemo product code or model path changed. Task 2, the paired real-SQLite Mnemo
 comparison and frozen verdict, is next.
+
+Task 2 adds paired `NM`, `DM`, and real-SQLite `MR` rows plus the frozen analysis/report logic. The
+first red test expected both durable conditions to retain every exact source string. The real Mnemo
+path instead exposed a substantive failing result: all six revised checkpoints exceeded the normal
+compact handoff target, so deterministic compaction shortened exact current facts, evidence text,
+and some next actions. The test was corrected to measure that preregistered outcome rather than
+weakening the grader, lying about token estimates, or changing product compaction.
+
+Across the in-test 18-row comparison, Markdown retains all six exact current facts, evidence
+references, and next actions. Mnemo rejects all six stale competing writes and preserves the winning
+revision, while plain Markdown rejects none; both have zero false memories, cross-project
+disclosures, and model tokens. However, Mnemo fails the frozen exact-fact correctness gate after all
+six compactions. Its full current MCP packet also measures 32,704 conservative tokens versus 3,271
+for Markdown (9.998x); optional history is 24,638 versus 3,386. The frozen verdict is therefore
+`MARKDOWN_PREFERRED` with action `STOP_FEATURE_EXPANSION`, not a Mnemo win. These are deterministic
+test measurements, not yet an immutable validation result or a model-task result. All seven focused
+tests pass; Ruff and strict mypy are clean. Task 3 will run the complete gate and only then produce
+and privacy-check one immutable offline result. No product behavior, model call, dependency,
+migration, Phase 3, deployment, or release changed.
