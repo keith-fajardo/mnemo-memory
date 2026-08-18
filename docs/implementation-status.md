@@ -5941,3 +5941,21 @@ ephemeral PostgreSQL gate passed 26 tests with one opt-in load test skipped. For
 strict typing over 312 source files, schema, dependency/provenance, 165-file architecture, and
 installed-package checks all passed. No dependency, lockfile, schema, stable default, deploy, or
 release sequence changed.
+
+### Disciplined Markdown vs Mnemo proof-or-stop — In progress
+
+The maintainer approved a new evaluation-only issue to compare Mnemo with a strong project-local
+Markdown handoff before any Phase 3 expansion. The frozen `DM` baseline has a compact current
+section, append-only history, evidence references, an untrusted-evidence warning, selective current
+delivery, and deterministic perfect fixture maintenance. It is intentionally an optimistic upper
+bound rather than a weak file baseline. `NM` remains the memory-necessity control and `MR` uses the
+real local Mnemo checkpoint service.
+
+Task 0 preregisters all six original synthetic families, four explicit fact-evolution cases,
+current/history correctness, provenance, scope, conservative token counts, and a two-writer stale
+update probe. The frozen verdict distinguishes `DIFFERENTIATED`, `TRADEOFF`, `PARITY`, and
+`MARKDOWN_PREFERRED`; only the first two demonstrate a mechanical Mnemo advantage, and exceeding
+1.25 times Markdown's current-view tokens is reported as a compactness failure. The first two
+contract tests failed because the fixture and preregistration were absent, then passed after both
+were added. No runner, result, model call, product behavior, dependency, migration, Phase 3,
+deployment, or release change exists yet. Task 1, the offline Markdown baseline, is next.

@@ -1,0 +1,147 @@
+{
+  "schema_version": "mnemo-markdown-handoff-proof/1.0",
+  "fixture_id": "markdown-handoff-proof-v1",
+  "source_corpus": "tests/fixtures/evals/viability-corpus-v1.json",
+  "provenance": {
+    "classification": "original_mnemo_synthetic_comparison",
+    "originality_attestation": "Original Mnemo evaluation schedule referencing existing Mnemo-owned synthetic event keys; no production, personal, secret, or competitor content."
+  },
+  "seed": 20260818,
+  "conditions": [
+    "NM",
+    "DM",
+    "MR"
+  ],
+  "markdown_baseline": {
+    "format": "one project-local Markdown file",
+    "current_view": "selective compact section",
+    "history_view": "append-only section",
+    "maintenance": "deterministic perfect fixture updates",
+    "concurrency": "plain last-writer-wins save without external locking or Git commits"
+  },
+  "scenario_families": [
+    {
+      "template_id": "software-release",
+      "initial_event_keys": [
+        "sw-goal",
+        "sw-constraint",
+        "sw-constraint-ledger",
+        "sw-constraint-scope",
+        "sw-constraint-checks",
+        "sw-goal-2",
+        "sw-old-decision"
+      ],
+      "revised_event_keys": [
+        "sw-failure",
+        "sw-fact",
+        "sw-artifact",
+        "sw-new-decision",
+        "sw-question",
+        "sw-next"
+      ],
+      "current_event_key": "sw-new-decision",
+      "superseded_event_key": "sw-old-decision",
+      "evidence_event_key": "sw-fact",
+      "next_action_event_key": "sw-next"
+    },
+    {
+      "template_id": "incident-handoff",
+      "initial_event_keys": [
+        "inc-goal",
+        "inc-constraint",
+        "inc-agent-claim",
+        "inc-old-decision"
+      ],
+      "revised_event_keys": [
+        "inc-failure",
+        "inc-evidence",
+        "inc-decision",
+        "inc-question",
+        "inc-next"
+      ],
+      "current_event_key": "inc-decision",
+      "superseded_event_key": "inc-old-decision",
+      "evidence_event_key": "inc-evidence",
+      "next_action_event_key": "inc-next"
+    },
+    {
+      "template_id": "customer-case",
+      "initial_event_keys": [
+        "case-goal",
+        "case-constraint",
+        "case-customer",
+        "case-agent"
+      ],
+      "revised_event_keys": [
+        "case-failure",
+        "case-evidence",
+        "case-decision",
+        "case-question",
+        "case-next"
+      ],
+      "current_event_key": "case-decision",
+      "superseded_event_key": null,
+      "evidence_event_key": "case-evidence",
+      "next_action_event_key": "case-next"
+    },
+    {
+      "template_id": "strategy-research",
+      "initial_event_keys": [
+        "rs-goal",
+        "rs-constraint",
+        "rs-old-decision"
+      ],
+      "revised_event_keys": [
+        "rs-failure",
+        "rs-evidence",
+        "rs-uncertain",
+        "rs-decision",
+        "rs-question",
+        "rs-next"
+      ],
+      "current_event_key": "rs-decision",
+      "superseded_event_key": "rs-old-decision",
+      "evidence_event_key": "rs-evidence",
+      "next_action_event_key": "rs-next"
+    },
+    {
+      "template_id": "multi-agent-coordination",
+      "initial_event_keys": [
+        "ma-goal-user",
+        "ma-constraint",
+        "ma-goal-agent"
+      ],
+      "revised_event_keys": [
+        "ma-failure",
+        "ma-evidence",
+        "ma-agent-claim",
+        "ma-decision",
+        "ma-question",
+        "ma-next"
+      ],
+      "current_event_key": "ma-decision",
+      "superseded_event_key": null,
+      "evidence_event_key": "ma-evidence",
+      "next_action_event_key": "ma-next"
+    },
+    {
+      "template_id": "dbt-data-handoff",
+      "initial_event_keys": [
+        "dbt-goal",
+        "dbt-constraint",
+        "dbt-old-decision"
+      ],
+      "revised_event_keys": [
+        "dbt-failure",
+        "dbt-evidence",
+        "dbt-decision",
+        "dbt-question",
+        "dbt-next"
+      ],
+      "current_event_key": "dbt-decision",
+      "superseded_event_key": "dbt-old-decision",
+      "evidence_event_key": "dbt-evidence",
+      "next_action_event_key": "dbt-next"
+    }
+  ]
+}
