@@ -5942,7 +5942,7 @@ strict typing over 312 source files, schema, dependency/provenance, 165-file arc
 installed-package checks all passed. No dependency, lockfile, schema, stable default, deploy, or
 release sequence changed.
 
-### Disciplined Markdown vs Mnemo proof-or-stop — In progress
+### Disciplined Markdown vs Mnemo proof-or-stop — Complete
 
 The maintainer approved a new evaluation-only issue to compare Mnemo with a strong project-local
 Markdown handoff before any Phase 3 expansion. The frozen `DM` baseline has a compact current
@@ -5990,3 +5990,26 @@ test measurements, not yet an immutable validation result or a model-task result
 tests pass; Ruff and strict mypy are clean. Task 3 will run the complete gate and only then produce
 and privacy-check one immutable offline result. No product behavior, model call, dependency,
 migration, Phase 3, deployment, or release changed.
+
+Task 3 is complete. The full repository gate passed before the immutable run: 1,164 tests passed
+with 27 expected environment skips; the ephemeral PostgreSQL gate passed 26 tests with one opt-in
+load test skipped. Formatting, linting, strict typing over 314 source files, schema,
+dependency/provenance, 165-file architecture, and installed-package checks all passed.
+
+Immutable result
+`evaluation-results/markdown-handoff-proof-v1/offline-20260818-markdown-vs-mnemo-001`
+contains 18 paired rows and verdict `MARKDOWN_PREFERRED`. Markdown's summed current working view is
+3,271 conservative tokens versus Mnemo's 32,704 (Mnemo is 9.998x larger); optional history is 3,386
+versus 24,638. Markdown retains every exact current fact, evidence reference, and next action in all
+six optimistic deterministic cases. Mnemo's normal compact handoff path compacts all six revised
+checkpoints and therefore fails the frozen exact-fact gate, but it rejects all six stale writes and
+preserves the winning revisions while Markdown does neither. Both conditions produce zero critical
+false memories and cross-project disclosures; Mnemo makes zero model calls and uses zero model
+tokens.
+
+All three artifact hashes match the manifest, `rows.jsonl` has exactly 18 rows, forbidden payload
+field names are absent, and a read-only scan found zero source event summaries in the four result
+artifacts. The honest action is `STOP_FEATURE_EXPANSION`: do not add Phase 3 to rescue the claim.
+This offline mechanism test does not prove model-generated task correctness or user preference, so
+both remain `NOT_EVALUATED`. No Ollama or other model call, product behavior, dependency, migration,
+stable default, deployment, or release changed.
