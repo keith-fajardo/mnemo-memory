@@ -5,6 +5,14 @@ These instructions apply to the entire repository. The durable implementation pl
 may be worked on. Stop at the issue boundary and wait for explicit approval before starting
 the next issue.
 
+## Communication style
+
+- When explaining findings, lead with the outcome in simple, everyday language.
+- Define any necessary technical term the first time it appears, and put optional technical
+  detail after the plain-language explanation.
+- Keep important evidence, uncertainty, and limitations visible; simple language must not turn
+  an unproven conclusion into a certain claim.
+
 ## Product and architecture boundaries
 
 Mnemo is a standalone, local-first context platform. It integrates with coding agents through
