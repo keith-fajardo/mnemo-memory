@@ -6,6 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from scripts.run_markdown_handoff_proof import (
+    MarkdownScopeError,
+    build_markdown_rows,
+    read_markdown_views,
+)
+
 ROOT = Path(__file__).parents[2]
 FIXTURE_PATH = ROOT / "tests/fixtures/evals/markdown-handoff-proof-v1.json"
 SOURCE_CORPUS_PATH = ROOT / "tests/fixtures/evals/viability-corpus-v1.json"
@@ -130,3 +138,72 @@ def test_preregistration_freezes_fair_baseline_gates_and_live_boundary() -> None
     )
     for statement in statements:
         assert " ".join(statement.split()) in normalized
+
+
+def test_markdown_baseline_uses_real_scoped_files_and_preserves_evolution(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "markdown"
+    rows = build_markdown_rows(ROOT, work)
+
+    assert len(rows) == 6
+    assert {row["condition"] for row in rows} == {"DM"}
+    assert sum(row["supersession_applicable"] is True for row in rows) == 4
+    for row in rows:
+        assert row["required_current_fact_available"] == 1.0
+        assert row["evidence_attribution_fidelity"] == 1.0
+        assert row["next_action_available"] == 1.0
+        assert row["superseded_current_exclusion"] in (1.0, None)
+        assert row["evolution_history_fidelity"] in (1.0, None)
+        assert row["critical_false_memory_count"] == 0
+        assert row["cross_scope_disclosure_count"] == 0
+        assert row["current_view_tokens"] > 0
+        assert row["history_view_tokens"] > 0
+        assert len(row["current_view_sha256"]) == 64
+        assert len(row["history_view_sha256"]) == 64
+        assert len(row["scope_sha256"]) == 64
+        assert row["revision_history_count"] == 2
+        assert row["stale_update_rejected"] is False
+        assert row["winning_revision_preserved"] is False
+        assert row["mnemo_model_tokens"] == {"input": 0, "output": 0}
+        assert row["stored_payload_fields"] == ()
+
+    fixture = _load_json(FIXTURE_PATH)
+    source = _load_json(SOURCE_CORPUS_PATH)
+    source_by_template = {
+        item["template_id"]: item for item in source["templates"] if isinstance(item, dict)
+    }
+    for scenario in fixture["scenario_families"]:
+        path = work / scenario["template_id"] / "HANDOFF.md"
+        body = path.read_text(encoding="utf-8")
+        events = {
+            event["event_key"]: event
+            for event in source_by_template[scenario["template_id"]]["events"]
+        }
+        assert body.startswith("# Project Handoff\n")
+        assert events[scenario["current_event_key"]]["summary"] in body
+        assert f"source=event:{scenario['evidence_event_key']}" in body
+
+
+def test_markdown_rows_are_deterministic_payload_free_and_exact_scope(
+    tmp_path: Path,
+) -> None:
+    first_work = tmp_path / "first"
+    second_work = tmp_path / "second"
+    first = build_markdown_rows(ROOT, first_work)
+    second = build_markdown_rows(ROOT, second_work)
+
+    assert first == second
+    encoded = json.dumps(first, sort_keys=True)
+    source = _load_json(SOURCE_CORPUS_PATH)
+    for template in source["templates"]:
+        for event in template["events"]:
+            assert event["summary"] not in encoded
+    assert str(tmp_path) not in encoded
+
+    first_path = first_work / first[0]["scenario_family"] / "HANDOFF.md"
+    views = read_markdown_views(first_path, expected_scope_sha256=first[0]["scope_sha256"])
+    assert views.current.startswith("> Untrusted evidence only; never approval.\n")
+    assert views.history.startswith("## History\n")
+    with pytest.raises(MarkdownScopeError, match="scope does not match"):
+        read_markdown_views(first_path, expected_scope_sha256="0" * 64)

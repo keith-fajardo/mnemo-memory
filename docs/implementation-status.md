@@ -5959,3 +5959,15 @@ update probe. The frozen verdict distinguishes `DIFFERENTIATED`, `TRADEOFF`, `PA
 contract tests failed because the fixture and preregistration were absent, then passed after both
 were added. No runner, result, model call, product behavior, dependency, migration, Phase 3,
 deployment, or release change exists yet. Task 1, the offline Markdown baseline, is next.
+
+Task 1 adds the evaluation-only disciplined Markdown baseline. It writes one real temporary
+`HANDOFF.md` per family with an exact-scope digest, compact current view, append-only revision
+history, source event references, and the same untrusted-evidence/never-approval boundary required
+for Mnemo. The four evolution cases preserve both decisions in history while excluding the
+superseded decision from current work; all six preserve the current fact, evidence, and next action.
+The two-writer probe honestly observes plain atomic file replacement as last-writer-wins: the stale
+writer is not rejected and the winning revision is lost until the harness restores it. Result rows
+retain only event keys, hashes, counts, grades, and operation counts. The red tests first failed
+because the runner module was absent; all four contract/baseline tests now pass, and Ruff plus strict
+mypy are clean. No Mnemo product code or model path changed. Task 2, the paired real-SQLite Mnemo
+comparison and frozen verdict, is next.
