@@ -18,6 +18,7 @@ from scripts.run_markdown_handoff_proof import (
     decide_markdown_handoff_verdict,
     read_markdown_views,
     render_markdown_handoff_report,
+    run_offline_evaluation,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -347,3 +348,47 @@ def test_rows_analysis_and_report_are_payload_free(
     assert str(ROOT) not in encoded
     assert "model-generated task correctness: NOT_EVALUATED" in report
     assert "This is an offline mechanical result" in report
+
+
+def test_offline_result_is_exclusive_hashed_deterministic_and_payload_free(
+    tmp_path: Path,
+) -> None:
+    first_result = tmp_path / "result-one"
+    second_result = tmp_path / "result-two"
+    first = run_offline_evaluation(ROOT, first_result, tmp_path / "work-one")
+    second = run_offline_evaluation(ROOT, second_result, tmp_path / "work-two")
+
+    expected_artifacts = {"rows.jsonl", "analysis.json", "report.md"}
+    assert set(first["artifact_sha256"]) == expected_artifacts
+    assert set(first["input_sha256"]) == {
+        "docs/evaluations/markdown-handoff-proof-preregistration.md",
+        "scripts/run_markdown_handoff_proof.py",
+        "tests/fixtures/evals/markdown-handoff-proof-v1.json",
+        "tests/fixtures/evals/viability-corpus-v1.json",
+    }
+    assert first["verdict"] == "MARKDOWN_PREFERRED"
+    assert first["model_calls"] == 0
+    assert first["stored_payload_fields"] == []
+    assert (first_result / "manifest.json").is_file()
+    for name, digest in first["artifact_sha256"].items():
+        assert _sha256_file(first_result / name) == digest
+        assert (first_result / name).read_bytes() == (second_result / name).read_bytes()
+        assert second["artifact_sha256"][name] == digest
+
+    stored = "\n".join(path.read_text(encoding="utf-8") for path in sorted(first_result.iterdir()))
+    source = _load_json(SOURCE_CORPUS_PATH)
+    for template in source["templates"]:
+        for event in template["events"]:
+            assert event["summary"] not in stored
+    assert str(ROOT) not in stored
+    assert str(tmp_path) not in stored
+    assert "prompt" not in json.loads((first_result / "manifest.json").read_text())["fields"]
+
+    with pytest.raises(FileExistsError):
+        run_offline_evaluation(ROOT, first_result, tmp_path / "work-three")
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -783,3 +784,89 @@ def render_markdown_handoff_report(analysis: dict[str, Any]) -> str:
         "- Mnemo model tokens: 0 input, 0 output\n"
         "- model-generated task correctness: NOT_EVALUATED\n"
     )
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_text(path: Path, value: str) -> None:
+    path.write_text(value, encoding="utf-8")
+
+
+def run_offline_evaluation(
+    repository_root: Path, result_directory: Path, work_directory: Path
+) -> dict[str, Any]:
+    """Create one exclusive payload-free offline result directory."""
+
+    root = repository_root.resolve()
+    result = result_directory.resolve()
+    work = work_directory.resolve()
+    if result == work or result in work.parents or work in result.parents:
+        raise ValueError("result and temporary work directories must be separate")
+    result.mkdir(parents=True, exist_ok=False)
+    rows = build_offline_rows(root, work)
+    analysis = analyze_markdown_handoff_rows(rows)
+    report = render_markdown_handoff_report(analysis)
+
+    rows_text = "".join(
+        f"{json.dumps(row, sort_keys=True, separators=(',', ':'))}\n" for row in rows
+    )
+    analysis_text = f"{json.dumps(analysis, sort_keys=True, indent=2)}\n"
+    artifacts = {
+        "rows.jsonl": rows_text,
+        "analysis.json": analysis_text,
+        "report.md": report,
+    }
+    for name, body in artifacts.items():
+        _write_text(result / name, body)
+
+    input_paths = (
+        "docs/evaluations/markdown-handoff-proof-preregistration.md",
+        "scripts/run_markdown_handoff_proof.py",
+        "tests/fixtures/evals/markdown-handoff-proof-v1.json",
+        "tests/fixtures/evals/viability-corpus-v1.json",
+    )
+    manifest: dict[str, Any] = {
+        "schema_version": "mnemo-markdown-handoff-proof-manifest/1.0",
+        "run_id": result.name,
+        "verdict": analysis["verdict"],
+        "row_count": len(rows),
+        "conditions": ["NM", "DM", "MR"],
+        "model_calls": 0,
+        "mnemo_model_tokens": {"input": 0, "output": 0},
+        "stored_payload_fields": [],
+        "fields": [
+            "fixture event keys",
+            "normalized view hashes",
+            "numeric grades",
+            "token counts",
+            "operation counts",
+            "verdict",
+        ],
+        "artifact_sha256": {name: _sha256_file(result / name) for name in artifacts},
+        "input_sha256": {name: _sha256_file(root / name) for name in input_paths},
+    }
+    _write_text(result / "manifest.json", f"{json.dumps(manifest, sort_keys=True, indent=2)}\n")
+    return manifest
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the offline disciplined-Markdown versus Mnemo comparison."
+    )
+    parser.add_argument("--repository-root", type=Path, default=Path.cwd())
+    parser.add_argument("--result-dir", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path, required=True)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    manifest = run_offline_evaluation(args.repository_root, args.result_dir, args.work_dir)
+    print(json.dumps(manifest, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
