@@ -5793,7 +5793,7 @@ PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, l
 typing, schema, dependency/provenance, 165-file architecture, and installed-package checks all
 passed. No dependency, lockfile, schema, production renderer, deploy, or release sequence changed.
 
-### Lifecycle token break-even — Complete offline; live calibration awaits separate approval
+### Lifecycle token break-even — Complete offline and sampled live calibration
 
 The maintainer approved the reviewed lifecycle-aware token-saving issue. Task 0 preregisters the
 FH, RS, NM, and real-hook MR conditions before implementation, references all six existing original
@@ -5898,3 +5898,46 @@ skipped. Formatting, linting, strict typing, schema, dependency/provenance, 165-
 and installed-package checks all passed. No dependency, lockfile, schema, stable default, deploy, or
 release sequence changed. This issue stops at the approved offline boundary; a live `qwen3:14b`
 calibration remains a separately authorized follow-up rather than part of the completed claim.
+
+The maintainer subsequently authorized the preregistered sampled live calibration. Commit `05ff455`
+adds a loopback-only Ollama adapter with exact `qwen3:14b` identity and digest checks, non-thinking
+temperature-zero requests, a 40,960-token context window, an eight-output-token cap, a 90-minute
+wall-clock cap, and append-before-call journaling that refuses to replay an orphaned or failed
+provider call. Prompts, responses, reasoning, and rendered memory remain transient. The two new live
+tests failed first because the adapter was absent, then the complete 13-test lifecycle suite passed
+in 148.14 seconds before calibration.
+
+Immutable run `live-20260818-qwen3-14b-lifecycle-token-001` used installed Qwen3-14B Q4_K_M digest
+`bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8`. Its one preflight and all 36
+primary calls completed: the raw file has 72 rows, the provider journal has 74 start/terminal
+records, and the failure file is empty. All six artifact hashes verify. A read-only scan found zero
+source task-prompt, source event-summary, rendered-context, response, or reasoning matches and zero
+stored prompt/response/reasoning keys. Provider-call accounting is 36 expected, 36 included, zero
+failed, and zero orphaned; Mnemo model tokens remain zero.
+
+The sampled provider totals across six families were FH 2,411 versus MR 17,742 at horizon 1
+(-635.88% total-token savings), FH 18,713 versus MR 17,742 at horizon 10 (5.19%), and FH 52,913
+versus MR 18,889 at horizon 30 (64.30%). Every individual horizon-30 family saved approximately
+62.9% to 65.3% input tokens. These are actual counts for one sampled prompt per frozen horizon, not
+cumulative counts for every lifecycle call. The separate conservative cumulative estimates remain
+-452.55%, -21.23%, and 53.41%, with estimated break-even at horizon 30.
+
+The immutable run's original aggregate incorrectly promoted sampled horizon counts to the
+preregistered cumulative-lifecycle `PASS`. That verdict is rejected while the raw measurements and
+their hashes remain valid and unchanged. A red regression captured the defect; commit `4adc521`
+adds an explicit `actual_measurement_scope`, requires cumulative provider coverage for final `PASS`,
+and labels sampled provider counts separately. Corrected read-only analysis of all 72 immutable rows
+is `PROVISIONAL`: sampled provider counts are complete, cumulative provider counts are not, the
+estimated cumulative savings/fidelity/safety gates pass, and model-generated task quality remains
+`NOT EVALUATED`. All 13 lifecycle tests pass after the correction in 149.19 seconds, with Ruff and
+strict mypy clean.
+
+The first complete-gate attempt exposed one unrelated date-boundary defect in
+`test_checkpoint_save_telemetry.py`: its fixed August 11 `NOW` expired under the store's real
+seven-day retention clock on August 18. No product behavior failed. Commit `68f1b76` anchors that
+test to its actual start time; its three narrow tests plus formatting, linting, and strict typing
+pass. The clean complete gate then passed 1,156 tests with 27 expected environment skips; the
+ephemeral PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting,
+strict typing over 312 source files, schema, dependency/provenance, 165-file architecture, and
+installed-package checks all passed. No dependency, lockfile, schema, stable default, deploy, or
+release sequence changed.
