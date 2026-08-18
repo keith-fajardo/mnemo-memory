@@ -15,7 +15,7 @@ from mnemo_memory.packages.telemetry import (
     LocalCheckpointSaveTelemetryStore,
 )
 
-NOW = datetime(2026, 8, 11, 3, 0, tzinfo=UTC)
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 def scope(task: str = "55555555-5555-4555-8555-555555555555") -> AutomaticRouteScope:
