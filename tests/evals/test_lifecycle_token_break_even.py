@@ -474,7 +474,7 @@ def test_live_run_is_private_bounded_append_only_and_resumable(
             family,
             condition,
             horizon,
-            100,
+            {"FH": 1_000, "RS": 750, "NM": 100, "MR": 500}[condition],
             0,
             actual=False,
             available=(
@@ -532,7 +532,11 @@ def test_live_run_is_private_bounded_append_only_and_resumable(
     assert "PRIVATE-LIVE-MR" not in artifact_text
     assert "PRIVATE-LIVE-RESPONSE" not in artifact_text
     assert "PRIVATE-LIVE-REASONING" not in artifact_text
-    assert _load_json(run_directory / "aggregate.json")["verdict"] == "PASS"
+    aggregate = _load_json(run_directory / "aggregate.json")
+    assert aggregate["verdict"] == "PROVISIONAL"
+    assert aggregate["provider_token_counts_complete"] is True
+    assert aggregate["cumulative_provider_token_counts_complete"] is False
+    assert aggregate["actual"]["measurement_scope"] == "sampled_prompt"
     assert _load_json(run_directory / "aggregate.json")["provider_call_accounting"] == {
         "expected": 36,
         "included": 36,
@@ -611,6 +615,7 @@ def _metric_row(
         row["downstream_prompt_actual_tokens"] = input_tokens
         row["downstream_output_actual_tokens"] = output_tokens
         row["provider_call_status"] = "included"
+        row["actual_measurement_scope"] = "cumulative_lifecycle"
     return row
 
 
@@ -692,6 +697,22 @@ def test_lifecycle_verdict_requires_valid_memory_and_complete_actual_counts() ->
     assert passed["verdict"] == "PASS"
     assert passed["task_quality"] == "NOT EVALUATED"
 
+    sampled = tuple(
+        {
+            **row,
+            **(
+                {"actual_measurement_scope": "sampled_prompt"}
+                if row["condition"] in {"FH", "MR"}
+                else {}
+            ),
+        }
+        for row in live
+    )
+    sampled_result = decide_lifecycle_verdict(sampled)
+    assert sampled_result["verdict"] == "PROVISIONAL"
+    assert sampled_result["provider_token_counts_complete"] is True
+    assert sampled_result["cumulative_provider_token_counts_complete"] is False
+
     leaked = [dict(row) for row in live]
     leaked[0]["memory_necessity_valid"] = False
     assert decide_lifecycle_verdict(tuple(leaked))["verdict"] == "INVALID"
@@ -718,5 +739,6 @@ def test_lifecycle_report_labels_evidence_without_significance_claims() -> None:
     assert "Downstream actual provider tokens" in report
     assert "Mnemo model tokens" in report
     assert "Model-generated task quality" in report
+    assert "Actual provider measurement scope" in report
     assert "descriptive sensitivity" in report
     assert "significant" not in report.casefold()

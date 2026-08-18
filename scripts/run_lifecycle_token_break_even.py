@@ -1203,8 +1203,19 @@ def _token_source_analysis(rows: tuple[dict[str, Any], ...], source: str) -> dic
             "paired_lifecycle_tes": total_savings,
         }
     long_horizon = by_horizon.get(str(max(horizons))) if horizons else None
+    measurement_scope = "cumulative_lifecycle_estimate"
+    if source == "actual":
+        scopes = {
+            str(row.get("actual_measurement_scope", "unspecified"))
+            for row in rows
+            if row.get("condition") in {"FH", "MR"} and "downstream_prompt_actual_tokens" in row
+        }
+        measurement_scope = (
+            next(iter(scopes)) if len(scopes) == 1 else ("not_evaluated" if not scopes else "mixed")
+        )
     return {
         "measurement_source": source,
+        "measurement_scope": measurement_scope,
         "by_horizon": by_horizon,
         "observed_break_even_horizon": break_even,
         "long_horizon": long_horizon,
@@ -1306,12 +1317,14 @@ def decide_lifecycle_verdict(
             "verdict": "NOT EVALUATED",
             "task_quality": "NOT EVALUATED",
             "provider_token_counts_complete": False,
+            "cumulative_provider_token_counts_complete": False,
         }
     if any(row.get("memory_necessity_valid") is not True for row in rows):
         return {
             "verdict": "INVALID",
             "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
             "provider_token_counts_complete": False,
+            "cumulative_provider_token_counts_complete": False,
         }
     control_complete, control_valid = _availability_control_valid(rows)
     if control_complete and not control_valid:
@@ -1319,12 +1332,14 @@ def decide_lifecycle_verdict(
             "verdict": "INVALID",
             "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
             "provider_token_counts_complete": False,
+            "cumulative_provider_token_counts_complete": False,
         }
     if not control_complete:
         return {
             "verdict": "NOT EVALUATED",
             "task_quality": "NOT EVALUATED" if task_quality is None else "EVALUATED",
             "provider_token_counts_complete": False,
+            "cumulative_provider_token_counts_complete": False,
         }
 
     scored_memory = tuple(
@@ -1361,7 +1376,10 @@ def decide_lifecycle_verdict(
         and "downstream_output_actual_tokens" in row
         for row in provider_rows
     )
-    source = "actual" if provider_complete else "estimated"
+    cumulative_provider_complete = provider_complete and all(
+        row.get("actual_measurement_scope") == "cumulative_lifecycle" for row in provider_rows
+    )
+    source = "actual" if cumulative_provider_complete else "estimated"
     token_analysis = _token_source_analysis(rows, source)
     long_horizon = cast(dict[str, object] | None, token_analysis["long_horizon"])
     savings = None if long_horizon is None else long_horizon.get("total_model_token_savings")
@@ -1369,13 +1387,14 @@ def decide_lifecycle_verdict(
     gates_pass = fidelity_gate and safety_gate and quality_gate and savings_gate
     verdict = (
         ("PASS" if gates_pass else "FAIL")
-        if provider_complete
+        if cumulative_provider_complete
         else ("PROVISIONAL" if gates_pass else "FAIL")
     )
     return {
         "verdict": verdict,
         "task_quality": quality_status,
         "provider_token_counts_complete": provider_complete,
+        "cumulative_provider_token_counts_complete": cumulative_provider_complete,
         "savings_gate": savings_gate,
         "fidelity_gate": fidelity_gate,
         "safety_gate": safety_gate,
@@ -1473,6 +1492,7 @@ def render_lifecycle_report(analysis: dict[str, object]) -> str:
         f"| Downstream estimated model tokens | {_canonical_json(estimated_long)} |\n"
         f"| Downstream actual provider tokens | "
         f"{'NOT EVALUATED' if actual_long is None else _canonical_json(actual_long)} |\n"
+        f"| Actual provider measurement scope | {actual['measurement_scope']} |\n"
         f"| Mnemo model tokens | {_canonical_json(analysis['mnemo_model_tokens'])} |\n"
         f"| Local deterministic work | {_canonical_json(analysis['local_deterministic_work'])} |\n"
         f"| Provider call accounting | {_canonical_json(analysis['provider_call_accounting'])} |\n"
@@ -1762,6 +1782,7 @@ def run_live_evaluation(
             **row,
             "run_id": run_id,
             "measurement_source": "provider_actual",
+            "actual_measurement_scope": "sampled_prompt",
             "downstream_prompt_actual_tokens": int(metadata["prompt_eval_count"]),
             "downstream_output_actual_tokens": int(metadata["eval_count"]),
             "provider_call_status": "included",
