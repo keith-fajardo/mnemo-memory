@@ -27,7 +27,9 @@ _FIELDS = {
     "context_structural_tokens",
     "context_total_tokens",
     "episodic_retention_days",
+    "experimental_local_first_takeover_enabled",
     "experimental_semantic_memory_enabled",
+    "local_first_takeover_live_calls_authorized",
     "model_id",
     "model_provider",
     "optional_model_enabled",
@@ -45,6 +47,8 @@ class PersonalSettings:
     approved_event_capture_enabled: bool = True
     experimental_semantic_memory_enabled: bool = False
     optional_model_enabled: bool = False
+    experimental_local_first_takeover_enabled: bool = False
+    local_first_takeover_live_calls_authorized: bool = False
     model_provider: str | None = None
     model_id: str | None = None
     episodic_retention_days: int = 180
@@ -62,6 +66,8 @@ class PersonalSettings:
             "approved_event_capture_enabled",
             "experimental_semantic_memory_enabled",
             "optional_model_enabled",
+            "experimental_local_first_takeover_enabled",
+            "local_first_takeover_live_calls_authorized",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise PersonalSettingsError(f"{name} must be a boolean")
@@ -105,19 +111,28 @@ class PersonalSettings:
             "context_structural_tokens": self.context_structural_tokens,
             "context_total_tokens": self.context_total_tokens,
             "episodic_retention_days": self.episodic_retention_days,
+            "experimental_local_first_takeover_enabled": self.experimental_local_first_takeover_enabled,
             "experimental_semantic_memory_enabled": self.experimental_semantic_memory_enabled,
+            "local_first_takeover_live_calls_authorized": self.local_first_takeover_live_calls_authorized,
             "model_id": self.model_id,
             "model_provider": self.model_provider,
             "optional_model_enabled": self.optional_model_enabled,
             "repository_knowledge_sync_enabled": self.repository_knowledge_sync_enabled,
         }
 
+    _MIGRATED_DEFAULTS = {
+        "experimental_semantic_memory_enabled": False,
+        "experimental_local_first_takeover_enabled": False,
+        "local_first_takeover_live_calls_authorized": False,
+    }
+
     @classmethod
     def from_dict(cls, value: object) -> Self:
         if not isinstance(value, dict):
             raise PersonalSettingsError("personal settings fields are invalid")
-        if set(value) == _FIELDS - {"experimental_semantic_memory_enabled"}:
-            value = {**value, "experimental_semantic_memory_enabled": False}
+        missing = _FIELDS - set(value)
+        if missing and missing <= set(cls._MIGRATED_DEFAULTS):
+            value = {**{k: cls._MIGRATED_DEFAULTS[k] for k in missing}, **value}
         if set(value) != _FIELDS:
             raise PersonalSettingsError("personal settings fields are invalid")
         try:

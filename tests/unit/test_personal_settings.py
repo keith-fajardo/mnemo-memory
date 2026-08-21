@@ -39,7 +39,9 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
         "context_structural_tokens",
         "context_total_tokens",
         "episodic_retention_days",
+        "experimental_local_first_takeover_enabled",
         "experimental_semantic_memory_enabled",
+        "local_first_takeover_live_calls_authorized",
         "model_id",
         "model_provider",
         "optional_model_enabled",
@@ -189,3 +191,18 @@ def test_automatic_repository_knowledge_sync_honors_personal_consent(tmp_path: P
     store.save(PersonalSettings(repository_knowledge_sync_enabled=True))
     cli_main._refresh_project_knowledge(data, binding)
     assert len(repository.list_active_documents(binding.scope)) == 1
+
+
+def test_takeover_flags_default_false() -> None:
+    s = PersonalSettings()
+    assert s.experimental_local_first_takeover_enabled is False
+    assert s.local_first_takeover_live_calls_authorized is False
+
+
+def test_from_dict_migrates_missing_takeover_flags() -> None:
+    d = PersonalSettings().to_dict()
+    d.pop("experimental_local_first_takeover_enabled")
+    d.pop("local_first_takeover_live_calls_authorized")
+    migrated = PersonalSettings.from_dict(d)
+    assert migrated.experimental_local_first_takeover_enabled is False
+    assert migrated.local_first_takeover_live_calls_authorized is False
