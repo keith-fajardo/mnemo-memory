@@ -1554,6 +1554,168 @@ checkpoint projections in external exports or backups, and powered small-model f
 evaluation remain incomplete. The experimental path is not a production default and the compact
 format is not production-validated until the documented live gates pass.
 
+### Subscription-backed Codex CLI evaluation escape or misaccounting
+
+**Scenario:** An evaluation prompt, plan, or frontier output causes Codex CLI to invoke a shell,
+MCP, web, or filesystem tool; inherited user configuration exposes an external service; an API key
+is used instead of the intended ChatGPT subscription; untrusted model confidence or prose selects
+its own route; plan text, raw JSONL, or diagnostics persist sensitive content; or cached and
+reasoning token breakdowns are double-counted as additional usage.
+
+**Required controls:** The v3 adapter is limited to the frozen synthetic shadow corpus and is not a
+production model route. It requires explicit per-run live authorization, a pinned CLI version and
+model, exactly one `Logged in using ChatGPT` status line across bounded standard output and standard
+error, and an environment with no non-empty OpenAI or Codex API-key variable. Missing, conflicting,
+or non-subscription status fails closed; unrelated CLI warnings are ignored and remain transient. It
+invokes fixed argument tuples without a shell, uses a fresh system-temporary working directory,
+ignores user configuration and repository rules, applies a read-only sandbox, passes the prompt
+through standard input, and forwards only a bounded operational environment allowlist. Output must
+match the purpose-specific JSON Schema and a strict JSONL lifecycle. Any unknown event, tool item,
+failed process, malformed or oversized response, identity mismatch, or invalid usage fails closed.
+Call, timeout, response-byte, and cumulative reported-token ceilings are explicit. Prompts,
+responses, reasoning, JSONL, standard error, thread IDs, and authentication state remain transient.
+Cached input and reasoning output are persisted only as non-additive breakdowns of their respective
+total counters. The fixed `cache_write_input_tokens` compatibility field is accepted only when it
+is an actual integer equal to zero and contributes nothing to any recorded counter; boolean,
+string, negative, or nonzero values fail closed. `total_tokens` and unknown fields remain rejected.
+Usage-shape failures may disclose only fixed required-field names, fixed recognized
+additional-field names, an unrecognized-field count, and fixed invalid-counter names. Provider
+values and unrecognized field names remain transient. Subscription mode reports no API-dollar
+estimate.
+
+The v4 hybrid extension remains evaluation-only and accepts exactly three user-selected routing
+strategies: `local_first`, `frontier_plan_first`, and `hybrid`. Before any model call, `hybrid`
+compares only validated, frozen session risk tags with a validated plan-first tag set. Ticket text,
+model output, and model confidence have no routing authority. The plan-first path requires a strict,
+bounded plan schema before local execution, treats the plan as an untrusted proposal, runs the same
+deterministic schema, allowed-value, structured-support, and memory-consistency controls after local
+execution, and requires a frontier review even when those controls pass. It permits no more than one
+local repair and one final review; unresolved work fails closed. Direct frontier takeover is frozen
+off. Plan and critique text remain transient; artifacts may retain only fixed route names, fixed
+risk reason codes, hashes, closed review statuses, deterministic reports, and usage counters.
+
+The v5 savings treatment forces `local_first` for all `SS` sessions. A deterministic pass makes no
+frontier call; a failed gate retains the same one-review, one-repair, final-review bound. Frontier
+planning and takeover are disabled for `SS`. Subscription savings compare only `SS` and `TD`
+frontier input plus output totals; local tokens remain separately visible and cannot inflate that
+primary metric. The one-variant ceiling permits at most nine frontier calls and 180,000 reported
+tokens. The token limit remains cumulative and fail closed, but because usage is provider-reported
+after a response, crossing calls can consume unrecorded subscription capacity. The ceiling is not a
+usage target and does not authorize a larger run.
+
+An unresolved `SS` review cycle cannot be masked by later sessions. The runner first appends the
+bounded rejected-session record so calls, usage, hashes, closed review statuses, and deterministic
+reports remain auditable, then stops the trajectory before updating history, persisting a Mnemo
+checkpoint, or starting another session. The outer run records the condition as unavailable with a
+fixed failure category. It must not score a cumulative final state assembled after that rejection.
+
+The separately authorized 30-variant final run changes only cumulative safety bounds. Fail-closed
+continuation limits `SS` to at most two frontier calls per variant and direct `TD` to three, so the
+global call ceiling is 150. The 3,000,000 reported-token ceiling is above the 2,331,030-token linear
+projection from the completed five-call v5 sample. Counters remain process-local and the supervised
+run remains nonresumable, preventing a restart from resetting a partially consumed allowance. The
+ceiling does not guarantee ChatGPT subscription capacity; account or rate limits may still stop the
+run, and a crossing response may consume unrecorded capacity before it fails closed.
+
+**Verification:** Evaluation tests inject the subprocess transport and cover authorization before
+transport, API-key rejection, CLI-version and ChatGPT-login pinning, exact safety flags and isolated
+working directory, status delivered on standard error after a warning, ambiguous-status rejection,
+environment minimization, standard-input prompting, strict schema placement, tool-event rejection,
+malformed identity/usage and token-breakdown rejection, call and token limits, provider dispatch,
+usage-breakdown capture, zero-only cache-write compatibility, nonzero and invalid cache-write
+rejection, privacy-safe missing/null/type/additional/unknown/negative usage diagnostics, and
+subscription-aware reports. Repository-wide formatting, linting, typing, unit/integration,
+PostgreSQL, schema, dependency, architecture, and installed-package checks must pass without
+executing a Codex model.
+
+The v4 tests additionally cover strict routing configuration, all three user-selected strategies,
+deterministic tag intersection, a bounded plan/review/repair/review sequence, malformed-plan denial
+before local execution, mandatory review on plan-first success, route and reason-code accounting,
+and absence of plan text from persisted session artifacts. The canonical v4 fixture leaves live
+calls unauthorized.
+
+The v5 tests additionally require all three routes to resolve to local-first, a complete
+three-session deterministic pass to use zero frontier calls, and the frontier-token-savings metric
+to remain 100% when local usage is arbitrarily large and frontier usage is zero. A second frontier
+`repair` verdict must retain exactly one rejected session record and stop before session two. Its
+canonical fixture leaves live calls unauthorized and takeover off.
+
+The final-run fixture test requires exactly 30 inherited variants, unchanged models, loop, routing,
+and thresholds, a 150-call ceiling, a 3,000,000-token ceiling, and canonical live authorization off.
+
+The completed final run exposed an analysis-integrity risk when conditions have unequal
+availability. Unavailable trajectories contain no usage totals, although their bounded raw-session
+records retain accepted provider usage. The current condition summaries aggregate only available
+trajectories, and the savings calculation compares those unequal condition populations. Therefore
+`frontier_token_savings_vs_direct`, `total_token_savings_vs_direct`, and `token_gate_pass` are not
+claimable when the complete paired count is below the frozen minimum. Raw-session usage must be
+audited, and any completion-adjusted fallback estimate must be labeled as an inference rather than
+an observed treatment, until a separately approved analyzer correction fails the economic gate
+closed for incomplete populations.
+
+The approved analyzer correction now computes savings only over complete matched variants and
+returns unavailable savings with a false token gate whenever the preregistered paired population is
+incomplete. Condition summaries remain descriptive, but cannot be promoted into an economic gate.
+The v6 evaluation-only takeover route is separately user-enabled and defaults off in every earlier
+fixture. It triggers only after the local proposal fails deterministic parsing, value, remembered
+constraint, or structured-support checks. The runner then makes one direct frontier execution of
+the original task, skips advisor critique and local repair, and subjects the direct result to the
+same deterministic checks. A failed takeover stops the trajectory. Tests require exact call order,
+one-call accounting, no review statuses, continued execution only after verified takeover, and
+fail-closed rejection when the frontier result still conflicts with trusted memory.
+
+The first v6 live engineering run exposed a schema-to-verifier integration risk. The strict direct
+frontier schema requires every configuration property in its `changes` object, but the takeover
+gate currently interprets property presence as a mutation. It consequently rejects unchanged
+later-session fields as unsupported during session one. This behavior is fail closed and caused no
+unsafe acceptance, but it makes the live takeover path unavailable and can waste one frontier call.
+Any correction must derive an effective delta against the current candidate base before structured
+support checks, continue rejecting every unsupported value that actually changes, and add a
+regression using the same full-field response shape required by the provider schema. Partial fake
+responses are insufficient evidence for this boundary.
+
+The correction applies that exact boundary in the evaluation harness: only type-preserving values
+equal to the current candidate base are removed, and the normalized effective changes replace the
+full response changes before verification and checkpoint-content construction. Full-field tests
+require a supported effective change to pass, a remembered-value mismatch to fail, and an
+unsupported effective change to fail. This does not authorize a production model route.
+
+The active router-goal verdict is fail closed and separate from the earlier supervision research
+verdict. It cannot claim success below 30 complete matched variants, when any supervised trajectory
+is unavailable or unsuccessful, when any supervised trajectory contains a critical false memory,
+when matched mean supervised quality is more than 0.02 below direct frontier, or when matched
+frontier-token savings are below 30%. Savings exclude local executor tokens from the primary
+subscription-capacity comparison but continue reporting local usage separately. Tests perturb each
+gate independently so an aggregate average cannot hide an unsuccessful or unsafe router task.
+
+The corrected v6 engineering triplet establishes route viability but not the router goal: one
+supervised trajectory completed after exactly one takeover, with zero critical false memories and
+the same hidden-test score as direct frontier. The analyzer withheld its goal and savings verdicts
+because 29 required pairs were absent. The frozen final-run bounds permit at most 180 frontier
+calls: three possible supervised takeovers and three direct-frontier calls per variant. Its
+3,000,000 reported-token ceiling is about 59.3% above the engineering triplet's 1,883,730-token
+linear projection to 30 variants. Both ceilings remain process-local and post-response; they limit
+but cannot prevent a crossing response from consuming subscription capacity. The canonical fixture
+keeps live authorization off, and the run remains nonresumable.
+
+The immutable final run used all 30 matched variants and reports the router goal as `ACHIEVED`:
+all supervised trajectories succeeded, critical false memories remained zero, supervised and
+direct-frontier mean hidden-test accuracy were both 1.0, and supervised frontier-token usage was
+80.523% lower. The route made 18 takeovers across 90 supervised sessions and no advisor reviews,
+plans, or escalations. Artifact, reconstructed-input, route, failure, and bounded privacy audits
+passed. The older supervision verdict remains `REJECT` because its separate +0.10 local-executor
+improvement threshold was not met; no result may present that research hypothesis as passing.
+These observations remain limited to the frozen synthetic corpus and do not authorize production
+routing or broader prompts.
+
+**Residual risk:** Codex CLI documents that read-only mode requires approval before commands, and
+this adapter does not enable automatic approval. However, the adapter has no separate provider-side
+no-tools switch and observes attempted tool events only after the process returns. A reported-token
+ceiling is also post-response and can be crossed by one call. Therefore this adapter must not receive
+secrets, sensitive repository content, or general user prompts; only the preregistered synthetic
+corpus is in scope. Any broader use requires a separately reviewed pre-execution tool-denial
+mechanism, plus separate authorization and evaluation.
+
 ## Security gates and ownership
 
 Changes affecting a threat above must update its required controls and verification. Security tests

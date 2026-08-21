@@ -5750,7 +5750,7 @@ with one opt-in load test skipped. Formatting, linting, strict typing, schema, d
 release, dependency, lockfile, or schema was touched. Phase 2 is complete; Phase 3 remains outside
 scope and requires a separately approved longer-horizon target.
 
-### Small-model long-horizon Phase 2 capability ladder — In progress
+### Small-model long-horizon Phase 2 capability ladder — Complete
 
 The maintainer explicitly authorized live Ollama accuracy and model-token measurement on the 24 GB
 M4 Air. The hardware substitution uses the already-installed `qwen2.5-coder:7b` weak anchor and
@@ -5792,6 +5792,575 @@ model call. The complete gate passed 1,130 tests with 27 expected environment sk
 PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting, linting, strict
 typing, schema, dependency/provenance, 165-file architecture, and installed-package checks all
 passed. No dependency, lockfile, schema, production renderer, deploy, or release sequence changed.
+
+On 2026-08-18 the maintainer explicitly approved an evaluation-only supervised-executor extension
+to this unfinished capability-ladder issue and selected the Apache-2.0 Ministral 3 8B Instruct
+Q4_K_M Ollama artifact as its local executor. The companion protocol compares direct Ministral,
+frontier-advised Ministral, and direct frontier execution. On the same date, the maintainer approved
+OpenAI `gpt-5.6-sol` at medium reasoning for the frontier role and requested a user-selectable
+secret-free model configuration. Live calls remain unauthorized; no local model stands in for that
+role. The loop is limited to one executor repair and two advisor reviews; deterministic consistency
+checks remain authoritative, and only verified field-name correction markers from the review cycle
+may reach Mnemo. Prompts, response bodies, critique prose, repair plans, and reasoning remain
+transient. No production route, agent endpoint proxy, dependency, model download, live call,
+final-run authority, deployment, or release is included.
+
+The provider-neutral harness and evaluation-only OpenAI Responses adapter are complete. The frozen
+protocol exposes a strict, secret-free `frontier_advisor` configuration for provider, model,
+reasoning effort, source URL, output/call/cost bounds, configured token rates, timeout, and explicit
+live-call authorization. The bundled adapter accepts only `openai`, takes `OPENAI_API_KEY` from the
+environment, sends no tools, requests stateless strict-schema output, enforces configured call and
+cost ceilings, and rejects malformed, refused, incomplete, or wrong-model responses. It also refuses
+resumed supervised runs so process-local spend counters cannot reset. The focused suite passed 34
+tests. The complete repository gate passed 1,179 tests with 27 expected environment skips; the real
+local PostgreSQL gate passed 26 tests with one opt-in load test skipped.
+Formatting, linting, strict typing over 315 source files, schema, dependency/provenance, 165-file
+architecture, and installed-package checks all passed. The dry and final runs remain unexecuted and
+require separate approval; no API credential was read and no external spend occurred.
+
+On 2026-08-19 the maintainer separately authorized one excluded engineering dry run. Immutable run
+`evaluation-results/long-horizon-v1/dry-20260819-ministral8b-gpt56sol-supervised-001`
+completed all three trajectories for one synthetic variant with zero failures and verdict
+`NOT_EVALUATED`, as preregistered for an engineering run below the 30-pair minimum. Direct Ministral
+(`SD`) scored 0.9333 hidden-test accuracy; supervised Ministral (`SS`) and direct GPT-5.6 Sol (`TD`)
+both scored 1.0. All three had end-to-end success, perfect exact-value integrity, and zero critical
+false memories.
+
+The supervised arm made four frontier calls and used 4,539 frontier input plus 993 output tokens;
+direct frontier used three calls and 3,825 input plus 866 output tokens. Supervision therefore used
+17.93% more frontier tokens and 170.11% more total executor-plus-frontier tokens than direct
+frontier on this single variant. Across both frontier conditions, seven calls used 8,364 input and
+1,859 output tokens, a conservative $0.09759 at the configured uncached rates. In the first
+supervised session, the executor's advisor-directed repair worsened one deterministic mismatch to
+four; the second advisor review requested another repair, so the bounded loop escalated and applied
+no changes. Later sessions passed review. No verified correction lesson was created or retrieved.
+
+All six manifest-listed artifact hashes and the corpus and runner hashes matched; analysis
+recomputed byte-for-value from three available trajectories. Nine raw session rows and three
+trajectory rows contained no exact source ticket/evidence text, prompt marker, credential pattern,
+or forbidden prompt/response/reasoning payload key; the failure journal was empty. The temporary
+live-authorized source configuration was removed after inspection while the immutable run artifacts
+retain their executed configuration and provenance. This one synthetic observation suggests the
+safety boundary worked but provides no evidence of token savings. A final run remains unauthorized.
+
+The maintainer then requested optimization of the paid frontier path. A separately preregistered v2
+changes only initial-review invocation: a parse-valid local candidate bypasses GPT-5.6 Sol only when
+it has no invalid values, no deterministic remembered-literal mismatch, and structured support for
+every changed field. Any failed gate still invokes the frontier advisor; after advisor intervention,
+one local repair still requires the existing final frontier review. Unsupported output cannot be
+accepted by an advisor `pass`, v1 keeps its always-review behavior, and no prompt, threshold, model,
+reasoning effort, privacy rule, or acceptance authority changed. The v2 source configuration remains
+`live_calls_authorized: false`; no model endpoint or credential was accessed.
+
+The new focused contracts first failed because the v2 fixture and loader support were absent. The
+implemented suite now passes 21 supervised-loop tests and 40 combined long-horizon tests, including
+a complete three-session supervised trajectory with zero frontier calls when every local change is
+deterministically supported, an invalid-draft repair with both frontier reviews retained, and an
+unsupported-change fail-closed case. Formatting, linting, and strict typing pass for the changed
+files. The restricted-agent aggregate attempt passed formatting, linting, strict typing over 315
+files, and 1,185 tests with 27 expected skips before its sandbox denied the PostgreSQL loopback
+socket. The maintainer then ran the complete aggregate gate in an unrestricted terminal. The
+ephemeral PostgreSQL gate passed 26 tests with its one opt-in load test skipped; context-packet
+schema validation, all 101 dependency/provenance entries, the 165-file architecture boundary, and
+installed personal-workflow verification all passed. The gated-v2 implementation is complete. No
+dependency, lockfile, schema, production route, model call, deploy, or release changed, and no paid
+v2 dry run is authorized.
+
+On 2026-08-19 the maintainer approved an evaluation-only Codex CLI adapter so the frontier advisor
+can use an existing ChatGPT subscription instead of an API key. The separately frozen v3 protocol
+keeps v2's models, deterministic gate, loop, prompts, scoring, and thresholds, but pins
+`codex-cli 0.147.0`, `gpt-5.6-sol`, medium reasoning, and an exact ChatGPT-login status. It removes
+API price and cost ceilings, adds call, response-byte, timeout, and cumulative reported-token
+ceilings, and labels dollar cost not applicable rather than treating subscription usage as API
+spend. Cached input and reasoning output are recorded as non-additive breakdowns of the input and
+output totals.
+
+The adapter fails before model execution without explicit live authorization, with an API-key
+environment, with a wrong CLI version, or without ChatGPT subscription authentication. Each future
+call would use an ephemeral system-temporary directory, sanitized environment, ignored user config
+and repository rules, read-only sandbox, standard-input prompt, strict output schema, and JSONL
+validation that rejects any tool event. The 28 focused adapter/supervision tests and 47 combined
+long-horizon tests pass with formatting, linting, and strict typing. Tests use an injected subprocess
+transport; only local CLI help, version, and login-status checks ran. No Codex model, Ollama model,
+API endpoint, dependency, production route, deploy, or release was invoked or changed. The complete
+gate passed formatting, linting, strict typing over 315 files, 1,192 tests with 27 expected
+environment skips, the ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped,
+schema validation, all 101 dependency/provenance entries, the 165-file architecture boundary, and
+installed personal-workflow verification. The threat-model review limits this adapter to the frozen
+synthetic corpus because the adapter has no independent provider-side no-tools switch and detects
+attempted tool events only in returned JSONL. This approved adapter extension is complete; a v3 dry
+run remained separately unauthorized at that checkpoint.
+
+The maintainer subsequently approved only the one-variant v3 engineering run with run ID
+`dry-20260819-ministral8b-gpt56sol-codexcli-v3-001`. Its first external-terminal attempt failed
+safely during preflight, before any model call or result-directory creation: the installed CLI
+reported `Logged in using ChatGPT` on standard error after a PATH-alias warning, while the adapter's
+test double and parser expected the status on standard output. The temporary authorized fixture was
+removed by the command trap and the canonical fixture stayed unauthorized. A regression test first
+reproduced that failure. The adapter now accepts exactly one bounded `Logged in using ...` status
+line across standard output and standard error, still requires the exact ChatGPT status, and rejects
+API-key or ambiguous status. The 47 combined long-horizon tests pass. The complete gate again passes
+formatting, linting, strict typing over 315 files, 1,192 tests with 27 expected environment skips,
+the ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped, schema validation, all
+101 dependency/provenance entries, the 165-file architecture boundary, and installed personal
+workflow verification. No Codex model, Ollama model, API endpoint, dependency, production route,
+deploy, or release was invoked or changed by the correction. The approved one-variant rerun outcome
+is recorded below; no larger run is authorized.
+
+The external-terminal rerun completed and wrote the immutable
+`dry-20260819-ministral8b-gpt56sol-codexcli-v3-001` artifact set. The local-only SD trajectory was
+available with 93.33% hidden-test accuracy, 100% exact-value integrity, zero critical false
+memories, 4,955 executor input tokens, and 585 executor output tokens. Both frontier-dependent SS
+and TD trajectories failed closed with `Codex CLI usage is invalid`, leaving zero complete paired
+variants and verdict `NOT_EVALUATED`; therefore this run makes no quality, frontier-token-saving,
+or advisor-effectiveness claim. All recorded artifact hashes verify, the temporary authorized
+fixture was removed, and the canonical v3 fixture remains unauthorized. The installed 0.147.0
+protocol schema includes total-token and optional cache-write-token fields beyond the four fields in
+the documented JSONL sample, making an additive-field mismatch the leading hypothesis. The current
+failure category does not distinguish a null, missing, additional, or mistyped usage field, so that
+hypothesis is not yet proven. Before another model call, the smallest next step is bounded
+usage-shape diagnostics and a compatibility regression test; any fresh live rerun requires separate
+maintainer approval.
+
+The maintainer approved the no-model diagnostic stage only. A new regression test first failed on
+the generic usage error, then passed after the adapter classified missing and null usage members,
+invalid usage-object types, missing fixed counters, recognized fixed additional fields,
+unrecognized-field counts, and invalid fixed counters. Diagnostic messages never include token
+values or provider-supplied unknown field names, and every noncanonical shape still fails closed;
+no compatibility relaxation was added. The 48 combined long-horizon tests, formatting, linting, and
+strict typing pass. The managed-shell aggregate passed 1,193 tests with 27 expected skips before the
+sandbox denied PostgreSQL's loopback bind. Schema validation, all 101 dependency/provenance entries,
+and the 165-file architecture boundary pass separately; installed-package verification is also
+blocked here by the sandboxed `uv` runtime. The maintainer then ran the complete aggregate gate in
+an unrestricted terminal. Its ephemeral PostgreSQL suite passed 26 tests with the one opt-in load
+test skipped; schema validation, all 101 dependency/provenance entries, the 165-file architecture
+boundary, and installed personal-workflow verification passed. Because the aggregate stages are
+chained with `&&`, reaching those final checks also confirms formatting, linting, strict typing, and
+the main test suite passed in the same run. The diagnostic stage is complete. No Codex model,
+Ollama model, API endpoint, dependency, production route, deploy, or release was invoked or changed,
+and no fresh live rerun is authorized.
+
+The maintainer separately approved one fresh one-variant diagnostic run with ID
+`dry-20260819-ministral8b-gpt56sol-codexcli-v3-diagnostic-002` and the existing ceiling of nine
+subscription-backed frontier calls. Preflight confirmed the ID is unused, the canonical fixture is
+still unauthorized, Codex CLI 0.147.0 reports a ChatGPT login, and Ollama is listening on loopback.
+The managed shell cannot access loopback, so the run awaits the fail-safe unrestricted-terminal
+command. This approval does not authorize a larger run or a compatibility code change.
+
+The diagnostic run completed and again produced `NOT_EVALUATED`, with SD available and SS/TD
+unavailable. Both frontier failures now identify the same exact safe category: the four required
+usage counters were present, but Codex CLI also emitted recognized additional field
+`cache_write_input_tokens`. All six artifact hashes verify, the temporary authorized fixture was
+removed, and the canonical fixture remains unauthorized. This proves an additive usage-field
+compatibility mismatch rather than null, missing, mistyped, negative, inconsistent, or arbitrary
+usage data. Official OpenAI documentation does not currently define the additional field's
+accounting semantics. No compatibility change is authorized yet; the smallest conservative proposal
+is to validate the field and accept it only when its value is zero, failing closed on nonzero usage
+until an explicit accounting rule is evidenced.
+
+The maintainer approved exactly that zero-only compatibility patch and regression coverage. The new
+test first failed because the adapter rejected `cache_write_input_tokens` even when it was zero.
+The adapter now accepts the field only when its value is an actual integer equal to zero and ignores
+it for accounting. Positive, negative, boolean, and string values fail closed; `total_tokens` and
+unknown fields remain rejected. The diagnostic remains value-free, and the four documented usage
+counters retain their existing totals and breakdown checks. All 49 combined supervised-shadow and
+long-horizon evaluation tests pass; formatting, linting, and strict typing pass for the changed
+Python files. No Codex model, Ollama model, API endpoint, dependency, production route, deploy, or
+release was invoked or changed by this patch.
+
+The managed-shell aggregate passed formatting, linting, strict typing over 315 source files, and
+1,194 tests with 27 expected environment skips. It then stopped because the sandbox denied the
+ephemeral PostgreSQL listener's loopback bind. Schema validation, all 101 dependency/provenance
+entries, and the 165-file architecture boundary pass separately; installed-package verification is
+also blocked here when sandboxed `uv` cannot read the macOS system configuration store. The
+maintainer then ran the complete aggregate in an unrestricted terminal. Its ephemeral PostgreSQL
+suite passed 26 tests with the one opt-in load test skipped; schema validation, all 101
+dependency/provenance entries, the 165-file architecture boundary, and installed personal-workflow
+verification passed. Because the aggregate stages are chained with `&&`, reaching those final
+checks also confirms formatting, linting, strict typing, and the 1,194-test main suite passed in the
+same run. The zero-only compatibility patch is complete. A fresh live evaluation remains outside
+this approval boundary.
+
+On 2026-08-20 the maintainer approved an evaluation-only v4 hybrid-routing extension. The frozen
+protocol adds three user-selectable strategies: `local_first`, `frontier_plan_first`, and `hybrid`.
+The hybrid preflight router runs before either model and selects plan-first only when validated,
+frozen session risk tags intersect the configured plan-first tags; ticket prose, model output, and
+model confidence cannot select a route. The preregistered synthetic treatment routes authorization
+and migration sessions through frontier planning and the bounded-mechanical session through the
+existing local-first deterministic gate. No production model route or agent endpoint changed.
+
+The plan-first path validates a bounded structured frontier plan before local execution, then
+requires a frontier review even when deterministic post-execution checks pass. One repair and one
+final review are the maximum; an invalid plan, unresolved mismatch, unsupported change, malformed
+review, or escalation fails closed. Direct frontier takeover remains disabled. Plan and critique
+text stay transient; session artifacts retain only route names, fixed reason codes, prompt hashes,
+closed review statuses, deterministic reports, and usage counters. The canonical fixture remains
+`live_calls_authorized: false`. The strict fixture/loader/router and supervised behavior suite passes
+36 tests, including invalid-plan denial before local execution, strict Codex plan-schema dispatch,
+and non-persistence of a unique plan marker. The 55 combined supervised-shadow and long-horizon
+tests, focused formatting, linting, and strict typing pass. No Codex model, Ollama model, API
+endpoint, dependency, schema, production route, deploy, or release was invoked or changed.
+The complete gate passes formatting, linting, strict typing over 315 source files, 1,200 tests with
+27 expected environment skips, the ephemeral PostgreSQL suite's 26 tests with one opt-in load test
+skipped, schema validation, all 101 dependency/provenance entries, the 165-file architecture
+boundary, and installed personal-workflow verification. The v4 implementation is complete; a live
+v4 evaluation remains outside this approval boundary.
+
+The maintainer then approved exactly one synthetic v4 engineering run under immutable ID
+`dry-20260820-ministral8b-gpt56sol-codexcli-hybrid-v4-001`. The hybrid `SS` trajectory and local
+`SD` trajectory completed successfully; direct-frontier `TD` failed closed, leaving no complete
+triplet and verdict `NOT_EVALUATED`. `SS` reached 100% hidden-test accuracy and exact-value
+integrity with zero critical false memories and zero repeated errors. `SD` reached 93.33% accuracy,
+100% exact-value integrity, zero critical false memories, and two repeated errors.
+
+The hybrid route made three local calls and four frontier calls: one plan and one passing review for
+each authorization and migration session. The bounded-mechanical session passed the local-first
+deterministic gate with zero frontier calls. Successful hybrid calls reported 61,578 frontier input
+and 671 frontier output tokens, including 335 reasoning-output tokens as a non-additive subset; the
+local executor reported 5,356 input and 618 output tokens. The shared 75,000-token ceiling had only
+12,751 tokens remaining after `SS`. The first `TD` response crossed that ceiling and was rejected
+with `frontier advisor reported usage above the token limit`. Because the limit is checked against
+reported usage after a response, that failed call consumed unknown subscription capacity that is not
+retained in the accepted counters. Therefore this run proves the zero-frontier mechanical fast path
+and successful hybrid quality for one variant, but it cannot quantify total subscription usage or
+token savings against direct frontier.
+
+All six manifest-listed artifact hashes match. The temporary authorized fixture was removed, the
+canonical fixture remains unauthorized with frontier takeover off, and bounded artifact inspection
+found no plan/prompt/response/repair body or credential marker. The immutable run remains unchanged.
+No rerun, ceiling change, larger evaluation, production route, deploy, or release is authorized.
+
+After reviewing that incomplete comparison, the maintainer approved one separately preregistered
+v5 savings-focused engineering variant. The frozen v5 treatment forces all three `SS` sessions
+through the existing local-first deterministic gate, disables frontier planning and takeover for
+`SS`, and compares only frontier input plus output tokens against direct-frontier `TD` for the
+primary subscription-savings metric. Local tokens remain reported as secondary total-compute and
+latency evidence but cannot reduce or inflate frontier savings. The quality thresholds and 30%
+frontier-token-savings gate remain unchanged.
+
+The v5 maximum is nine frontier calls: up to two after a failed local gate in each `SS` session plus
+three `TD` calls. Its 180,000 reported-token ceiling uses the observed v4 four-call total of 62,249
+to provide bounded headroom above a linear nine-call projection of about 140,061. This is a
+fail-closed safety ceiling, not expected usage. The preregistration records the post-response
+overshoot limitation and freezes exactly one live synthetic engineering variant after verification;
+the canonical fixture remains unauthorized.
+
+The fixture and red contract test were added before loader support and failed on the missing v5
+constant. Minimal schema-version and constant support then made the contract pass without changing
+the v4 router or supervised loop. Three v5-specific tests now cover the exact frozen configuration,
+three zero-frontier local-first passes, route accounting, and frontier-only savings despite
+arbitrarily large local usage. All 39 supervised-shadow tests and 58 combined supervised-shadow and
+long-horizon tests pass with focused formatting, linting, and strict typing. No model call,
+dependency, production route, deploy, or release was invoked or changed. Repository-wide
+verification passed formatting, linting, strict typing over 315 source files, and 1,203 tests with
+27 expected environment skips. The managed shell then denied PostgreSQL's temporary loopback bind.
+Schema validation, all 101 dependency/provenance entries, and the 165-file architecture boundary
+pass separately; installed-package verification is blocked here when its subprocess reaches the
+sandbox-inaccessible `uv` cache. The approved external command must pass the exact `npm run check`,
+including PostgreSQL and installed-package verification, before creating temporary live
+authorization. No v5 model call has occurred.
+
+The maintainer's fail-safe unrestricted-terminal command then passed the exact aggregate gate before
+temporarily authorizing the single frozen v5 run. Reaching the model preflight after the chained
+gate confirms formatting, linting, strict typing, the 1,203-test main suite with 27 expected
+environment skips, the ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped,
+schema validation, all 101 dependency/provenance entries, the 165-file architecture boundary, and
+installed personal-workflow verification. Codex CLI 0.147.0 reported the required ChatGPT login.
+
+The immutable `dry-20260820-ministral8b-gpt56sol-codexcli-localfirst-v5-001` run completed all three
+conditions for one synthetic variant. `SS` and direct-frontier `TD` each reached 100% hidden-test
+accuracy, 100% exact-value integrity, zero critical false memories, zero repeated errors, and
+end-to-end success. Direct-local `SD` reached 93.33% hidden-test accuracy, 100% exact-value
+integrity, zero critical false memories, two repeated errors, and end-to-end success. The primary
+frontier-only comparison counted 30,369 `SS` tokens and 47,332 `TD` tokens, a reduction of 16,963
+tokens or 35.84%; the frozen 30% token gate therefore passed. Including the 7,139 local executor
+tokens, `SS` used 37,508 additive model tokens, 9,824 or 20.76% fewer than `TD`. Reasoning-output
+tokens remain a non-additive subset of frontier output. `SS` took about 177.0 seconds versus 34.0
+seconds for `TD`, so this sample shows subscription-token savings but not latency savings.
+
+All three `SS` sessions were local-first and made no plan call. Sessions two and three passed with
+no frontier call. Session one failed deterministic authorization checks, made a local repair
+attempt, and invoked two frontier reviews. Both closed review statuses were `repair`; the session
+accepted no changes and retained deterministic mismatches, but later local sessions supplied the
+missing final-state values. The trajectory therefore passed its cumulative final-state grader even
+though the bounded repair cycle did not resolve that individual session. This is a fail-closed
+semantics limitation to correct before a larger run, not evidence that the repair loop reliably
+achieved each session goal.
+
+The verdict remains `NOT_EVALUATED` because one paired variant is below the frozen 30-pair evidence
+minimum. The quality gate is also false: `SS` matched `TD`, but its 6.67-percentage-point improvement
+over `SD` was below the frozen 10-point margin. All six manifest-listed artifact hashes match; the
+failure journal is empty; the temporary authorized fixture was removed; the canonical fixture
+remains unauthorized with local-first routing and frontier takeover off; and bounded inspection
+found no persisted plan, prompt, response, repair body, API key, or bearer credential. No larger
+run, production route, deployment, or release is authorized.
+
+The maintainer then approved the smallest fail-closed correction before any larger run. A trajectory
+regression first reproduced the live defect: after a second frontier `repair` verdict, the evaluator
+continued into sessions two and three instead of stopping. The candidate generator was already
+rejecting that session by returning no accepted changes; the defect was only in trajectory control
+flow. The trajectory now writes the same bounded rejected-session record and immediately raises a
+fixed `supervised session remained unresolved` failure before adding model output to history,
+persisting a Mnemo checkpoint, or starting a later session. The outer runner can therefore mark the
+condition unavailable rather than let later work rescue its cumulative final-state score. The new
+regression proves there are exactly two local attempts, two closed `repair` reviews, one retained
+session record with no accepted changes, and no second session. All 40 focused supervised-shadow
+tests and all 59 combined supervised-shadow and long-horizon tests pass. The complete gate passes
+formatting, linting, strict typing over 315 source files, 1,204 tests with 27 expected environment
+skips, the ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped, schema
+validation, all 101 dependency/provenance entries, the 165-file architecture boundary, and
+installed personal-workflow verification. No model call, dependency, schema, production route,
+deployment, or release changed.
+
+The maintainer then explicitly authorized the full 30-variant statistical evaluation. The final
+protocol reuses schema 5.0 and changes only cumulative live-run bounds; it adds no routing or model
+behavior. A fixture contract failed first because the final fixture did not exist, then passed after
+freezing all 30 inherited variants, the existing local-first/direct-local/direct-frontier
+conditions, unchanged quality and 30% frontier-token-savings gates, canonical live authorization
+off, 150 maximum frontier calls, and 3,000,000 maximum reported frontier tokens. The call ceiling is
+30 times the corrected maximum of two `SS` plus three `TD` calls per variant. The token ceiling adds
+about 29% headroom above the 2,331,030-token linear projection from the v5 five-call sample. Fewer
+than 30 complete triplets must remain `NOT_EVALUATED`. The immutable final run ID is
+`final-20260820-ministral8b-gpt56sol-codexcli-localfirst-30pair-001`. No final-run model call has
+occurred. The 41 supervised-shadow tests and all 60 combined supervised-shadow and long-horizon
+tests pass with focused formatting, linting, and strict typing. The complete gate passes formatting,
+linting, strict typing over 315 source files, 1,205 tests with 27 expected environment skips, the
+ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped, schema validation, all 101
+dependency/provenance entries, the 165-file architecture boundary, and installed personal-workflow
+verification.
+
+The managed-shell live attempt failed before result-directory creation or any model call. Its first
+invocation was blocked by sandbox-inaccessible `uv` cache metadata. Direct use of the already
+verified virtual-environment Python then passed the Codex CLI preflight but the sandbox denied the
+local Ollama `/api/tags` loopback connection. The temporary authorized fixture was removed and the
+canonical final fixture remains unauthorized. The exact unrestricted-terminal run remains pending;
+no retry, alternate run ID, production route, deployment, or release occurred.
+
+The maintainer's unrestricted-terminal run then completed all 90 scheduled condition attempts and
+wrote the immutable final artifact set. All 30 direct-local `SD` and all 30 direct-frontier `TD`
+trajectories were available and successful. Only 13 of 30 supervised `SS` trajectories were
+available and successful; the other 17 failed closed in session one. Every failure had two local
+attempts, two frontier `repair` reviews, no accepted changes, and the same final deterministic
+mismatches in authorization role, authorization-before-lookup, tenant idempotency key, and tenant
+idempotency scope. The supervised completion rate was therefore 43.33%, leaving only 13 complete
+triplets and the correct overall verdict `NOT_EVALUATED`.
+
+Among the 13 surviving pairs, `SS` and `TD` both scored 100% hidden-test accuracy and exact-value
+integrity; paired `SD` averaged 99.49%. The `SS - SD` improvement was only 0.51 percentage points,
+well below the frozen 10-point margin, while `SS - TD` was zero. Successful `SS` averaged about
+125.0 seconds versus 35.4 seconds for paired `TD`. Twelve successful supervised variants used no
+frontier call; one used a repair/pass pair. These conditional results are selection-biased by the
+17 failed supervised variants and do not establish treatment quality.
+
+The generated 97.86% frontier-token-savings value and `token_gate_pass: true` are not valid economic
+claims. The analyzer summed 30,467 frontier tokens from only the 13 available `SS` trajectories but
+compared them with 1,423,155 tokens from all 30 `TD` trajectories. It also omitted 518,635 frontier
+tokens consumed by the 17 failed `SS` trajectories even though their raw session records preserve
+that usage. Across all 30 supervised attempts, `SS` consumed 549,102 frontier tokens over 36 calls
+plus 124,006 local tokens; this is 61.42% fewer frontier tokens than `TD`, but it completed only 13
+goals. If each failed variant is completion-adjusted using its actually observed matched `TD`
+tokens as a direct-frontier fallback, the inferred frontier total is 1,355,573, only 4.75% below
+direct frontier. Including local tokens yields 1,479,579 total tokens, 3.96% above direct frontier.
+That completion-adjusted calculation is an inference, not an observed combined route.
+
+All six manifest-listed hashes match. The temporary live fixture was removed, the canonical fixture
+remains unauthorized with takeover off, and bounded artifact inspection found no persisted prompt,
+response, repair-step body, plan body, API key, or bearer credential. No rerun, analyzer correction,
+production route, deployment, or release is authorized. The smallest next decision is whether to
+fix incomplete-population economics reporting and separately evaluate direct frontier takeover
+after a failed local gate instead of spending two reviews on a repair the local model often cannot
+apply.
+
+The maintainer approved both bounded follow-ups. Four regressions failed first: the missing v6
+fixture blocked the takeover contracts, and the existing analyzer still reported 100% savings with
+a passing token gate from one surviving pair against an unequal direct-frontier population. The
+analyzer now derives economics only from matched pairs and makes both savings fields unavailable,
+both gates false, and the report explicitly non-claiming until the complete preregistered population
+exists. Descriptive condition totals and paired quality diagnostics remain visible but cannot become
+an economic verdict.
+
+The new schema 6.0 evaluation fixture is local-first with explicit takeover enabled and canonical
+live authorization off. A deterministic local failure now goes directly to one frontier execution
+of the original task; it skips both advisor reviews and the local repair attempt. Frontier output
+remains an untrusted proposal and must pass the same deterministic memory-consistency and
+structured-support checks before the session continues. Session, trajectory, and aggregate records
+separately count takeover calls. Earlier schema 4.0 and 5.0 fixtures still require takeover off.
+The one-variant engineering ceiling is six frontier calls and 180,000 reported tokens, and its only
+permitted claim is route validation; its quality and savings verdict must remain `NOT_EVALUATED`.
+Focused tests, formatting, linting, and strict typing pass. No model call, dependency, production
+route, deployment, release, or immutable result changed. The complete repository gate is pending.
+
+The complete repository gate now passes formatting, linting, strict typing over 315 source files,
+1,210 tests with 27 expected environment skips, the ephemeral PostgreSQL suite's 26 tests with one
+opt-in load test skipped, context schema validation, all 101 dependency/provenance entries, the
+165-file architecture boundary, and installed personal-workflow verification. The analyzer and v6
+evaluation implementation are complete. No v6 model call is authorized or has occurred; the next
+issue-boundary action is an explicitly approved one-variant engineering run.
+
+The maintainer then authorized exactly one synthetic v6 engineering run under immutable ID
+`dry-20260820-ministral8b-gpt56sol-codexcli-takeover-v6-001`. It uses one variant, at most six
+frontier calls, and at most 180,000 reported frontier tokens. The canonical fixture must remain
+unauthorized, and this approval does not include a retry, larger run, production route, deployment,
+or release. The run result is pending.
+
+The managed-shell preflight confirmed Codex CLI 0.147.0 and the required ChatGPT login, then stopped
+because the sandbox cannot connect to Ollama's loopback listener. A separate listener check confirms
+Ollama is listening on `127.0.0.1:11434`. The stop occurred before temporary authorization, result
+directory creation, or any model call; the canonical fixture remains unauthorized. The same
+approved immutable run now awaits the fail-safe unrestricted-terminal command.
+
+The unrestricted-terminal v6 run completed all three scheduled condition attempts. Direct-local
+`SD` and direct-frontier `TD` were available and successful, with respective hidden-test accuracy
+of 93.33% and 100% and exact-value integrity of 100%. Supervised `SS` failed closed in session one,
+so there was no complete triplet. The corrected analyzer reports `NOT_EVALUATED`, zero pairs, null
+frontier and total savings, and false quality and token gates.
+
+The raw `SS` record proves the intended route order: one local call was followed by exactly one
+direct frontier takeover, with no plan, advisor review, or local repair call. The stopped attempt
+used 1,402 local tokens and 15,417 frontier tokens. The local candidate conflicted with the verified
+`idempotent_replay=true` constraint. The takeover candidate had no invalid value or verified-value
+mismatch, but it was rejected as unsupported because the strict direct-frontier schema requires all
+configuration fields inside `changes`, while the takeover gate treats every present field as an
+effective mutation. Session-one memory intentionally cannot support nine later-session fields, so
+the current real-provider takeover shape is structurally unable to pass even when those fields are
+unchanged. The earlier unit tests used partial synthetic takeover responses and therefore missed
+this schema-to-verifier integration defect.
+
+All six manifest-listed artifact hashes match. The reconstructed temporary live fixture and current
+runner hashes match the manifest, the temporary fixture is absent, and the canonical v6 fixture
+remains unauthorized. Bounded inspection found no persisted prompt, response body, repair steps,
+API-key name, bearer credential, or key marker. The immutable result remains unchanged. No retry,
+larger run, production route, deployment, or release is authorized. The smallest proposed
+correction is to validate only the takeover's effective delta from the current candidate base,
+while still rejecting any unsupported field whose value actually changes, and to cover that path
+with a full strict-schema response regression before seeking separate rerun approval.
+
+The active router objective authorizes progress toward 30 complete safe pairs, frontier quality
+within two percentage points, and at least 30% fewer frontier tokens. Full-schema regressions first
+reproduced the v6 live failure: a provider-shaped response containing unchanged fields was rejected.
+The takeover path now reduces validated full-state output to typed value differences from the
+current candidate base before deterministic verification and before any response-derived checkpoint
+content is built. Unchanged unsupported fields are discarded; a newly changed unsupported field
+still fails closed. The realistic trajectory regression completes all three sessions after one
+local failure and one takeover, while the safety regression rejects an unsupported atomic-reservation
+change. All 66 combined supervised and long-horizon tests pass with focused formatting, linting,
+and strict typing. No model call, dependency, production route, deployment, release, or immutable
+result changed. The complete repository gate is pending before any fresh live validation.
+
+The complete repository gate now passes formatting, linting, strict typing over 315 source files,
+1,211 tests with 27 expected environment skips, the ephemeral PostgreSQL suite's 26 tests with one
+opt-in load test skipped, context schema validation, all 101 dependency/provenance entries, the
+165-file architecture boundary, and installed personal-workflow verification. The next required
+evidence is one fresh immutable v6 engineering triplet using the corrected runner under ID
+`dry-20260820-ministral8b-gpt56sol-codexcli-takeover-v6-delta-002`. It retains the six-call and
+180,000-reported-token ceilings and cannot make a quality or savings claim. Because the managed
+shell cannot reach the verified Ollama loopback listener, the run awaits the fail-safe external
+terminal command. No model call or result directory for this ID exists yet.
+
+The analyzer now reports the active router objective as a separate `router_goal` result so the
+older supervision verdict cannot obscure or redefine the approved acceptance criteria. It returns
+`ACHIEVED` only for a complete population of at least 30 matched `SS`/`SD`/`TD` variants when every
+`SS` trajectory succeeds, every `SS` trajectory has zero critical false memories, mean `SS` hidden
+accuracy is no more than 0.02 below matched direct-frontier `TD`, and matched `SS` frontier input
+plus output tokens are at least 30% lower than `TD`. Incomplete populations are `NOT_EVALUATED`;
+complete populations that miss any condition are `NOT_ACHIEVED`. Positive and negative analyzer
+tests cover each condition independently, and all 66 combined supervised and long-horizon tests
+pass after formatting, linting, and strict typing. The corrected live triplet remains the next
+required runtime evidence.
+
+The complete repository gate also passes with the router-goal result in place: formatting, linting,
+strict typing over 315 source files, 1,211 tests with 27 expected environment skips, the ephemeral
+PostgreSQL suite's 26 tests with one opt-in load test skipped, context schema validation, all 101
+dependency/provenance entries, the 165-file architecture boundary, and installed personal-workflow
+verification. This verifies the measurement mechanism, not the live router objective itself.
+
+The corrected immutable triplet
+`dry-20260820-ministral8b-gpt56sol-codexcli-takeover-v6-delta-002` completed all three conditions.
+`SS`, `TD`, and `SD` each had end-to-end success, exact-value integrity of 1.0, and zero critical
+false memories. `SS` matched `TD` at 1.0 hidden-test accuracy and improved on `SD`'s 0.9333. The
+router made three local calls and exactly one direct takeover, using 15,061 frontier input plus 315
+output tokens; direct frontier made three calls using 46,434 input plus 981 output tokens. The
+observed one-pair frontier-token reduction is 67.57%, while the analyzer correctly reports
+`NOT_EVALUATED`, null savings, and a false router goal because only one of 30 required pairs exists.
+
+All six artifact hashes, the current runner hash, and the reconstructed authorized-corpus hash
+match the reproducibility manifest. The result contains nine session rows, three trajectory rows,
+and zero failure rows. The temporary live fixture is absent, the canonical fixture remains
+unauthorized, and bounded inspection found no forbidden prompt, response, reasoning, critique,
+repair-plan, credential, or secret keys or markers. This validates the corrected takeover route and
+accounting but makes no final quality or savings claim.
+
+The frozen v6 final fixture changes only cumulative ceilings: 180 frontier calls and 3,000,000
+reported frontier tokens. The call ceiling covers one possible takeover in each of three `SS`
+sessions plus three `TD` calls across 30 variants. The engineering triplet reported 62,791 combined
+frontier tokens; its linear 30-variant projection is 1,883,730, so the token ceiling is about 59.3%
+above that calibration. Models, prompts, route, checks, population, thresholds, and canonical
+authorization-off behavior remain unchanged. The final fixture contract and preregistration are
+complete; focused and full verification are pending before the live final run.
+
+The complete repository gate now passes with the frozen v6 final fixture: formatting, linting,
+strict typing over 315 source files, 1,212 tests with 27 expected environment skips, the ephemeral
+PostgreSQL suite's 26 tests with one opt-in load test skipped, context schema validation, all 101
+dependency/provenance entries, the 165-file architecture boundary, and installed personal-workflow
+verification. The final immutable live run is the only remaining evidence needed to evaluate the
+router goal.
+
+Immutable final run
+`evaluation-results/long-horizon-v1/final-20260820-ministral8b-gpt56sol-codexcli-takeover-v6-30pair-001`
+achieves the frozen router goal. All 30 matched `SS`/`SD`/`TD` triplets are available, all 90
+trajectories succeeded, and every supervised trajectory has exact-value integrity of 1.0 and zero
+critical false memories. Mean `SS` and `TD` hidden-test accuracy are both 1.0, so the matched
+frontier-quality difference is 0.0. `SS` used 271,106 frontier input plus 6,003 output tokens
+(277,109 total), versus `TD`'s 1,392,493 input plus 30,258 output (1,422,751 total): observed
+frontier-token savings are 80.523%, above the frozen 30% requirement. Including 166,988 local
+executor tokens, total-model-token savings remain 68.786%.
+
+The supervised router made 90 local calls and 18 direct takeovers, with no advisor reviews, plans,
+escalations, or failed trajectories; direct frontier made 90 calls. Independent read-only
+recalculation from the 90 trajectory rows reproduces the paired population, success, safety,
+quality, and token figures exactly. All six artifact hashes, the runner hash, and the reconstructed
+authorized-corpus hash match the manifest. The result has 270 session rows, 90 trajectory rows,
+zero failure rows, no transcript-leakage or hidden-grader-rendering flags, no forbidden payload
+keys, and no credential markers. The temporary live fixture is absent and the canonical fixture
+remains unauthorized.
+
+The separate older supervision-research verdict is `REJECT` because `SS` improved over `SD` by
+0.04 rather than that protocol's additional +0.10 requirement. That older hypothesis is honestly
+rejected; it does not contradict the separately frozen router objective, which required completion,
+zero critical errors, direct-frontier quality within 0.02, and at least 30% fewer frontier tokens.
+The result proves only this synthetic shadow objective, not production safety, general task quality,
+or customer value. The post-result complete repository gate passes formatting, linting, strict
+typing over 315 source files, 1,212 tests with 27 expected environment skips, the ephemeral
+PostgreSQL suite's 26 tests with one opt-in load test skipped, schema validation, all 101 dependency
+entries, the 165-file architecture boundary, and installed-package verification. No production
+route, agent endpoint, dependency, migration, deployment, or release changed. The capability-ladder
+issue stops at this boundary.
+
+### `0.1.0a22` production deployment — In progress
+
+The user explicitly approved a coordinated prerelease bump, push to `main`, and production PyPI
+publication of the completed branch. Release preparation advances the package and pinned release
+metadata from `0.1.0a21` to `0.1.0a22`; the exact version must be confirmed unused on PyPI before
+publication. The release includes the completed branch delta through the synthetic router
+evaluation, but it does not turn the evaluation harness into a production model proxy or enable
+live frontier calls in any canonical fixture.
+
+The exact PyPI metadata endpoint returned `404` for `0.1.0a22`, and `uv lock --offline` generated
+the coordinated root-package lock entry at that version. The complete prepublication repository
+gate passes formatting, linting, strict typing over 315 source files, 1,212 tests with 27 expected
+environment skips, the ephemeral PostgreSQL suite's 26 tests with one opt-in load test skipped,
+schema validation, all 101 dependency entries, the 165-file architecture boundary, and installed-
+package verification. The managed release shell cannot access uv's global build cache, so the
+protected production workflow remains responsible for its required clean wheel/source-distribution
+build, hash checks, provenance checks, and publication verification.
+
+Acceptance requires a reviewed scoped delta excluding unrelated worktree files, a lockfile updated
+only through `uv`, coordinated version pins in both publish workflows and installed-artifact
+verifiers, the complete repository gate, source-independent wheel and source-distribution
+verification, a release commit fast-forwarded and pushed to `main`, successful protected
+`publish-pypi.yml` execution, and independent PyPI metadata, hash, provenance, and installed-wheel
+verification. No TestPyPI publication, direct local upload, team deployment, or local installation
+is included unless separately requested.
 
 ### Lifecycle token break-even — Complete offline and sampled live calibration
 

@@ -1,0 +1,70 @@
+{
+  "schema_version": "mnemo-supervised-small-model-shadow/6.0",
+  "base_corpus": {
+    "path": "tests/fixtures/evals/telehealth-long-horizon-v1.json",
+    "sha256": "sha256:77b0b5385d614141a2df3be3d3a996a93cea7c3ba055eb11fcdd5e9979c8f83e"
+  },
+  "conditions": [
+    "SD",
+    "SS",
+    "TD"
+  ],
+  "executor_model": {
+    "provider": "ollama",
+    "identifier": "ministral-3:8b-instruct-2512-q4_K_M",
+    "source_url": "https://ollama.com/library/ministral-3:8b-instruct-2512-q4_K_M",
+    "license": "Apache-2.0",
+    "temperature": 0,
+    "num_ctx": 4096,
+    "num_predict": 320,
+    "generation_strategy": "single_json"
+  },
+  "frontier_advisor": {
+    "provider": "codex_cli",
+    "identifier": "gpt-5.6-sol",
+    "source_url": "https://learn.chatgpt.com/docs/non-interactive-mode",
+    "authentication_mode": "chatgpt_subscription",
+    "executable": "codex",
+    "required_cli_version": "0.147.0",
+    "reasoning_effort": "medium",
+    "maximum_response_bytes": 32768,
+    "maximum_calls": 180,
+    "maximum_frontier_tokens": 3000000,
+    "request_timeout_seconds": 120,
+    "live_calls_authorized": false
+  },
+  "loop": {
+    "maximum_executor_repairs": 1,
+    "maximum_advisor_reviews": 2,
+    "persist_verified_field_names_only": true,
+    "frontier_review_gate": "deterministic_failure_only"
+  },
+  "hybrid_routing": {
+    "mode": "local_first",
+    "plan_first_tags": [
+      "authorization",
+      "migration"
+    ],
+    "frontier_takeover": true,
+    "maximum_plan_steps": 8,
+    "session_risk_tags": {
+      "1": [
+        "authorization"
+      ],
+      "2": [
+        "bounded_mechanical"
+      ],
+      "3": [
+        "migration"
+      ]
+    }
+  },
+  "preregistered_supervision_thresholds": {
+    "minimum_pairs": 30,
+    "bootstrap_iterations": 10000,
+    "supervised_accuracy_margin": 0.1,
+    "frontier_quality_floor": -0.02,
+    "frontier_token_savings_margin": 0.3,
+    "critical_false_memories_allowed": 0
+  }
+}
