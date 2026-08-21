@@ -12,20 +12,26 @@ def _fake_transport(
     def transport(url: str, payload: dict[str, Any]) -> dict[str, Any]:
         captured["url"] = url
         captured["payload"] = payload
-        candidates = {"candidates": [
-            {"kind": "decision", "claim": "x", "confidence": 0.9, "sensitivity": "normal"}]}
+        candidates = {
+            "candidates": [
+                {"kind": "decision", "claim": "x", "confidence": 0.9, "sensitivity": "normal"}
+            ]
+        }
         return {"response": json.dumps(candidates)}
+
     return transport
 
 
 def test_generate_returns_parseable_candidates() -> None:
     captured: dict[str, Any] = {}
-    p = OllamaEpisodicProvider("http://127.0.0.1:11434", "ministral-3:8b",
-                               transport=_fake_transport(captured))
+    p = OllamaEpisodicProvider(
+        "http://127.0.0.1:11434", "ministral-3:8b", transport=_fake_transport(captured)
+    )
 
     class Req:
         summary = "did a thing"
         max_candidates = 4
+
     raw = p.generate(Req())
     assert parse_episodic_output(raw, 4)[0].claim == "x"
     assert captured["url"].endswith("/api/generate")

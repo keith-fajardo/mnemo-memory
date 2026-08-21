@@ -74,12 +74,8 @@ def test_ingest_persists_mapped_and_drops_unmapped() -> None:
             return object()
 
     proposals = (
-        EpisodicExtractionProposal(
-            EpisodicMemoryKind.DECISION, "chose X", 0.9, Sensitivity.NORMAL
-        ),
-        EpisodicExtractionProposal(
-            EpisodicMemoryKind.LESSON, "note", 0.5, Sensitivity.NORMAL
-        ),
+        EpisodicExtractionProposal(EpisodicMemoryKind.DECISION, "chose X", 0.9, Sensitivity.NORMAL),
+        EpisodicExtractionProposal(EpisodicMemoryKind.LESSON, "note", 0.5, Sensitivity.NORMAL),
     )
     result = ingest_episodic_proposals(
         service=FakeService(),
@@ -102,9 +98,7 @@ def test_ingest_drops_a_rejected_proposal_without_losing_earlier_persisted_ones(
             return object()
 
     proposals = (
-        EpisodicExtractionProposal(
-            EpisodicMemoryKind.DECISION, "chose X", 0.9, Sensitivity.NORMAL
-        ),
+        EpisodicExtractionProposal(EpisodicMemoryKind.DECISION, "chose X", 0.9, Sensitivity.NORMAL),
         EpisodicExtractionProposal(
             EpisodicMemoryKind.OUTCOME, "api_key=leaked", 0.8, Sensitivity.NORMAL
         ),

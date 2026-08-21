@@ -45,8 +45,12 @@ NOW = datetime(2026, 8, 22, 9, 30, tzinfo=UTC)
 
 _VALID_OUTPUT: dict[str, object] = {
     "candidates": [
-        {"kind": "decision", "claim": "Use the local provider first.", "confidence": 0.9,
-         "sensitivity": "normal"}
+        {
+            "kind": "decision",
+            "claim": "Use the local provider first.",
+            "confidence": 0.9,
+            "sensitivity": "normal",
+        }
     ]
 }
 _INVALID_OUTPUT: dict[str, object] = {"nope": []}
