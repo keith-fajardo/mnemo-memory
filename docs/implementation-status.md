@@ -6336,7 +6336,7 @@ entries, the 165-file architecture boundary, and installed-package verification.
 route, agent endpoint, dependency, migration, deployment, or release changed. The capability-ladder
 issue stops at this boundary.
 
-### `0.1.0a22` production deployment — In progress
+### `0.1.0a22` production deployment — Complete
 
 The user explicitly approved a coordinated prerelease bump, push to `main`, and production PyPI
 publication of the completed branch. Release preparation advances the package and pinned release
@@ -6353,6 +6353,14 @@ schema validation, all 101 dependency entries, the 165-file architecture boundar
 package verification. The managed release shell cannot access uv's global build cache, so the
 protected production workflow remains responsible for its required clean wheel/source-distribution
 build, hash checks, provenance checks, and publication verification.
+
+Protected production workflow run `32449425860` completed successfully for exact release commit
+`76855d8230fa8b9d1ad4123674984edeabadac9e`. Because publication and post-publication verification
+are ordered dependencies in that workflow, this success confirms the exact wheel and source
+distribution were built once, hash-bound, published through PyPI OIDC, then independently checked
+against PyPI metadata, artifact hashes, trusted-publishing provenance, and an installed downloaded
+wheel. The coordinated `0.1.0a22` production deployment is complete; no TestPyPI publication, team
+deployment, or local installation was performed.
 
 Acceptance requires a reviewed scoped delta excluding unrelated worktree files, a lockfile updated
 only through `uv`, coordinated version pins in both publish workflows and installed-artifact
