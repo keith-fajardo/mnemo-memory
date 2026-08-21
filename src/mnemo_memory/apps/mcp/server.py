@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from mnemo_memory.connectors.automatic_memory.checkpoint_evidence import (
     CheckpointFileEvidenceResolver,
 )
+from mnemo_memory.connectors.automatic_memory.pending_takeover import LocalPendingTakeoverStore
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
     refresh_registered_project_source,
@@ -35,6 +36,7 @@ from mnemo_memory.connectors.dbt.project_binding import (
     LocalDbtProjectBindingStore,
 )
 from mnemo_memory.connectors.local_embeddings import FastEmbedLocalProvider
+from mnemo_memory.connectors.ollama import OllamaEpisodicProvider
 from mnemo_memory.packages.application import (
     CheckpointRuntime,
     CheckpointView,
@@ -59,6 +61,7 @@ from mnemo_memory.packages.context_engine import (
     render_context_packet,
 )
 from mnemo_memory.packages.domain import ContextPacket, MemoryScope, SourceStateFingerprint
+from mnemo_memory.packages.model_gateway.episodic_extraction import parse_episodic_output
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteScope,
@@ -70,6 +73,10 @@ from mnemo_memory.packages.telemetry import (
 
 SERVER_NAME = "mnemo-local"
 SERVER_VERSION = "0.1.0"
+# Fixed loopback default. Kept as a module constant (not yet settings-configurable) since the
+# provider only ever talks to a locally-run Ollama daemon; construction is inert unless episodic
+# extraction is enabled (see `PersonalSettings.episodic_extraction_enabled`).
+_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
 _SOURCE_CONTEXT_KEYS = frozenset(
     {"source_query", "source_impact", "source_changes", "source_overview"}
@@ -1031,6 +1038,15 @@ def _build_local_mcp_context_session(
         )
         skill_registry = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
         settings = PersonalSettingsStore(runtime.config.data_directory).load()
+        episodic_enabled = settings.episodic_extraction_enabled
+        episodic_provider = (
+            OllamaEpisodicProvider(_OLLAMA_ENDPOINT, cast(str, settings.model_id))
+            if episodic_enabled
+            else None
+        )
+        pending_takeover_store = (
+            LocalPendingTakeoverStore(runtime.config.data_directory) if episodic_enabled else None
+        )
 
         def after_checkpoint_save(view: CheckpointView) -> None:
             # Source observation was already an optional fail-open callback. Keep it isolated so
@@ -1123,6 +1139,14 @@ def _build_local_mcp_context_session(
                 if settings.experimental_semantic_memory_enabled
                 else None
             ),
+            episodic_provider=episodic_provider,
+            episodic_output_parser=parse_episodic_output,
+            pending_takeover_store=pending_takeover_store,
+            task_activity_events=runtime.repository,
+            episodic_extraction_enabled=episodic_enabled,
+            local_first_takeover_enabled=settings.experimental_local_first_takeover_enabled,
+            takeover_live_calls_authorized=settings.local_first_takeover_live_calls_authorized,
+            episodic_route_recorder=None,
         )
 
         def refresh_source() -> None:
@@ -1140,10 +1164,12 @@ def main(data_directory: Path | None = None) -> None:
     try:
         settings = PersonalSettingsStore(resolve_local_config(data_directory).data_directory).load()
         experimental_semantic_memory_enabled = settings.experimental_semantic_memory_enabled
+        episodic_extraction_enabled = settings.episodic_extraction_enabled
     except (LocalConfigurationError, PersonalSettingsError):
         # Tool discovery remains storage-inert and fail-open. A later tool call still reports the
         # concrete configuration/storage failure through the deferred runtime boundary.
         experimental_semantic_memory_enabled = False
+        episodic_extraction_enabled = False
     deferred_port = _DeferredMcpContextPort(
         lambda: _build_local_mcp_context_session(data_directory, Path.cwd())
     )
@@ -1151,6 +1177,7 @@ def main(data_directory: Path | None = None) -> None:
         create_server(
             deferred_port,
             experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
+            episodic_extraction_enabled=episodic_extraction_enabled,
         ).run(transport="stdio")
     finally:
         deferred_port.close()
