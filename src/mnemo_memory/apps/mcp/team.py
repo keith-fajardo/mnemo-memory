@@ -153,6 +153,12 @@ class PostgreSQLTeamMcpPort:
         finally:
             self._release_connection()
 
+    def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
+    def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]:
         try:
             scope = self._scope(request)
@@ -328,6 +334,12 @@ class AuthenticatedTeamMcpPort:
 
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).save_checkpoint(request)
+
+    def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+        return self._port(request).extract_episodic(request)
+
+    def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+        return self._port(request).submit_episodic_candidates(request)
 
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]:
         return cast(TeamMcpPort, self._port(request)).list_knowledge_sources(request)

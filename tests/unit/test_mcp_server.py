@@ -309,6 +309,14 @@ def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listin
             events.append(("save_checkpoint", request))
             return request
 
+        def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("extract_episodic", request))
+            return request
+
+        def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("submit_episodic_candidates", request))
+            return request
+
     class RecordingSession:
         port: McpContextPort = RecordingPort()
 

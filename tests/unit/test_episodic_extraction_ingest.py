@@ -89,3 +89,33 @@ def test_ingest_persists_mapped_and_drops_unmapped() -> None:
         proposals=proposals,
     )
     assert result.persisted == 1 and result.dropped == 1 and len(calls) == 1
+
+
+def test_ingest_drops_a_rejected_proposal_without_losing_earlier_persisted_ones() -> None:
+    calls: list[object] = []
+
+    class FakeService:
+        def record_approved_event(self, command: object) -> object:
+            calls.append(command)
+            if len(calls) == 2:
+                raise RuntimeError("secret policy rejected this candidate")
+            return object()
+
+    proposals = (
+        EpisodicExtractionProposal(
+            EpisodicMemoryKind.DECISION, "chose X", 0.9, Sensitivity.NORMAL
+        ),
+        EpisodicExtractionProposal(
+            EpisodicMemoryKind.OUTCOME, "api_key=leaked", 0.8, Sensitivity.NORMAL
+        ),
+    )
+
+    result = ingest_episodic_proposals(
+        service=FakeService(),
+        scope=_task_scope(),
+        source_event_key="evt-2",
+        evidence_references=(_evidence(),),
+        proposals=proposals,
+    )
+
+    assert result.persisted == 1 and result.dropped == 1 and len(calls) == 2

@@ -7,7 +7,9 @@ Uses fakes for the episodic provider and the approved-event service, a real (in-
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from mnemo_memory.connectors.automatic_memory.pending_takeover import LocalPendingTakeoverStore
 from mnemo_memory.packages.application.checkpoints import RecordApprovedEpisodicEvent
@@ -136,18 +138,20 @@ def _port(
     local_first_takeover_enabled: bool = False,
     takeover_live_calls_authorized: bool = False,
     approved_event_capture_enabled: bool = True,
+    episodic_route_recorder: Callable[[str], None] | None = None,
 ) -> DurableMcpContextPort:
     return DurableMcpContextPort(
         service,  # type: ignore[arg-type]
         default_scope=scope,
         approved_event_capture_enabled=approved_event_capture_enabled,
-        episodic_provider=provider,  # type: ignore[arg-type]
+        episodic_provider=provider,
         episodic_output_parser=parse_episodic_output,
-        pending_takeover_store=pending_store,  # type: ignore[arg-type]
+        pending_takeover_store=pending_store,
         task_activity_events=events,
         episodic_extraction_enabled=episodic_extraction_enabled,
         local_first_takeover_enabled=local_first_takeover_enabled,
         takeover_live_calls_authorized=takeover_live_calls_authorized,
+        episodic_route_recorder=episodic_route_recorder,
     )
 
 
@@ -220,7 +224,9 @@ def test_extract_episodic_extracted_without_persisting_when_capture_is_off() -> 
     assert service.calls == []
 
 
-def test_extract_episodic_hands_off_invalid_output_when_both_flags_are_on(tmp_path) -> None:
+def test_extract_episodic_hands_off_invalid_output_when_both_flags_are_on(
+    tmp_path: Path,
+) -> None:
     scope = _scope()
     events = ReferenceTaskActivityEventRepository()
     source = _event(scope)
@@ -265,6 +271,23 @@ def test_extract_episodic_fails_local_when_invalid_output_and_flags_are_off() ->
     assert service.calls == []
 
 
+def test_extract_episodic_reports_no_events_when_the_source_is_empty() -> None:
+    scope = _scope()
+    events = ReferenceTaskActivityEventRepository()
+    service = FakeApprovedEventService()
+    port = _port(
+        scope=scope,
+        service=service,
+        events=events,
+        provider=FakeEpisodicProvider(output=_VALID_OUTPUT),
+    )
+
+    result = port.extract_episodic({})
+
+    assert result == {"status": "no_events"}
+    assert service.calls == []
+
+
 def test_extract_episodic_is_fail_open_when_the_provider_raises() -> None:
     scope = _scope()
     events = ReferenceTaskActivityEventRepository()
@@ -283,7 +306,7 @@ def test_extract_episodic_is_fail_open_when_the_provider_raises() -> None:
     assert service.calls == []
 
 
-def test_submit_episodic_candidates_rejects_without_a_pending_marker(tmp_path) -> None:
+def test_submit_episodic_candidates_rejects_without_a_pending_marker(tmp_path: Path) -> None:
     scope = _scope()
     events = ReferenceTaskActivityEventRepository()
     events.append_task_activity_event(_event(scope))
@@ -302,7 +325,7 @@ def test_submit_episodic_candidates_rejects_without_a_pending_marker(tmp_path) -
 
 
 def test_submit_episodic_candidates_rejects_invalid_candidates_and_keeps_the_marker(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     scope = _scope()
     events = ReferenceTaskActivityEventRepository()
@@ -330,7 +353,7 @@ def test_submit_episodic_candidates_rejects_invalid_candidates_and_keeps_the_mar
 
 
 def test_submit_episodic_candidates_persists_once_and_a_second_submit_is_rejected(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     scope = _scope()
     events = ReferenceTaskActivityEventRepository()
@@ -360,3 +383,44 @@ def test_submit_episodic_candidates_persists_once_and_a_second_submit_is_rejecte
 
     assert second == {"status": "rejected", "reason": "no_pending_handoff"}
     assert len(service.calls) == 1
+
+
+def test_extract_episodic_records_the_extracted_route_outcome() -> None:
+    scope = _scope()
+    events = ReferenceTaskActivityEventRepository()
+    events.append_task_activity_event(_event(scope))
+    recorded: list[str] = []
+    port = _port(
+        scope=scope,
+        service=FakeApprovedEventService(),
+        events=events,
+        provider=FakeEpisodicProvider(output=_VALID_OUTPUT),
+        episodic_route_recorder=recorded.append,
+    )
+
+    result = port.extract_episodic({})
+
+    assert result["status"] == "extracted"
+    assert recorded == ["extracted"]
+
+
+def test_extract_episodic_records_the_handoff_route_outcome(tmp_path: Path) -> None:
+    scope = _scope()
+    events = ReferenceTaskActivityEventRepository()
+    events.append_task_activity_event(_event(scope))
+    recorded: list[str] = []
+    port = _port(
+        scope=scope,
+        service=FakeApprovedEventService(),
+        events=events,
+        provider=FakeEpisodicProvider(output=_INVALID_OUTPUT),
+        pending_store=LocalPendingTakeoverStore(tmp_path),
+        local_first_takeover_enabled=True,
+        takeover_live_calls_authorized=True,
+        episodic_route_recorder=recorded.append,
+    )
+
+    result = port.extract_episodic({})
+
+    assert result["status"] == "handoff"
+    assert recorded == ["handoff"]

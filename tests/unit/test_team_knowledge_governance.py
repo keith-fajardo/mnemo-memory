@@ -73,6 +73,12 @@ class _ContextPort:
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         return {}
 
+    def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
+    def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
 
 def test_source_approval_round_trips_and_rejects_identity_tampering() -> None:
     scope = _scope()

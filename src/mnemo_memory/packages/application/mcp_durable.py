@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from time import monotonic
@@ -161,6 +162,7 @@ class DurableMcpContextPort:
         episodic_extraction_enabled: bool = False,
         local_first_takeover_enabled: bool = False,
         takeover_live_calls_authorized: bool = False,
+        episodic_route_recorder: Callable[[str], None] | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -188,6 +190,7 @@ class DurableMcpContextPort:
         if not isinstance(takeover_live_calls_authorized, bool):
             raise TypeError("takeover live-call authorization setting must be a boolean")
         self._takeover_live_calls_authorized = takeover_live_calls_authorized
+        self._episodic_route_recorder = episodic_route_recorder
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -968,7 +971,7 @@ class DurableMcpContextPort:
                 or self._task_activity_events is None
                 or not self._episodic_extraction_enabled
             ):
-                return {"status": "extraction_disabled"}
+                return self._record_episodic_route({"status": "extraction_disabled"})
             scope = _scope(request, self._default_scope)
             event = self._resolve_episodic_event(request, scope)
             if event is None:
@@ -978,9 +981,11 @@ class DurableMcpContextPort:
             try:
                 proposals = self._episodic_output_parser(raw, extraction_request.max_candidates)
             except (TypeError, ValueError):
-                return self._handle_invalid_local_extraction(event)
+                return self._record_episodic_route(self._handle_invalid_local_extraction(event))
             if not self._approved_event_capture_enabled:
-                return {"status": "extracted", "persisted": 0, "dropped": 0}
+                return self._record_episodic_route(
+                    {"status": "extracted", "persisted": 0, "dropped": 0}
+                )
             result = ingest_episodic_proposals(
                 service=self._service,
                 scope=event.scope,
@@ -988,13 +993,22 @@ class DurableMcpContextPort:
                 evidence_references=event.evidence_references,
                 proposals=proposals,
             )
-            return {
-                "status": "extracted",
-                "persisted": result.persisted,
-                "dropped": result.dropped,
-            }
+            return self._record_episodic_route(
+                {
+                    "status": "extracted",
+                    "persisted": result.persisted,
+                    "dropped": result.dropped,
+                }
+            )
         except Exception:
-            return {"status": "error"}
+            return self._record_episodic_route({"status": "error"})
+
+    def _record_episodic_route(self, outcome: dict[str, object]) -> dict[str, object]:
+        """Emit only a content-free route outcome; never let telemetry change the result."""
+        if self._episodic_route_recorder is not None:
+            with contextlib.suppress(Exception):
+                self._episodic_route_recorder(str(outcome["status"]))
+        return outcome
 
     def _handle_invalid_local_extraction(self, event: TaskActivityEvent) -> dict[str, object]:
         if (
