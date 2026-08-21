@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Self
+from typing import ClassVar, Self
 
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
@@ -111,16 +111,20 @@ class PersonalSettings:
             "context_structural_tokens": self.context_structural_tokens,
             "context_total_tokens": self.context_total_tokens,
             "episodic_retention_days": self.episodic_retention_days,
-            "experimental_local_first_takeover_enabled": self.experimental_local_first_takeover_enabled,
+            "experimental_local_first_takeover_enabled": (
+                self.experimental_local_first_takeover_enabled
+            ),
             "experimental_semantic_memory_enabled": self.experimental_semantic_memory_enabled,
-            "local_first_takeover_live_calls_authorized": self.local_first_takeover_live_calls_authorized,
+            "local_first_takeover_live_calls_authorized": (
+                self.local_first_takeover_live_calls_authorized
+            ),
             "model_id": self.model_id,
             "model_provider": self.model_provider,
             "optional_model_enabled": self.optional_model_enabled,
             "repository_knowledge_sync_enabled": self.repository_knowledge_sync_enabled,
         }
 
-    _MIGRATED_DEFAULTS = {
+    _MIGRATED_DEFAULTS: ClassVar[dict[str, bool]] = {
         "experimental_semantic_memory_enabled": False,
         "experimental_local_first_takeover_enabled": False,
         "local_first_takeover_live_calls_authorized": False,
