@@ -125,6 +125,7 @@ class AutomaticMemoryHook:
     git_observer: GitSourceObserver | None = None
     tool_telemetry_observer: _ToolTelemetryObserver | None = None
     delivery_telemetry_observer: _DeliveryTelemetryObserver | None = None
+    episodic_extraction_enabled: bool = False
 
     def handle(self, event: object) -> dict[str, object]:
         if not isinstance(event, dict):
@@ -326,6 +327,10 @@ class AutomaticMemoryHook:
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
             instruction = _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
+            if self.episodic_extraction_enabled:
+                instruction += (
+                    "\n\nMnemo: run extract_episodic on this session's recent events."
+                )
             if event_name == "PreCompact":
                 # Compaction hooks are a context boundary, not a command-stop decision. Attach the
                 # last durable handoff while asking the agent to save its current one when the
