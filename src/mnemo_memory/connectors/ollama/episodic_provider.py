@@ -16,9 +16,10 @@ _PROMPT = (
 
 
 def _urllib_transport(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    timeout = payload.pop("_timeout", 30.0)
     body = json.dumps(payload).encode()
     req = _request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with _request.urlopen(req, timeout=payload.pop("_timeout", 30.0)) as response:
+    with _request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode())  # type: ignore[no-any-return]
 
 
