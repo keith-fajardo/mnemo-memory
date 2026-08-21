@@ -267,6 +267,7 @@ def create_server(
     stateless_http: bool = False,
     json_response: bool = False,
     experimental_semantic_memory_enabled: bool = False,
+    episodic_extraction_enabled: bool = False,
 ) -> FastMCP:
     """Create the local context/checkpoint tools around an explicitly supplied application port."""
     server = FastMCP(
@@ -864,6 +865,50 @@ def create_server(
             }
         )
 
+    if episodic_extraction_enabled:
+
+        @server.tool(
+            name="extract_episodic",
+            description=(
+                "Run local episodic extraction over one explicit task activity event, or the "
+                "most recent unprocessed event when omitted. Fail-open: extraction errors "
+                "return a status without raising."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False, destructiveHint=False, openWorldHint=False
+            ),
+        )
+        def extract_episodic(
+            event_id: Annotated[
+                str | None, Field(default=None, min_length=36, max_length=36)
+            ] = None,
+        ) -> dict[str, object]:
+            return port.extract_episodic({"event_id": event_id})
+
+        @server.tool(
+            name="submit_episodic_candidates",
+            description=(
+                "Accept the host agent's takeover episodic candidates for exactly one pending "
+                "extraction handoff. Fail-open: invalid input or a missing pending handoff "
+                "returns a rejected status without raising."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False, destructiveHint=False, openWorldHint=False
+            ),
+        )
+        def submit_episodic_candidates(
+            candidates: Annotated[
+                list[dict[str, object]],
+                Field(
+                    description=(
+                        "Proposed episodic candidates for the current pending handoff, in the "
+                        "kind/claim/confidence/sensitivity schema returned by extract_episodic."
+                    )
+                ),
+            ],
+        ) -> dict[str, object]:
+            return port.submit_episodic_candidates({"candidates": candidates})
+
     if team_knowledge_port is not None:
 
         @server.tool(
@@ -925,6 +970,8 @@ def create_server(
             )
 
     names = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
+    if episodic_extraction_enabled:
+        names.extend(("extract_episodic", "submit_episodic_candidates"))
     if team_knowledge_port is not None:
         names.extend(("list_knowledge_sources", "approve_knowledge_source"))
     for name in names:
