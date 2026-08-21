@@ -5,9 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from ..domain.approved_episodic_events import ApprovedEventKind
-from ..domain.episodic_candidates import EpisodicExtractionProposal, EpisodicMemoryKind
-from ..domain.models import EvidenceReference, MemoryScope
+from mnemo_memory.packages.domain.approved_episodic_events import ApprovedEventKind
+from mnemo_memory.packages.domain.episodic_candidates import (
+    EpisodicExtractionProposal,
+    EpisodicMemoryKind,
+)
+from mnemo_memory.packages.domain.models import EvidenceReference, MemoryScope
+
 from .checkpoints import RecordApprovedEpisodicEvent
 
 _APPROVED_KIND: dict[EpisodicMemoryKind, ApprovedEventKind] = {
