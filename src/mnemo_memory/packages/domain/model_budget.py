@@ -13,6 +13,7 @@ _MAX_BIGINT = 9_223_372_036_854_775_807
 
 class ModelTaskType(StrEnum):
     EPISODIC_CANDIDATE_EXTRACTION = "episodic_candidate_extraction"
+    FRONTIER_TAKEOVER = "frontier_takeover"
 
 
 class ModelBudgetDenied(RuntimeError):

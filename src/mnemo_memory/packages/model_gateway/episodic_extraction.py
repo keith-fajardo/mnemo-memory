@@ -113,7 +113,7 @@ class SchemaBoundEpisodicExtractionGateway:
             except Exception as error:
                 raise EpisodicExtractionGatewayError("MNEMO_EPISODIC_PROVIDER_FAILURE") from error
             try:
-                return _parse_output(raw, request.max_candidates)
+                return parse_episodic_output(raw, request.max_candidates)
             except (TypeError, ValueError) as error:
                 if attempt == 1:
                     raise EpisodicExtractionGatewayError("MNEMO_EPISODIC_INVALID_OUTPUT") from error
@@ -126,7 +126,9 @@ def _metadata(value: str, name: str) -> str:
     return value
 
 
-def _parse_output(raw: object, max_candidates: int) -> tuple[EpisodicExtractionProposal, ...]:
+def parse_episodic_output(
+    raw: object, max_candidates: int
+) -> tuple[EpisodicExtractionProposal, ...]:
     if not isinstance(raw, Mapping) or set(raw) != {"candidates"}:
         raise ValueError("episodic extraction output fields are invalid")
     values = raw["candidates"]
@@ -159,3 +161,6 @@ def _parse_output(raw: object, max_candidates: int) -> tuple[EpisodicExtractionP
             )
         )
     return tuple(proposals)
+
+
+_parse_output = parse_episodic_output  # backward-compatible internal alias

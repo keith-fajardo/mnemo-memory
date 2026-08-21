@@ -47,6 +47,7 @@ from mnemo_memory.packages.model_gateway import (
     EpisodicExtractionGatewayError,
     SchemaBoundEpisodicExtractionGateway,
 )
+from mnemo_memory.packages.model_gateway.episodic_extraction import parse_episodic_output
 from mnemo_memory.packages.storage import (
     EpisodicMemoryCandidateConflict,
     EpisodicMemoryCandidateNotFound,
@@ -168,6 +169,21 @@ def _valid_output(
             }
         ]
     }
+
+
+def test_parse_episodic_output_is_public_and_parses_valid() -> None:
+    raw = {
+        "candidates": [
+            {"kind": "decision", "claim": "x", "confidence": 0.9, "sensitivity": "normal"}
+        ]
+    }
+    result = parse_episodic_output(raw, 4)
+    assert len(result) == 1 and result[0].claim == "x"
+
+
+def test_parse_episodic_output_rejects_bad_fields() -> None:
+    with pytest.raises(ValueError):
+        parse_episodic_output({"nope": []}, 4)
 
 
 def _gateway(
