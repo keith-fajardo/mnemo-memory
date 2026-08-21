@@ -65,6 +65,8 @@ def ingest_episodic_proposals(
                 )
             )
         except Exception:
+            # Intentional fail-open: this also swallows genuine storage outages as "dropped",
+            # not just policy rejections, so one bad candidate never aborts the batch.
             dropped += 1
             continue
         persisted += 1

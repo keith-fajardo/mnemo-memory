@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mnemo_memory.apps.mcp.server import create_server
+from mnemo_memory.apps.mcp.server import _DeferredMcpContextPort, create_server
 from mnemo_memory.connectors.automatic_memory.pending_takeover import LocalPendingTakeoverStore
 from mnemo_memory.connectors.ollama.episodic_provider import OllamaEpisodicProvider
 from mnemo_memory.packages.application import (
@@ -24,6 +24,7 @@ from mnemo_memory.packages.application import (
     build_checkpoint_runtime,
 )
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
+from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.domain import (
     EvidenceId,
     EvidenceLocation,
@@ -141,9 +142,7 @@ def _build_port(settings: PersonalSettings, *, data_directory: Path) -> DurableM
         if episodic_enabled
         else None
     )
-    pending_takeover_store = (
-        LocalPendingTakeoverStore(data_directory) if episodic_enabled else None
-    )
+    pending_takeover_store = LocalPendingTakeoverStore(data_directory) if episodic_enabled else None
     return DurableMcpContextPort(
         _FakeApprovedEventService(),  # type: ignore[arg-type]
         default_scope=scope,
@@ -156,6 +155,63 @@ def _build_port(settings: PersonalSettings, *, data_directory: Path) -> DurableM
         takeover_live_calls_authorized=settings.local_first_takeover_live_calls_authorized,
         episodic_route_recorder=None,
     )
+
+
+class _StaticMcpContextSession:
+    """Minimal `_McpContextSession` that hands back an already-built port.
+
+    Stands in for `_LocalMcpContextSession` without needing a full `CheckpointRuntime`,
+    so the test can prove `_DeferredMcpContextPort` reaches the exact wired
+    `DurableMcpContextPort` production construction builds.
+    """
+
+    def __init__(self, port: DurableMcpContextPort) -> None:
+        self.port: McpContextPort = port
+
+    def refresh_source(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def test_deferred_port_delegates_extract_episodic_to_the_wired_provider(
+    tmp_path: Path,
+) -> None:
+    """Regression test: `_DeferredMcpContextPort` is the production port `main()` wires
+
+    MCP tools against. It must not shadow the real `DurableMcpContextPort.extract_episodic`
+    with a dead `{"status": "extraction_disabled"}` stub, or the whole live-episodic-extraction
+    feature stays unreachable even when fully enabled.
+    """
+    settings = PersonalSettings(
+        optional_model_enabled=True, model_provider="ollama", model_id="ministral-3:8b"
+    )
+    assert settings.episodic_extraction_enabled is True
+    real_port = _build_port(settings, data_directory=tmp_path)
+    deferred = _DeferredMcpContextPort(lambda: _StaticMcpContextSession(real_port))
+
+    result = deferred.extract_episodic({})
+
+    # "extracted" (not the old dead stub's unconditional "extraction_disabled") proves the
+    # call reached the real wired `DurableMcpContextPort`, not a shadowing stub.
+    assert result["status"] == "extracted"
+
+
+def test_deferred_port_delegates_submit_episodic_candidates_to_the_wired_provider(
+    tmp_path: Path,
+) -> None:
+    settings = PersonalSettings(
+        optional_model_enabled=True, model_provider="ollama", model_id="ministral-3:8b"
+    )
+    real_port = _build_port(settings, data_directory=tmp_path)
+    deferred = _DeferredMcpContextPort(lambda: _StaticMcpContextSession(real_port))
+
+    result = deferred.submit_episodic_candidates({"candidates": []})
+
+    # No pending handoff was recorded, but reaching this rejection (rather than the old
+    # dead stub's unconditional "extraction_disabled") proves the call was delegated.
+    assert result["status"] == "rejected"
 
 
 def test_extract_episodic_runs_through_the_wired_ollama_provider_when_enabled(

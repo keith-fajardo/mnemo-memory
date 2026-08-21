@@ -225,10 +225,10 @@ class _DeferredMcpContextPort:
         return self._initialized_session().port.save_checkpoint(request)
 
     def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
-        return {"status": "extraction_disabled"}
+        return self._initialized_session().port.extract_episodic(request)
 
     def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
-        return {"status": "extraction_disabled"}
+        return self._initialized_session().port.submit_episodic_candidates(request)
 
     def verify_against_memory(self, request: dict[str, object]) -> dict[str, object]:
         port = cast(SemanticVerificationMcpPort, self._initialized_session().port)
