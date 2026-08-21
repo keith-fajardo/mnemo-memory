@@ -126,7 +126,9 @@ def _metadata(value: str, name: str) -> str:
     return value
 
 
-def parse_episodic_output(raw: object, max_candidates: int) -> tuple[EpisodicExtractionProposal, ...]:
+def parse_episodic_output(
+    raw: object, max_candidates: int
+) -> tuple[EpisodicExtractionProposal, ...]:
     if not isinstance(raw, Mapping) or set(raw) != {"candidates"}:
         raise ValueError("episodic extraction output fields are invalid")
     values = raw["candidates"]

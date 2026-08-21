@@ -39,7 +39,7 @@ def run_local_first_takeover(
             reserve_frontier()
         except Exception:
             # Denied/unavailable frontier budget: fail closed to the local failure.
-            raise local_failure
+            raise local_failure from None
         escalated = frontier()
         validate(escalated)  # frontier invalid -> propagate -> fail closed
         on_route("frontier")

@@ -19,6 +19,4 @@ def test_model_gateway_does_not_import_eval_or_apps():
     for path in SRC.glob("*.py"):
         for mod in _imports(path):
             assert "scripts" not in mod, f"{path} imports eval harness"
-            assert not mod.startswith(
-                "mnemo_memory.apps"
-            ), f"{path} imports apps layer"
+            assert not mod.startswith("mnemo_memory.apps"), f"{path} imports apps layer"
