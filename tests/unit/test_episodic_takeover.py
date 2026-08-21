@@ -1,9 +1,20 @@
 from types import SimpleNamespace
 
 import pytest
+
+from mnemo_memory.packages.domain.model_budget import ModelBudgetReservation
 from mnemo_memory.packages.model_gateway.episodic_takeover import TakeoverEpisodicProvider
 
-VALID = {"candidates": [{"kind": "decision", "claim": "x", "confidence": 0.9, "sensitivity": "normal"}]}
+VALID = {
+    "candidates": [
+        {
+            "kind": "decision",
+            "claim": "x",
+            "confidence": 0.9,
+            "sensitivity": "normal",
+        }
+    ]
+}
 INVALID = {"candidates": [{"bad": True}]}
 
 class FakeProvider:
@@ -47,7 +58,6 @@ def test_default_off_no_frontier_provider_fails_closed():
         p.generate(_req())
 
 # helpers
-from mnemo_memory.packages.domain.model_budget import ModelBudgetReservation
 def _res(): return ModelBudgetReservation(input_tokens=2000, output_tokens=1000, cost_microusd=0)
 class _NullBudget:
     def reserve(self, workspace_id, task_type, reservation): return None
