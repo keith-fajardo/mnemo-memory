@@ -4,9 +4,9 @@ import pathlib
 SRC = pathlib.Path("src/mnemo_memory/packages/model_gateway")
 
 
-def _imports(path):
+def _imports(path: pathlib.Path) -> list[str]:
     tree = ast.parse(path.read_text())
-    names = []
+    names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             names.append(node.module)
@@ -15,7 +15,7 @@ def _imports(path):
     return names
 
 
-def test_model_gateway_does_not_import_eval_or_apps():
+def test_model_gateway_does_not_import_eval_or_apps() -> None:
     for path in SRC.glob("*.py"):
         for mod in _imports(path):
             assert "scripts" not in mod, f"{path} imports eval harness"
