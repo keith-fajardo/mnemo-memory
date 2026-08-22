@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from time import monotonic
@@ -34,6 +35,9 @@ from mnemo_memory.packages.application.checkpoints import (
     estimate_checkpoint_tokens,
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
+from mnemo_memory.packages.application.episodic_extraction_ingest import (
+    ingest_episodic_proposals,
+)
 from mnemo_memory.packages.application.semantic_verification import (
     verify_candidate_against_memory,
 )
@@ -61,6 +65,9 @@ from mnemo_memory.packages.domain import (
     ContextPacket,
     DbtNodeId,
     DbtSnapshotId,
+    EpisodicExtractionProposal,
+    EpisodicExtractionRequest,
+    EventId,
     EvidenceReference,
     MemoryScope,
     OwnerId,
@@ -70,12 +77,19 @@ from mnemo_memory.packages.domain import (
     SemanticMemoryAtom,
     SessionId,
     SourceStateFingerprint,
+    TaskActivityEvent,
     TaskId,
     Visibility,
     WorkspaceId,
 )
 from mnemo_memory.packages.domain.identifiers import Identifier
-from mnemo_memory.packages.storage import ProjectSkillRegistry
+from mnemo_memory.packages.storage import ProjectSkillRegistry, TaskActivityEventRepository
+
+# The candidate-count bound below mirrors `EpisodicExtractionRequest.max_candidates` and
+# `parse_episodic_output`'s own `_MAX_CANDIDATES` in `packages/model_gateway`. It is
+# duplicated (not imported) because `packages/application` may not depend on
+# `packages/model_gateway`; see `scripts/check_architecture.py`.
+_MAX_EPISODIC_CANDIDATES = 4
 
 
 class UnifiedContextPort(Protocol):
@@ -84,6 +98,36 @@ class UnifiedContextPort(Protocol):
 
 class SemanticVerificationPort(Protocol):
     def active_atoms(self, scope: MemoryScope) -> tuple[SemanticMemoryAtom, ...]: ...
+
+
+class EpisodicExtractionProviderPort(Protocol):
+    """Structural match for `RawEpisodicExtractionProvider` (`packages/model_gateway`).
+
+    Duplicated as a local Protocol, not imported, because `packages/application` may not
+    depend on `packages/model_gateway`; see `scripts/check_architecture.py`.
+    """
+
+    @property
+    def provider_id(self) -> str: ...
+
+    @property
+    def model_id(self) -> str: ...
+
+    def generate(self, request: EpisodicExtractionRequest) -> object: ...
+
+
+class PendingTakeoverPort(Protocol):
+    """Structural match for `LocalPendingTakeoverStore` (`connectors/automatic_memory`).
+
+    Duplicated as a local Protocol, not imported, because `packages/application` may not
+    depend on `connectors/*`; see `scripts/check_architecture.py`.
+    """
+
+    def mark(self, scope: MemoryScope, source_event_key: str) -> None: ...
+
+    def pending(self, scope: MemoryScope) -> str | None: ...
+
+    def clear(self, scope: MemoryScope) -> None: ...
 
 
 class DurableMcpContextPort:
@@ -109,6 +153,16 @@ class DurableMcpContextPort:
             | None
         ) = None,
         semantic_memory: SemanticVerificationPort | None = None,
+        episodic_provider: EpisodicExtractionProviderPort | None = None,
+        episodic_output_parser: (
+            Callable[[object, int], tuple[EpisodicExtractionProposal, ...]] | None
+        ) = None,
+        pending_takeover_store: PendingTakeoverPort | None = None,
+        task_activity_events: TaskActivityEventRepository | None = None,
+        episodic_extraction_enabled: bool = False,
+        local_first_takeover_enabled: bool = False,
+        takeover_live_calls_authorized: bool = False,
+        episodic_route_recorder: Callable[[str], None] | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -123,6 +177,20 @@ class DurableMcpContextPort:
         self._checkpoint_evidence_resolver = checkpoint_evidence_resolver
         self._checkpoint_save_observer = checkpoint_save_observer
         self._semantic_memory = semantic_memory
+        self._episodic_provider = episodic_provider
+        self._episodic_output_parser = episodic_output_parser
+        self._pending_takeover_store = pending_takeover_store
+        self._task_activity_events = task_activity_events
+        if not isinstance(episodic_extraction_enabled, bool):
+            raise TypeError("episodic extraction setting must be a boolean")
+        self._episodic_extraction_enabled = episodic_extraction_enabled
+        if not isinstance(local_first_takeover_enabled, bool):
+            raise TypeError("local-first takeover setting must be a boolean")
+        self._local_first_takeover_enabled = local_first_takeover_enabled
+        if not isinstance(takeover_live_calls_authorized, bool):
+            raise TypeError("takeover live-call authorization setting must be a boolean")
+        self._takeover_live_calls_authorized = takeover_live_calls_authorized
+        self._episodic_route_recorder = episodic_route_recorder
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope
@@ -889,6 +957,153 @@ class DurableMcpContextPort:
                 None,
             )
             raise safe_error from error
+
+    def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+        """Run local episodic extraction; escalate invalid output to host-agent takeover.
+
+        Fail-open: any exception (including a raising provider) is swallowed and reported
+        as ``{"status": "error"}`` without persisting anything.
+        """
+        try:
+            if (
+                self._episodic_provider is None
+                or self._episodic_output_parser is None
+                or self._task_activity_events is None
+                or not self._episodic_extraction_enabled
+            ):
+                return self._record_episodic_route({"status": "extraction_disabled"})
+            scope = _scope(request, self._default_scope)
+            event = self._resolve_episodic_event(request, scope)
+            if event is None:
+                return {"status": "no_events"}
+            extraction_request = EpisodicExtractionRequest.from_event(event)
+            raw = self._episodic_provider.generate(extraction_request)
+            try:
+                proposals = self._episodic_output_parser(raw, extraction_request.max_candidates)
+            except (TypeError, ValueError):
+                return self._record_episodic_route(self._handle_invalid_local_extraction(event))
+            if not self._approved_event_capture_enabled:
+                return self._record_episodic_route(
+                    {"status": "extracted", "persisted": 0, "dropped": 0}
+                )
+            result = ingest_episodic_proposals(
+                service=self._service,
+                scope=event.scope,
+                source_event_key=event.source_event_key,
+                evidence_references=event.evidence_references,
+                proposals=proposals,
+            )
+            return self._record_episodic_route(
+                {
+                    "status": "extracted",
+                    "persisted": result.persisted,
+                    "dropped": result.dropped,
+                }
+            )
+        except Exception:
+            return self._record_episodic_route({"status": "error"})
+
+    def _record_episodic_route(self, outcome: dict[str, object]) -> dict[str, object]:
+        """Emit only a content-free route outcome; never let telemetry change the result."""
+        if self._episodic_route_recorder is not None:
+            with contextlib.suppress(Exception):
+                self._episodic_route_recorder(str(outcome["status"]))
+        return outcome
+
+    def _handle_invalid_local_extraction(self, event: TaskActivityEvent) -> dict[str, object]:
+        if (
+            self._local_first_takeover_enabled
+            and self._takeover_live_calls_authorized
+            and self._pending_takeover_store is not None
+        ):
+            self._pending_takeover_store.mark(event.scope, event.source_event_key)
+            return {
+                "status": "handoff",
+                "event": {
+                    "summary": event.summary,
+                    "source_event_key": event.source_event_key,
+                },
+                "schema": {
+                    "candidates": [
+                        {
+                            "kind": "decision|failure|outcome|lesson|preference",
+                            "claim": "str",
+                            "confidence": 0.0,
+                            "sensitivity": "normal",
+                        }
+                    ]
+                },
+                "reason": "local_invalid",
+            }
+        return {"status": "local_failed"}
+
+    def _resolve_episodic_event(
+        self, request: Mapping[str, object], scope: MemoryScope
+    ) -> TaskActivityEvent | None:
+        assert self._task_activity_events is not None
+        event_id = request.get("event_id")
+        if isinstance(event_id, str) and len(event_id) == 36:
+            return self._task_activity_events.get_task_activity_event(
+                scope, EventId.from_string(event_id)
+            )
+        page = self._task_activity_events.list_task_activity_events(scope, offset=0, limit=1)
+        return page.items[0] if page.items else None
+
+    def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+        """Accept the host agent's takeover candidates for exactly one pending handoff.
+
+        Fail-open: any exception is swallowed and reported as ``{"status": "error"}``
+        without persisting anything.
+        """
+        try:
+            if self._pending_takeover_store is None or self._episodic_output_parser is None:
+                return {"status": "rejected", "reason": "no_pending_handoff"}
+            scope = _scope(request, self._default_scope)
+            key = self._pending_takeover_store.pending(scope)
+            if key is None:
+                return {"status": "rejected", "reason": "no_pending_handoff"}
+            try:
+                proposals = self._episodic_output_parser(
+                    {"candidates": request.get("candidates")}, _MAX_EPISODIC_CANDIDATES
+                )
+            except (TypeError, ValueError):
+                return {"status": "rejected", "reason": "invalid_candidates"}
+            event = self._find_task_activity_event_by_key(scope, key)
+            if event is None:
+                return {"status": "rejected", "reason": "no_pending_handoff"}
+            result = ingest_episodic_proposals(
+                service=self._service,
+                scope=event.scope,
+                source_event_key=event.source_event_key,
+                evidence_references=event.evidence_references,
+                proposals=proposals,
+            )
+            self._pending_takeover_store.clear(scope)
+            return {
+                "status": "persisted",
+                "persisted": result.persisted,
+                "dropped": result.dropped,
+            }
+        except Exception:
+            return {"status": "error"}
+
+    def _find_task_activity_event_by_key(
+        self, scope: MemoryScope, source_event_key: str
+    ) -> TaskActivityEvent | None:
+        if self._task_activity_events is None:
+            return None
+        offset = 0
+        for _ in range(20):
+            page = self._task_activity_events.list_task_activity_events(
+                scope, offset=offset, limit=50
+            )
+            for item in page.items:
+                if item.source_event_key == source_event_key:
+                    return item
+            if page.next_offset is None:
+                return None
+            offset = page.next_offset
+        return None
 
     def _observe_checkpoint_save(self, view: CheckpointView) -> None:
         """Keep optional local structure observation fail-open and outside MCP errors."""

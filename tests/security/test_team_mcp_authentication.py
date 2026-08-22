@@ -35,6 +35,12 @@ class _Port:
     def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "save_checkpoint"}
 
+    def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
+    def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+        return {"status": "extraction_disabled"}
+
     def list_knowledge_sources(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "list_knowledge_sources"}
 

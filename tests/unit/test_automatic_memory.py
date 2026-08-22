@@ -341,6 +341,45 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     assert "transcript" not in state.lower()
 
 
+def test_stop_nudges_extract_episodic_only_when_enabled(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+
+    enabled_hook = AutomaticMemoryHook(data, "codex", episodic_extraction_enabled=True)
+    enabled_hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
+    )
+    enabled_hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+    stop = enabled_hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
+    assert "run extract_episodic" in str(stop)
+
+    disabled_hook = AutomaticMemoryHook(data, "codex")
+    disabled_hook.handle(
+        {"hook_event_name": "SessionStart", "session_id": "s2", "cwd": str(project)}
+    )
+    disabled_hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s2",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+    unchanged_stop = disabled_hook.handle(
+        {"hook_event_name": "Stop", "session_id": "s2", "cwd": str(project)}
+    )
+    assert "run extract_episodic" not in str(unchanged_stop)
+
+
 def test_session_start_retention_failure_never_blocks_the_client(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()

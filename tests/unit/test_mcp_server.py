@@ -289,6 +289,68 @@ def test_server_lists_verifier_only_when_experimental_semantic_memory_is_enabled
     assert verifier.inputSchema["properties"]["reconcile"]["default"] is False
 
 
+def test_server_lists_episodic_tools_only_when_episodic_extraction_is_enabled(
+    tmp_path: Path,
+) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "runtime")) as runtime:
+        server = create_server(
+            DurableMcpContextPort(runtime.checkpoint_service),
+            episodic_extraction_enabled=True,
+        )
+        tools = list(asyncio.run(server.list_tools()))
+        names = [tool.name for tool in tools]
+
+        assert names == [
+            "get_context",
+            "list_skills",
+            "get_skill",
+            "explain_context",
+            "save_checkpoint",
+            "extract_episodic",
+            "submit_episodic_candidates",
+        ]
+
+        tool_manager_tools = server._tool_manager._tools
+        for name in ("extract_episodic", "submit_episodic_candidates"):
+            assert name in tool_manager_tools
+            assert tool_manager_tools[name].parameters["additionalProperties"] is False
+
+        extract_tool = next(tool for tool in tools if tool.name == "extract_episodic")
+        assert extract_tool.annotations is not None
+        assert extract_tool.annotations.readOnlyHint is False
+        assert extract_tool.annotations.destructiveHint is False
+        assert extract_tool.annotations.openWorldHint is False
+        assert set(extract_tool.inputSchema["properties"]) == {"event_id"}
+        assert extract_tool.inputSchema["additionalProperties"] is False
+
+        submit_tool = next(tool for tool in tools if tool.name == "submit_episodic_candidates")
+        assert submit_tool.annotations is not None
+        assert submit_tool.annotations.readOnlyHint is False
+        assert submit_tool.annotations.destructiveHint is False
+        assert submit_tool.annotations.openWorldHint is False
+        assert set(submit_tool.inputSchema["properties"]) == {"candidates"}
+        assert submit_tool.inputSchema["additionalProperties"] is False
+
+
+def test_server_omits_episodic_tools_by_default(tmp_path: Path) -> None:
+    with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "runtime")) as runtime:
+        server = create_server(DurableMcpContextPort(runtime.checkpoint_service))
+        tools = list(asyncio.run(server.list_tools()))
+        names = [tool.name for tool in tools]
+
+        assert "extract_episodic" not in names
+        assert "submit_episodic_candidates" not in names
+        assert names == [
+            "get_context",
+            "list_skills",
+            "get_skill",
+            "explain_context",
+            "save_checkpoint",
+        ]
+        assert "extract_episodic" not in server._tool_manager._tools
+        assert "submit_episodic_candidates" not in server._tool_manager._tools
+
+
 def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listing() -> None:
     events: list[object] = []
 
@@ -307,6 +369,14 @@ def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listin
 
         def save_checkpoint(self, request: dict[str, object]) -> dict[str, object]:
             events.append(("save_checkpoint", request))
+            return request
+
+        def extract_episodic(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("extract_episodic", request))
+            return request
+
+        def submit_episodic_candidates(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("submit_episodic_candidates", request))
             return request
 
     class RecordingSession:

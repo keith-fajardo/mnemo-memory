@@ -41,6 +41,7 @@ CONNECTOR_COMPONENTS = {
     "connectors/git",
     "connectors/obsidian",
     "connectors/oauth",
+    "connectors/ollama",
     "connectors/postgresql",
 }
 KNOWN_COMPONENTS = PACKAGE_COMPONENTS | APP_COMPONENTS | CONNECTOR_COMPONENTS

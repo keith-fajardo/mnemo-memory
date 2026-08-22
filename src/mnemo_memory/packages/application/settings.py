@@ -89,6 +89,15 @@ class PersonalSettings:
             raise PersonalSettingsError("context budget is invalid") from error
 
     @property
+    def episodic_extraction_enabled(self) -> bool:
+        """Whether local Ollama episodic extraction should be wired at construction sites."""
+        return (
+            self.optional_model_enabled
+            and self.model_provider == "ollama"
+            and self.model_id is not None
+        )
+
+    @property
     def context_budget(self) -> ContextBudget:
         return ContextBudget(
             active_task_checkpoint=self.context_active_task_checkpoint_tokens,

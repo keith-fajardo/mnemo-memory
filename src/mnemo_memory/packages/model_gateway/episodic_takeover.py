@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..domain.episodic_candidates import EpisodicExtractionRequest
-from ..domain.identifiers import WorkspaceId
-from ..domain.model_budget import (
+from mnemo_memory.packages.domain.episodic_candidates import EpisodicExtractionRequest
+from mnemo_memory.packages.domain.identifiers import WorkspaceId
+from mnemo_memory.packages.domain.model_budget import (
     ModelBudgetReservation,
     ModelBudgetReservationPort,
     ModelTaskType,
 )
+
 from .episodic_extraction import (
     RawEpisodicExtractionProvider,
     parse_episodic_output,
