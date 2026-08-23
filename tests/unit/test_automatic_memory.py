@@ -380,6 +380,132 @@ def test_stop_nudges_extract_episodic_only_when_enabled(tmp_path: Path) -> None:
     assert "run extract_episodic" not in str(unchanged_stop)
 
 
+def _establish_saved_baseline(
+    hook: AutomaticMemoryHook,
+    data: Path,
+    binding: MemoryProjectBinding,
+    project: Path,
+    transcript: Path,
+) -> None:
+    """Drive the hook to one confirmed save so a transcript-byte baseline is recorded."""
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+    _create_test_handoff(data, binding)
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "mcp__mnemo-memory__save_checkpoint",
+            "transcript_path": str(transcript),
+        }
+    )
+
+
+def test_stop_reminder_waits_until_transcript_grows_past_threshold(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_bytes(b"x" * 1000)
+    hook = AutomaticMemoryHook(data, "codex", context_save_growth_bytes=500)
+    _establish_saved_baseline(hook, data, binding, project, transcript)
+
+    # New work makes the session dirty again; the byte baseline (1000) must be preserved.
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+
+    transcript.write_bytes(b"x" * 1100)  # +100 bytes since the save: below the 500 threshold
+    quiet = hook.handle(
+        {
+            "hook_event_name": "Stop",
+            "session_id": "s1",
+            "cwd": str(project),
+            "transcript_path": str(transcript),
+        }
+    )
+    assert quiet == {}
+
+    transcript.write_bytes(b"x" * 1700)  # +700 bytes since the save: past the threshold
+    nudged = hook.handle(
+        {
+            "hook_event_name": "Stop",
+            "session_id": "s1",
+            "cwd": str(project),
+            "transcript_path": str(transcript),
+        }
+    )
+    assert nudged["decision"] == "block"
+
+
+def test_stop_fails_open_and_nudges_when_transcript_size_is_unmeasurable(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_bytes(b"x" * 1000)
+    hook = AutomaticMemoryHook(data, "codex", context_save_growth_bytes=500)
+    _establish_saved_baseline(hook, data, binding, project, transcript)
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+
+    # A Stop with no transcript_path cannot measure growth; memory safety requires a nudge anyway.
+    nudged = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
+    assert nudged["decision"] == "block"
+
+
+def test_precompact_always_flushes_even_below_growth_threshold(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_bytes(b"x" * 1000)
+    # claude-code emits the PreCompact instruction inline (codex stays silent by design).
+    hook = AutomaticMemoryHook(data, "claude-code", context_save_growth_bytes=500)
+    _establish_saved_baseline(hook, data, binding, project, transcript)
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "apply_patch",
+        }
+    )
+
+    transcript.write_bytes(b"x" * 1100)  # only +100 bytes: under the threshold
+    flushed = hook.handle(
+        {
+            "hook_event_name": "PreCompact",
+            "session_id": "s1",
+            "cwd": str(project),
+            "transcript_path": str(transcript),
+        }
+    )
+    assert "save_checkpoint" in str(flushed)
+
+
 def test_session_start_retention_failure_never_blocks_the_client(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()

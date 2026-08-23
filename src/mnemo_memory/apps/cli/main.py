@@ -102,6 +102,7 @@ from mnemo_memory.packages.application import (
     PersonalDiagnosticContext,
     PersonalDiagnosticError,
     PersonalDiagnosticService,
+    PersonalSettings,
     PersonalSettingsError,
     PersonalSettingsStore,
     PersonalUninstallError,
@@ -3488,12 +3489,13 @@ def memory_route_diagnostics_purge(
 def build_automatic_memory_hook(config: LocalConfig, client: ClientName) -> AutomaticMemoryHook:
     """Compose the production automatic-memory hook for one trusted local client."""
     try:
-        episodic_extraction_enabled = (
-            PersonalSettingsStore(config.data_directory).load().episodic_extraction_enabled
-        )
+        loaded_settings = PersonalSettingsStore(config.data_directory).load()
+        episodic_extraction_enabled = loaded_settings.episodic_extraction_enabled
+        context_save_growth_bytes = loaded_settings.context_save_growth_bytes
     except PersonalSettingsError:
         # The hook stays a nudge-only surface; a settings failure just keeps the nudge inert.
         episodic_extraction_enabled = False
+        context_save_growth_bytes = PersonalSettings().context_save_growth_bytes
 
     def expire_due_checkpoints(binding: MemoryProjectBinding) -> None:
         retention_days = PersonalSettingsStore(config.data_directory).load().episodic_retention_days
@@ -3539,6 +3541,7 @@ def build_automatic_memory_hook(config: LocalConfig, client: ClientName) -> Auto
             )
         ),
         episodic_extraction_enabled=episodic_extraction_enabled,
+        context_save_growth_bytes=context_save_growth_bytes,
     )
 
 

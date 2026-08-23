@@ -1,9 +1,11 @@
 """Client-hook handler for opt-in automatic checkpoint reminders.
 
-This module deliberately does not read a transcript, environment values, or tool bodies. It reads
-only the public save operation tag when supplied, so an explicit small historical fact cannot be
-mistaken for a complete task handoff. On a trusted enabled project boundary it may refresh Mnemo's
-bounded static source-structure projection; it never stores source text.
+This module deliberately does not read a transcript's contents, environment values, or tool
+bodies. It reads only the public save operation tag when supplied, so an explicit small historical
+fact cannot be mistaken for a complete task handoff. To pace checkpoint nudges by how much context
+has accumulated it may stat the client transcript for its byte size alone (file metadata, never the
+conversation text). On a trusted enabled project boundary it may refresh Mnemo's bounded static
+source-structure projection; it never stores source text.
 """
 
 from __future__ import annotations
@@ -126,6 +128,9 @@ class AutomaticMemoryHook:
     tool_telemetry_observer: _ToolTelemetryObserver | None = None
     delivery_telemetry_observer: _DeliveryTelemetryObserver | None = None
     episodic_extraction_enabled: bool = False
+    # Byte growth of the client transcript since the last save before a Stop nudges another
+    # checkpoint. 0 disables the gate (nudge on every dirty Stop, the historical behavior).
+    context_save_growth_bytes: int = 200_000
 
     def handle(self, event: object) -> dict[str, object]:
         if not isinstance(event, dict):
@@ -184,6 +189,9 @@ class AutomaticMemoryHook:
                     telemetry_event_id=state.telemetry_event_id,
                     dirty_reminder_sent=False,
                     delivered_context_keys=state.delivered_context_keys,
+                    # Anchor the growth gate to the transcript size at this durable save, so the
+                    # next Stop nudge waits until enough new context has accumulated.
+                    saved_transcript_bytes=_transcript_size_bytes(event),
                 )
                 _ProjectHandoffStateStore(self.data_directory).clear(binding.scope)
             elif tool_name in _MUTATING_TOOLS:
@@ -211,6 +219,7 @@ class AutomaticMemoryHook:
                     telemetry_event_id=state.telemetry_event_id,
                     dirty_reminder_sent=(state.dirty_reminder_sent if state.dirty else False),
                     delivered_context_keys=state.delivered_context_keys,
+                    saved_transcript_bytes=state.saved_transcript_bytes,
                 )
                 _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             return {}
@@ -304,6 +313,7 @@ class AutomaticMemoryHook:
                 telemetry_event_id=prompt_attachment.telemetry_event_id,
                 dirty_reminder_sent=state.dirty_reminder_sent or should_remind,
                 delivered_context_keys=delivered_context_keys,
+                saved_transcript_bytes=state.saved_transcript_bytes,
             )
             return output
         if event_name == "PreCompact":
@@ -319,9 +329,14 @@ class AutomaticMemoryHook:
                 telemetry_event_id=state.telemetry_event_id,
                 dirty_reminder_sent=state.dirty_reminder_sent,
                 delivered_context_keys=(),
+                saved_transcript_bytes=state.saved_transcript_bytes,
             )
         if event_name in {"Stop", "PreCompact"} and state.dirty and not state.saved:
             if event.get("stop_hook_active") is True:
+                return {}
+            if event_name == "Stop" and not self._context_growth_reached(event, state):
+                # Enough context has not yet accumulated since the last save. Stay silent so the
+                # turn ends fast; the session stays dirty and PreCompact remains the flush backstop.
                 return {}
             _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             self._refresh_project_knowledge(binding)
@@ -345,6 +360,21 @@ class AutomaticMemoryHook:
                 )
             return self._checkpoint_output(instruction)
         return {}
+
+    def _context_growth_reached(self, event: Mapping[str, object], state: _SessionState) -> bool:
+        """Whether the transcript has grown enough since the last save to warrant a new nudge.
+
+        Fails open (returns True) when the gate is disabled or growth cannot be measured, so a
+        missing/unreadable transcript path never suppresses a needed handoff.
+        """
+        threshold = self.context_save_growth_bytes
+        if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold <= 0:
+            return True
+        baseline = state.saved_transcript_bytes
+        current = _transcript_size_bytes(event)
+        if baseline is None or current is None:
+            return True
+        return current - baseline >= threshold
 
     def _expire_due_checkpoints(self, binding: MemoryProjectBinding) -> None:
         """Run one bounded retention pass without ever blocking the client session."""
@@ -689,6 +719,25 @@ class _SessionState:
     telemetry_event_id: UUID | None = None
     dirty_reminder_sent: bool = False
     delivered_context_keys: tuple[str, ...] = ()
+    saved_transcript_bytes: int | None = None
+
+
+def _transcript_size_bytes(event: Mapping[str, object]) -> int | None:
+    """Return the client transcript's byte size (metadata only), or None if unmeasurable.
+
+    Reads the file's size, never its contents. Any absence, symlink, or OS error yields None so
+    the caller fails open to the historical every-dirty-stop nudge and never loses a handoff.
+    """
+    path = event.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        transcript = Path(path)
+        if transcript.is_symlink() or not transcript.is_file():
+            return None
+        return transcript.stat().st_size
+    except OSError:
+        return None
 
 
 class _SessionStateStore:
@@ -728,6 +777,14 @@ class _SessionStateStore:
             and all(_valid_delivery_key(key) for key in raw_delivery_keys)
             else ()
         )
+        raw_saved_bytes = value.get("saved_transcript_bytes")
+        saved_transcript_bytes = (
+            raw_saved_bytes
+            if isinstance(raw_saved_bytes, int)
+            and not isinstance(raw_saved_bytes, bool)
+            and raw_saved_bytes >= 0
+            else None
+        )
         return _SessionState(
             value.get("dirty") is True,
             value.get("saved") is True,
@@ -737,6 +794,7 @@ class _SessionStateStore:
             parsed_telemetry_event_id,
             value.get("dirty_reminder_sent") is True,
             delivered_context_keys,
+            saved_transcript_bytes,
         )
 
     def save(
@@ -751,6 +809,7 @@ class _SessionStateStore:
         telemetry_event_id: UUID | None = None,
         dirty_reminder_sent: bool = False,
         delivered_context_keys: tuple[str, ...] = (),
+        saved_transcript_bytes: int | None = None,
     ) -> None:
         try:
             with exclusive_local_file_lock(self._directory, ".automatic-memory-state.lock"):
@@ -767,6 +826,12 @@ class _SessionStateStore:
                     session["telemetry_event_id"] = str(telemetry_event_id)
                 if dirty_reminder_sent:
                     session["dirty_reminder_sent"] = True
+                if (
+                    isinstance(saved_transcript_bytes, int)
+                    and not isinstance(saved_transcript_bytes, bool)
+                    and saved_transcript_bytes >= 0
+                ):
+                    session["saved_transcript_bytes"] = saved_transcript_bytes
                 sanitized_delivery_keys = _merge_delivery_keys((), delivered_context_keys)
                 if sanitized_delivery_keys:
                     session["delivered_context_keys"] = list(sanitized_delivery_keys)

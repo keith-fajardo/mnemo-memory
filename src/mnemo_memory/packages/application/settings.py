@@ -23,6 +23,7 @@ _FIELDS = {
     "context_episodic_tokens",
     "context_knowledge_tokens",
     "context_provenance_tokens",
+    "context_save_growth_bytes",
     "context_skills_tokens",
     "context_structural_tokens",
     "context_total_tokens",
@@ -59,6 +60,7 @@ class PersonalSettings:
     context_skills_tokens: int = 1_200
     context_provenance_tokens: int = 400
     context_total_tokens: int = 5_700
+    context_save_growth_bytes: int = 200_000
 
     def __post_init__(self) -> None:
         for name in (
@@ -75,6 +77,12 @@ class PersonalSettings:
             1 <= self.episodic_retention_days <= 3_650
         ):
             raise PersonalSettingsError("episodic retention must be between 1 and 3650 days")
+        if (
+            isinstance(self.context_save_growth_bytes, bool)
+            or not isinstance(self.context_save_growth_bytes, int)
+            or not 0 <= self.context_save_growth_bytes <= 100_000_000
+        ):
+            raise PersonalSettingsError("context save growth must be between 0 and 100000000 bytes")
         provider = _optional_metadata(self.model_provider, "model provider")
         model = _optional_metadata(self.model_id, "model id")
         object.__setattr__(self, "model_provider", provider)
@@ -116,6 +124,7 @@ class PersonalSettings:
             "context_episodic_tokens": self.context_episodic_tokens,
             "context_knowledge_tokens": self.context_knowledge_tokens,
             "context_provenance_tokens": self.context_provenance_tokens,
+            "context_save_growth_bytes": self.context_save_growth_bytes,
             "context_skills_tokens": self.context_skills_tokens,
             "context_structural_tokens": self.context_structural_tokens,
             "context_total_tokens": self.context_total_tokens,
@@ -133,10 +142,11 @@ class PersonalSettings:
             "repository_knowledge_sync_enabled": self.repository_knowledge_sync_enabled,
         }
 
-    _MIGRATED_DEFAULTS: ClassVar[dict[str, bool]] = {
+    _MIGRATED_DEFAULTS: ClassVar[dict[str, bool | int]] = {
         "experimental_semantic_memory_enabled": False,
         "experimental_local_first_takeover_enabled": False,
         "local_first_takeover_live_calls_authorized": False,
+        "context_save_growth_bytes": 200_000,
     }
 
     @classmethod

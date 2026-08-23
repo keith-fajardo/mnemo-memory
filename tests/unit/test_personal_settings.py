@@ -38,6 +38,7 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
         "context_skills_tokens",
         "context_structural_tokens",
         "context_total_tokens",
+        "context_save_growth_bytes",
         "episodic_retention_days",
         "experimental_local_first_takeover_enabled",
         "experimental_semantic_memory_enabled",
@@ -206,3 +207,16 @@ def test_from_dict_migrates_missing_takeover_flags() -> None:
     migrated = PersonalSettings.from_dict(d)
     assert migrated.experimental_local_first_takeover_enabled is False
     assert migrated.local_first_takeover_live_calls_authorized is False
+
+
+def test_context_save_growth_bytes_default_and_migration() -> None:
+    assert PersonalSettings().context_save_growth_bytes == 200_000
+    legacy = PersonalSettings().to_dict()
+    legacy.pop("context_save_growth_bytes")
+    migrated = PersonalSettings.from_dict(legacy)
+    assert migrated.context_save_growth_bytes == 200_000
+
+
+def test_context_save_growth_bytes_rejects_negative() -> None:
+    with pytest.raises(PersonalSettingsError):
+        PersonalSettings(context_save_growth_bytes=-1)
