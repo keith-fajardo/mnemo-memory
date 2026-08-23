@@ -9,8 +9,13 @@ from urllib import request as _request
 
 _PROMPT = (
     "Extract at most {n} episodic memory candidates from the event summary below. "
-    'Reply with ONLY JSON of the form {{"candidates":[{{"kind":"decision|failure|outcome|'
-    'lesson|preference","claim":"...","confidence":0.0,"sensitivity":"normal"}}]}}. '
+    'Reply with ONLY JSON of the form {{"candidates":[{{"kind":"...","claim":"...",'
+    '"confidence":0.0,"sensitivity":"normal"}}]}}. '
+    '"kind" MUST be EXACTLY ONE of these five words: decision, failure, outcome, lesson, '
+    "preference. Do NOT invent any other kind or return the list itself. Map anything else to "
+    "the closest allowed kind (decided/chose -> decision; broke/regressed/error -> failure; "
+    "fixed/shipped/built/implemented -> outcome; learned/realized -> lesson; likes/wants/prefers "
+    '-> preference). "sensitivity" MUST be exactly "normal". '
     "Emit an empty candidates list if nothing is worth remembering.\n\nEVENT:\n{summary}"
 )
 

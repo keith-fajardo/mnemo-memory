@@ -37,3 +37,22 @@ def test_generate_returns_parseable_candidates() -> None:
     assert captured["url"].endswith("/api/generate")
     assert captured["payload"]["model"] == "ministral-3:8b"
     assert p.provider_id == "ollama" and p.model_id == "ministral-3:8b"
+
+
+def test_prompt_constrains_kind_to_the_allowed_enum() -> None:
+    captured: dict[str, Any] = {}
+    p = OllamaEpisodicProvider(
+        "http://127.0.0.1:11434", "ministral-3:8b", transport=_fake_transport(captured)
+    )
+
+    class Req:
+        summary = "did a thing"
+        max_candidates = 4
+
+    p.generate(Req())
+    prompt = captured["payload"]["prompt"]
+    for kind in ("decision", "failure", "outcome", "lesson", "preference"):
+        assert kind in prompt
+    # The model must be told to pick exactly one allowed kind and not invent others.
+    assert "exactly one" in prompt.lower()
+    assert "invent" in prompt.lower()

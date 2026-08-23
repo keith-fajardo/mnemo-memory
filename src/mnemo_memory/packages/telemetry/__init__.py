@@ -19,6 +19,11 @@ from .checkpoint_saves import (
     CheckpointSaveTelemetryError,
     LocalCheckpointSaveTelemetryStore,
 )
+from .takeover_routes import (
+    LocalTakeoverRouteTelemetryStore,
+    TakeoverRouteTelemetry,
+    TakeoverRouteTelemetryError,
+)
 
 __all__ = [
     "AutomaticRouteDiagnosticsMode",
@@ -36,4 +41,7 @@ __all__ = [
     "LocalAutomaticRouteDiagnosticsSettingsStore",
     "LocalAutomaticRouteTelemetryStore",
     "LocalCheckpointSaveTelemetryStore",
+    "LocalTakeoverRouteTelemetryStore",
+    "TakeoverRouteTelemetry",
+    "TakeoverRouteTelemetryError",
 ]

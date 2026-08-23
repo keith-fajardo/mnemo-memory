@@ -69,6 +69,7 @@ from mnemo_memory.packages.telemetry import (
     CheckpointSaveOutcome,
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalCheckpointSaveTelemetryStore,
+    LocalTakeoverRouteTelemetryStore,
 )
 
 SERVER_NAME = "mnemo-local"
@@ -1103,6 +1104,9 @@ def _build_local_mcp_context_session(
                 retention_days=diagnostics.retention_days,
             ).record(event)
 
+        def record_episodic_route(status: str) -> None:
+            LocalTakeoverRouteTelemetryStore(runtime.config.data_directory).record(status)
+
         port = DurableMcpContextPort(
             runtime.checkpoint_service,
             UnifiedContextEngine(
@@ -1146,7 +1150,7 @@ def _build_local_mcp_context_session(
             episodic_extraction_enabled=episodic_enabled,
             local_first_takeover_enabled=settings.experimental_local_first_takeover_enabled,
             takeover_live_calls_authorized=settings.local_first_takeover_live_calls_authorized,
-            episodic_route_recorder=None,
+            episodic_route_recorder=record_episodic_route,
         )
 
         def refresh_source() -> None:
