@@ -12,7 +12,7 @@ def test_pypi_workflow_builds_once_then_transfers_an_exact_release_bundle() -> N
     assert "uv build --no-sources --out-dir build-output" in value
     assert 'cp "build-output/$wheel" "build-output/$sdist" release/' in value
     assert "path: release/" in value
-    assert "name: mnemo-unified-context-0.1.0a22" in value
+    assert "name: mnemo-unified-context-0.1.0a23" in value
     assert "sha256sum --check SHA256SUMS" in value
     assert "source-run-id:" not in value
     assert "scripts/verify_installed_dbt_wrapper.py" in value
@@ -35,8 +35,8 @@ def test_pypi_workflow_isolates_oidc_publication_and_uses_explicit_artifacts() -
     assert "--token" not in value
     assert "uv publish dist/*" not in value
     assert "uv publish" not in value
-    assert "cp release/mnemo_unified_context-0.1.0a22-py3-none-any.whl publish-release/" in value
-    assert "cp release/mnemo_unified_context-0.1.0a22.tar.gz publish-release/" in value
+    assert "cp release/mnemo_unified_context-0.1.0a23-py3-none-any.whl publish-release/" in value
+    assert "cp release/mnemo_unified_context-0.1.0a23.tar.gz publish-release/" in value
     assert "https://test.pypi.org/legacy/" not in value
 
 
@@ -45,8 +45,8 @@ def test_pypi_post_upload_verification_is_unprivileged_and_hash_bound() -> None:
 
     assert "verify-pypi:" in value
     assert "--registry-name PyPI" in value
-    assert "https://pypi.org/pypi/mnemo-unified-context/0.1.0a22/json" in value
-    assert "downloaded-release/mnemo_unified_context-0.1.0a22-py3-none-any.whl" in value
+    assert "https://pypi.org/pypi/mnemo-unified-context/0.1.0a23/json" in value
+    assert "downloaded-release/mnemo_unified_context-0.1.0a23-py3-none-any.whl" in value
     assert "--provenance-base-url https://pypi.org/integrity" in value
     assert "--expected-repository keith-fajardo/mnemo-memory" in value
     assert "--expected-workflow publish-pypi.yml" in value
