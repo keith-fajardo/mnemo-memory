@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -106,6 +107,6 @@ def test_stats_recent_lists_per_day_rows_newest_first(tmp_path: Path) -> None:
     now = datetime(2026, 8, 24, tzinfo=UTC)
     store.record("extracted", now=now)
     store.record("handoff", now=now - timedelta(days=1))
-    recent = store.stats(now=now)["recent"]
+    recent = cast(list[tuple[str, int, int]], store.stats(now=now)["recent"])
     assert recent[0] == ("2026-08-24", 1, 0)
     assert recent[1] == ("2026-08-23", 0, 1)

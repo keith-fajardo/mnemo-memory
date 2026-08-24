@@ -11,7 +11,7 @@ from mnemo_memory.packages.telemetry import LocalTakeoverRouteTelemetryStore
 
 
 def test_format_savings_table_shows_estimate_and_all_time_row() -> None:
-    stats = {
+    stats: dict[str, object] = {
         "today": {"local": 12, "frontier": 1},
         "last_7_days": {"local": 34, "frontier": 2},
         "last_30_days": {"local": 91, "frontier": 5},
@@ -28,7 +28,7 @@ def test_format_savings_table_shows_estimate_and_all_time_row() -> None:
 
 
 def test_format_savings_table_handles_no_dated_activity() -> None:
-    stats = {
+    stats: dict[str, object] = {
         "today": {"local": 0, "frontier": 0},
         "last_7_days": {"local": 0, "frontier": 0},
         "last_30_days": {"local": 0, "frontier": 0},
