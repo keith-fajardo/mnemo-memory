@@ -220,7 +220,13 @@ from mnemo_memory.packages.telemetry import (
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
     LocalCheckpointSaveTelemetryStore,
+    LocalTakeoverRouteTelemetryStore,
+    TakeoverRouteTelemetryError,
 )
+
+# Rough frontier tokens one escalated extraction would spend; the local-vs-frontier split is
+# exact, this multiplier is a labelled estimate until per-call token measurement lands.
+_ESTIMATED_TOKENS_PER_LOCAL_EXTRACTION = 297
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -1135,6 +1141,38 @@ def _show(value: object) -> None:
     typer.echo(json.dumps(value, sort_keys=True))
 
 
+def _format_savings_table(stats: dict[str, object], per_local: int) -> str:
+    """Render the takeover-route stats as a plain fixed-width table (pure, no I/O)."""
+
+    def summary_row(label: str, bucket: object) -> str:
+        data = bucket if isinstance(bucket, dict) else {}
+        local = int(data.get("local", 0))
+        frontier = int(data.get("frontier", 0))
+        saved = local * per_local
+        return f"{label:<14}{local:>6}{frontier:>10}  ~{saved:>9,}"
+
+    lines = [
+        f"TOKENS SAVED  (local extractions x ~{per_local}, estimate)",
+        "",
+        f"{'Day':<14}{'local':>6}{'frontier':>10}{'saved':>12}",
+    ]
+    recent = stats.get("recent")
+    rows = recent if isinstance(recent, list) else []
+    if rows:
+        for row in rows:
+            day, local, frontier = row
+            saved = int(local) * per_local
+            lines.append(f"{day:<14}{int(local):>6}{int(frontier):>10}  ~{saved:>9,}")
+    else:
+        lines.append("(no dated activity yet)")
+    lines.append("")
+    lines.append(summary_row("Today", stats.get("today")))
+    lines.append(summary_row("Last 7 days", stats.get("last_7_days")))
+    lines.append(summary_row("Last 30 days", stats.get("last_30_days")))
+    lines.append(summary_row("All-time", stats.get("all_time")))
+    return "\n".join(lines)
+
+
 def _validate_cli_relative_path(value: str) -> None:
     """Keep a human-facing source-history filter scoped to one canonical relative path."""
     path = PurePosixPath(value)
@@ -1255,6 +1293,23 @@ def guide(
 ) -> None:
     """Run the onboarding guide using the shorter descriptive command name."""
     _run_setup_guide(data_dir, initialize=initialize, non_interactive=non_interactive)
+
+
+@app.command("savings", help="Show local-vs-frontier extraction savings per day, week, and month.")
+def savings(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    as_json: bool = typer.Option(False, "--json", help="Emit the raw stats as JSON instead."),
+) -> None:
+    """Report how often episodic extraction stayed local (saving frontier tokens)."""
+    try:
+        config = resolve_local_config(data_dir)
+        stats = LocalTakeoverRouteTelemetryStore(config.data_directory).stats()
+    except (TakeoverRouteTelemetryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_SAVINGS_UNAVAILABLE") from error
+    if as_json:
+        _show(stats)
+        return
+    typer.echo(_format_savings_table(stats, _ESTIMATED_TOKENS_PER_LOCAL_EXTRACTION))
 
 
 @app.command(help="Initialize Mnemo's local data directory and SQLite database.")
