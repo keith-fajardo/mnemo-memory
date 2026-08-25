@@ -246,6 +246,7 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
             "get_skill",
             "explain_context",
             "save_checkpoint",
+            "structural_lookup",
         ]
         oversized = process_a.tool("save_checkpoint", save_payload(token_estimate=601))
         assert oversized.get("isError") is not True

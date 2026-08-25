@@ -20,7 +20,14 @@ from scripts.verify_release_artifacts import verify_sdist, verify_wheel
 DISTRIBUTION_VERSION = "0.1.0a24"
 WHEEL_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}-py3-none-any.whl"
 SDIST_NAME = f"mnemo_unified_context-{DISTRIBUTION_VERSION}.tar.gz"
-TOOLS = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
+TOOLS = [
+    "get_context",
+    "list_skills",
+    "get_skill",
+    "explain_context",
+    "save_checkpoint",
+    "structural_lookup",
+]
 
 
 class InstalledWorkflowError(RuntimeError):
