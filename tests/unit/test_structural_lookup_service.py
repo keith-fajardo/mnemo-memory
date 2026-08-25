@@ -64,31 +64,43 @@ def test_lookup_on_empty_index_returns_empty(tmp_path: Path) -> None:
 
 
 def test_callers_are_isolated_from_importers(tmp_path: Path) -> None:
+    """An IMPORTS edge and a CALLS edge that share the SAME literal target string
+    must not leak into each other's results. `import shared` produces an IMPORTS
+    edge from the module symbol with target "shared"; `caller()`'s `shared()` call
+    produces a CALLS edge with the identical target string "shared". Only the
+    `edge.kind is not wanted` filter separates them — deleting that filter would
+    make `callers` also return the module (the importer) and `imports` also return
+    `caller` (the caller), so this fails if the kind filter is removed.
+    """
     root = tmp_path / "p"
     root.mkdir()
-    (root / "m.py").write_text(
-        "import os\n\n"
-        "def caller():\n    return target()\n\n"
-        "def target():\n    return 1\n\n"
-        "def bystander():\n    return os.getpid()\n"
-    )
+    (root / "m.py").write_text("import shared\n\ndef caller():\n    return shared()\n")
     repo = _repo_with(root, tmp_path / "mem" / "mnemo.sqlite3")
     service = StructuralLookupService(repo)
 
-    callers = service.lookup(project_scope(), kind="callers", target="target")
+    callers = service.lookup(project_scope(), kind="callers", target="shared")
     caller_names = {h.qualified_name.rsplit(".", 1)[-1] for h in callers.hits}
-    assert "caller" in caller_names
-    assert "bystander" not in caller_names  # importer of os, not a caller of target
+    assert caller_names == {"caller"}, "callers must exclude the IMPORTS edge to 'shared'"
+
+    importers = service.lookup(project_scope(), kind="imports", target="shared")
+    importer_names = {h.qualified_name.rsplit(".", 1)[-1] for h in importers.hits}
+    assert importer_names == {"m"}, "imports must exclude the CALLS edge to 'shared'"
 
 
 def test_imports_finds_importers(tmp_path: Path) -> None:
     root = tmp_path / "p"
     root.mkdir()
-    (root / "m.py").write_text("import os\n\ndef f():\n    return os.getpid()\n")
+    (root / "m.py").write_text(
+        "import os\n\ndef f():\n    return os.getpid()\n\ndef caller():\n    return os()\n"
+    )
     repo = _repo_with(root, tmp_path / "mem" / "mnemo.sqlite3")
     service = StructuralLookupService(repo)
     result = service.lookup(project_scope(), kind="imports", target="os")
-    assert result.hits, "expected at least one importer of os"
+    names = {h.qualified_name.rsplit(".", 1)[-1] for h in result.hits}
+    assert "m" in names, "expected the importing module symbol"
+    # caller() has a CALLS edge whose target string is also "os" — it must not
+    # leak into an `imports` result; only the kind filter excludes it.
+    assert "caller" not in names, "a CALLS edge to 'os' must not count as an import"
 
 
 def test_contains_lists_file_symbols(tmp_path: Path) -> None:
