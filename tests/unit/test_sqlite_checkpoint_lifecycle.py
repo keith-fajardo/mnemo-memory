@@ -368,4 +368,4 @@ def test_checkpoint_expiry_migration_rolls_back_and_retries(tmp_path: Path) -> N
 
     assert repository.schema_version() == 0
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32

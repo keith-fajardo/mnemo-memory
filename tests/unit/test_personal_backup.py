@@ -75,11 +75,11 @@ def test_backup_is_private_digest_named_and_restores_pre_mutation_state(tmp_path
     assert first.reused is False
     assert repeated.reused is True
     assert repeated.backup_path == first.backup_path
-    assert first.schema_version == 31
+    assert first.schema_version == 32
     assert first.created_at == NOW
     assert first.backup_path.parent == config.data_directory / "backups"
     assert first.backup_path.name == (
-        f"mnemo-v31-20260805T143012345678Z-{first.content_digest.removeprefix('sha256:')}.sqlite3"
+        f"mnemo-v32-20260805T143012345678Z-{first.content_digest.removeprefix('sha256:')}.sqlite3"
     )
     assert first.content_digest == (
         "sha256:" + hashlib.sha256(first.backup_path.read_bytes()).hexdigest()
@@ -158,7 +158,7 @@ def test_backup_cli_reports_only_recovery_metadata_and_safe_failure(tmp_path: Pa
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["schema_version"] == 31
+    assert payload["schema_version"] == 32
     assert payload["content_digest"].startswith("sha256:")
     assert Path(payload["backup_path"]).is_file()
     assert "memory" not in payload

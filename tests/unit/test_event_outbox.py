@@ -476,7 +476,7 @@ def test_event_outbox_migration_rolls_back_as_one_step(tmp_path: Path) -> None:
             is None
         )
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
     with sqlite3.connect(repository.path) as connection:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(event_outbox)").fetchall()

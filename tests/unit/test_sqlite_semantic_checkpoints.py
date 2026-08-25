@@ -113,7 +113,7 @@ class _TrackingSemanticRepository(SQLiteSemanticCheckpointRepository):
 def test_migration_31_is_additive_and_creates_semantic_tables(tmp_path: Path) -> None:
     repository, _, path = _repositories(tmp_path)
 
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
     with sqlite3.connect(path) as connection:
         names = {
             str(row[0])
@@ -150,7 +150,7 @@ def test_migration_31_rolls_back_atomically_and_retries(tmp_path: Path) -> None:
         connection.execute("DROP TABLE semantic_checkpoints")
         connection.execute("DROP TABLE semantic_atom_source_events")
         connection.execute("DROP TABLE semantic_memory_atoms")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 31")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (31, 32)")
 
     assert repository.schema_version() == 30
     with pytest.raises(SQLiteMigrationError, match="injected"):
@@ -165,7 +165,7 @@ def test_migration_31_rolls_back_atomically_and_retries(tmp_path: Path) -> None:
         )
 
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
 
 
 def test_sqlite_service_persists_delta_snapshot_and_provenance(tmp_path: Path) -> None:

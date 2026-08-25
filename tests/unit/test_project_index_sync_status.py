@@ -148,7 +148,7 @@ def test_migration_28_rolls_back_and_retries_from_schema_27(tmp_path: Path) -> N
         connection.execute("DROP TRIGGER checkpoint_event_delete_requires_tombstone")
         connection.execute("DROP TRIGGER checkpoint_observation_delete_requires_tombstone")
         connection.execute("DROP TABLE checkpoint_deletions")
-        connection.execute("DELETE FROM schema_migrations WHERE version IN (28, 29, 30, 31)")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (28, 29, 30, 31, 32)")
 
     assert repository.schema_version() == 27
     with pytest.raises(SQLiteMigrationError, match="injected migration failure"):
@@ -163,7 +163,7 @@ def test_migration_28_rolls_back_and_retries_from_schema_27(tmp_path: Path) -> N
         )
 
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
 
 
 def test_source_staleness_requires_content_free_git_proof() -> None:

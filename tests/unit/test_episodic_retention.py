@@ -637,7 +637,7 @@ def test_expiration_migration_is_atomic_payload_free_and_preserves_candidates(
         )
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 31
+    assert sqlite.schema_version() == 32
     assert sqlite.get_episodic_memory_candidate(candidate.scope, candidate.memory_id) == candidate
     with sqlite3.connect(sqlite.path) as connection:
         columns = {
@@ -734,7 +734,7 @@ def test_purge_migration_rolls_back_and_preserves_candidate_and_expiration(
         ).fetchone() == (str(expiration.expiration_id),)
 
     sqlite.migrate()
-    assert sqlite.schema_version() == 31
+    assert sqlite.schema_version() == 32
     assert sqlite.get_episodic_memory_expiration(candidate.scope, candidate.memory_id) == expiration
     with sqlite3.connect(sqlite.path) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

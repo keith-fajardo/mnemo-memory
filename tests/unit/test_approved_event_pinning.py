@@ -225,7 +225,7 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
     path = tmp_path / "pin-migration.sqlite3"
     repository = SQLiteCheckpointRepository(path, base_directory=tmp_path)
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER approved_episodic_event_pin_target_scope_match")
         connection.execute("DROP TABLE approved_episodic_event_pin_evidence")
@@ -249,4 +249,4 @@ def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) 
         )
 
     repository.migrate()
-    assert repository.schema_version() == 31
+    assert repository.schema_version() == 32
