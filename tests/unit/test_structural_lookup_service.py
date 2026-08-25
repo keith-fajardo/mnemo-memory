@@ -50,8 +50,7 @@ def test_define_locates_symbol(tmp_path: Path) -> None:
     assert result.kind == "define"
     assert result.snapshot_id is not None
     assert any(
-        h.qualified_name.endswith("target") and h.relative_path == "m.py"
-        for h in result.hits
+        h.qualified_name.endswith("target") and h.relative_path == "m.py" for h in result.hits
     )
 
 

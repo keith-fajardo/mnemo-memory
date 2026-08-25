@@ -12,7 +12,9 @@ from typing import Literal
 
 from mnemo_memory.packages.domain import (
     CodeEdgeKind,
+    CodeSnapshotId,
     CodeSymbol,
+    CodeSymbolId,
     MemoryScope,
 )
 from mnemo_memory.packages.storage.contracts import SourceStructureRepository
@@ -82,5 +84,34 @@ class StructuralLookupService:
             truncated=len(found) > bound,
         )
 
-    def _edge_lookup(self, scope, snapshot_id, symbols, kind, target):  # B2 fills this in
-        return []
+    def _edge_lookup(
+        self,
+        scope: MemoryScope,
+        snapshot_id: CodeSnapshotId,
+        symbols: tuple[CodeSymbol, ...],
+        kind: StructuralLookupKind,
+        target: str,
+    ) -> list[StructuralHit]:
+        wanted = CodeEdgeKind.CALLS if kind == "callers" else CodeEdgeKind.IMPORTS
+        by_id = {s.symbol_id: s for s in symbols}
+        target_ids = {s.symbol_id for s in symbols if _matches_name(s, target)}
+        edges = self._source.iter_edges(scope, snapshot_id)
+        seen: set[CodeSymbolId] = set()
+        out: list[StructuralHit] = []
+        for edge in edges:
+            if edge.kind is not wanted:
+                continue
+            hit = (
+                (edge.target_symbol_id is not None and edge.target_symbol_id in target_ids)
+                or edge.target == target
+                or edge.target.rsplit(".", 1)[-1] == target
+            )
+            if not hit:
+                continue
+            source = by_id.get(edge.source_symbol_id)
+            if source is None or source.symbol_id in seen:
+                continue
+            seen.add(source.symbol_id)
+            out.append(_hit(source))
+        out.sort(key=lambda h: (h.relative_path, h.line, h.qualified_name))
+        return out
