@@ -111,6 +111,24 @@ class _RequestConnectionFactory:
             connection.close()
 
 
+def _empty_structural_lookup(request: dict[str, object]) -> dict[str, object]:
+    """The safe empty structural-lookup result for the team surface.
+
+    Team structural lookup is intentionally non-functional in this plan: the tool surface is
+    the minimal ``{kind,target,limit}`` and a team caller cannot yet supply the workspace scope
+    the query needs. Rather than raise ``MNEMO_INVALID_SCOPE`` through the workspace guard, the
+    team path fails open to this empty shape (matching the local port's contract). Real team
+    support — supplying ``workspace_id`` — is a future enhancement, out of scope here.
+    """
+    return {
+        "kind": str(request.get("kind", "")).strip(),
+        "query": str(request.get("target", "")).strip(),
+        "snapshot_id": None,
+        "truncated": False,
+        "hits": [],
+    }
+
+
 class PostgreSQLTeamMcpPort:
     """Team context plus content-free source-governance transport operations."""
 
@@ -136,10 +154,9 @@ class PostgreSQLTeamMcpPort:
             self._release_connection()
 
     def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
-        try:
-            return self._context.structural_lookup(request)
-        finally:
-            self._release_connection()
+        # Non-functional on the team surface by design; fail open to the empty result and
+        # never touch a connection (see _empty_structural_lookup).
+        return _empty_structural_lookup(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -305,7 +322,6 @@ class PostgreSQLTeamMcpPortFactory:
                 episodic,
             ),
             skills=skills,
-            source_structure_repository=source,
         )
         return PostgreSQLTeamMcpPort(
             context,
@@ -334,7 +350,10 @@ class AuthenticatedTeamMcpPort:
         return self._port(request).get_context(request)
 
     def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
-        return self._port(request).structural_lookup(request)
+        # Fail open BEFORE the workspace-requiring _port path: the minimal {kind,target,limit}
+        # tool surface never carries workspace_id, so delegating would always raise
+        # MNEMO_INVALID_SCOPE. Return the safe empty shape instead.
+        return _empty_structural_lookup(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).list_skills(request)

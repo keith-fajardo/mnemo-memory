@@ -282,6 +282,44 @@ def test_streamable_http_route_requires_bearer_authentication(
     }
 
 
+def test_structural_lookup_fails_open_instead_of_requiring_workspace_scope() -> None:
+    # The structural_lookup tool surface is the minimal {kind,target,limit}; it never carries a
+    # workspace_id. Delegating into the workspace-requiring _port path would raise
+    # MNEMO_INVALID_SCOPE on every team call, so the team port must fail open to the empty shape.
+    principal = OwnerId.new()
+    empty: dict[str, object] = {
+        "kind": "define",
+        "query": "CurrentService",
+        "snapshot_id": None,
+        "truncated": False,
+        "hits": [],
+    }
+
+    # Even with a fully valid authenticated token but no workspace_id in the request, the
+    # token-binding path is bypassed safely: no raise, and no per-request port is ever built.
+    authenticated_factory = _Factory()
+    authenticated = AccessToken(
+        token="opaque",
+        client_id="client",
+        scopes=["mnemo:context"],
+        subject=str(principal),
+    )
+    port = AuthenticatedTeamMcpPort(
+        authenticated_factory, access_token_loader=lambda: authenticated
+    )
+    assert port.structural_lookup({"kind": "define", "target": "CurrentService"}) == empty
+    # An unknown kind stays fail-open too, echoing the requested kind like the local port.
+    assert port.structural_lookup({"kind": "grep", "target": "x"})["hits"] == []
+    # Short-circuited before the workspace guard: no connection/port composition occurred.
+    assert authenticated_factory.calls == []
+
+    # And with no token at all it still never raises MNEMO_AUTH_REQUIRED / MNEMO_INVALID_SCOPE.
+    anonymous_factory = _Factory()
+    anonymous = AuthenticatedTeamMcpPort(anonymous_factory, access_token_loader=lambda: None)
+    assert anonymous.structural_lookup({"kind": "callers", "target": "y"})["hits"] == []
+    assert anonymous_factory.calls == []
+
+
 def _new_key_pair() -> tuple[str, str]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_pem = private_key.private_bytes(

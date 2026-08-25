@@ -98,6 +98,18 @@ def test_structural_lookup_callers_via_port(
     assert names == {"caller"}
 
 
+def test_structural_lookup_imports_via_port(
+    port_with_indexed_source: tuple[DurableMcpContextPort, dict[str, object]],
+) -> None:
+    port, base = port_with_indexed_source
+    result = port.structural_lookup({**base, "kind": "imports", "target": "shared"})
+    names = {
+        str(hit["qualified_name"]).rsplit(".", 1)[-1]
+        for hit in cast(list[dict[str, object]], result["hits"])
+    }
+    assert names == {"m"}
+
+
 def test_structural_lookup_contains_via_port(
     port_with_indexed_source: tuple[DurableMcpContextPort, dict[str, object]],
 ) -> None:
