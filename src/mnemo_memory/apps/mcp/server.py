@@ -1192,7 +1192,13 @@ def _build_local_mcp_context_session(
 
         def refresh_source() -> None:
             if binding is not None:
-                refresh_registered_project_source(binding, source_repository)
+                # Share the observer's scan-cache so this read-path refresh (get_context,
+                # structural_lookup) also skips the full parse when the tree is unchanged.
+                refresh_registered_project_source(
+                    binding,
+                    source_repository,
+                    cache_dir=runtime.config.data_directory / "scan-cache",
+                )
 
         return _LocalMcpContextSession(runtime, port, refresh_source)
     except Exception:
