@@ -39,9 +39,7 @@ def binding_and_repo(
     yield binding, repository
 
 
-def _install_counting_parse(
-    monkeypatch: pytest.MonkeyPatch, calls: dict[str, int]
-) -> None:
+def _install_counting_parse(monkeypatch: pytest.MonkeyPatch, calls: dict[str, int]) -> None:
     real_parse = SourceStructureParser.parse
 
     def counting_parse(

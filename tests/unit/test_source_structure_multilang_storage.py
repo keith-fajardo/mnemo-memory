@@ -32,9 +32,7 @@ def test_go_package_symbol_persists(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     (root / "go.mod").write_text("module example.com/demo\n\ngo 1.21\n")
-    (root / "main.go").write_text(
-        "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n"
-    )
+    (root / "main.go").write_text('package main\n\nfunc main() {\n\tprintln("hi")\n}\n')
     artifact = SourceStructureParser().parse(
         SourceStructureParseRequest(project_scope(), root.resolve())
     )
