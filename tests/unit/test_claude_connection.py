@@ -100,6 +100,7 @@ def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) 
                 "get_skill",
                 "explain_context",
                 "save_checkpoint",
+                "structural_lookup",
             ]
             saved = await session.call_tool(
                 "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)

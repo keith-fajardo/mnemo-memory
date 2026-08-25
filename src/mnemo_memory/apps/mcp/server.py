@@ -216,6 +216,13 @@ class _DeferredMcpContextPort:
             self._refresh_source_once(session)
         return session.port.get_context(request)
 
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        session = self._initialized_session()
+        # A locate query is only correct against the current tree; refresh the snapshot once,
+        # mirroring the source-context path in get_context.
+        self._refresh_source_once(session)
+        return session.port.structural_lookup(request)
+
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return self._initialized_session().port.list_skills(request)
 
@@ -977,7 +984,35 @@ def create_server(
                 }
             )
 
-    names = ["get_context", "list_skills", "get_skill", "explain_context", "save_checkpoint"]
+    @server.tool(
+        name="structural_lookup",
+        description=(
+            "Locate code in the current project from the maintained source-structure "
+            "index — deterministic, no model call, a few tokens. PREFER THIS over "
+            "dispatching a search/Explore subagent when you need to find where a symbol "
+            "is defined, what calls it, what imports a module, or what a file contains. "
+            "kind='define' (where is X defined), 'callers' (what calls X), "
+            "'imports' (what imports module Z), 'contains' (symbols defined in file Y). "
+            "target is a symbol name for define/callers, a module name for imports, or a "
+            "project-relative file path for contains. Returns relative_path + line hits."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def structural_lookup(
+        kind: Annotated[str, Field(pattern="^(define|callers|imports|contains)$")],
+        target: Annotated[str, Field(min_length=1, max_length=512)],
+        limit: Annotated[int, Field(ge=1, le=200)] = 50,
+    ) -> dict[str, object]:
+        return port.structural_lookup({"kind": kind, "target": target, "limit": limit})
+
+    names = [
+        "get_context",
+        "list_skills",
+        "get_skill",
+        "explain_context",
+        "save_checkpoint",
+        "structural_lookup",
+    ]
     if episodic_extraction_enabled:
         names.extend(("extract_episodic", "submit_episodic_candidates"))
     if team_knowledge_port is not None:
@@ -1151,6 +1186,7 @@ def _build_local_mcp_context_session(
             local_first_takeover_enabled=settings.experimental_local_first_takeover_enabled,
             takeover_live_calls_authorized=settings.local_first_takeover_live_calls_authorized,
             episodic_route_recorder=record_episodic_route,
+            source_structure_repository=source_repository,
         )
 
         def refresh_source() -> None:
