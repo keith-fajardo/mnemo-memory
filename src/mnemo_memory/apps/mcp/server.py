@@ -1047,6 +1047,7 @@ def _build_local_mcp_context_session(
             source_repository,
             runtime.repository,
             lambda: datetime.now(UTC),
+            cache_dir=runtime.config.data_directory / "scan-cache",
         )
         dbt_bindings = LocalDbtProjectBindingStore(runtime.config.data_directory)
         dbt_state_observer = DbtGitStateObserver()

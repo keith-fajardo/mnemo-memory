@@ -26,6 +26,9 @@ from mnemo_memory.connectors.automatic_memory.git_observation import (
     GitSourceObservation,
     GitSourceObserver,
 )
+from mnemo_memory.connectors.automatic_memory.source_observation import (
+    refresh_registered_project_source,
+)
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
@@ -55,8 +58,6 @@ from mnemo_memory.packages.project_index import (
     SourceImpactQuery,
     SourceImpactService,
     SourceSnapshotDiff,
-    SourceStructureParser,
-    SourceStructureParseRequest,
 )
 from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
@@ -496,35 +497,35 @@ class AutomaticMemoryHook:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
             repository.migrate()
             previous = repository.get_active_snapshot(binding.scope)
-            stored = repository.store_and_activate(
-                SourceStructureParser().parse(
-                    SourceStructureParseRequest(binding.scope, binding.project_root)
-                )
+            stored_snapshot = refresh_registered_project_source(
+                binding, repository, cache_dir=self.data_directory / "scan-cache"
             )
-            git_observation = self._observe_git(binding, stored.snapshot.source_digest)
+            if stored_snapshot is None:
+                return _SourceRefresh(None)
+            git_observation = self._observe_git(binding, stored_snapshot.source_digest)
             if previous is None:
                 return _SourceRefresh(
-                    stored.snapshot.source_digest, git_observation=git_observation
+                    stored_snapshot.source_digest, git_observation=git_observation
                 )
-            if previous.snapshot_id == stored.snapshot.snapshot_id:
+            if previous.snapshot_id == stored_snapshot.snapshot_id:
                 if not include_latest_transition:
                     return _SourceRefresh(
-                        stored.snapshot.source_digest, git_observation=git_observation
+                        stored_snapshot.source_digest, git_observation=git_observation
                     )
                 transition = repository.latest_transition(binding.scope)
                 if transition is None:
                     return _SourceRefresh(
-                        stored.snapshot.source_digest, git_observation=git_observation
+                        stored_snapshot.source_digest, git_observation=git_observation
                     )
                 before, after = transition
             else:
-                before, after = previous, stored.snapshot
+                before, after = previous, stored_snapshot
             diff = SourceImpactService(repository).diff(
                 binding.scope, before.snapshot_id, after.snapshot_id
             )
             changes = _SourceChangeSummary.from_diff(diff)
             return _SourceRefresh(
-                stored.snapshot.source_digest,
+                stored_snapshot.source_digest,
                 changes,
                 _dependent_impact_cues(repository, binding.scope, diff, changes),
                 _dbt_downstream_cues(self.data_directory, binding.scope, changes),
