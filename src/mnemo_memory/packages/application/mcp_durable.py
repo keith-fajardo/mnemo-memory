@@ -41,6 +41,10 @@ from mnemo_memory.packages.application.episodic_extraction_ingest import (
 from mnemo_memory.packages.application.semantic_verification import (
     verify_candidate_against_memory,
 )
+from mnemo_memory.packages.application.structural_lookup import (
+    StructuralLookupKind,
+    StructuralLookupService,
+)
 from mnemo_memory.packages.application.unified_context import (
     ContextCheckpointRecapQuery,
     ContextDbtChangesQuery,
@@ -83,7 +87,11 @@ from mnemo_memory.packages.domain import (
     WorkspaceId,
 )
 from mnemo_memory.packages.domain.identifiers import Identifier
-from mnemo_memory.packages.storage import ProjectSkillRegistry, TaskActivityEventRepository
+from mnemo_memory.packages.storage import (
+    ProjectSkillRegistry,
+    SourceStructureRepository,
+    TaskActivityEventRepository,
+)
 
 # The candidate-count bound below mirrors `EpisodicExtractionRequest.max_candidates` and
 # `parse_episodic_output`'s own `_MAX_CANDIDATES` in `packages/model_gateway`. It is
@@ -163,6 +171,7 @@ class DurableMcpContextPort:
         local_first_takeover_enabled: bool = False,
         takeover_live_calls_authorized: bool = False,
         episodic_route_recorder: Callable[[str], None] | None = None,
+        source_structure_repository: SourceStructureRepository | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -191,6 +200,58 @@ class DurableMcpContextPort:
             raise TypeError("takeover live-call authorization setting must be a boolean")
         self._takeover_live_calls_authorized = takeover_live_calls_authorized
         self._episodic_route_recorder = episodic_route_recorder
+        self._structural_lookup_service = (
+            None
+            if source_structure_repository is None
+            else StructuralLookupService(source_structure_repository)
+        )
+
+    def structural_lookup(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Deterministically locate code in the active project snapshot; never leak storage.
+
+        Fail-open: an unknown kind, an absent source index, an underivable project scope, or
+        any repository error all resolve to an empty result rather than a client-visible error.
+        """
+        kind = str(request.get("kind", "")).strip()
+        target = str(request.get("target", "")).strip()
+        raw_limit = request.get("limit", 50)
+        limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) else 50
+        empty: dict[str, object] = {
+            "kind": kind,
+            "query": target,
+            "snapshot_id": None,
+            "truncated": False,
+            "hits": [],
+        }
+        if (
+            kind not in ("define", "callers", "imports", "contains")
+            or self._structural_lookup_service is None
+        ):
+            return empty
+        try:
+            scope = _project_scope(_scope(request, self._default_scope))
+            result = self._structural_lookup_service.lookup(
+                scope, kind=cast(StructuralLookupKind, kind), target=target, limit=limit
+            )
+        except Exception:
+            # Fail-open: never turn a locate query into a client-visible failure or disclose
+            # parser/storage details. An empty result is always a safe answer.
+            return empty
+        return {
+            "kind": result.kind,
+            "query": result.query,
+            "snapshot_id": result.snapshot_id,
+            "truncated": result.truncated,
+            "hits": [
+                {
+                    "relative_path": hit.relative_path,
+                    "qualified_name": hit.qualified_name,
+                    "kind": hit.kind,
+                    "line": hit.line,
+                }
+                for hit in result.hits
+            ],
+        }
 
     def _resolve_current_dbt_source_state(
         self, scope: MemoryScope

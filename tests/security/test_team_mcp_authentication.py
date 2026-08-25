@@ -26,6 +26,9 @@ class _Port:
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "get_context", "workspace_id": request["workspace_id"]}
 
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "structural_lookup"}
+
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "list_skills"}
 
@@ -273,6 +276,7 @@ def test_streamable_http_route_requires_bearer_authentication(
         "get_skill",
         "explain_context",
         "save_checkpoint",
+        "structural_lookup",
         "list_knowledge_sources",
         "approve_knowledge_source",
     }

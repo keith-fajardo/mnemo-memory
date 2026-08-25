@@ -64,6 +64,9 @@ class _ContextPort:
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         return {}
 
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        return {}
+
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return {}
 

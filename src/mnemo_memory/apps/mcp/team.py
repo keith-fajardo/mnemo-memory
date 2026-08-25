@@ -135,6 +135,12 @@ class PostgreSQLTeamMcpPort:
         finally:
             self._release_connection()
 
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        try:
+            return self._context.structural_lookup(request)
+        finally:
+            self._release_connection()
+
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         try:
             return self._context.list_skills(request)
@@ -299,6 +305,7 @@ class PostgreSQLTeamMcpPortFactory:
                 episodic,
             ),
             skills=skills,
+            source_structure_repository=source,
         )
         return PostgreSQLTeamMcpPort(
             context,
@@ -325,6 +332,9 @@ class AuthenticatedTeamMcpPort:
 
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).get_context(request)
+
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        return self._port(request).structural_lookup(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).list_skills(request)
