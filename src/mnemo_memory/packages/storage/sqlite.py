@@ -249,7 +249,7 @@ from .contracts import (
 )
 from .source_search import source_search_terms, source_symbol_matches, source_symbol_rank
 
-LATEST_SCHEMA_VERSION = 31
+LATEST_SCHEMA_VERSION = 32
 BUSY_TIMEOUT_MS = 5000
 
 
@@ -767,6 +767,18 @@ class SQLiteCheckpointRepository:
                 if fail_after_version == 31:
                     raise SQLiteMigrationError("injected migration failure")
                 version = 31
+            if version < 32:
+                _execute_sql_script(
+                    connection,
+                    _migration_text("0032_source_structure_multilang_kinds.sql"),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (32, ?)",
+                    (_timestamp(),),
+                )
+                if fail_after_version == 32:
+                    raise SQLiteMigrationError("injected migration failure")
+                version = 32
 
     def _map_legacy_checkpoints(self, connection: sqlite3.Connection) -> None:
         headers = {
