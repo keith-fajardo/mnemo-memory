@@ -107,6 +107,45 @@ def _manifest_with_added_modified_and_removed_nodes() -> str:
     return json.dumps(value)
 
 
+def _manifest_with_duplicate_name(duplicate_name: str, new_unique_id: str, cloned_from: str) -> str:
+    value = json.loads(FIXTURE.read_text())
+    nodes = value["nodes"]
+    parent_map = value["parent_map"]
+    child_map = value["child_map"]
+    new_node = dict(nodes[cloned_from])
+    new_node.update(
+        {
+            "unique_id": new_unique_id,
+            "package_name": "mnemo_analytics_dup",
+            "name": duplicate_name,
+            "alias": duplicate_name,
+            "original_file_path": f"models/dup/{duplicate_name}.sql",
+            "checksum": {"checksum": "dup-checksum"},
+            "depends_on": {"nodes": []},
+        }
+    )
+    nodes[new_unique_id] = new_node
+    parent_map[new_unique_id] = []
+    child_map[new_unique_id] = []
+    return json.dumps(value)
+
+
+def dbt_service_with_duplicate_name(
+    duplicate_name: str, new_unique_id: str, cloned_from: str
+) -> DbtManifestApplicationService:
+    repo = ReferenceProjectIndexRepository()
+    writer = DbtManifestApplicationService(repo, DbtManifestParser())
+    writer.ingest(
+        IngestManifest(
+            scope=project_scope(),
+            raw_manifest=_manifest_with_duplicate_name(duplicate_name, new_unique_id, cloned_from),
+            source_identity="fixtures/dbt/manifest-v12.json",
+            ingested_at=STAMP,
+        )
+    )
+    return DbtManifestApplicationService(repo)
+
+
 def dbt_service_with_two_manifest_snapshots() -> DbtManifestApplicationService:
     repo = ReferenceProjectIndexRepository()
     writer = DbtManifestApplicationService(repo, DbtManifestParser())
@@ -163,12 +202,27 @@ def test_target_resolves_by_relative_path() -> None:
     assert r.resolved_unique_id == "model.mnemo_analytics.fct_orders"
 
 
-def test_bare_name_target_is_unsupported_fails_open() -> None:
-    # DbtManifestApplicationService exposes neither a public active-snapshot
-    # accessor nor iter_nodes (both live only on the storage-layer
-    # repository); per the plan's explicit fallback, bare-name resolution is
-    # therefore unsupported rather than reaching into a private attribute.
+def test_bare_name_target_resolves_uniquely() -> None:
+    # DbtManifestApplicationService has no direct "get node by name"
+    # accessor, so a bare name is resolved by composing the existing public
+    # query_selector(resource_type=...) across every known resource type
+    # and matching on `.name` (see _resolve_bare_name).
     service = DbtStructureService(dbt_service_with_manifest())
+    r = service.lookup(project_scope(), kind="upstream", target="fct_orders")
+    assert r.resolved_unique_id == "model.mnemo_analytics.fct_orders"
+
+
+def test_bare_name_target_ambiguous_fails_open() -> None:
+    # Two enabled nodes share the name "fct_orders" (one cloned into a
+    # second package) - an ambiguous bare name must not misresolve to
+    # either one, so it fails open instead of guessing.
+    service = DbtStructureService(
+        dbt_service_with_duplicate_name(
+            "fct_orders",
+            "model.mnemo_analytics_dup.fct_orders",
+            "model.mnemo_analytics.fct_orders",
+        )
+    )
     r = service.lookup(project_scope(), kind="upstream", target="fct_orders")
     assert r.items == ()
     assert r.resolved_unique_id is None

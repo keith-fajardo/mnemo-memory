@@ -16,6 +16,7 @@ from mnemo_memory.packages.application.dbt import (
     LineageDirection,
     QueryLineage,
     QueryManifestChanges,
+    QueryManifestSelector,
     QuerySourceFreshness,
     QueryTestCoverage,
     ResolveManifestFile,
@@ -31,6 +32,24 @@ _VALID_KINDS = frozenset(
 )
 _LINEAGE_KINDS = frozenset({"upstream", "downstream", "impact"})
 
+# dbt unique_ids are "<resource>.<package>.<name>"; this is also the
+# exhaustive set of `raw_resource_type` values query_selector can filter on,
+# reused to compose a full-manifest name search (see _resolve_bare_name).
+_KNOWN_RESOURCE_TYPES = frozenset(
+    {
+        "model",
+        "source",
+        "seed",
+        "snapshot",
+        "test",
+        "analysis",
+        "exposure",
+        "metric",
+        "semantic_model",
+        "macro",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DbtStructureResult:
@@ -45,20 +64,8 @@ class DbtStructureResult:
 
 
 def _looks_like_unique_id(target: str) -> bool:
-    # dbt unique_ids are "<resource>.<package>.<name>", resource in a known set
     head = target.split(".", 1)[0]
-    return "." in target and head in {
-        "model",
-        "source",
-        "seed",
-        "snapshot",
-        "test",
-        "analysis",
-        "exposure",
-        "metric",
-        "semantic_model",
-        "macro",
-    }
+    return "." in target and head in _KNOWN_RESOURCE_TYPES
 
 
 def _looks_like_path(target: str) -> bool:
@@ -131,14 +138,35 @@ class DbtStructureService:
                 return str(resolved.node.unique_id)
             except Exception:
                 return None
-        # Bare-name resolution would require enumerating every node in the
-        # active snapshot (e.g. via an active-snapshot/iter_nodes accessor),
-        # but DbtManifestApplicationService exposes neither publicly - only
-        # the storage-layer repository does, and reaching into a private
-        # `_repository` attribute would mean inventing an API contract that
-        # isn't there. Per the plan's explicit fallback, bare names are
-        # unsupported: fail open to "could not resolve" rather than guess.
-        return None
+        return self._resolve_bare_name(scope, target)
+
+    def _resolve_bare_name(self, scope: MemoryScope, target: str) -> str | None:
+        """Resolve a bare node name by composing the existing public query_selector.
+
+        DbtManifestApplicationService has no direct "get node by name"
+        accessor, but query_selector(resource_type=...) is public and real,
+        so a full-manifest name search is composed from one call per known
+        resource type, filtering client-side on `.name`. Exactly one match
+        across all resource types resolves; zero or more than one match
+        (ambiguous name) fails open to None rather than guessing. A
+        truncated listing with zero matches also fails open to None - it
+        cannot be told apart from a match that was cut off by the page
+        limit, so it must not be reported as a definitive "not found".
+        """
+        try:
+            matches: list[str] = []
+            for resource_type in _KNOWN_RESOURCE_TYPES:
+                result = self._dbt.query_selector(
+                    QueryManifestSelector(
+                        scope=scope, resource_type=resource_type, maximum_nodes=100
+                    )
+                )
+                matches.extend(str(node.unique_id) for node in result.nodes if node.name == target)
+            if len(matches) == 1:
+                return matches[0]
+            return None
+        except Exception:
+            return None
 
     def _lineage(
         self,
@@ -164,7 +192,11 @@ class DbtStructureService:
             {
                 "unique_id": str(n.node.unique_id),
                 "name": n.node.name,
-                "resource_type": n.node.resource_type.value,
+                # raw_resource_type (not the resource_type enum, which folds
+                # unknown types to "other") so a consumer joining nodes
+                # across kinds sees one consistent string per node - see
+                # _test_coverage/_changes, which use the same field.
+                "resource_type": n.node.raw_resource_type,
                 "relative_path": n.node.original_file_path,
                 "depth": n.depth,
             }
@@ -212,6 +244,10 @@ class DbtStructureService:
             }
             for node in result.test_nodes
         )
+        # edges=(): TestCoverageQueryResult.edges carries the test-attachment
+        # edges, but per the brief's item shape test_coverage only surfaces
+        # the attached test nodes themselves - omitted deliberately, not an
+        # oversight.
         return DbtStructureResult(
             "test_coverage",
             target,
