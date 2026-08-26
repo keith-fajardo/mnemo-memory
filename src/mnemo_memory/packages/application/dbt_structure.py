@@ -15,6 +15,9 @@ from mnemo_memory.packages.application.dbt import (
     DbtManifestApplicationService,
     LineageDirection,
     QueryLineage,
+    QueryManifestChanges,
+    QuerySourceFreshness,
+    QueryTestCoverage,
     ResolveManifestFile,
 )
 from mnemo_memory.packages.domain import MemoryScope
@@ -186,7 +189,6 @@ class DbtStructureService:
             result.truncated,
         )
 
-    # _test_coverage / _freshness / _changes: implemented in A2 against the real result fields.
     def _test_coverage(
         self,
         scope: MemoryScope,
@@ -194,7 +196,32 @@ class DbtStructureService:
         unique_id: str,
         css: SourceStateFingerprint | None,
     ) -> DbtStructureResult:
-        raise NotImplementedError
+        result = self._dbt.query_test_coverage(
+            QueryTestCoverage(
+                scope=scope,
+                unique_id=DbtNodeId(unique_id),
+                current_source_state=css,
+            )
+        )
+        items: tuple[dict[str, object], ...] = tuple(
+            {
+                "test_unique_id": str(node.unique_id),
+                "subject_node": str(result.subject_node.unique_id),
+                "resource_type": node.raw_resource_type,
+                "relative_path": node.original_file_path,
+            }
+            for node in result.test_nodes
+        )
+        return DbtStructureResult(
+            "test_coverage",
+            target,
+            unique_id,
+            result.currentness.value,
+            result.currentness_reason,
+            items,
+            (),
+            result.truncated,
+        )
 
     def _freshness(
         self,
@@ -203,9 +230,63 @@ class DbtStructureService:
         unique_id: str,
         css: SourceStateFingerprint | None,
     ) -> DbtStructureResult:
-        raise NotImplementedError
+        result = self._dbt.query_source_freshness(
+            QuerySourceFreshness(
+                scope=scope,
+                unique_id=DbtNodeId(unique_id),
+                current_source_state=css,
+            )
+        )
+        observation = result.observation
+        items: tuple[dict[str, object], ...]
+        if observation is None:
+            items = ()
+        else:
+            items = (
+                {
+                    "source_unique_id": str(result.source_node.unique_id),
+                    "status": observation.status.value,
+                    "max_loaded_at": (
+                        None
+                        if observation.max_loaded_at is None
+                        else observation.max_loaded_at.isoformat()
+                    ),
+                    "age_seconds": observation.age_seconds,
+                },
+            )
+        return DbtStructureResult(
+            "freshness",
+            target,
+            unique_id,
+            result.currentness.value,
+            result.currentness_reason,
+            items,
+            (),
+            False,
+        )
 
     def _changes(
         self, scope: MemoryScope, css: SourceStateFingerprint | None
     ) -> DbtStructureResult:
-        raise NotImplementedError
+        result = self._dbt.query_changes(
+            QueryManifestChanges(scope=scope, current_source_state=css)
+        )
+        items: tuple[dict[str, object], ...] = tuple(
+            {
+                "kind": change.kind.value,
+                "unique_id": str(change.unique_id),
+                "resource_type": change.node.raw_resource_type,
+                "relative_path": change.node.original_file_path,
+            }
+            for change in result.changes
+        )
+        return DbtStructureResult(
+            "changes",
+            "",
+            None,
+            result.currentness.value,
+            result.currentness_reason,
+            items,
+            (),
+            result.truncated,
+        )

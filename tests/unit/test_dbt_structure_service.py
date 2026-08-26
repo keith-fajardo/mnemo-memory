@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mnemo_memory.connectors.dbt.artifacts import DbtSourceFreshnessParser
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
-from mnemo_memory.packages.application.dbt import DbtManifestApplicationService, IngestManifest
+from mnemo_memory.packages.application.dbt import (
+    DbtManifestApplicationService,
+    IngestManifest,
+    IngestSourceFreshness,
+)
 from mnemo_memory.packages.application.dbt_structure import DbtStructureService
 from mnemo_memory.packages.domain import (
     MemoryScope,
@@ -19,6 +25,7 @@ from mnemo_memory.packages.domain import (
 from mnemo_memory.packages.storage.reference import ReferenceProjectIndexRepository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "manifest-v12.json"
+SOURCES_FIXTURE = Path(__file__).parents[1] / "fixtures" / "dbt" / "sources-v3.json"
 STAMP = datetime(2026, 8, 2, tzinfo=UTC)
 
 
@@ -44,6 +51,83 @@ def dbt_service_with_manifest() -> DbtManifestApplicationService:
         )
     )
     return DbtManifestApplicationService(repo)  # reader-only handle, mirrors production wiring
+
+
+def dbt_service_with_manifest_and_freshness() -> DbtManifestApplicationService:
+    repo = ReferenceProjectIndexRepository()
+    writer = DbtManifestApplicationService(
+        repo, DbtManifestParser(), source_freshness_parser=DbtSourceFreshnessParser()
+    )
+    snapshot = writer.ingest(
+        IngestManifest(
+            scope=project_scope(),
+            raw_manifest=FIXTURE.read_text(),
+            source_identity="fixtures/dbt/manifest-v12.json",
+            ingested_at=STAMP,
+        )
+    ).snapshot
+    writer.ingest_source_freshness(
+        IngestSourceFreshness(
+            scope=project_scope(),
+            snapshot_id=snapshot.snapshot_id,
+            raw_sources=SOURCES_FIXTURE.read_bytes(),
+            source_identity="sources.json",
+            ingested_at=STAMP,
+        )
+    )
+    return DbtManifestApplicationService(repo)
+
+
+def _manifest_with_added_modified_and_removed_nodes() -> str:
+    value = json.loads(FIXTURE.read_text())
+    nodes = value["nodes"]
+    parent_map = value["parent_map"]
+    child_map = value["child_map"]
+    nodes["model.mnemo_analytics.fct_orders"]["checksum"]["checksum"] = "fact-orders-v2"
+    removed = "test.mnemo_analytics.unique_fct_orders"
+    del nodes[removed]
+    del parent_map[removed]
+    del child_map[removed]
+    child_map["model.mnemo_analytics.fct_orders"].remove(removed)
+    added = "model.mnemo_analytics.new_rollup"
+    new_node = dict(nodes["model.date_utils.dim_calendar"])
+    new_node.update(
+        {
+            "unique_id": added,
+            "package_name": "mnemo_analytics",
+            "name": "new_rollup",
+            "alias": "new_rollup",
+            "original_file_path": "models/marts/new_rollup.sql",
+            "checksum": {"checksum": "new-rollup"},
+        }
+    )
+    nodes[added] = new_node
+    parent_map[added] = []
+    child_map[added] = []
+    return json.dumps(value)
+
+
+def dbt_service_with_two_manifest_snapshots() -> DbtManifestApplicationService:
+    repo = ReferenceProjectIndexRepository()
+    writer = DbtManifestApplicationService(repo, DbtManifestParser())
+    first = writer.ingest(
+        IngestManifest(
+            scope=project_scope(),
+            raw_manifest=FIXTURE.read_text(),
+            source_identity="fixtures/dbt/manifest-v12.json",
+            ingested_at=STAMP,
+        )
+    ).snapshot
+    writer.ingest(
+        IngestManifest(
+            scope=project_scope(),
+            raw_manifest=_manifest_with_added_modified_and_removed_nodes(),
+            source_identity="fixtures/dbt/manifest-v12.json",
+            ingested_at=STAMP,
+            expected_active_snapshot_id=first.snapshot_id,
+        )
+    )
+    return DbtManifestApplicationService(repo)
 
 
 # --- A1: lineage kinds + node resolution + fail-open -----------------------
@@ -108,3 +192,68 @@ def test_no_active_manifest_fails_open() -> None:
     service = DbtStructureService(DbtManifestApplicationService(ReferenceProjectIndexRepository()))
     r = service.lookup(project_scope(), kind="changes", target="")
     assert r.items == () and r.currentness == "unknown"
+
+
+# --- A2: test_coverage / freshness / changes --------------------------------
+
+
+def test_test_coverage_returns_attached_test() -> None:
+    service = DbtStructureService(dbt_service_with_manifest())
+    r = service.lookup(
+        project_scope(), kind="test_coverage", target="model.mnemo_analytics.fct_orders"
+    )
+    assert r.kind == "test_coverage"
+    assert r.resolved_unique_id == "model.mnemo_analytics.fct_orders"
+    assert r.currentness in ("current", "stale", "unknown")
+    assert r.items == (
+        {
+            "test_unique_id": "test.mnemo_analytics.unique_fct_orders",
+            "subject_node": "model.mnemo_analytics.fct_orders",
+            "resource_type": "test",
+            "relative_path": "tests/unique_fct_orders.sql",
+        },
+    )
+
+
+def test_freshness_returns_observed_status() -> None:
+    service = DbtStructureService(dbt_service_with_manifest_and_freshness())
+    r = service.lookup(
+        project_scope(), kind="freshness", target="source.mnemo_analytics.raw_orders"
+    )
+    assert r.kind == "freshness"
+    assert r.resolved_unique_id == "source.mnemo_analytics.raw_orders"
+    assert r.currentness in ("current", "stale", "unknown")
+    assert len(r.items) == 1
+    item = r.items[0]
+    assert item["source_unique_id"] == "source.mnemo_analytics.raw_orders"
+    assert item["status"] == "warn"
+    assert item["age_seconds"] == 5400.0
+
+
+def test_freshness_without_observation_is_empty_but_valid() -> None:
+    service = DbtStructureService(dbt_service_with_manifest())
+    r = service.lookup(
+        project_scope(), kind="freshness", target="source.mnemo_analytics.raw_orders"
+    )
+    assert r.kind == "freshness"
+    assert r.resolved_unique_id == "source.mnemo_analytics.raw_orders"
+    assert r.items == ()
+
+
+def test_changes_with_single_snapshot_fails_open_but_valid() -> None:
+    service = DbtStructureService(dbt_service_with_manifest())
+    r = service.lookup(project_scope(), kind="changes", target="")
+    assert r.kind == "changes"
+    assert r.items == ()
+    assert r.currentness == "unknown"
+
+
+def test_changes_across_two_snapshots_maps_added_modified_removed() -> None:
+    service = DbtStructureService(dbt_service_with_two_manifest_snapshots())
+    r = service.lookup(project_scope(), kind="changes", target="")
+    assert r.kind == "changes"
+    assert r.currentness in ("current", "stale", "unknown")
+    kinds_by_id = {item["unique_id"]: item["kind"] for item in r.items}
+    assert kinds_by_id["model.mnemo_analytics.fct_orders"] == "modified"
+    assert kinds_by_id["model.mnemo_analytics.new_rollup"] == "added"
+    assert kinds_by_id["test.mnemo_analytics.unique_fct_orders"] == "removed"
