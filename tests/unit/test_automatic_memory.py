@@ -46,6 +46,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     LocalObsidianVaultBindingStore,
     MemoryProjectBinding,
     exclusive_local_file_lock,
+    find_memory_project_root,
 )
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
 from mnemo_memory.packages.application.checkpoints import (
@@ -254,6 +255,44 @@ def test_obsidian_binding_rejects_missing_marker_and_symlinked_vault_root(tmp_pa
     linked.symlink_to(target, target_is_directory=True)
     with pytest.raises(AutomaticMemoryBindingError, match="MNEMO_OBSIDIAN_ROOT_UNSAFE"):
         store.enable(project, linked)
+
+
+def _make_git_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """Lay out a primary checkout and a linked git worktree, returning (main, worktree).
+
+    A worktree's ``.git`` is a file pointing at ``<main>/.git/worktrees/<name>``; that
+    administrative directory carries a ``commondir`` whose contents locate the shared
+    ``.git`` directory relative to itself.
+    """
+    main = tmp_path / "repo"
+    (main / ".git").mkdir(parents=True)
+    admin = main / ".git" / "worktrees" / "feature"
+    admin.mkdir(parents=True)
+    (admin / "commondir").write_text("../..\n")
+    worktree = tmp_path / "checkouts" / "feature"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {admin}\n")
+    return main.resolve(), worktree
+
+
+def test_find_memory_project_root_resolves_git_worktree_to_main_working_tree(
+    tmp_path: Path,
+) -> None:
+    main, worktree = _make_git_worktree(tmp_path)
+
+    assert find_memory_project_root(worktree) == main
+
+
+def test_binding_lookup_from_git_worktree_reuses_main_checkout_binding(
+    tmp_path: Path,
+) -> None:
+    main, worktree = _make_git_worktree(tmp_path)
+    data = tmp_path / "data"
+    enabled = LocalMemoryProjectBindingStore(data).enable(main)
+
+    from_worktree = LocalMemoryProjectBindingStore(data).get(worktree)
+
+    assert from_worktree == enabled
 
 
 def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_path: Path) -> None:

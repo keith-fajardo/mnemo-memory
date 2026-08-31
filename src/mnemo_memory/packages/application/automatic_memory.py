@@ -158,16 +158,50 @@ class MemoryProjectBinding:
 
 
 def find_memory_project_root(path: Path) -> Path:
-    """Find the nearest repository root, or use the explicit existing directory."""
+    """Find the nearest repository root, or use the explicit existing directory.
+
+    A git worktree's ``.git`` is a file pointing at the primary checkout's
+    administrative directory rather than a repository of its own.  Resolve that back to
+    the main working tree so a worktree shares the binding enabled on the primary
+    checkout instead of reading as a separate, unenabled project.
+    """
     candidate = path.expanduser().resolve()
     if candidate.is_file():
         candidate = candidate.parent
     if not candidate.is_dir():
         raise AutomaticMemoryBindingError("MNEMO_MEMORY_PROJECT_ROOT_INVALID")
     for parent in (candidate, *candidate.parents):
-        if (parent / ".git").exists():
+        marker = parent / ".git"
+        if marker.is_dir():
             return parent
+        if marker.is_file():
+            return _worktree_main_working_tree(marker) or parent
     return candidate
+
+
+def _worktree_main_working_tree(git_file: Path) -> Path | None:
+    """Resolve a worktree ``.git`` pointer file to the primary checkout root, or None.
+
+    Reading is best-effort: a malformed or missing pointer chain falls back to the
+    worktree directory itself rather than raising, keeping directory resolution fail-open.
+    """
+    try:
+        contents = git_file.read_text(encoding="utf-8", errors="strict")
+    except OSError:
+        return None
+    prefix = "gitdir:"
+    line = next((ln for ln in contents.splitlines() if ln.startswith(prefix)), None)
+    if line is None:
+        return None
+    admin = Path(line[len(prefix) :].strip())
+    if not admin.is_absolute():
+        admin = (git_file.parent / admin).resolve()
+    try:
+        common = (admin / (admin / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    except OSError:
+        return None
+    root = common.parent
+    return root if root.is_dir() else None
 
 
 class LocalMemoryProjectBindingStore:
