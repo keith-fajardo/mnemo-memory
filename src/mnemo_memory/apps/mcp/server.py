@@ -1219,7 +1219,6 @@ def _build_local_mcp_context_session(
             source_structure_repository=source_repository,
             dbt_structure_service=DbtStructureService(
                 runtime.dbt_manifest_service,
-                runtime.repository,
                 current_source_state=current_dbt_source_state,
             ),
             default_dbt_scope=None if dbt_binding is None else dbt_binding.scope,

@@ -6638,3 +6638,16 @@ Focused automatic-memory coverage passed (91 tests). The complete `npm run check
 skip. Formatting, linting, strict typing, schema, dependency/provenance, architecture, and installed
 personal-workflow verification all passed. This issue is complete; stop here pending approval for
 another issue.
+
+### `0.1.0a25` release compatibility correction — Complete (2026-09-02)
+
+The first protected PyPI run stopped before artifact creation or publication because the resolved
+dbt-structure application result and the MCP adapter used incompatible result shapes. The correction
+preserves the richer application result while restoring its snapshot identifier and translates its
+bounded item/edge dictionaries directly at the MCP boundary. Composition no longer supplies an
+obsolete repository constructor argument.
+
+Focused dbt/MCP coverage passed (58 tests). The complete `npm run check` gate passed with 1,317
+tests and 27 expected skips; the ephemeral PostgreSQL suite passed 26 tests with one opt-in skip.
+No artifact was published by the failed run. The corrected release commit is ready for the protected
+workflow; publish status must be verified separately.

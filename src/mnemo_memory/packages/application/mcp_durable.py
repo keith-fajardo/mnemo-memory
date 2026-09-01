@@ -314,24 +314,8 @@ class DurableMcpContextPort:
                 if result.currentness == "current"
                 else "Run dbt through Mnemo to refresh lineage before relying on this map."
             ),
-            "nodes": [
-                {
-                    "unique_id": node.unique_id,
-                    "name": node.name,
-                    "resource_type": node.resource_type,
-                    "relative_path": node.relative_path,
-                    "depth": node.depth,
-                }
-                for node in result.nodes
-            ],
-            "edges": [
-                {
-                    "parent_id": edge.parent_id,
-                    "child_id": edge.child_id,
-                    "edge_type": edge.edge_type,
-                }
-                for edge in result.edges
-            ],
+            "nodes": list(result.items),
+            "edges": list(result.edges),
             "truncated": result.truncated,
         }
 

@@ -56,6 +56,7 @@ class DbtStructureResult:
     kind: str
     query: str
     resolved_unique_id: str | None
+    snapshot_id: str | None
     currentness: str
     currentness_reason: str
     items: tuple[dict[str, object], ...]
@@ -73,7 +74,7 @@ def _looks_like_path(target: str) -> bool:
 
 
 def _empty(kind: str, target: str, reason: str) -> DbtStructureResult:
-    return DbtStructureResult(kind, target, None, "unknown", reason, (), (), False)
+    return DbtStructureResult(kind, target, None, None, "unknown", reason, (), (), False)
 
 
 class DbtStructureService:
@@ -88,7 +89,7 @@ class DbtStructureService:
         self,
         dbt_service: DbtManifestApplicationService,
         *,
-        current_source_state: Callable[[MemoryScope], SourceStateFingerprint] | None = None,
+        current_source_state: Callable[[MemoryScope], SourceStateFingerprint | None] | None = None,
     ) -> None:
         self._dbt = dbt_service
         self._current_source_state = current_source_state
@@ -214,6 +215,7 @@ class DbtStructureService:
             kind,
             target,
             unique_id,
+            str(result.snapshot.snapshot_id),
             result.currentness.value,
             result.currentness_reason,
             items,
@@ -252,6 +254,7 @@ class DbtStructureService:
             "test_coverage",
             target,
             unique_id,
+            str(result.snapshot.snapshot_id),
             result.currentness.value,
             result.currentness_reason,
             items,
@@ -294,6 +297,7 @@ class DbtStructureService:
             "freshness",
             target,
             unique_id,
+            str(result.snapshot.snapshot_id),
             result.currentness.value,
             result.currentness_reason,
             items,
@@ -320,6 +324,7 @@ class DbtStructureService:
             "changes",
             "",
             None,
+            str(result.after_snapshot.snapshot_id),
             result.currentness.value,
             result.currentness_reason,
             items,

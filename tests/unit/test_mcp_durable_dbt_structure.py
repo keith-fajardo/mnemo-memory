@@ -52,7 +52,7 @@ def dbt_structure_service() -> DbtStructureService:
             source_state=SOURCE_STATE,
         )
     )
-    return DbtStructureService(dbt, repository, current_source_state=lambda _: SOURCE_STATE)
+    return DbtStructureService(dbt, current_source_state=lambda _: SOURCE_STATE)
 
 
 def port(
