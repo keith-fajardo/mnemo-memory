@@ -162,6 +162,7 @@ async def _call_launcher(
             "explain_context",
             "save_checkpoint",
             "structural_lookup",
+            "dbt_structure",
         ]:
             raise RuntimeError("unexpected MCP tool inventory")
         result = await session.call_tool(action, payload, read_timeout_seconds=timedelta(seconds=8))

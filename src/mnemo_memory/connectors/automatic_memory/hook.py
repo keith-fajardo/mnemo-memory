@@ -227,7 +227,11 @@ class AutomaticMemoryHook:
         if event_name == "SessionStart":
             self._expire_due_checkpoints(binding)
             self._refresh_project_knowledge(binding)
-            refreshed = self._refresh_source_structure(binding, include_latest_transition=True)
+            # The current snapshot is sufficient for a fresh-session hint. Replaying the last
+            # transition here can diff every historical edge again even when the cached current
+            # snapshot is unchanged. Agents that need prior changes receive the bounded
+            # ``source_changes`` retrieval hint below and can request that evidence explicitly.
+            refreshed = self._refresh_source_structure(binding)
             git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
             state_store.save(
                 session_id,

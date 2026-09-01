@@ -27,6 +27,7 @@ TOOLS = [
     "explain_context",
     "save_checkpoint",
     "structural_lookup",
+    "dbt_structure",
 ]
 
 

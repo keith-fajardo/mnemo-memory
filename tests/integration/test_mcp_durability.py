@@ -247,6 +247,7 @@ def test_exact_launcher_survives_restart_and_terminal_selection(tmp_path: Path) 
             "explain_context",
             "save_checkpoint",
             "structural_lookup",
+            "dbt_structure",
         ]
         oversized = process_a.tool("save_checkpoint", save_payload(token_estimate=601))
         assert oversized.get("isError") is not True
@@ -626,6 +627,12 @@ def test_fresh_registered_process_labels_dbt_context_current_without_scope_ids(
                 )
             )
         )
+        dbt_structure = structured(
+            process.tool(
+                "dbt_structure",
+                {"kind": "downstream", "target": "fct_orders", "depth": 1},
+            )
+        )
     finally:
         process.close()
 
@@ -633,6 +640,9 @@ def test_fresh_registered_process_labels_dbt_context_current_without_scope_ids(
     assert all(
         json.loads(item.content)["currentness"] == "current" for item in packet.structural_items
     )
+    assert dbt_structure["resolved_unique_id"] == "model.mnemo_analytics.fct_orders"
+    assert dbt_structure["currentness"] == "current"
+    assert dbt_structure["nodes"]
 
 
 def test_abrupt_acknowledged_write_and_two_process_conflict_are_durable(tmp_path: Path) -> None:

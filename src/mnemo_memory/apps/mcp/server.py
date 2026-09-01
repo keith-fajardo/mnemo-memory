@@ -51,6 +51,7 @@ from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
 )
+from mnemo_memory.packages.application.dbt_structure import DbtStructureService
 from mnemo_memory.packages.application.mcp_durable import DurableMcpContextPort
 from mnemo_memory.packages.application.mcp_port import McpContextPort
 from mnemo_memory.packages.application.unified_context import UnifiedContextService
@@ -222,6 +223,9 @@ class _DeferredMcpContextPort:
         # mirroring the source-context path in get_context.
         self._refresh_source_once(session)
         return session.port.structural_lookup(request)
+
+    def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+        return self._initialized_session().port.dbt_structure(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return self._initialized_session().port.list_skills(request)
@@ -1005,6 +1009,26 @@ def create_server(
     ) -> dict[str, object]:
         return port.structural_lookup({"kind": kind, "target": target, "limit": limit})
 
+    @server.tool(
+        name="dbt_structure",
+        description=(
+            "Answer dbt model-lineage questions from the maintained manifest — deterministic, "
+            "no model call, a few tokens. PREFER THIS over dispatching a search/Explore agent "
+            "or reading target/manifest.json when you need a model's upstream dependencies, "
+            "downstream dependents, or change impact. kind='upstream' asks what feeds the "
+            "target; 'downstream' asks what depends on it; 'impact' returns its downstream "
+            "blast radius. target is a model name, project-relative manifest path, or dbt "
+            "unique_id. Every answer reports manifest currentness; Mnemo never runs dbt."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def dbt_structure(
+        kind: Annotated[str, Field(pattern="^(upstream|downstream|impact)$")],
+        target: Annotated[str, Field(min_length=1, max_length=512)],
+        depth: Annotated[int | None, Field(ge=1, le=50)] = None,
+    ) -> dict[str, object]:
+        return port.dbt_structure({"kind": kind, "target": target, "depth": depth})
+
     names = [
         "get_context",
         "list_skills",
@@ -1012,6 +1036,7 @@ def create_server(
         "explain_context",
         "save_checkpoint",
         "structural_lookup",
+        "dbt_structure",
     ]
     if episodic_extraction_enabled:
         names.extend(("extract_episodic", "submit_episodic_candidates"))
@@ -1051,6 +1076,10 @@ def _build_local_mcp_context_session(
         )
         dbt_bindings = LocalDbtProjectBindingStore(runtime.config.data_directory)
         dbt_state_observer = DbtGitStateObserver()
+        try:
+            dbt_binding = dbt_bindings.get(project_directory)
+        except DbtProjectBindingError:
+            dbt_binding = None
 
         def current_dbt_source_state(scope: MemoryScope) -> SourceStateFingerprint | None:
             try:
@@ -1188,6 +1217,12 @@ def _build_local_mcp_context_session(
             takeover_live_calls_authorized=settings.local_first_takeover_live_calls_authorized,
             episodic_route_recorder=record_episodic_route,
             source_structure_repository=source_repository,
+            dbt_structure_service=DbtStructureService(
+                runtime.dbt_manifest_service,
+                runtime.repository,
+                current_source_state=current_dbt_source_state,
+            ),
+            default_dbt_scope=None if dbt_binding is None else dbt_binding.scope,
         )
 
         def refresh_source() -> None:

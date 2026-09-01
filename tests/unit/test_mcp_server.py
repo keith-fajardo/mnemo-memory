@@ -127,6 +127,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
         "explain_context",
         "save_checkpoint",
         "structural_lookup",
+        "dbt_structure",
     ]
     assert tools[0].annotations is not None and tools[0].annotations.readOnlyHint is True
     recap_schema = tools[0].inputSchema["properties"]["recap_days"]
@@ -143,6 +144,15 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert set(structural.inputSchema["properties"]) == {"kind", "target", "limit"}
     assert structural.inputSchema["additionalProperties"] is False
     assert "PREFER THIS" in (structural.description or "")
+    dbt_structure = tools[6]
+    assert dbt_structure.name == "dbt_structure"
+    assert dbt_structure.annotations is not None
+    assert dbt_structure.annotations.readOnlyHint is True
+    assert dbt_structure.annotations.destructiveHint is False
+    assert dbt_structure.annotations.openWorldHint is False
+    assert set(dbt_structure.inputSchema["properties"]) == {"kind", "target", "depth"}
+    assert dbt_structure.inputSchema["additionalProperties"] is False
+    assert "PREFER THIS" in (dbt_structure.description or "")
     assert all(tool.inputSchema["additionalProperties"] is False for tool in tools)
     assert "operation" in tools[4].inputSchema["properties"]
     assert "lessons" in tools[4].inputSchema["properties"]
@@ -280,6 +290,7 @@ def test_server_lists_verifier_only_when_experimental_semantic_memory_is_enabled
         "verify_against_memory",
         "save_checkpoint",
         "structural_lookup",
+        "dbt_structure",
     ]
     verifier = tools[4]
     assert verifier.annotations is not None and verifier.annotations.readOnlyHint is True
@@ -319,6 +330,7 @@ def test_server_lists_episodic_tools_only_when_episodic_extraction_is_enabled(
             "extract_episodic",
             "submit_episodic_candidates",
             "structural_lookup",
+            "dbt_structure",
         ]
 
         tool_manager_tools = server._tool_manager._tools
@@ -358,6 +370,7 @@ def test_server_omits_episodic_tools_by_default(tmp_path: Path) -> None:
             "explain_context",
             "save_checkpoint",
             "structural_lookup",
+            "dbt_structure",
         ]
         assert "extract_episodic" not in server._tool_manager._tools
         assert "submit_episodic_candidates" not in server._tool_manager._tools
@@ -373,6 +386,10 @@ def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listin
 
         def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
             events.append(("structural_lookup", request))
+            return request
+
+        def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+            events.append(("dbt_structure", request))
             return request
 
         def list_skills(self, request: dict[str, object]) -> dict[str, object]:
@@ -417,6 +434,7 @@ def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listin
         "explain_context",
         "save_checkpoint",
         "structural_lookup",
+        "dbt_structure",
     ]
     assert events == []
 
@@ -424,6 +442,10 @@ def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listin
     assert events == ["build", ("get_context", {"source_query": None})]
     deferred.get_context({"source_changes": {"relative_path": "src/service.py"}})
     deferred.get_context({"source_overview": {}})
+    assert deferred.dbt_structure({"kind": "upstream", "target": "orders"}) == {
+        "kind": "upstream",
+        "target": "orders",
+    }
     assert events.count("build") == 1
     assert events.count("refresh_source") == 1
 
@@ -1629,6 +1651,7 @@ def test_real_stdio_handshake_and_tool_listing_do_not_open_local_storage(tmp_pat
                 "explain_context",
                 "save_checkpoint",
                 "structural_lookup",
+                "dbt_structure",
             ]
             unavailable = await session.call_tool("get_context", IDS)
             assert unavailable.isError is True
@@ -1660,6 +1683,7 @@ def test_real_stdio_server_is_durable_and_protocol_clean(tmp_path: Path) -> None
                 "explain_context",
                 "save_checkpoint",
                 "structural_lookup",
+                "dbt_structure",
             ]
             created = await session.call_tool(
                 "save_checkpoint",

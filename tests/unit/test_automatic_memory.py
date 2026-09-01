@@ -2936,6 +2936,34 @@ def test_session_start_refreshes_supported_static_source_structure(tmp_path: Pat
     assert snapshot.symbol_count == 2
 
 
+def test_session_start_uses_current_source_snapshot_without_replaying_last_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    observed: list[bool] = []
+    original = AutomaticMemoryHook._refresh_source_structure
+
+    def refresh(
+        self: AutomaticMemoryHook,
+        binding: MemoryProjectBinding,
+        *,
+        include_latest_transition: bool = False,
+    ) -> object:
+        observed.append(include_latest_transition)
+        return original(self, binding, include_latest_transition=include_latest_transition)
+
+    monkeypatch.setattr(AutomaticMemoryHook, "_refresh_source_structure", refresh)
+
+    AutomaticMemoryHook(data, "codex").handle(
+        {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
+    )
+
+    assert observed == [False]
+
+
 def test_registered_project_source_refresh_fails_open_on_an_unsafe_file(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
@@ -3154,9 +3182,8 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     later_output = later["hookSpecificOutput"]
     assert isinstance(later_output, dict)
     later_instruction = str(later_output["additionalContext"])
-    assert "most recent saved transition" in later_instruction
-    assert "service.py:service.current" in later_instruction
-    assert "service.py:service.initial" in later_instruction
+    assert "most recent saved transition" not in later_instruction
+    assert "source_changes" in later_instruction
     assert "private initial body" not in later_instruction
     assert "private changed body" not in later_instruction
 

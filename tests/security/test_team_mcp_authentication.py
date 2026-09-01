@@ -29,6 +29,9 @@ class _Port:
     def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "structural_lookup"}
 
+    def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+        return {"operation": "dbt_structure"}
+
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return {"operation": "list_skills"}
 
@@ -277,6 +280,7 @@ def test_streamable_http_route_requires_bearer_authentication(
         "explain_context",
         "save_checkpoint",
         "structural_lookup",
+        "dbt_structure",
         "list_knowledge_sources",
         "approve_knowledge_source",
     }
@@ -318,6 +322,18 @@ def test_structural_lookup_fails_open_instead_of_requiring_workspace_scope() -> 
     anonymous = AuthenticatedTeamMcpPort(anonymous_factory, access_token_loader=lambda: None)
     assert anonymous.structural_lookup({"kind": "callers", "target": "y"})["hits"] == []
     assert anonymous_factory.calls == []
+
+
+def test_dbt_structure_fails_open_before_team_scope_and_authentication() -> None:
+    factory = _Factory()
+    port = AuthenticatedTeamMcpPort(factory, access_token_loader=lambda: None)
+
+    result = port.dbt_structure({"kind": "upstream", "target": "fct_orders"})
+
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert result["currentness"] == "unknown"
+    assert factory.calls == []
 
 
 def _new_key_pair() -> tuple[str, str]:

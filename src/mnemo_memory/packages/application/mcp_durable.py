@@ -35,6 +35,10 @@ from mnemo_memory.packages.application.checkpoints import (
     estimate_checkpoint_tokens,
 )
 from mnemo_memory.packages.application.dbt import LineageDirection
+from mnemo_memory.packages.application.dbt_structure import (
+    DbtStructureKind,
+    DbtStructureService,
+)
 from mnemo_memory.packages.application.episodic_extraction_ingest import (
     ingest_episodic_proposals,
 )
@@ -172,6 +176,8 @@ class DurableMcpContextPort:
         takeover_live_calls_authorized: bool = False,
         episodic_route_recorder: Callable[[str], None] | None = None,
         source_structure_repository: SourceStructureRepository | None = None,
+        dbt_structure_service: DbtStructureService | None = None,
+        default_dbt_scope: MemoryScope | None = None,
     ) -> None:
         self._service = service
         self._context_service = context_service
@@ -205,6 +211,8 @@ class DurableMcpContextPort:
             if source_structure_repository is None
             else StructuralLookupService(source_structure_repository)
         )
+        self._dbt_structure_service = dbt_structure_service
+        self._default_dbt_scope = default_dbt_scope
 
     def structural_lookup(self, request: Mapping[str, object]) -> dict[str, object]:
         """Deterministically locate code in the active project snapshot; never leak storage.
@@ -251,6 +259,80 @@ class DurableMcpContextPort:
                 }
                 for hit in result.hits
             ],
+        }
+
+    def dbt_structure(self, request: Mapping[str, object]) -> dict[str, object]:
+        """Return model-level dbt lineage from the explicitly bound local project."""
+        kind = str(request.get("kind", "")).strip()
+        target = str(request.get("target", "")).strip()
+        raw_depth = request.get("depth")
+        empty: dict[str, object] = {
+            "kind": kind,
+            "query": target,
+            "resolved_unique_id": None,
+            "snapshot_id": None,
+            "currentness": "unknown",
+            "currentness_reason": "dbt structure is unavailable",
+            "freshness_hint": ("Run dbt through Mnemo to create or refresh the active manifest."),
+            "nodes": [],
+            "edges": [],
+            "truncated": False,
+        }
+        if (
+            kind not in ("upstream", "downstream", "impact")
+            or not target
+            or self._dbt_structure_service is None
+            or self._default_dbt_scope is None
+            or (
+                raw_depth is not None
+                and (
+                    not isinstance(raw_depth, int)
+                    or isinstance(raw_depth, bool)
+                    or not 1 <= raw_depth <= 50
+                )
+            )
+        ):
+            return empty
+        try:
+            result = self._dbt_structure_service.lookup(
+                _project_scope(self._default_dbt_scope),
+                kind=cast(DbtStructureKind, kind),
+                target=target,
+                depth=raw_depth,
+            )
+        except Exception:
+            return empty
+        return {
+            "kind": result.kind,
+            "query": result.query,
+            "resolved_unique_id": result.resolved_unique_id,
+            "snapshot_id": result.snapshot_id,
+            "currentness": result.currentness,
+            "currentness_reason": result.currentness_reason,
+            "freshness_hint": (
+                ""
+                if result.currentness == "current"
+                else "Run dbt through Mnemo to refresh lineage before relying on this map."
+            ),
+            "nodes": [
+                {
+                    "unique_id": node.unique_id,
+                    "name": node.name,
+                    "resource_type": node.resource_type,
+                    "relative_path": node.relative_path,
+                    "depth": node.depth,
+                }
+                for node in result.nodes
+            ],
+            "edges": [
+                {
+                    "parent_id": edge.parent_id,
+                    "child_id": edge.child_id,
+                    "edge_type": edge.edge_type,
+                }
+                for edge in result.edges
+            ],
+            "truncated": result.truncated,
         }
 
     def _resolve_current_dbt_source_state(

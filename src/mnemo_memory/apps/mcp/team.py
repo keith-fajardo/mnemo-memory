@@ -129,6 +129,22 @@ def _empty_structural_lookup(request: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _empty_dbt_structure(request: dict[str, object]) -> dict[str, object]:
+    """Team dbt structure stays unavailable until its authenticated scope is designed."""
+    return {
+        "kind": str(request.get("kind", "")).strip(),
+        "query": str(request.get("target", "")).strip(),
+        "resolved_unique_id": None,
+        "snapshot_id": None,
+        "currentness": "unknown",
+        "currentness_reason": "dbt structure is unavailable",
+        "freshness_hint": "",
+        "nodes": [],
+        "edges": [],
+        "truncated": False,
+    }
+
+
 class PostgreSQLTeamMcpPort:
     """Team context plus content-free source-governance transport operations."""
 
@@ -157,6 +173,9 @@ class PostgreSQLTeamMcpPort:
         # Non-functional on the team surface by design; fail open to the empty result and
         # never touch a connection (see _empty_structural_lookup).
         return _empty_structural_lookup(request)
+
+    def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+        return _empty_dbt_structure(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         try:
@@ -354,6 +373,9 @@ class AuthenticatedTeamMcpPort:
         # tool surface never carries workspace_id, so delegating would always raise
         # MNEMO_INVALID_SCOPE. Return the safe empty shape instead.
         return _empty_structural_lookup(request)
+
+    def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+        return _empty_dbt_structure(request)
 
     def list_skills(self, request: dict[str, object]) -> dict[str, object]:
         return self._port(request).list_skills(request)

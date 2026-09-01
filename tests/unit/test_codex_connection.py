@@ -120,6 +120,7 @@ def test_real_codex_registration_is_isolated_and_reversible(tmp_path: Path) -> N
                 "explain_context",
                 "save_checkpoint",
                 "structural_lookup",
+                "dbt_structure",
             ]
             saved = await session.call_tool(
                 "save_checkpoint", _durable_payload(), read_timeout_seconds=timedelta(seconds=5)

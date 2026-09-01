@@ -6590,3 +6590,51 @@ artifacts. The honest action is `STOP_FEATURE_EXPANSION`: do not add Phase 3 to 
 This offline mechanism test does not prove model-generated task correctness or user preference, so
 both remain `NOT_EVALUATED`. No Ollama or other model call, product behavior, dependency, migration,
 stable default, deployment, or release changed.
+
+### Discoverable dbt structural lookup — Complete (2026-08-26)
+
+The maintainer approved continuing the saved dbt structural-awareness checkpoint. This bounded
+issue adds one read-only, deterministic `dbt_structure` MCP tool for model-level upstream,
+downstream, and impact queries over the already-active dbt manifest. It resolves an exact dbt
+unique ID, model name, or project-relative manifest path; derives its exact retrieval scope from the
+explicit local dbt-project binding; reports manifest currentness; and fails open to an empty result
+when the binding, manifest, node, or storage path is unavailable.
+
+The implementation reuses the existing authoritative manifest query service and scoped project
+index. The new application service resolves unique IDs, exact manifest-relative paths, and
+unambiguous node names; returns bounded nodes and edges with snapshot/currentness metadata; and
+preserves useful stale results with a refresh hint. Local MCP composition obtains the project scope
+from `LocalDbtProjectBindingStore`. The team surface deliberately returns an empty result before
+authentication or workspace composition because authenticated team dbt lookup remains out of
+scope. Every hardcoded MCP inventory and installed-workflow check includes the new tool.
+
+Results: 72 focused service, port, MCP, security, and integration tests passed. The complete
+`npm run check` gate passed with 1,306 tests and 27 expected environment skips; the ephemeral
+PostgreSQL gate passed 26 tests with one opt-in load test skipped. Formatting and linting passed;
+strict mypy passed over 343 source files; context schema validation passed; all 101 registered
+dependency/provenance entries passed; architecture validation passed for 175 product Python files;
+and installed personal workflow verification passed.
+
+No column-level lineage, SQL parsing, automatic `dbt parse`, model call, supplemental
+test/freshness/change query mode, dependency, lockfile, migration, team dbt query support, release,
+or deployment was added. This issue is complete; stop here pending approval for another issue.
+
+### SessionStart structural-transition latency — Complete (2026-08-31)
+
+After a live SessionStart hook took about 220 seconds, read-only inspection found 211 stored source
+snapshots and 6.78 million stored edges; the edge tables and their indexes occupy about 3.3 GB of
+the local SQLite profile. The hook previously recomputed the most recent saved structural transition
+on every SessionStart even when the cached current snapshot was unchanged. That can require a full
+historical edge diff before the client becomes usable.
+
+SessionStart now retains the current cached source snapshot and its freshness hint, but does not
+replay the previous transition. Prior changes remain available through the existing bounded explicit
+`source_changes` retrieval hint. The transition is still summarized when the source actually changes
+during the current refresh. No SQLite/PostgreSQL migration, retained-data deletion, scope or policy
+change, external service, or model routing change was made.
+
+Focused automatic-memory coverage passed (91 tests). The complete `npm run check` gate passed with
+1,307 tests and 27 expected skips; the ephemeral PostgreSQL suite passed 26 tests with one opt-in
+skip. Formatting, linting, strict typing, schema, dependency/provenance, architecture, and installed
+personal-workflow verification all passed. This issue is complete; stop here pending approval for
+another issue.

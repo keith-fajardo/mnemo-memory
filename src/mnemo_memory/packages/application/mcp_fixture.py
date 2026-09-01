@@ -17,6 +17,29 @@ from mnemo_memory.packages.domain import (
 
 
 class FixtureMcpContextPort:
+    def structural_lookup(self, request: dict[str, object]) -> dict[str, object]:
+        return {
+            "kind": request.get("kind"),
+            "query": request.get("target"),
+            "snapshot_id": None,
+            "truncated": False,
+            "hits": [],
+        }
+
+    def dbt_structure(self, request: dict[str, object]) -> dict[str, object]:
+        return {
+            "kind": request.get("kind"),
+            "query": request.get("target"),
+            "resolved_unique_id": None,
+            "snapshot_id": None,
+            "currentness": "unknown",
+            "currentness_reason": "dbt structure is unavailable",
+            "freshness_hint": "",
+            "nodes": [],
+            "edges": [],
+            "truncated": False,
+        }
+
     def get_context(self, request: dict[str, object]) -> dict[str, object]:
         owner = OwnerId.from_string(_id(request, "owner_id"))
         query = request.get("query")
