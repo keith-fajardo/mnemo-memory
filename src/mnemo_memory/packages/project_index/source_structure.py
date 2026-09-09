@@ -434,14 +434,19 @@ class SourceStructureParser:
                     static_methods,
                     calls,
                 )
-        if len(pending) > request.limits.max_symbols:
-            raise SourceStructureError("MNEMO_SOURCE_SYMBOL_LIMIT")
         source_digest = f"sha256:{digest.hexdigest()}"
         snapshot_id = CodeSnapshotId(
             uuid5(_SNAPSHOT_NAMESPACE, f"{request.scope.to_dict()}:{source_digest}")
         )
         if go_module_path is not None:
             pending.extend(self._go_package_symbols(pending, go_module_path))
+        # Minified or generated sources can contain repeated declarations with the same name on
+        # one physical line. Those declarations have one storage identity and one deterministic
+        # symbol ID, so retaining duplicates adds no evidence and makes the projection invalid.
+        # Keep declarations on different lines distinct so overload ambiguity is preserved.
+        pending = list(dict.fromkeys(pending))
+        if len(pending) > request.limits.max_symbols:
+            raise SourceStructureError("MNEMO_SOURCE_SYMBOL_LIMIT")
         symbols = tuple(
             CodeSymbol(
                 snapshot_id,

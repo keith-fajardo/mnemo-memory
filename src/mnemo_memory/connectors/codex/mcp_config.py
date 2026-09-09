@@ -9,6 +9,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 SERVER_NAME = "mnemo-memory"
 
@@ -19,6 +20,7 @@ class CodexMcpManager:
     mnemo_executable: Path
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
     environment: dict[str, str] | None = None
+    tool_profile: Literal["full", "compact"] = "full"
 
     @classmethod
     def discover(cls, mnemo_executable: Path) -> CodexMcpManager:
@@ -31,7 +33,10 @@ class CodexMcpManager:
 
     @property
     def command(self) -> list[str]:
-        return [str(self.mnemo_executable), "mcp", "serve", "--stdio"]
+        command = [str(self.mnemo_executable), "mcp", "serve", "--stdio"]
+        if self.tool_profile == "compact":
+            command.extend(("--profile", "compact"))
+        return command
 
     def inspect(self) -> dict[str, object] | None:
         result = self.run(
@@ -53,15 +58,25 @@ class CodexMcpManager:
         transport = entry.get("transport")
         if isinstance(transport, dict):
             entry = transport
-        return (
-            _same_launcher(entry.get("command"), self.mnemo_executable)
-            and entry.get("args") == self.command[1:]
+        return _same_launcher(entry.get("command"), self.mnemo_executable) and entry.get(
+            "args"
+        ) in (
+            ["mcp", "serve", "--stdio"],
+            ["mcp", "serve", "--stdio", "--profile", "compact"],
         )
+
+    def has_selected_profile(self, entry: dict[str, object]) -> bool:
+        transport = entry.get("transport")
+        if isinstance(transport, dict):
+            entry = transport
+        return self.is_owned(entry) and entry.get("args") == self.command[1:]
 
     def connect(self, dry_run: bool = False) -> dict[str, object]:
         existing = self.inspect()
         if existing is not None:
             if self.is_owned(existing):
+                if not self.has_selected_profile(existing):
+                    raise ValueError("MNEMO_CODEX_PROFILE_MISMATCH")
                 return {"status": "connected", "changed": False, "server": SERVER_NAME}
             raise ValueError("MNEMO_CODEX_CONFLICT")
         if dry_run:

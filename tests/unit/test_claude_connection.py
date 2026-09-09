@@ -58,6 +58,30 @@ def test_claude_user_scope_registration_is_idempotent_and_conflict_safe(tmp_path
         ).disconnect()
 
 
+def test_claude_compact_registration_and_profile_mismatch_are_explicit(tmp_path: Path) -> None:
+    launcher = tmp_path / "mnemo-memory"
+    launcher.touch()
+    state = ""
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal state
+        if command[2] == "get":
+            return done(command, 0 if state else 1, state)
+        if command[2] == "add":
+            state = " ".join(command[7:])
+        if command[2] == "remove":
+            state = ""
+        return done(command)
+
+    compact = ClaudeMcpManager("/fake/claude", launcher, run, tool_profile="compact")
+    assert compact.connect()["changed"] is True
+    assert compact.command[-2:] == ["--profile", "compact"]
+    assert compact.has_selected_profile(state)
+    with pytest.raises(ValueError, match="MNEMO_CLAUDE_PROFILE_MISMATCH"):
+        ClaudeMcpManager("/fake/claude", launcher, run).connect()
+    assert ClaudeMcpManager("/fake/claude", launcher, run).disconnect()["changed"] is True
+
+
 @pytest.mark.skipif(shutil.which("claude") is None, reason="Claude Code CLI is unavailable")
 def test_real_claude_registration_and_registered_launcher_smoke(tmp_path: Path) -> None:
     home = tmp_path / "Claude Home With Spaces"

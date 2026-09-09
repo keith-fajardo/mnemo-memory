@@ -16,7 +16,7 @@ from importlib import import_module
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 from time import monotonic
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID, uuid4, uuid5
 
 import typer
@@ -259,6 +259,13 @@ mcp_app = typer.Typer(no_args_is_help=True, help="Run the local MCP server.")
 app.add_typer(mcp_app, name="mcp", help="Run the local MCP server.")
 connect_app = typer.Typer(no_args_is_help=True, help="Register Mnemo with an AI coding client.")
 disconnect_app = typer.Typer(no_args_is_help=True, help="Remove a client registration.")
+
+
+class McpToolProfile(str, Enum):
+    FULL = "full"
+    COMPACT = "compact"
+
+
 dbt_app = typer.Typer(
     no_args_is_help=True,
     help="Enable personal dbt lineage memory and safely wrap local dbt commands.",
@@ -2002,31 +2009,50 @@ def dbt_shell_hook(shell: str = typer.Argument(...)) -> None:
     raise typer.BadParameter("supported shells: zsh, bash, fish")
 
 
-@mcp_app.command("serve", help="Serve Mnemo's five scoped context/checkpoint tools over stdio.")
+@mcp_app.command("serve", help="Serve Mnemo's personal context/checkpoint tools over stdio.")
 def mcp_serve(
     stdio: bool = typer.Option(False, "--stdio"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+    profile: McpToolProfile = typer.Option(  # noqa: B008
+        McpToolProfile.FULL,
+        "--profile",
+        help="Use the complete or reduced bound-project tool surface.",
+    ),
 ) -> None:
     if not stdio:
         raise typer.BadParameter("Issue 7 supports only --stdio")
     arguments = [sys.executable, "-m", "mnemo_memory.apps.mcp.server"]
     if data_dir is not None:
         arguments.extend(["--data-dir", str(data_dir)])
+    if profile is McpToolProfile.COMPACT:
+        arguments.extend(["--profile", "compact"])
     os.execv(sys.executable, arguments)
 
 
-def _codex_manager() -> CodexMcpManager:
+def _codex_manager(tool_profile: Literal["full", "compact"] = "full") -> CodexMcpManager:
     launcher = shutil.which("mnemo-memory")
     if launcher is None:
         raise typer.BadParameter("MNEMO_LAUNCHER_NOT_RESOLVABLE: install Mnemo before connecting")
-    return CodexMcpManager.discover(Path(launcher).resolve())
+    manager = CodexMcpManager.discover(Path(launcher).resolve())
+    return CodexMcpManager(
+        manager.codex_executable,
+        manager.mnemo_executable,
+        environment=manager.environment,
+        tool_profile=tool_profile,
+    )
 
 
-def _claude_manager() -> ClaudeMcpManager:
+def _claude_manager(tool_profile: Literal["full", "compact"] = "full") -> ClaudeMcpManager:
     launcher = shutil.which("mnemo-memory")
     if launcher is None:
         raise typer.BadParameter("MNEMO_LAUNCHER_NOT_RESOLVABLE: install Mnemo before connecting")
-    return ClaudeMcpManager.discover(Path(launcher).resolve())
+    manager = ClaudeMcpManager.discover(Path(launcher).resolve())
+    return ClaudeMcpManager(
+        manager.executable,
+        manager.mnemo_executable,
+        environment=manager.environment,
+        tool_profile=tool_profile,
+    )
 
 
 def _installed_launcher() -> Path:
@@ -3625,6 +3651,11 @@ def connect_codex(
     confirm: bool = typer.Option(False, "--confirm", help="Ask before changing client config."),
     yes: bool = typer.Option(False, "--yes", hidden=True),
     json_output: bool = typer.Option(False, "--json"),
+    mcp_profile: McpToolProfile = typer.Option(  # noqa: B008
+        McpToolProfile.FULL,
+        "--mcp-profile",
+        help="Register the complete or reduced bound-project MCP surface.",
+    ),
     auto_memory: bool = typer.Option(
         True,
         "--auto-memory/--auto-memory-disable",
@@ -3633,11 +3664,17 @@ def connect_codex(
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
-    manager = _codex_manager()
+    manager = (
+        _codex_manager()
+        if mcp_profile is McpToolProfile.FULL
+        else _codex_manager(cast(Literal["full", "compact"], mcp_profile.value))
+    )
     if check:
         _show({"connected": manager.inspect() is not None})
         return
     prompt = "Register Mnemo with Codex"
+    if mcp_profile is McpToolProfile.COMPACT:
+        prompt += " using the compact personal MCP profile"
     if auto_memory:
         prompt += " and enable automatic task memory for this project"
     if confirm and not yes and not dry_run and not typer.confirm(f"{prompt}?"):
@@ -3656,6 +3693,11 @@ def connect_claude_code(
     dry_run: bool = typer.Option(False, "--dry-run"),
     confirm: bool = typer.Option(False, "--confirm", help="Ask before changing client config."),
     yes: bool = typer.Option(False, "--yes", hidden=True),
+    mcp_profile: McpToolProfile = typer.Option(  # noqa: B008
+        McpToolProfile.FULL,
+        "--mcp-profile",
+        help="Register the complete or reduced bound-project MCP surface.",
+    ),
     auto_memory: bool = typer.Option(
         True,
         "--auto-memory/--auto-memory-disable",
@@ -3664,11 +3706,17 @@ def connect_claude_code(
     project_dir: Path = typer.Option(Path("."), "--project-dir"),  # noqa: B008
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
 ) -> None:
-    manager = _claude_manager()
+    manager = (
+        _claude_manager()
+        if mcp_profile is McpToolProfile.FULL
+        else _claude_manager(cast(Literal["full", "compact"], mcp_profile.value))
+    )
     if check:
         _show({"connected": manager.inspect() is not None})
         return
     prompt = "Register Mnemo with Claude Code"
+    if mcp_profile is McpToolProfile.COMPACT:
+        prompt += " using the compact personal MCP profile"
     if auto_memory:
         prompt += " and enable automatic task memory for this project"
     if confirm and not yes and not dry_run and not typer.confirm(f"{prompt}?"):

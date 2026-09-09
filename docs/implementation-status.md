@@ -6651,3 +6651,137 @@ Focused dbt/MCP coverage passed (58 tests). The complete `npm run check` gate pa
 tests and 27 expected skips; the ephemeral PostgreSQL suite passed 26 tests with one opt-in skip.
 No artifact was published by the failed run. The corrected release commit is ready for the protected
 workflow; publish status must be verified separately.
+### Generated-source duplicate identity and hook fail-open correction — Complete
+
+The user explicitly approved a bounded production correction after enabling automatic memory for
+`dbt-open-lineage` exposed two coupled defects in the installed `0.1.0a21` runtime. A Git-ignored,
+generated minified JavaScript bundle produced repeated declarations with the same relative path,
+qualified name, kind, and line. The parser emitted those exact duplicate identities, SQLite
+rejected the snapshot, and the lifecycle hook allowed the resulting project-index repository error
+to escape instead of failing open.
+
+Acceptance requires the parser to collapse only exact duplicate pending-symbol identities while
+preserving distinct overloads and declarations; the lifecycle hook must treat project-index
+repository failures as an unavailable refresh and continue without a traceback; focused parser and
+automatic-memory regressions must reproduce both failures; and the complete `npm run check` gate
+must pass. After verification, the local installed runtime may be updated from this reviewed
+worktree and the previously failing hook must be reproduced successfully in `dbt-open-lineage`.
+No schema, dependency, model, prompt-routing, authorization, retention, target-repository source,
+release publication, or unrelated cleanup change is authorized.
+
+The first complete gate exposed six pre-existing telemetry-test failures because their August 2026
+fixture timestamps had aged beyond the production seven-day retention window. The test anchors now
+use their execution time while preserving the same relative eight-day expiry boundary. This is a
+verification-only correction; production clocks, retention behavior, schemas, and stored data are
+unchanged.
+
+Implementation is complete. `SourceStructureParser` now collapses exact pending-symbol duplicates
+before enforcing the unique-symbol limit and constructing stable domain symbols. The identity still
+includes relative path, qualified name, kind, and line, so declarations and overloads on different
+lines remain distinct. `AutomaticMemoryHook` now catches the storage-neutral
+`ProjectIndexRepositoryError` boundary during source refresh and returns an unavailable refresh,
+preserving its fail-open lifecycle contract without exposing a traceback or storage detail.
+
+Focused parser, hook, route-telemetry, and checkpoint-save telemetry verification passed 96 tests.
+The real `dbt-open-lineage` checkout, including its restored 628 KB generated bundle, parsed and
+stored successfully with 150 files, 1,955 unique symbols, and 4,889 relationships. The complete
+`npm run check` gate passed with 1,083 tests and 27 expected skips; isolated PostgreSQL/RLS passed
+26 tests with one expected load-test skip; formatting, linting, strict typing, schema, dependency,
+architecture, and installed-package checks passed.
+
+The reviewed worktree was installed into the local uv tool environment without publication. A real
+profile refresh activated snapshot `d2ec08ca-fa1d-57be-8738-ab1efcd6df01`, and an isolated-profile
+SessionStart/PostToolUse/Stop smoke against `dbt-open-lineage` returned the expected checkpoint
+decision with no traceback or storage error. The target repository and its generated bundle were
+not changed. No release was published; the local source build still reports `0.1.0a21`.
+
+### Compact personal MCP tool profile — Complete
+
+The user explicitly approved the local-first token-efficiency program and its first bounded issue.
+This issue preserves the existing complete full MCP surface, including its current and conditionally
+enabled tools, and adds an opt-in compact personal profile containing only reduced `get_context` and
+`save_checkpoint` contracts. The compact schemas
+must omit caller-supplied scope identities, advanced dbt/source/knowledge/skill selectors, raw
+evidence objects, correction lessons, and approved-event mutation while retaining normal bound-
+project checkpoint create/revise/complete/abandon and bounded context/recap behavior.
+
+Acceptance requires profile-aware CLI serving and exact Codex/Claude registration, safe mismatch
+detection and removal of either owned profile, unchanged legacy full-profile behavior, a real stdio
+compact-profile save/restart/recall test, unknown-field rejection, and a deterministic measurement
+showing at least 50% fewer serialized tool-schema characters than the full profile. Focused tests and
+the complete `npm run check` gate must pass. This issue adds no model dependency, model download,
+provider call, persistence schema, context-selection change, automatic attachment change, release,
+deployment, or installation.
+
+Implementation is complete. `mcp serve --profile compact` exposes only reduced `get_context` and
+`save_checkpoint` contracts and resolves scope from the bound project; `full` remains the default.
+Codex and Claude registration now persist the chosen profile, report profile mismatches, and safely
+remove either Mnemo-owned configuration. After rebasing onto the expanded seven-core-tool full
+profile, the serialized compact tool schemas measure 3,053 characters versus 22,644 for the full
+profile, an 86.5% reduction.
+
+Focused MCP and connector verification passed 77 tests, including a real compact stdio
+save/restart/recall lifecycle and strict unknown-field rejection. The complete Python suite passed
+1,087 tests with 27 expected skips. Formatting, linting, strict typing over 298 files, schema,
+dependency/provenance, architecture, and source-independent installed-package checks passed. The
+isolated PostgreSQL/RLS gate passed 26 tests with one expected opt-in load-test skip.
+
+### Replaceable local-model configuration documentation — Complete
+
+The user explicitly approved a documentation-only clarification after selecting Qwen3.5 9B as the
+leading local semantic-compiler candidate. Acceptance requires the user guide, local MCP reference,
+and token-efficiency plan to distinguish the already persisted optional provider/model settings
+from currently implemented runtime behavior; identify the safe replacement and restart contract;
+preserve historical provenance and deterministic fallback requirements; and state that Mnemo does
+not alter the coding client's model. No runtime, settings schema, dependency, model download, model
+call, database, release, deployment, or installation change is authorized.
+
+Documentation is complete. The user guide now identifies the dashboard and resolved
+`settings.json` location, gives an intended Ollama/Qwen model selection, and explains safe
+replacement, restart, migration, provenance, and fallback behavior. After reconciliation with the
+newer production branch, the guide and MCP reference also distinguish the existing explicit local
+episodic-extraction call from the still-planned semantic checkpoint compiler and from the coding
+client's model. The token-efficiency plan makes configuration-driven selection and per-call
+provenance acceptance criteria for the future semantic compiler.
+
+The complete `npm run check` gate passed: 1,087 tests passed with 27 expected skips; the isolated
+PostgreSQL/RLS gate passed 26 tests with one expected opt-in load-test skip; and formatting, linting,
+strict typing over 298 files, schema, dependency/provenance, architecture, and installed-package
+checks passed. No runtime or packaged behavior changed.
+
+### `0.1.0a26` compact MCP profile deployment — In progress (2026-09-09)
+
+The user explicitly approved production deployment of the current reviewed worktree and reminded
+the maintainer to bump the release. Before preparation, the local branch was found behind remote
+`main`; the work was preserved, rebased onto `e2b33dc`, and reconciled with the newer seven-core-tool
+MCP surface and existing default-off Ollama episodic extraction. PyPI contains immutable releases
+through `0.1.0a25` and returned 404 for `0.1.0a26`, so `0.1.0a26` is the next verified unused
+prerelease.
+
+The release includes exact generated-source duplicate collapse, fail-open source refresh,
+profile-aware Codex/Claude registration, the two-tool compact personal MCP profile, and corrected
+configuration documentation. The complete profile and its current or conditionally enabled tools
+remain available and default. No model is downloaded and no optional model setting is enabled by
+this deployment.
+
+Acceptance requires coordinated `0.1.0a26` metadata and workflow references, focused regression
+coverage, the complete local gate on the rebased tree, source-independent wheel and source-
+distribution verification with recorded hashes, one reviewed release commit pushed to `main`, a
+successful protected `publish-pypi.yml` run, independent live PyPI hash/provenance verification,
+installation of that exact published wheel with the existing `router` extra, and installed-runtime
+version, connection, diagnostics, migration, compact-profile, and default-profile smokes.
+
+Release-candidate verification passed before commit. Focused MCP, connector, automatic-memory,
+source-parser, settings, Ollama-provider, workflow, packaged-resource, and artifact-verifier coverage
+passed 215 tests. The complete `npm run check` gate passed with 1,323 tests and 27 expected
+environment skips; the isolated PostgreSQL/RLS gate passed 26 tests with one expected opt-in load-
+test skip. Formatting and linting passed; strict mypy passed over 343 source files; schema,
+dependency/provenance, architecture over 175 product Python files, and installed personal-workflow
+verification passed. The deterministic resumption, cross-client, and unified-context evaluations
+also passed all gates without a model call.
+
+The source-independent `0.1.0a26` artifacts passed distribution-name, version, contents, schema,
+license, provenance, and forbidden-content verification. Their pre-publication SHA-256 digests are:
+
+- wheel: `5aa0e544ffa9dce05e3e5dd2419f45f503d084dcf94d68a21e09cbc138ace168`
+- source distribution: `2855fb94dbb2a1cd3c09d98ff7a3d6e2d32790657d88011b8df79a082cb09d72`

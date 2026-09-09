@@ -94,6 +94,29 @@ def test_multi_language_parser_builds_one_deterministic_static_snapshot(tmp_path
     assert "helper();" not in repr(first)
 
 
+def test_parser_collapses_only_exact_same_line_symbol_identities(tmp_path: Path) -> None:
+    root = tmp_path / "generated-bundle"
+    root.mkdir()
+    (root / "index.js").write_text(
+        "export class Service { run() {} run(value) { return value } }\n"
+        "export function overload() {}\n"
+        "export function overload(value) { return value }\n",
+        encoding="utf-8",
+    )
+
+    artifact = SourceStructureParser().parse(SourceStructureParseRequest(scope(), root.resolve()))
+    identities = [
+        (item.relative_path, item.qualified_name, item.kind, item.line) for item in artifact.symbols
+    ]
+
+    assert len(identities) == len(set(identities))
+    assert identities.count(("index.js", "index.Service.run", CodeSymbolKind.FUNCTION, 1)) == 1
+    assert [item.line for item in artifact.symbols if item.qualified_name == "index.overload"] == [
+        2,
+        3,
+    ]
+
+
 @pytest.mark.parametrize(
     ("filename", "source", "error"),
     [

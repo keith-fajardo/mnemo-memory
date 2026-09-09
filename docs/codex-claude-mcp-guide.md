@@ -4,7 +4,7 @@ Mnemo is connected to Codex and Claude Code as a **local MCP server**. You may h
 plugin, but Mnemo does not install an editor extension or change either client’s model. It registers
 one local tool server named `mnemo-memory`.
 
-That server provides exactly five tools:
+The complete profile provides seven core tools:
 
 - `save_checkpoint` — explicitly save, revise, complete, or abandon a task handoff.
 - `get_context` — retrieve the matching saved handoff and optional dbt lineage facts.
@@ -12,6 +12,13 @@ That server provides exactly five tools:
   returned packet without repeating its retrieved content.
 - `list_skills` — list current checked-in project-skill metadata compatible with the calling client.
 - `get_skill` — retrieve one exact checked-in compatible skill as cited untrusted evidence.
+- `structural_lookup` — answer bounded source-symbol definition, caller, import, and overview
+  questions from Mnemo's deterministic index.
+- `dbt_structure` — answer bounded upstream, downstream, and impact questions from the saved dbt
+  manifest.
+
+Explicit experimental settings may add verification and episodic-extraction tools. The compact
+profile described below always exposes only `get_context` and `save_checkpoint`.
 
 The server starts when the client needs it and reads the local Mnemo database. It does not upload
 that database, capture every conversation, or call a model on its own.
@@ -31,7 +38,7 @@ omissions, and canonical token accounting intact.
 Install the published package and make sure the command works:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a25
+uv tool install mnemo-unified-context==0.1.0a26
 mnemo --help
 mnemo init
 ```
@@ -46,6 +53,23 @@ mnemo connect codex
 # or
 mnemo connect claude-code
 ```
+
+The complete profile remains the compatibility default. To reduce the tool definitions
+placed in the coding agent's context, a personal project can opt into the compact profile:
+
+```bash
+mnemo disconnect codex --yes
+mnemo connect codex --mcp-profile compact
+# or use the same --mcp-profile option with claude-code
+```
+
+The compact profile exposes only reduced `get_context` and `save_checkpoint` schemas. It resolves
+scope from the enabled local project and supports normal handoff create/revise/complete/abandon,
+resume, short-query, and recap workflows. Use the complete profile when the agent needs direct dbt,
+source, knowledge, skill, correction-lesson, approved-event, context-explanation, structural-lookup,
+or optional model-assisted operations.
+Changing profiles is explicit: disconnect the recognized Mnemo registration and reconnect with the
+new profile so a requested profile never silently replaces client configuration.
 
 This creates a private local project binding; you never enter scope UUIDs. At a new session, the
 hook attaches the bounded saved checkpoint, lessons, approved facts, and latest bounded source

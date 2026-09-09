@@ -54,6 +54,31 @@ def test_connect_registers_exact_argument_array_and_reads_it_back(tmp_path: Path
     assert manager.connect()["changed"] is False
 
 
+def test_compact_registration_is_exact_and_profile_mismatch_is_explicit(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    state: dict[str, object] = {}
+    launcher = tmp_path / "mnemo-memory"
+    launcher.touch()
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[2] == "get":
+            return completed(command, 0 if state else 1, json.dumps(state))
+        if command[2] == "add":
+            state.update({"command": command[5], "args": command[6:]})
+        if command[2] == "remove":
+            state.clear()
+        return completed(command)
+
+    compact = CodexMcpManager("/fake/codex", launcher, run, tool_profile="compact")
+    assert compact.connect()["changed"] is True
+    assert calls[1][-5:] == ["mcp", "serve", "--stdio", "--profile", "compact"]
+    assert compact.has_selected_profile(state)
+    with pytest.raises(ValueError, match="MNEMO_CODEX_PROFILE_MISMATCH"):
+        CodexMcpManager("/fake/codex", launcher, run).connect()
+    assert CodexMcpManager("/fake/codex", launcher, run).disconnect()["changed"] is True
+
+
 def test_conflicting_or_unrecognized_entry_is_never_replaced_or_removed(tmp_path: Path) -> None:
     launcher = tmp_path / "mnemo-memory"
     launcher.touch()

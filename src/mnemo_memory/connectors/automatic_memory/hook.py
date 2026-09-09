@@ -536,7 +536,7 @@ class AutomaticMemoryHook:
                 git_observation,
                 GitObservationStore(self.data_directory).get(binding.scope, before.source_digest),
             )
-        except (OSError, ValueError, RuntimeError):
+        except (ProjectIndexRepositoryError, OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
 
     def _observe_git(

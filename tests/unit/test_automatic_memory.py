@@ -84,6 +84,7 @@ from mnemo_memory.packages.storage import (
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
+from mnemo_memory.packages.storage.contracts import SourceIndexStorageFailure
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
@@ -3093,6 +3094,37 @@ def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointi
     assert "service.py:service.initial" in reason
     assert "return 2" not in reason
     assert str(project) not in reason
+
+
+def test_source_index_storage_failure_during_stop_is_fail_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "service.py").write_text("def initial():\n    return 1\n", encoding="utf-8")
+    data = tmp_path / "data"
+    LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex")
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
+    hook.handle(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "cwd": str(project),
+            "tool_name": "Edit",
+        }
+    )
+
+    def unavailable(*_: object) -> object:
+        raise SourceIndexStorageFailure("source index storage operation failed")
+
+    monkeypatch.setattr(SQLiteSourceStructureRepository, "store_and_activate", unavailable)
+
+    result = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
+
+    assert result["decision"] == "block"
+    assert "save_checkpoint" in str(result["reason"])
+    assert "source index storage operation failed" not in str(result)
 
 
 def test_checkpoint_save_refreshes_changed_structure_without_waiting_for_stop_or_restart(

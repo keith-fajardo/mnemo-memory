@@ -11,7 +11,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Protocol, cast
+from typing import Annotated, Literal, Protocol, cast
 from uuid import uuid4
 
 from mcp.server.auth.provider import TokenVerifier
@@ -79,6 +79,7 @@ SERVER_VERSION = "0.1.0"
 # provider only ever talks to a locally-run Ollama daemon; construction is inert unless episodic
 # extraction is enabled (see `PersonalSettings.episodic_extraction_enabled`).
 _OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
+ToolProfile = Literal["full", "compact"]
 _MAX_EXPLAIN_PACKET_BYTES = 131_072
 _SOURCE_CONTEXT_KEYS = frozenset(
     {"source_query", "source_impact", "source_changes", "source_overview"}
@@ -275,7 +276,7 @@ class _DeferredMcpContextPort:
             self._source_refreshed = True
 
 
-def create_server(
+def _create_full_server(
     port: McpContextPort,
     *,
     team_knowledge_port: TeamKnowledgeMcpPort | None = None,
@@ -1050,6 +1051,130 @@ def create_server(
     return server
 
 
+def _create_compact_server(port: McpContextPort) -> FastMCP:
+    """Expose only the normal bound-project handoff path with a small public schema."""
+    server = FastMCP(
+        SERVER_NAME,
+        instructions="Mnemo compact bound-project context and checkpoint tools.",
+    )
+    server._mcp_server.version = SERVER_VERSION
+
+    @server.tool(
+        name="get_context",
+        description=(
+            "Return bounded memory for the active local project. Omit query to resume the current "
+            "handoff; use a short query or recap_days for prior task context."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    )
+    def get_context(
+        query: Annotated[str | None, Field(default=None, min_length=1, max_length=512)] = None,
+        recap_days: Annotated[int | None, Field(default=None, ge=0, le=90)] = None,
+        total_tokens: Annotated[int, Field(ge=100, le=1_300)] = 600,
+    ) -> dict[str, object]:
+        return port.get_context(
+            {
+                "query": query,
+                "recap_days": recap_days,
+                "include_approved_events": True,
+                "active_task_checkpoint_tokens": min(600, total_tokens),
+                "total_tokens": total_tokens,
+            }
+        )
+
+    @server.tool(
+        name="save_checkpoint",
+        description=(
+            "Create, revise, complete, or abandon the active local project's compact handoff. "
+            "Provide objective, state, evidence files, and the exact next work; omit empty values."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
+    )
+    def save_checkpoint(
+        operation: Annotated[
+            str,
+            Field(description="One of: create, revise, complete, abandon."),
+        ],
+        task_objective: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=4_000)
+        ] = None,
+        current_state: Annotated[
+            str | None, Field(default=None, min_length=1, max_length=4_000)
+        ] = None,
+        evidence_files: Annotated[
+            list[str] | None, Field(default=None, min_length=1, max_length=16)
+        ] = None,
+        checkpoint_id: Annotated[str | None, Field(default=None)] = None,
+        expected_revision_id: Annotated[str | None, Field(default=None)] = None,
+        reason: Annotated[str | None, Field(default=None, max_length=4_000)] = None,
+        remaining_work: Annotated[list[str] | None, Field(default=None, max_length=16)] = None,
+        decisions: Annotated[list[str] | None, Field(default=None, max_length=16)] = None,
+        failures: Annotated[list[str] | None, Field(default=None, max_length=16)] = None,
+        blockers: Annotated[list[str] | None, Field(default=None, max_length=16)] = None,
+        verification_performed: Annotated[
+            list[str] | None, Field(default=None, max_length=16)
+        ] = None,
+    ) -> dict[str, object]:
+        return port.save_checkpoint(
+            {
+                "operation": operation,
+                "task_objective": task_objective,
+                "current_state": current_state,
+                "evidence_files": evidence_files,
+                "checkpoint_id": checkpoint_id,
+                "expected_revision_id": expected_revision_id,
+                "reason": reason,
+                "remaining_work": remaining_work,
+                "decisions": decisions,
+                "failures": failures,
+                "blockers": blockers,
+                "verification_performed": verification_performed,
+            }
+        )
+
+    for name in ("get_context", "save_checkpoint"):
+        tool = server._tool_manager._tools[name]
+        tool.parameters["additionalProperties"] = False
+        tool.fn_metadata.arg_model.model_config["extra"] = "forbid"
+        tool.fn_metadata.arg_model.model_rebuild(force=True)
+    return server
+
+
+def create_server(
+    port: McpContextPort,
+    *,
+    team_knowledge_port: TeamKnowledgeMcpPort | None = None,
+    auth: AuthSettings | None = None,
+    token_verifier: TokenVerifier | None = None,
+    host: str = "127.0.0.1",
+    http_port: int = 8000,
+    stateless_http: bool = False,
+    json_response: bool = False,
+    experimental_semantic_memory_enabled: bool = False,
+    episodic_extraction_enabled: bool = False,
+    tool_profile: ToolProfile = "full",
+) -> FastMCP:
+    """Create either the complete API or the reduced bound-project personal API."""
+    if tool_profile == "compact":
+        if team_knowledge_port is not None or auth is not None or token_verifier is not None:
+            raise ValueError("MNEMO_COMPACT_PROFILE_PERSONAL_ONLY")
+        return _create_compact_server(port)
+    if tool_profile != "full":
+        raise ValueError("MNEMO_MCP_TOOL_PROFILE_INVALID")
+    return _create_full_server(
+        port,
+        team_knowledge_port=team_knowledge_port,
+        auth=auth,
+        token_verifier=token_verifier,
+        host=host,
+        http_port=http_port,
+        stateless_http=stateless_http,
+        json_response=json_response,
+        experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
+        episodic_extraction_enabled=episodic_extraction_enabled,
+    )
+
+
 def _build_local_mcp_context_session(
     data_directory: Path | None,
     project_directory: Path,
@@ -1240,7 +1365,7 @@ def _build_local_mcp_context_session(
         raise
 
 
-def main(data_directory: Path | None = None) -> None:
+def main(data_directory: Path | None = None, tool_profile: ToolProfile = "full") -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
     try:
         settings = PersonalSettingsStore(resolve_local_config(data_directory).data_directory).load()
@@ -1259,6 +1384,7 @@ def main(data_directory: Path | None = None) -> None:
             deferred_port,
             experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
             episodic_extraction_enabled=episodic_extraction_enabled,
+            tool_profile=tool_profile,
         ).run(transport="stdio")
     finally:
         deferred_port.close()
@@ -1267,9 +1393,13 @@ def main(data_directory: Path | None = None) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir")
+    parser.add_argument("--profile", choices=("full", "compact"), default="full")
     args = parser.parse_args()
     try:
-        main(None if args.data_dir is None else Path(args.data_dir))
+        main(
+            None if args.data_dir is None else Path(args.data_dir),
+            cast(ToolProfile, args.profile),
+        )
     except (LocalConfigurationError, LocalRuntimeError, PersonalSettingsError) as error:
         logging.basicConfig(
             level=logging.ERROR, stream=sys.stderr, format="%(levelname)s %(message)s"

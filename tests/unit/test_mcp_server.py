@@ -376,6 +376,56 @@ def test_server_omits_episodic_tools_by_default(tmp_path: Path) -> None:
         assert "submit_episodic_candidates" not in server._tool_manager._tools
 
 
+def test_compact_profile_reduces_schema_and_keeps_only_bound_project_operations(
+    tmp_path: Path,
+) -> None:
+    async def list_profiles() -> tuple[list[Tool], list[Tool]]:
+        with build_checkpoint_runtime(LocalConfig.defaults(tmp_path / "runtime")) as runtime:
+            port = DurableMcpContextPort(runtime.checkpoint_service)
+            full = list(await create_server(port).list_tools())
+            compact = list(await create_server(port, tool_profile="compact").list_tools())
+            return full, compact
+
+    full, compact = asyncio.run(list_profiles())
+    assert [tool.name for tool in compact] == ["get_context", "save_checkpoint"]
+    assert set(compact[0].inputSchema["properties"]) == {
+        "query",
+        "recap_days",
+        "total_tokens",
+    }
+    assert set(compact[1].inputSchema["properties"]) == {
+        "operation",
+        "task_objective",
+        "current_state",
+        "evidence_files",
+        "checkpoint_id",
+        "expected_revision_id",
+        "reason",
+        "remaining_work",
+        "decisions",
+        "failures",
+        "blockers",
+        "verification_performed",
+    }
+    assert all(tool.inputSchema["additionalProperties"] is False for tool in compact)
+    assert not any(name in compact[0].inputSchema["properties"] for name in IDS)
+    assert not any(name in compact[1].inputSchema["properties"] for name in IDS)
+
+    def schema_characters(tools: list[Tool]) -> int:
+        return sum(
+            len(
+                json.dumps(
+                    tool.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            for tool in tools
+        )
+
+    assert schema_characters(compact) * 2 <= schema_characters(full)
+
+
 def test_deferred_local_port_keeps_runtime_and_source_refresh_out_of_tool_listing() -> None:
     events: list[object] = []
 
@@ -1892,6 +1942,65 @@ def test_real_stdio_server_resolves_enabled_project_scope_without_uuid_arguments
             assert len(json.dumps(overview_payload)) < 12_000
             text_payload = "".join(item.text for item in overview.content if hasattr(item, "text"))
             assert len(text_payload) < 12_000
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=15))
+
+
+def test_real_stdio_compact_profile_saves_and_recalls_bound_project_checkpoint(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "compact project"
+    project.mkdir()
+    evidence = project / "README.md"
+    evidence.write_text("compact profile evidence\n", encoding="utf-8")
+    data = tmp_path / "compact data"
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "mnemo_memory.apps.mcp.server",
+            "--data-dir",
+            str(data),
+            "--profile",
+            "compact",
+        ],
+        cwd=project,
+    )
+
+    async def exercise() -> None:
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            tools = (await session.list_tools()).tools
+            assert [tool.name for tool in tools] == ["get_context", "save_checkpoint"]
+            rejected_scope = await session.call_tool(
+                "get_context", {"owner_id": str(IDS["owner_id"])}
+            )
+            assert rejected_scope.isError is True
+            created = await session.call_tool(
+                "save_checkpoint",
+                {
+                    "operation": "create",
+                    "task_objective": "Prove compact profile durability",
+                    "current_state": "Compact save completed",
+                    "evidence_files": ["README.md"],
+                    "remaining_work": ["Recall from a fresh process"],
+                    "verification_performed": ["real stdio save"],
+                },
+            )
+            assert created.isError is False
+            created_payload = created.structuredContent or {}
+
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            recalled = await session.call_tool("get_context", {})
+            assert recalled.isError is False
+            packet = ContextPacket.from_dict(recalled.structuredContent or {})
+            assert packet.owner_scope == binding.checkpoint_scope
+            assert packet.active_task_checkpoint is not None
+            assert str(created_payload["checkpoint_revision_id"]) in (
+                packet.provenance[0].source_reference
+            )
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=15))
 

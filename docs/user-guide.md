@@ -46,7 +46,7 @@ install, or treating all installed software as privileged code.
 Install the command once, then opt in each repository where you want Mnemo memory:
 
 ```bash
-uv tool install mnemo-unified-context==0.1.0a25
+uv tool install mnemo-unified-context==0.1.0a26
 mnemo --version
 mnemo init
 cd /path/to/your/project
@@ -909,6 +909,36 @@ days old; reading a checkpoint never renews it, and expiry preserves its audit h
 MCP process after other settings changes; existing extracted episodic records keep their original
 retention schedules. Run
 `mnemo stop` when you no longer want the local web process.
+
+### Configure a replaceable local model
+
+Mnemo already stores one optional provider and model selection in the personal profile. Use the
+dashboard Settings section to change **Provider** and **Model ID** together and enable optional
+model tasks. The values are stored in `settings.json` inside Mnemo's resolved data directory; on
+macOS the default location is `~/Library/Application Support/Mnemo/settings.json`. A custom absolute
+`MNEMO_DATA_DIR` moves the whole personal profile, including this file. The settings document is a
+strict complete object, so prefer the dashboard over manually writing a partial JSON fragment. It
+never stores an API key.
+
+One intended local selection is provider `ollama` with a replaceable model ID such as
+`qwen3.5:9b-q4_K_M`. Model IDs are configuration, not constants in Mnemo's domain code. After
+changing the provider or model, restart the MCP process so every subsequent optional model call
+uses one consistent configuration. A replacement requires no database migration and does not
+rewrite earlier memory: any model-assisted result retains the provider, model, and prompt-version
+provenance recorded when it was produced.
+
+Today this setting enables the full MCP profile's explicit `extract_episodic` workflow when the
+provider is `ollama`. The automatic-memory hook never runs the model itself; at a work boundary it
+can only ask the coding agent to call that tool. The tool sends one bounded task-event summary to
+the configured loopback Ollama model, validates its candidate output, and fails open without
+storing a proposal when the runtime is missing, stopped, slow, or invalid. The compact MCP profile
+deliberately omits this optional tool.
+
+The current model does not compile task checkpoints. Checkpoint persistence and compaction remain
+deterministic; extending the configured local model to semantic checkpoint compilation is a later,
+separately gated issue. Model output is always an untrusted proposal and cannot decide scope,
+authorization, evidence, retention, or persistence policy. Mnemo also never changes the model used
+by Codex or Claude Code.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),

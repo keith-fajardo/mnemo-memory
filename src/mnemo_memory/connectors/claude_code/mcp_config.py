@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 SERVER_NAME = "mnemo-memory"
 
@@ -17,6 +18,7 @@ class ClaudeMcpManager:
     mnemo_executable: Path
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
     environment: dict[str, str] | None = None
+    tool_profile: Literal["full", "compact"] = "full"
 
     @classmethod
     def discover(cls, launcher: Path) -> ClaudeMcpManager:
@@ -29,7 +31,10 @@ class ClaudeMcpManager:
 
     @property
     def command(self) -> list[str]:
-        return [str(self.mnemo_executable), "mcp", "serve", "--stdio"]
+        command = [str(self.mnemo_executable), "mcp", "serve", "--stdio"]
+        if self.tool_profile == "compact":
+            command.extend(("--profile", "compact"))
+        return command
 
     def inspect(self) -> str | None:
         result = self.run(
@@ -43,12 +48,24 @@ class ClaudeMcpManager:
         return result.stdout if result.returncode == 0 else None
 
     def is_owned(self, detail: str) -> bool:
-        return str(self.mnemo_executable) in detail and "mcp serve --stdio" in detail
+        compact = "mcp serve --stdio --profile compact"
+        legacy_full = "mcp serve --stdio"
+        return str(self.mnemo_executable) in detail and (
+            compact in detail or (legacy_full in detail and "--profile" not in detail)
+        )
+
+    def has_selected_profile(self, detail: str) -> bool:
+        if not self.is_owned(detail):
+            return False
+        compact = "--profile compact" in detail
+        return compact if self.tool_profile == "compact" else not compact
 
     def connect(self, dry_run: bool = False) -> dict[str, object]:
         existing = self.inspect()
         if existing is not None:
             if self.is_owned(existing):
+                if not self.has_selected_profile(existing):
+                    raise ValueError("MNEMO_CLAUDE_PROFILE_MISMATCH")
                 return {"status": "connected", "changed": False, "server": SERVER_NAME}
             raise ValueError("MNEMO_CLAUDE_CONFLICT")
         if dry_run:

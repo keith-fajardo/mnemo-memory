@@ -6,14 +6,44 @@ Mnemo exposes one local stdio MCP server, `mnemo-local` version `0.1.0`:
 mnemo mcp serve --stdio
 ```
 
+For an enabled personal project, `--profile compact` exposes only reduced `get_context` and
+`save_checkpoint` contracts. The complete profile remains the default and is required for direct
+advanced dbt/source/knowledge/skill operations and any enabled experimental tools. The compact
+profile accepts no explicit scope IDs or raw evidence objects; it resolves the current bound project
+and uses project-relative `evidence_files` for checkpoint provenance.
+
 It resolves the same durable personal data directory as the local lifecycle commands. Use an
 absolute `--data-dir` or `MNEMO_DATA_DIR` for an isolated profile. The server writes only MCP
-protocol messages to stdout and diagnostics to stderr; it makes no network request, model call,
-or transcript capture.
+protocol messages to stdout and diagnostics to stderr. Default settings make no model call; an
+explicitly enabled Ollama extraction uses only its configured loopback endpoint. The server never
+captures a raw transcript.
+
+## Optional model configuration status
+
+The personal settings store already accepts `optional_model_enabled`, `model_provider`, and
+`model_id`. These values are replaceable through the loopback dashboard and are persisted in
+`settings.json` under the resolved Mnemo data directory. They are deliberately separate from the
+Codex or Claude model configuration: Mnemo never changes, proxies, or replaces the coding client's
+model endpoint.
+
+When provider `ollama` and a model ID are enabled, the full profile adds `extract_episodic` and
+`submit_episodic_candidates`. Only an explicit `extract_episodic` call invokes the configured local
+model; the hook never calls it synchronously, and `get_context`, `save_checkpoint`, source/dbt
+operations, and the compact profile remain model-free. Output is schema-validated and subject to
+deterministic scope, evidence, sensitivity, and persistence controls. Provider or parse failure is
+fail-open for the coding session and persists no unvalidated proposal.
+
+Change the provider or model through Settings and restart the MCP process to expose the replacement
+consistently. Historical model-assisted records keep their original provenance. The planned semantic
+checkpoint compiler may reuse this configuration behind its own gate, but checkpoint compaction does
+not call a model today.
 
 ## Tools
 
-Exactly five tools are exposed. Inside a repository enabled by the default connection,
+The default complete profile exposes seven core tools: `get_context`, `list_skills`, `get_skill`,
+`explain_context`, `save_checkpoint`, `structural_lookup`, and `dbt_structure`. Explicit settings
+may add experimental verification and episodic-extraction tools. The compact profile always exposes
+only `get_context` and `save_checkpoint`. Inside a repository enabled by the default connection,
 `get_context`,
 `list_skills`, and `get_skill` may
 omit all scope fields: the local MCP process resolves the repository's registered stable scope from
