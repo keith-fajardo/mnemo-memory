@@ -6749,7 +6749,7 @@ PostgreSQL/RLS gate passed 26 tests with one expected opt-in load-test skip; and
 strict typing over 298 files, schema, dependency/provenance, architecture, and installed-package
 checks passed. No runtime or packaged behavior changed.
 
-### `0.1.0a26` compact MCP profile deployment — In progress (2026-09-09)
+### `0.1.0a26` compact MCP profile deployment — Complete (2026-09-09)
 
 The user explicitly approved production deployment of the current reviewed worktree and reminded
 the maintainer to bump the release. Before preparation, the local branch was found behind remote
@@ -6785,3 +6785,23 @@ license, provenance, and forbidden-content verification. Their pre-publication S
 
 - wheel: `5aa0e544ffa9dce05e3e5dd2419f45f503d084dcf94d68a21e09cbc138ace168`
 - source distribution: `2855fb94dbb2a1cd3c09d98ff7a3d6e2d32790657d88011b8df79a082cb09d72`
+
+Production deployment is complete. Release commit
+`82a1174035ddc81760a4c0d67c8462634c51b211` was pushed to `main`. Protected workflow run
+`34298711390` passed clean-runner verification and deterministic evaluations, source-independent
+wheel/source-distribution smokes, checksum-bound OIDC publication, and independent live PyPI
+metadata, artifact-hash, provenance, and installation verification.
+
+The workflow bundle and live PyPI metadata agree on these authoritative SHA-256 digests:
+
+- wheel: `efc7a5a584ede426d017071757c64ede2109171dcfa8aac3cbb47f814ba48452`
+- source distribution: `064cece7ad24d0dfa56a035254117fbc80bcb2dc4e2055dccfc9d69105fa5c40`
+
+The exact published wheel was installed locally with the existing `router` extra. The command
+reports `0.1.0a26`; Codex and Claude Code registration checks pass. An isolated installed-runtime
+smoke initialized schema 32, produced a content-free diagnostic bundle, and listed the expected
+seven default full-profile tools and two compact-profile tools. Before the real personal profile
+was migrated, Mnemo created and verified a 501,755,904-byte schema-31 recovery backup with content
+digest `sha256:551fb690982594f9fa22b79c283261f818f832a5d8ce16606c9bd6dc32aa72fd`.
+The real profile then migrated successfully to schema 32 and reports healthy initialized status.
+No model was downloaded, invoked, or enabled during deployment.
