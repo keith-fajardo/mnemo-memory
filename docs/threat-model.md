@@ -1716,6 +1716,30 @@ secrets, sensitive repository content, or general user prompts; only the preregi
 corpus is in scope. Any broader use requires a separately reviewed pre-execution tool-denial
 mechanism, plus separate authorization and evaluation.
 
+### Hosted typed-decision classifier data exposure
+
+**Scenario:** A prompt, stored memory snippet or event summary is sent to TypeSafe's Jev API.
+TypeSafe's standard terms allow storage and perpetual telemetry use. A snippet embedded in
+question text carries a secret past a prompt-only scan. A runtime caller claims to be a
+synthetic fixture. The API key reaches a log, report or exception. A slow provider delays the
+hook.
+
+**Required controls:** The data route is a closed enum whose only phase-1 value,
+`synthetic_only`, blocks every runtime request before credential, budget or network work. The
+runtime composition binds the runtime source itself and exposes no source parameter. The guard
+secret-scans the original text, the bounded text actually sent, and every axis string (name,
+labels, instructions, criteria) before sending, never sends non-`normal`
+sensitivity, bounds text to 512 characters and every axis string to 400, reserves
+`typed_decision` budget, and enforces a hard deadline (600 ms per prompt) with no retry. The
+Mnemo (the runtime composition and the evaluation CLI) reads the key only from
+`TYPESAFE_API_KEY` and hands it to the connector as a constructor argument. The connector
+redacts it from `repr`, rejects keys that are not printable ASCII, refuses HTTP redirects so the key is never forwarded,
+and raises payload-free errors without chained causes. Telemetry and evaluation reports record
+counts, reasons, durations and model versions only. Only fixtures that declare synthetic
+provenance may be sent, and live evaluation needs `--live-calls-authorized`. Adding a data route
+requires signed zero-data-retention terms, name and identifier redaction, and an ADR 0049
+amendment.
+
 ## Security gates and ownership
 
 Changes affecting a threat above must update its required controls and verification. Security tests

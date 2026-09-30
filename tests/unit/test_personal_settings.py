@@ -17,6 +17,7 @@ from mnemo_memory.packages.application import (
     build_lifecycle_service,
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.domain import TypedDecisionKind, TypedDecisionMode
 from mnemo_memory.packages.storage import SQLiteKnowledgeDocumentRepository
 
 
@@ -42,11 +43,15 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
         "episodic_retention_days",
         "experimental_local_first_takeover_enabled",
         "experimental_semantic_memory_enabled",
+        "experimental_typed_decisions_enabled",
         "local_first_takeover_live_calls_authorized",
         "model_id",
         "model_provider",
         "optional_model_enabled",
         "repository_knowledge_sync_enabled",
+        "typed_decision_data_route",
+        "typed_decision_model_id",
+        "typed_decision_modes",
     }
     assert not any(
         "key" in name or "secret" in name or "token_value" in name for name in settings.to_dict()
@@ -220,3 +225,68 @@ def test_context_save_growth_bytes_default_and_migration() -> None:
 def test_context_save_growth_bytes_rejects_negative() -> None:
     with pytest.raises(PersonalSettingsError):
         PersonalSettings(context_save_growth_bytes=-1)
+
+
+def test_typed_decision_settings_default_off_and_synthetic_only() -> None:
+    settings = PersonalSettings()
+    assert settings.experimental_typed_decisions_enabled is False
+    assert settings.typed_decision_data_route == "synthetic_only"
+    assert settings.typed_decision_model_id == "jev-1.13.0"
+    assert settings.typed_decision_mode(TypedDecisionKind.FRONT_DOOR) is TypedDecisionMode.OFF
+    assert settings.to_dict()["typed_decision_modes"] == {}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"typed_decision_data_route": "vercel_zdr"},
+        {"typed_decision_data_route": "standard_terms"},
+        {"typed_decision_model_id": "bad model id"},
+        {"typed_decision_modes": {"front_door": "shadow"}},  # switch still off
+        {"experimental_typed_decisions_enabled": True, "typed_decision_modes": {"nope": "live"}},
+        {
+            "experimental_typed_decisions_enabled": True,
+            "typed_decision_modes": {"front_door": "on"},
+        },
+        {"experimental_typed_decisions_enabled": "yes"},
+        {"typed_decision_modes": ["front_door"]},
+    ],
+)
+def test_typed_decision_settings_reject_unsupported_values(overrides: dict[str, object]) -> None:
+    with pytest.raises(PersonalSettingsError):
+        PersonalSettings.from_dict({**PersonalSettings().to_dict(), **overrides})
+
+
+def test_typed_decision_modes_round_trip_through_the_store(tmp_path: Path) -> None:
+    store = PersonalSettingsStore(tmp_path / "profile")
+    expected = PersonalSettings.from_dict(
+        {
+            **PersonalSettings().to_dict(),
+            "experimental_typed_decisions_enabled": True,
+            "typed_decision_modes": {"relevance": "shadow", "front_door": "shadow"},
+        }
+    )
+    store.save(expected)
+    loaded = store.load()
+    assert loaded == expected
+    assert loaded.typed_decision_mode(TypedDecisionKind.RELEVANCE) is TypedDecisionMode.SHADOW
+    assert loaded.to_dict()["typed_decision_modes"] == {
+        "front_door": "shadow",
+        "relevance": "shadow",
+    }
+
+
+def test_legacy_settings_without_typed_decision_fields_load(tmp_path: Path) -> None:
+    store = PersonalSettingsStore(tmp_path / "profile")
+    store.save(PersonalSettings())
+    path = tmp_path / "profile" / "settings.json"
+    legacy = json.loads(path.read_text("utf-8"))
+    for name in (
+        "experimental_typed_decisions_enabled",
+        "typed_decision_data_route",
+        "typed_decision_model_id",
+        "typed_decision_modes",
+    ):
+        del legacy[name]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert store.load() == PersonalSettings()

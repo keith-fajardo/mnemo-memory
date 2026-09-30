@@ -8,13 +8,18 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import ClassVar, Self
+from typing import Any, ClassVar, Self
 
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     exclusive_local_file_lock,
 )
-from mnemo_memory.packages.domain import ContextBudget
+from mnemo_memory.packages.domain import (
+    ContextBudget,
+    TypedDecisionDataRoute,
+    TypedDecisionKind,
+    TypedDecisionMode,
+)
 
 _METADATA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _FIELDS = {
@@ -35,6 +40,10 @@ _FIELDS = {
     "model_provider",
     "optional_model_enabled",
     "repository_knowledge_sync_enabled",
+    "experimental_typed_decisions_enabled",
+    "typed_decision_data_route",
+    "typed_decision_model_id",
+    "typed_decision_modes",
 }
 
 
@@ -61,6 +70,10 @@ class PersonalSettings:
     context_provenance_tokens: int = 400
     context_total_tokens: int = 5_700
     context_save_growth_bytes: int = 200_000
+    experimental_typed_decisions_enabled: bool = False
+    typed_decision_data_route: str = TypedDecisionDataRoute.SYNTHETIC_ONLY.value
+    typed_decision_model_id: str = "jev-1.13.0"
+    typed_decision_modes: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -70,6 +83,7 @@ class PersonalSettings:
             "optional_model_enabled",
             "experimental_local_first_takeover_enabled",
             "local_first_takeover_live_calls_authorized",
+            "experimental_typed_decisions_enabled",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise PersonalSettingsError(f"{name} must be a boolean")
@@ -92,6 +106,21 @@ class PersonalSettings:
         if not self.optional_model_enabled and (provider is not None or model is not None):
             raise PersonalSettingsError("disabled optional model cannot retain routing metadata")
         try:
+            TypedDecisionDataRoute(self.typed_decision_data_route)
+        except ValueError as error:
+            raise PersonalSettingsError("typed decision data route is not supported") from error
+        if _optional_metadata(self.typed_decision_model_id, "typed decision model id") is None:
+            raise PersonalSettingsError("typed decision model id is required")
+        object.__setattr__(
+            self, "typed_decision_modes", _typed_decision_modes(self.typed_decision_modes)
+        )
+        if not self.experimental_typed_decisions_enabled and any(
+            mode != TypedDecisionMode.OFF.value for _, mode in self.typed_decision_modes
+        ):
+            raise PersonalSettingsError(
+                "typed decision modes require experimental_typed_decisions_enabled"
+            )
+        try:
             _ = self.context_budget
         except (TypeError, ValueError) as error:
             raise PersonalSettingsError("context budget is invalid") from error
@@ -103,6 +132,13 @@ class PersonalSettings:
             self.optional_model_enabled
             and self.model_provider == "ollama"
             and self.model_id is not None
+        )
+
+    def typed_decision_mode(self, kind: TypedDecisionKind) -> TypedDecisionMode:
+        """Return one decision's mode; decisions not listed are off."""
+
+        return TypedDecisionMode(
+            dict(self.typed_decision_modes).get(kind.value, TypedDecisionMode.OFF.value)
         )
 
     @property
@@ -133,6 +169,7 @@ class PersonalSettings:
                 self.experimental_local_first_takeover_enabled
             ),
             "experimental_semantic_memory_enabled": self.experimental_semantic_memory_enabled,
+            "experimental_typed_decisions_enabled": self.experimental_typed_decisions_enabled,
             "local_first_takeover_live_calls_authorized": (
                 self.local_first_takeover_live_calls_authorized
             ),
@@ -140,26 +177,38 @@ class PersonalSettings:
             "model_provider": self.model_provider,
             "optional_model_enabled": self.optional_model_enabled,
             "repository_knowledge_sync_enabled": self.repository_knowledge_sync_enabled,
+            "typed_decision_data_route": self.typed_decision_data_route,
+            "typed_decision_model_id": self.typed_decision_model_id,
+            "typed_decision_modes": dict(self.typed_decision_modes),
         }
 
-    _MIGRATED_DEFAULTS: ClassVar[dict[str, bool | int]] = {
+    _MIGRATED_DEFAULTS: ClassVar[dict[str, object]] = {
         "experimental_semantic_memory_enabled": False,
         "experimental_local_first_takeover_enabled": False,
         "local_first_takeover_live_calls_authorized": False,
         "context_save_growth_bytes": 200_000,
+        "experimental_typed_decisions_enabled": False,
+        "typed_decision_data_route": TypedDecisionDataRoute.SYNTHETIC_ONLY.value,
+        "typed_decision_model_id": "jev-1.13.0",
+        "typed_decision_modes": {},
     }
 
     @classmethod
     def from_dict(cls, value: object) -> Self:
         if not isinstance(value, dict):
             raise PersonalSettingsError("personal settings fields are invalid")
-        missing = _FIELDS - set(value)
+        fields: dict[str, Any] = dict(value)
+        missing = _FIELDS - set(fields)
         if missing and missing <= set(cls._MIGRATED_DEFAULTS):
-            value = {**{k: cls._MIGRATED_DEFAULTS[k] for k in missing}, **value}
-        if set(value) != _FIELDS:
+            fields = {**{k: cls._MIGRATED_DEFAULTS[k] for k in missing}, **fields}
+        if set(fields) != _FIELDS:
             raise PersonalSettingsError("personal settings fields are invalid")
+        modes = fields["typed_decision_modes"]
+        if not isinstance(modes, dict):
+            raise PersonalSettingsError("personal settings values are invalid")
+        fields["typed_decision_modes"] = tuple(modes.items())
         try:
-            return cls(**value)
+            return cls(**fields)
         except TypeError as error:
             raise PersonalSettingsError("personal settings values are invalid") from error
 
@@ -211,3 +260,21 @@ def _optional_metadata(value: str | None, name: str) -> str | None:
     if not isinstance(value, str) or not _METADATA.fullmatch(value.strip()):
         raise PersonalSettingsError(f"{name} is invalid")
     return value.strip()
+
+
+def _typed_decision_modes(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, tuple):
+        raise PersonalSettingsError("typed decision modes are invalid")
+    modes: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise PersonalSettingsError("typed decision modes are invalid")
+        try:
+            kind = TypedDecisionKind(item[0]).value
+            mode = TypedDecisionMode(item[1]).value
+        except ValueError as error:
+            raise PersonalSettingsError("typed decision modes are invalid") from error
+        if kind in modes:
+            raise PersonalSettingsError("typed decision modes are invalid")
+        modes[kind] = mode
+    return tuple(sorted(modes.items()))

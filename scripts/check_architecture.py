@@ -43,6 +43,7 @@ CONNECTOR_COMPONENTS = {
     "connectors/oauth",
     "connectors/ollama",
     "connectors/postgresql",
+    "connectors/typesafe",
 }
 KNOWN_COMPONENTS = PACKAGE_COMPONENTS | APP_COMPONENTS | CONNECTOR_COMPONENTS
 

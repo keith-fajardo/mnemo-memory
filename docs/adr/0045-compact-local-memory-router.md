@@ -3,6 +3,8 @@
 ## Status
 
 Accepted for the explicitly approved compact-router issue.
+Amended by [ADR 0049](0049-hosted-typed-classifier-and-cheap-model-tier.md) for hosted typed
+classification behind a data-route gate.
 
 ## Context
 
