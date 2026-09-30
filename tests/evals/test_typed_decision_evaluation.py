@@ -79,19 +79,48 @@ def test_latency_uses_nearest_rank_and_the_600ms_share() -> None:
 
 def test_relevance_gate_fails_if_any_relevant_candidate_is_dropped() -> None:
     rows = [
-        RelevanceRow("t", "a", "relevant", False),
-        RelevanceRow("t", "n", "noise", True),
+        RelevanceRow("t", "a", "relevant", False, True),
+        RelevanceRow("t", "n", "noise", True, True),
     ]
     assert score_relevance(rows)["gates"]["relevant_dropped"] is True
-    rows.append(RelevanceRow("t", "b", "relevant", True))
+    rows.append(RelevanceRow("t", "b", "relevant", True, True))
     assert score_relevance(rows)["gates"]["relevant_dropped"] is False
 
 
+def test_relevance_gate_fails_when_any_row_is_unanswered() -> None:
+    rows = [
+        RelevanceRow("t", "a", "relevant", False, True),
+        RelevanceRow("t", "n", "noise", False, False),
+    ]
+    score = score_relevance(rows)
+    assert score["unanswered"] == 1
+    assert score["gates"]["answered"] is False
+    assert score["gates"]["relevant_dropped"] is True
+    assert score_relevance([])["gates"]["answered"] is False
+
+
 def test_extraction_gate_needs_the_ollama_baseline() -> None:
-    jev = [ExtractionRow("jev", "e1", True, "decision", True, "decision")]
+    jev = [ExtractionRow("jev", "e1", True, "decision", True, "decision", True)]
     assert score_extraction(jev)["gates"] == {"baseline": "not_evaluated"}
-    ollama = [ExtractionRow("ollama", "e1", True, "decision", False, None)]
+    ollama = [ExtractionRow("ollama", "e1", True, "decision", False, None, True)]
     assert all(value is True for value in score_extraction(jev + ollama)["gates"].values())
+
+
+def test_extraction_gates_fail_when_an_arm_has_unanswered_rows() -> None:
+    jev = ExtractionRow("jev", "e1", True, "decision", True, "decision", True)
+    ollama = ExtractionRow("ollama", "e1", True, "decision", False, None, True)
+    lost_jev = ExtractionRow("jev", "e2", True, "decision", True, None, False)
+    lost_ollama = ExtractionRow("ollama", "e2", True, "decision", False, None, False)
+
+    jev_down = score_extraction([jev, lost_jev, ollama])
+    assert jev_down["arms"]["jev"]["unanswered"] == 1
+    assert jev_down["gates"]["jev_answered"] is False
+    assert jev_down["gates"]["baseline_answered"] is True
+
+    baseline_down = score_extraction([jev, ollama, lost_ollama])
+    assert baseline_down["arms"]["ollama"]["unanswered"] == 1
+    assert baseline_down["gates"]["baseline_answered"] is False
+    assert baseline_down["gates"]["jev_answered"] is True
 
 
 def test_tier_gate_requires_heavy_recall_of_095() -> None:
@@ -102,6 +131,14 @@ def test_tier_gate_requires_heavy_recall_of_095() -> None:
     assert score_tier(rows)["gates"]["heavy_recall"] is True  # 19/20 = 0.95
     rows.append(TierRow("h20", "heavy", "edit", "light", "light", "edit", False))
     assert score_tier(rows)["gates"]["heavy_recall"] is False
+
+
+def test_tier_gate_fails_when_any_case_was_unavailable() -> None:
+    rows = [TierRow("h0", "heavy", "edit", "heavy", "threshold", "edit", False)]
+    assert score_tier(rows)["gates"]["answered"] is True
+    rows.append(TierRow("h1", "heavy", "edit", "heavy", "unavailable:timeout", None, False))
+    assert score_tier(rows)["gates"]["answered"] is False
+    assert score_tier([])["gates"]["answered"] is False
 
 
 def test_phase_one_completion_requires_every_gate_true() -> None:

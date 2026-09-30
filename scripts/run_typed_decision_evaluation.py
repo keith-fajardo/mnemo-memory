@@ -68,12 +68,14 @@ class VersionRecorder:
         self.versions: set[str] = set()
         self.input_tokens = 0
         self.answered = 0
+        self.total_requests = 0
 
     def record(self, record: TypedDecisionRecord) -> None:
         if record.model_version is not None:
             self.versions.add(record.model_version)
         self.input_tokens += record.input_tokens
         self.answered += int(record.outcome == "answered")
+        self.total_requests += 1
 
 
 def main(
@@ -129,6 +131,7 @@ def main(
         "model_versions": sorted(recorder.versions),
         "pinned_model_only": pinned,
         "answered_requests": recorder.answered,
+        "total_requests": recorder.total_requests,
         "reserved_calls": budget.calls,
         "input_tokens": recorder.input_tokens,
         "ollama_model": args.ollama_model,

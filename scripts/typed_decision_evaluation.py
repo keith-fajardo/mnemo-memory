@@ -98,6 +98,7 @@ class RelevanceRow:
     candidate_id: str
     category: str  # "relevant", "superseded" or "noise"
     dropped: bool
+    answered: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,7 @@ class ExtractionRow:
     expected_kind: str | None
     predicted_worth: bool
     predicted_kind: str | None
+    answered: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +207,11 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
         "relevant_dropped": dropped,
         "noise_drop_rate": _drop_rate(rows, "noise"),
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
-        "gates": {"relevant_dropped": bool(relevant) and dropped == 0},
+        "unanswered": sum(not row.answered for row in rows),
+        "gates": {
+            "relevant_dropped": bool(relevant) and dropped == 0,
+            "answered": bool(rows) and all(row.answered for row in rows),
+        },
     }
 
 
@@ -224,12 +230,15 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
             "kind_accuracy": _share(
                 sum(row.predicted_kind == row.expected_kind for row in kinded), len(kinded)
             ),
+            "unanswered": sum(not row.answered for row in arm_rows),
         }
     if "jev" not in arms or "ollama" not in arms:
         return {"arms": arms, "gates": {"baseline": "not_evaluated"}}
     return {
         "arms": arms,
         "gates": {
+            "jev_answered": arms["jev"]["unanswered"] == 0,
+            "baseline_answered": arms["ollama"]["unanswered"] == 0,
             "worth_accuracy": arms["jev"]["worth_accuracy"] >= arms["ollama"]["worth_accuracy"],
             "kind_accuracy": arms["jev"]["kind_accuracy"] >= arms["ollama"]["kind_accuracy"],
         },
@@ -240,6 +249,7 @@ def score_tier(rows: Sequence[TierRow]) -> dict[str, Any]:
     heavy = [row for row in rows if row.expected_tier == "heavy"]
     light = [row for row in rows if row.expected_tier == "light"]
     heavy_recall = _share(sum(row.route == "heavy" for row in heavy), len(heavy))
+    unavailable = sum(row.reason.startswith("unavailable:") for row in rows)
     return {
         "cases": len(rows),
         "heavy_recall": heavy_recall,
@@ -248,9 +258,12 @@ def score_tier(rows: Sequence[TierRow]) -> dict[str, Any]:
             sum(row.tool_need == row.expected_tool_need for row in rows), len(rows)
         ),
         "hint_eligible": sum(row.hint for row in rows),
-        "unavailable": sum(row.reason.startswith("unavailable:") for row in rows),
+        "unavailable": unavailable,
         "missed_heavy_case_ids": sorted(row.case_id for row in heavy if row.route != "heavy"),
-        "gates": {"heavy_recall": heavy_recall >= 0.95},
+        "gates": {
+            "heavy_recall": heavy_recall >= 0.95,
+            "answered": bool(rows) and unavailable == 0,
+        },
     }
 
 
@@ -305,6 +318,7 @@ async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[Rele
                         candidate_id,
                         category,
                         should_drop_candidate(results.get(f"helps_{index}")),
+                        outcome.available,
                     )
                 )
     return rows
@@ -341,6 +355,7 @@ async def evaluate_extraction_jev(guard: GuardedTypedDecisionClassifier) -> list
                 kind,
                 worth_extracting(results.get(WORTH_REMEMBERING.name)),
                 accepted_choice(results.get(EPISODIC_KIND.name)),
+                outcome.available,
             )
         )
     return rows
@@ -349,10 +364,12 @@ async def evaluate_extraction_jev(guard: GuardedTypedDecisionClassifier) -> list
 def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow]:
     rows: list[ExtractionRow] = []
     for event_id, summary, worth, kind in extraction_events():
+        answered = True
         try:
             proposals = parse_episodic_output(provider.generate(_OllamaRequest(summary)), 4)
         except Exception:
             proposals = ()
+            answered = False  # predicts no candidates, but is counted as unanswered
         rows.append(
             ExtractionRow(
                 "ollama",
@@ -361,6 +378,7 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
                 kind,
                 bool(proposals),
                 proposals[0].kind.value if proposals else None,
+                answered,
             )
         )
     return rows

@@ -1731,8 +1731,9 @@ secret-scans the original text, the bounded text actually sent, and every axis s
 labels, instructions, criteria) before sending, never sends non-`normal`
 sensitivity, bounds text to 512 characters and every axis string to 400, reserves
 `typed_decision` budget, and enforces a hard deadline (600 ms per prompt) with no retry. The
-connector reads the key only from `TYPESAFE_API_KEY`, redacts it from `repr`, rejects keys that
-are not printable ASCII, refuses HTTP redirects so the key is never forwarded,
+Mnemo (the runtime composition and the evaluation CLI) reads the key only from
+`TYPESAFE_API_KEY` and hands it to the connector as a constructor argument. The connector
+redacts it from `repr`, rejects keys that are not printable ASCII, refuses HTTP redirects so the key is never forwarded,
 and raises payload-free errors without chained causes. Telemetry and evaluation reports record
 counts, reasons, durations and model versions only. Only fixtures that declare synthetic
 provenance may be sent, and live evaluation needs `--live-calls-authorized`. Adding a data route

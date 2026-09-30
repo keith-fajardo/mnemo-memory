@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+import urllib.error
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -91,13 +92,17 @@ def _empty_ollama(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run(
-    tmp_path: Path, *extra: str, transport: OracleTransport, env: dict[str, str] | None = None
+    tmp_path: Path,
+    *extra: str,
+    transport: Callable[[str, bytes, Mapping[str, str], float], bytes],
+    env: dict[str, str] | None = None,
+    ollama: Callable[[str, dict[str, Any]], dict[str, Any]] = _empty_ollama,
 ) -> int:
     return main(
         ["--run-id", "test-run", "--results-root", str(tmp_path), *extra],
         environ={"TYPESAFE_API_KEY": KEY} if env is None else env,
         jev_transport=transport,
-        ollama_transport=_empty_ollama,
+        ollama_transport=ollama,
     )
 
 
@@ -143,3 +148,66 @@ def test_cli_refuses_to_overwrite_an_existing_report(tmp_path: Path) -> None:
     transport = OracleTransport()
     assert _run(tmp_path, "--live-calls-authorized", transport=transport) == 2
     assert transport.calls == 0
+
+
+def _report(tmp_path: Path) -> dict[str, Any]:
+    report: dict[str, Any] = json.loads((tmp_path / "test-run" / "report.json").read_text("utf-8"))
+    return report
+
+
+class FrontDoorOnlyTransport(OracleTransport):
+    """Answers front-door questions and fails every other request."""
+
+    def __call__(self, url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        if "needs_long_term" not in json.loads(body)["questions"]:
+            self.calls += 1
+            raise urllib.error.URLError("down")
+        return super().__call__(url, body, headers, timeout)
+
+
+def test_cli_is_incomplete_when_only_the_front_door_answers(tmp_path: Path) -> None:
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        "--ollama-model",
+        "fake",
+        transport=FrontDoorOnlyTransport(),
+    )
+    report = _report(tmp_path)
+    assert code == 1 and report["phase_1_complete"] is False
+    assert report["relevance"]["gates"]["answered"] is False
+    assert report["tier"]["gates"]["answered"] is False
+    assert report["extraction"]["gates"]["jev_answered"] is False
+
+
+def test_cli_is_incomplete_when_the_call_cap_starves_the_run(tmp_path: Path) -> None:
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        "--ollama-model",
+        "fake",
+        "--max-calls",
+        "129",
+        transport=OracleTransport(),
+    )
+    report = _report(tmp_path)
+    assert code == 1 and report["phase_1_complete"] is False
+    assert report["run"]["total_requests"] > report["run"]["answered_requests"]
+
+
+def test_cli_is_incomplete_when_the_ollama_baseline_is_down(tmp_path: Path) -> None:
+    def down(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        raise ConnectionRefusedError("down")
+
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        "--ollama-model",
+        "fake",
+        transport=OracleTransport(),
+        ollama=down,
+    )
+    report = _report(tmp_path)
+    assert code == 1 and report["phase_1_complete"] is False
+    assert report["extraction"]["gates"]["baseline_answered"] is False
+    assert report["extraction"]["gates"]["jev_answered"] is True

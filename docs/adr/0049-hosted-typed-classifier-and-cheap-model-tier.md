@@ -123,8 +123,10 @@ versions are recorded here and in the threat model instead.
 
 ## Reversal or migration strategy
 
-Every setting defaults to off, and removing the settings fields is covered by the migrated
-defaults. Deleting `connectors/typesafe` and the runtime composition leaves today's behavior.
+Every setting defaults to off. New code reads older settings files through migrated defaults,
+but reverting the code also requires deleting `experimental_typed_decisions_enabled`,
+`typed_decision_data_route`, `typed_decision_model_id` and `typed_decision_modes` from
+`settings.json`, because older builds reject unknown keys. Deleting `connectors/typesafe` and the runtime composition leaves today's behavior.
 Nothing persists provider output.
 
 ## Verification
