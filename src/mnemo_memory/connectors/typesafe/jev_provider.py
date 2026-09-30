@@ -32,9 +32,27 @@ _MAXIMUM_RESPONSE_BYTES = 262_144
 JevTransport = Callable[[str, bytes, Mapping[str, str], float], bytes]
 
 
+class _NoRedirect(_request.HTTPRedirectHandler):
+    """Never follow a redirect: it would forward the Authorization header."""
+
+    def redirect_request(
+        self,
+        req: _request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_OPENER = _request.build_opener(_NoRedirect())
+
+
 def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
     request = _request.Request(url, data=body, headers=dict(headers), method="POST")
-    with _request.urlopen(request, timeout=timeout) as response:
+    with _OPENER.open(request, timeout=timeout) as response:
         payload: bytes = response.read(_MAXIMUM_RESPONSE_BYTES + 1)
     if len(payload) > _MAXIMUM_RESPONSE_BYTES:
         raise TypedDecisionAdapterError(TypedDecisionUnavailableReason.SCHEMA_INVALID)
@@ -54,7 +72,10 @@ class JevClassifier:
     ) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("MNEMO_TYPED_DECISION_CREDENTIAL_MISSING")
-        self._api_key = api_key.strip()
+        api_key = api_key.strip()
+        if not all(33 <= ord(ch) <= 126 for ch in api_key):
+            raise ValueError("MNEMO_TYPED_DECISION_CREDENTIAL_INVALID")
+        self._api_key = api_key
         self._model_id = model_id
         self._endpoint = endpoint
         self._transport = transport or _urllib_transport
@@ -146,9 +167,11 @@ def _result(axis: ClassifierAxis, answer: object) -> ClassifierResult:
     probabilities = answer.get("probabilities")
     if choice not in axis.allowed_labels or not isinstance(probabilities, dict):
         raise ValueError("choice is outside the allowed labels")
-    if set(probabilities) - set(axis.allowed_labels):
-        raise ValueError("probabilities name unknown labels")
-    by_label = {name: _probability(probabilities.get(name, 0.0)) for name in axis.allowed_labels}
+    if set(probabilities) != set(axis.allowed_labels):
+        raise ValueError("probabilities do not match the allowed labels")
+    by_label = {name: _probability(probabilities[name]) for name in axis.allowed_labels}
+    if by_label[str(choice)] < max(by_label.values()) - 1e-6:
+        raise ValueError("choice is not the most probable label")
     return ClassifierResult(
         axis.name,
         str(choice),

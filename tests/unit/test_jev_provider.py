@@ -1,6 +1,7 @@
 import json
 from collections.abc import Mapping
 from email.message import Message
+from typing import Any
 from urllib import error as urllib_error
 
 import pytest
@@ -108,6 +109,11 @@ def test_extreme_probabilities_stay_finite() -> None:
         lambda r: r["answers"]["needs_long_term"].update({"noul": 1.5}),
         lambda r: r["answers"]["needs_long_term"].update({"type": "choice"}),
         lambda r: r.update({"model": ""}),
+        lambda r: r["answers"]["complexity"].update({"probabilities": {}}),
+        lambda r: r["answers"]["complexity"]["probabilities"].pop("light"),
+        lambda r: r["answers"]["tool_need"].update(
+            {"choice": "edit", "probabilities": {"none": 1.0, "read_heavy": 0.0, "edit": 0.0}}
+        ),
     ],
 )
 def test_malformed_answers_are_schema_invalid(mutate: object) -> None:
@@ -152,3 +158,25 @@ def test_api_key_never_appears_in_repr_or_errors() -> None:
     with pytest.raises(ValueError) as missing:
         JevClassifier("   ")
     assert str(missing.value) == "MNEMO_TYPED_DECISION_CREDENTIAL_MISSING"
+
+
+def test_redirects_are_never_followed() -> None:
+    from urllib import request as urllib_request
+
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    req = urllib_request.Request(JEV_ENDPOINT, data=b"{}", method="POST")
+    handler: Any = jev_provider._NoRedirect()
+    redirect = handler.redirect_request(req, None, 302, "Found", Message(), "http://evil.example/")
+    assert redirect is None
+    opener: Any = jev_provider._OPENER
+    handlers = opener.handlers
+    assert not any(type(h) is urllib_request.HTTPRedirectHandler for h in handlers)
+
+
+@pytest.mark.parametrize("key", ["bad\nkey", "bad\u201ckey", "bad key", "\u00e9"])
+def test_malformed_keys_are_rejected_without_echo(key: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        JevClassifier(key)
+    assert key not in str(caught.value)
+    assert str(caught.value).startswith("MNEMO_TYPED_DECISION_CREDENTIAL_")
