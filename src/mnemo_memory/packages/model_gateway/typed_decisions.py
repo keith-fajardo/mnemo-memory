@@ -176,20 +176,39 @@ class GuardedTypedDecisionClassifier:
     ) -> TypedDecisionOutcome:
         """Return answers in axis order or one closed unavailable reason; never raises."""
 
-        started = self._clock()
-        axis_tuple = tuple(axes)
+        reason: TypedDecisionUnavailableReason | None
+        answer: AdapterAnswer | None
+        try:
+            started: float | None = self._clock()
+        except Exception:
+            started = None
+        try:
+            axis_tuple: tuple[ClassifierAxis, ...] | None = tuple(axes)
+        except Exception:
+            axis_tuple = None
         try:
             reason, answer = await self._ask(axis_tuple, text, sensitivity)
         except Exception:
             reason, answer = Reason.HTTP_ERROR, None
-        duration_ms = max(0, round((self._clock() - started) * 1_000))
+        try:
+            if started is None:
+                raise ValueError("clock unavailable")
+            duration_ms = max(0, round((self._clock() - started) * 1_000))
+        except Exception:
+            duration_ms = 0
+            if reason is None:
+                reason, answer = Reason.HTTP_ERROR, None
         outcome = TypedDecisionOutcome(
             () if answer is None else answer.results,
             reason,
             duration_ms,
             None if answer is None else answer.model_version,
         )
-        self._record(len(axis_tuple), outcome, 0 if answer is None else answer.input_tokens)
+        self._record(
+            0 if axis_tuple is None else len(axis_tuple),
+            outcome,
+            0 if answer is None else answer.input_tokens,
+        )
         return outcome
 
     async def classify_batch(
@@ -204,27 +223,26 @@ class GuardedTypedDecisionClassifier:
         return (await self.classify_batch((axis,), prompt))[0]
 
     async def _ask(
-        self, axes: tuple[ClassifierAxis, ...], text: object, sensitivity: Sensitivity
+        self,
+        axes: tuple[ClassifierAxis, ...] | None,
+        text: object,
+        sensitivity: Sensitivity,
     ) -> tuple[TypedDecisionUnavailableReason | None, AdapterAnswer | None]:
         adapter = self._adapter
         if not typed_decision_source_permitted(self._data_route, self._source):
             return Reason.DATA_ROUTE_BLOCKED, None
         if adapter is None:
             return Reason.NO_CREDENTIAL, None
-        if not isinstance(text, str) or not _request_shape_valid(axes, text):
+        if axes is None or not isinstance(text, str) or not _request_shape_valid(axes, text):
             return Reason.SCHEMA_INVALID, None
-        axis_texts = tuple(
-            value
-            for axis in axes
-            for value in (axis.instructions, *(description for _, description in axis.criteria))
-        )
-        if contains_high_confidence_secret(text, *axis_texts):
+        axis_texts = tuple(value for axis in axes for value in _axis_strings(axis))
+        bounded = bounded_decision_text(text)
+        if contains_high_confidence_secret(text, bounded, *axis_texts):
             return Reason.SECRET_BLOCKED, None
         if sensitivity is not Sensitivity.NORMAL:
             return Reason.SENSITIVITY_BLOCKED, None
         if any(len(value) > MAXIMUM_AXIS_TEXT_CHARACTERS for value in axis_texts):
             return Reason.SCHEMA_INVALID, None
-        bounded = bounded_decision_text(text)
         try:
             self._budget.reserve(
                 self._workspace_id, ModelTaskType.TYPED_DECISION, self._reservation
@@ -286,6 +304,17 @@ async def decide_tier(
     except Exception:
         return TierDecision("heavy", "unavailable:error", None)
     return TierDecision(decision.route, decision.reason, decision)
+
+
+def _axis_strings(axis: ClassifierAxis) -> tuple[str, ...]:
+    """Every axis string a provider adapter may send."""
+
+    return (
+        axis.name,
+        axis.instructions,
+        *axis.allowed_labels,
+        *(value for pair in axis.criteria for value in pair),
+    )
 
 
 def _request_shape_valid(axes: tuple[ClassifierAxis, ...], text: str) -> bool:

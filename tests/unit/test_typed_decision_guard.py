@@ -32,6 +32,7 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     bounded_decision_text,
     decide_tier,
 )
+from mnemo_memory.packages.policy.content_safety import contains_high_confidence_secret
 
 Reason = TypedDecisionUnavailableReason
 NEED = ClassifierAxis("needs_long_term", "needs memory", YES_NO_LABELS, 0.0, kind=AxisKind.YES_NO)
@@ -282,3 +283,44 @@ def test_guard_rejects_invalid_configuration() -> None:
     for deadline in (0.0, 31.0):
         with pytest.raises(ValueError):
             _guard(FakeAdapter(), deadline=deadline)
+
+
+def test_secret_created_by_bounding_is_never_sent() -> None:
+    adapter = FakeAdapter()
+    text = "A" * 400 + "password: " + "h" * 245  # tail starts at "password"
+    assert not contains_high_confidence_secret(text)
+    outcome = asyncio.run(_guard(adapter).ask((NEED,), text))
+    assert outcome.unavailable_reason is Reason.SECRET_BLOCKED
+    assert adapter.calls == []
+
+
+def test_secret_in_criteria_description_or_label_is_never_sent() -> None:
+    secret = "sk-abcdefghijklmnopqrstuvwxyz"
+    for labels, criteria in (
+        (("a", "b"), (("a", f"uses {secret}"), ("b", "fine"))),
+        ((secret, "b"), ((secret, "fine"), ("b", "fine"))),
+    ):
+        adapter = FakeAdapter()
+        axis = ClassifierAxis("pick", "choose", labels, 0.0, criteria=criteria)
+        outcome = asyncio.run(_guard(adapter).ask((axis,), "resume"))
+        assert outcome.unavailable_reason is Reason.SECRET_BLOCKED
+        assert adapter.calls == []
+
+
+def test_ask_never_raises_for_bad_axes_or_clock() -> None:
+    outcome = asyncio.run(_guard(FakeAdapter()).ask(None, "t"))  # type: ignore[arg-type]
+    assert outcome.unavailable_reason is Reason.SCHEMA_INVALID
+
+    guard = GuardedTypedDecisionClassifier(
+        FakeAdapter(),
+        data_route=TypedDecisionDataRoute.SYNTHETIC_ONLY,
+        source=TypedDecisionSource.SYNTHETIC_FIXTURE,
+        budget=CountingBudget(),
+        workspace_id=WORKSPACE,
+        reservation=RESERVATION,
+        deadline_seconds=1.0,
+        clock=lambda: float("nan"),
+    )
+    outcome = asyncio.run(guard.ask((NEED,), "t"))
+    assert outcome.unavailable_reason is Reason.HTTP_ERROR
+    assert outcome.duration_ms == 0
