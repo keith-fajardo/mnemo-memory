@@ -247,6 +247,14 @@ from .team_backup import (
     TeamBackupTableCount,
 )
 from .team_knowledge import TeamKnowledgeSourceApproval, TeamKnowledgeSourceStatus
+from .typed_decisions import (
+    TypedDecisionDataRoute,
+    TypedDecisionKind,
+    TypedDecisionMode,
+    TypedDecisionSource,
+    TypedDecisionUnavailableReason,
+    typed_decision_source_permitted,
+)
 
 __all__ = [
     "APPROVED_EVENT_EXPORT_FORMAT",
@@ -439,6 +447,11 @@ __all__ = [
     "TeamProjectVisibility",
     "TeamWorkspace",
     "TokenEstimator",
+    "TypedDecisionDataRoute",
+    "TypedDecisionKind",
+    "TypedDecisionMode",
+    "TypedDecisionSource",
+    "TypedDecisionUnavailableReason",
     "UnsupportedDbtSupplementalSchema",
     "UnsupportedManifestSchema",
     "ValidityState",
@@ -460,5 +473,6 @@ __all__ = [
     "normalize_registry_version",
     "normalize_skill_clients",
     "replay_episodic_memory_revisions",
+    "typed_decision_source_permitted",
     "unique_file_renames",
 ]

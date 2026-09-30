@@ -6805,3 +6805,17 @@ was migrated, Mnemo created and verified a 501,755,904-byte schema-31 recovery b
 digest `sha256:551fb690982594f9fa22b79c283261f818f832a5d8ce16606c9bd6dc32aa72fd`.
 The real profile then migrated successfully to schema 32 and reports healthy initialized status.
 No model was downloaded, invoked, or enabled during deployment.
+
+
+### Jev typed-decision routing phase 1 — In progress (2026-09-30)
+
+The maintainer approved `docs/superpowers/specs/2026-09-30-jev-typed-decision-routing-design.md`
+and its phase-1 plan. This issue revises the uncommitted MiniCPM cascade-router contract
+(2026-09-02) into a provider-neutral typed-decision port with `light`/`heavy` routes. It also adds
+a guarded hosted-classifier boundary, a TypeSafe Jev connector, default-off settings and an
+offline evaluation harness over synthetic fixtures.
+
+Phase 1 sends no runtime text to any provider. The only data route is `synthetic_only`, and
+runtime requests are refused before any network call. It does not wire the hook, the MCP server,
+the prompt router or episodic extraction, and Ollama remains the extraction provider. Live Jev
+evaluation runs only with explicit maintainer authorization.
