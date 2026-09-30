@@ -6806,8 +6806,7 @@ digest `sha256:551fb690982594f9fa22b79c283261f818f832a5d8ce16606c9bd6dc32aa72fd`
 The real profile then migrated successfully to schema 32 and reports healthy initialized status.
 No model was downloaded, invoked, or enabled during deployment.
 
-
-### Jev typed-decision routing phase 1 — In progress (2026-09-30)
+### Jev typed-decision routing phase 1 — Implemented; live evaluation pending (2026-09-30)
 
 The maintainer approved `docs/superpowers/specs/2026-09-30-jev-typed-decision-routing-design.md`
 and its phase-1 plan. This issue revises the uncommitted MiniCPM cascade-router contract
@@ -6819,3 +6818,20 @@ Phase 1 sends no runtime text to any provider. The only data route is `synthetic
 runtime requests are refused before any network call. It does not wire the hook, the MCP server,
 the prompt router or episodic extraction, and Ollama remains the extraction provider. Live Jev
 evaluation runs only with explicit maintainer authorization.
+
+Implemented:
+- the typed-decision domain vocabularies
+- the `light`/`heavy` cascade port with batching and mixed-source axes
+- a deterministic risk veto axis
+- the phase-1 question catalogue
+- `GuardedTypedDecisionClassifier` (secret scan covers the bounded text and every axis string;
+  never raises)
+- the TypeSafe Jev connector (no redirects, strict choice-probability validation, malformed-key
+  rejection)
+- default-off settings
+- a runtime composition that is blocked by the data route
+- a synthetic tier and worth fixture
+- the live-authorized evaluation CLI (`npm run eval:typed-decisions`)
+
+No runtime path calls the classifier, and ADR 0049 remains proposed. Phase 2 needs every phase-1
+gate true in a maintainer-authorized report, plus signed zero-data-retention terms.

@@ -36,6 +36,8 @@ evaluation gates.
    settings replacement, and record provider, model, prompt version, latency, usage, and result
    status for each attempted call. Changing the configured model must require no persistence
    migration, must not rewrite earlier provenance, and must fail safely to the deterministic path.
+   *Amended by ADR 0049:* typed decisions may call the hosted Jev classifier behind its
+   data-route gate. The semantic compiler itself still makes no hosted-provider call.
 4. **Live semantic checkpoint composition.** Route the personal checkpoint lifecycle through the
    existing semantic ledger and whole-atom adaptive renderer. Compile only events since the prior
    head, retain protected meanings and evidence associations, target 200 local tokens, and expand
