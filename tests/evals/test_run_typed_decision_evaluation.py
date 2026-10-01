@@ -9,6 +9,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from scripts.run_typed_decision_evaluation import main
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/evals"
@@ -122,6 +124,25 @@ def test_cli_refuses_without_live_authorization_or_credential(tmp_path: Path) ->
     transport = OracleTransport()
     assert _run(tmp_path, transport=transport) == 2
     assert _run(tmp_path, "--live-calls-authorized", transport=transport, env={}) == 2
+    assert transport.calls == 0
+    assert not (tmp_path / "test-run").exists()
+
+
+def test_cli_refuses_a_malformed_credential_without_echoing_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    malformed = "bad key-not-real-0000"  # an inner space is not a valid key
+    transport = OracleTransport()
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        transport=transport,
+        env={"TYPESAFE_API_KEY": malformed},
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.err == "refusing: TYPESAFE_API_KEY is malformed\n"
+    assert malformed not in captured.out + captured.err
     assert transport.calls == 0
     assert not (tmp_path / "test-run").exists()
 

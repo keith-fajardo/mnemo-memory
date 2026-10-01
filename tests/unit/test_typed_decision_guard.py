@@ -15,6 +15,7 @@ from mnemo_memory.packages.domain import (
     TypedDecisionUnavailableReason,
     WorkspaceId,
 )
+from mnemo_memory.packages.model_gateway import typed_decisions
 from mnemo_memory.packages.model_gateway.cascade_router import (
     YES_NO_LABELS,
     AxisKind,
@@ -308,6 +309,71 @@ def test_ask_each_never_raises_for_malformed_requests() -> None:
         Reason.SCHEMA_INVALID,
     ]
     assert asyncio.run(_guard(FakeAdapter()).ask_each([], total_deadline_seconds=1.0)) == ()
+
+
+def test_cancelling_ask_each_records_each_unfinished_request_once() -> None:
+    recorder = ListRecorder()
+    guard = _guard(SlowTextAdapter(), recorder=recorder, deadline=5.0)
+    requests = [((_axis("q0"),), "slow"), ((_axis("q1"), _axis("q2")), "slow")]
+    requests += [((_axis("q3"), _axis("q4"), _axis("q5")), "fast")]
+
+    async def cancel_midway() -> None:
+        task = asyncio.ensure_future(guard.ask_each(requests, total_deadline_seconds=5.0))
+        for _ in range(100):  # wait until the fast request has answered and been recorded
+            if recorder.records:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        await task
+
+    started = time.perf_counter()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cancel_midway())
+    assert time.perf_counter() - started < 1.0
+    assert sorted((record.outcome, record.axis_count) for record in recorder.records) == [
+        ("answered", 3),
+        ("timeout", 1),
+        ("timeout", 2),
+    ]
+    assert all(
+        record.duration_ms == 5_000 and record.model_version is None
+        for record in recorder.records
+        if record.outcome == "timeout"
+    )
+
+
+@pytest.mark.parametrize("late", ["result", "exception"])
+def test_a_worker_finishing_after_cancellation_is_dropped_quietly(
+    late: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    release = threading.Event()
+    workers: list[threading.Thread] = []
+
+    def work() -> str:
+        workers.append(threading.current_thread())
+        release.wait(1.0)
+        if late == "exception":
+            raise RuntimeError("late failure")
+        return "late result"
+
+    async def cancel_then_finish() -> list[dict[str, object]]:
+        seen: list[dict[str, object]] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: seen.append(context)
+        )
+        future = typed_decisions._run_in_daemon_thread(work)
+        future.cancel()
+        release.set()
+        for _ in range(100):
+            if workers:
+                break
+            await asyncio.sleep(0.01)
+        workers[0].join(1.0)  # the worker has now queued its late callback on this loop
+        await asyncio.sleep(0.05)  # let that callback run
+        return seen
+
+    assert asyncio.run(cancel_then_finish()) == []
+    assert "InvalidStateError" not in caplog.text
 
 
 @pytest.mark.parametrize("budget", [0.0, -1.0, 30.5, float("nan"), float("inf"), True])

@@ -217,9 +217,10 @@ class GuardedTypedDecisionClassifier:
     ) -> tuple[TypedDecisionOutcome, ...]:
         """Ask every request concurrently within one total budget; outcomes in request order.
 
-        Requests still running at the budget are cancelled and reported as ``timeout``. An
-        invalid budget is a caller programming error and raises ``ValueError``; nothing else
-        raises.
+        Requests still running at the budget are cancelled and reported as ``timeout``, and so
+        are those still running when the caller cancels this call (the ``CancelledError`` then
+        propagates). An invalid budget is a caller programming error and raises ``ValueError``;
+        nothing else raises.
         """
 
         if not _deadline_valid(total_deadline_seconds):
@@ -234,24 +235,23 @@ class GuardedTypedDecisionClassifier:
             asyncio.ensure_future(self._ask_request(request, sensitivity))
             for request in pending_requests
         ]
+        timed_out = TypedDecisionOutcome(
+            (), Reason.TIMEOUT, round(total_deadline_seconds * 1_000), None
+        )
         try:
             await asyncio.wait(tasks, timeout=total_deadline_seconds)
         finally:
+            # Also runs when the caller cancels us. ``ask`` records only requests that finish,
+            # so each cancelled one is recorded here, exactly once.
             unfinished = [task for task in tasks if not task.done()]
             for task in unfinished:
                 task.cancel()
             if unfinished:
                 await asyncio.wait(unfinished)
-        timed_out_ms = round(total_deadline_seconds * 1_000)
-        outcomes: list[TypedDecisionOutcome] = []
-        for request, task in zip(pending_requests, tasks, strict=True):
-            if task.cancelled():
-                outcome = TypedDecisionOutcome((), Reason.TIMEOUT, timed_out_ms, None)
-                self._record(_request_axis_count(request), outcome, 0)
-            else:
-                outcome = task.result()
-            outcomes.append(outcome)
-        return tuple(outcomes)
+            for request, task in zip(pending_requests, tasks, strict=True):
+                if task.cancelled():
+                    self._record(_request_axis_count(request), timed_out, 0)
+        return tuple(timed_out if task.cancelled() else task.result() for task in tasks)
 
     async def _ask_request(
         self, request: tuple[Sequence[ClassifierAxis], str], sensitivity: Sensitivity

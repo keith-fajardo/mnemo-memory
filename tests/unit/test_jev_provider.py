@@ -1,5 +1,6 @@
 import http.client
 import json
+import pickle
 import time
 from collections.abc import Mapping
 from email.message import Message
@@ -163,6 +164,26 @@ def test_non_json_body_is_schema_invalid() -> None:
             FRONT_DOOR_AXES, "prompt", timeout_seconds=0.6
         )
     assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+
+
+def _huge_probability_body() -> bytes:
+    response = json.loads(json.dumps(SMOKE_RESPONSE))
+    response["answers"]["needs_long_term"]["noul"] = 10**400  # math.isfinite overflows
+    return json.dumps(response).encode()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"[" * 100_000 + b"]" * 100_000, _huge_probability_body()],
+    ids=["deeply_nested", "huge_integer_probability"],
+)
+def test_pathological_bodies_are_schema_invalid_without_a_chain(body: bytes) -> None:
+    with pytest.raises(TypedDecisionAdapterError) as caught:
+        JevClassifier(KEY, transport=RecordingTransport(body)).answer(
+            FRONT_DOOR_AXES, "prompt", timeout_seconds=0.6
+        )
+    assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
 
 
 def test_http_and_network_failures_map_to_closed_reasons() -> None:
@@ -386,3 +407,11 @@ def test_stored_key_is_masked_in_the_classifier_state() -> None:
     assert KEY not in repr(vars(classifier))
     assert repr(classifier._api_key) == str(classifier._api_key) == "***"
     assert classifier._api_key.reveal() == KEY
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_classifier_cannot_be_pickled_with_its_key(protocol: int) -> None:
+    classifier = JevClassifier(KEY)
+    with pytest.raises(TypeError) as caught:
+        pickle.dumps(classifier, protocol=protocol)
+    assert KEY not in str(caught.value) and KEY not in repr(caught.value)

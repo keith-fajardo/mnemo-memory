@@ -11,7 +11,7 @@ import math
 import re
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, NoReturn
 from urllib import error as _error
 from urllib import request as _request
 
@@ -58,10 +58,11 @@ _OPENER = _request.build_opener(_NoRedirect())
 
 
 def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
-    """POST once; total time is bounded by ``timeout`` plus at most one socket timeout.
+    """POST once; ``timeout`` is a total deadline for the body read only.
 
-    ``timeout`` is also the per-operation socket limit, so a server that trickles its body
-    cannot keep the call alive past the total deadline.
+    DNS, each connection attempt, the TLS handshake and each header read are limited only per
+    operation, by the same ``timeout``. Reading a trickling body stops at the deadline plus at
+    most one socket read.
     """
 
     deadline = time.monotonic() + timeout
@@ -83,7 +84,7 @@ def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout
 
 
 class _Secret:
-    """Hold the API key so ``repr``, ``str`` and ``vars`` dumps never show it."""
+    """Hold the API key so ``repr``, ``str``, ``vars`` and pickle never show it."""
 
     __slots__ = ("_value",)
 
@@ -98,6 +99,9 @@ class _Secret:
 
     def __str__(self) -> str:
         return "***"
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("the TypeSafe API key cannot be pickled")
 
 
 class JevClassifier:
@@ -200,7 +204,15 @@ def _parse(axes: tuple[ClassifierAxis, ...], raw: bytes, configured_model: str) 
 
     try:
         answer: AdapterAnswer | None = _parse_answer(axes, raw, configured_model)
-    except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError):
+    except (
+        UnicodeDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        RecursionError,  # deeply nested JSON
+        OverflowError,  # an integer probability too large for a float
+    ):
         answer = None
     if answer is None:
         raise TypedDecisionAdapterError(TypedDecisionUnavailableReason.SCHEMA_INVALID)
