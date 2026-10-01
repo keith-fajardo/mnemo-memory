@@ -451,7 +451,8 @@ of section 3 change 1. The 600 ms per-prompt deadline applies to the front-door 
 filler check sends one request per retrieved note, up to 16 per prompt. The evaluation reports
 its per-request latency (`request_p50_ms`, `request_p95_ms`) and count, but does not gate them.
 A concurrent total-time budget for those requests must be set and gated before the filler check
-goes live in phase 2.
+goes live in phase 2. (Superseded by the 2026-10-02 hardening: the 0.8 s concurrent budget,
+`FILLER_CHECK_BUDGET_SECONDS`, is now gated by `within_budget`; see ADR 0049, Consequences.)
 
 **Reading the holdout gates.** The holdout has 8 noise notes, so `filler_removed` (at least 90%
 of noise dropped) means all 8 must be dropped; 7 of 8 is 0.875 and fails. The report's
