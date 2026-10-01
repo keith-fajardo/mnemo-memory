@@ -457,3 +457,11 @@ goes live in phase 2.
 of noise dropped) means all 8 must be dropped; 7 of 8 is 0.875 and fails. The report's
 `noise_dropped_share` is the share of all dropped notes that were noise, and is `None` when
 nothing was dropped.
+
+**Outcome (2026-10-02).** The live run `2026-10-01-phase1-b` passed every gate except two: the
+held-out prior-memory recall (0.8 against 0.9; both misses were correct `past_sessions` answers
+at confidence 0.58 and 0.50, below the 0.6 bar, so they resolve safely to lazy pull) and
+`baseline_answered` (one Ollama transport failure, now mitigated by one retry in the harness).
+The maintainer accepted phase 1 as passed with those two documented exceptions and did not lower
+the 0.6 bar, since tuning on the holdout would invalidate it; a lower per-label bar would need a
+third fresh prompt set.

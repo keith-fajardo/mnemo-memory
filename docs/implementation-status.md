@@ -6847,3 +6847,19 @@ The 600 ms deadline applies to the front-door request; the filler check sends up
 requests per prompt, reported but not gated, and a concurrent total-time budget must be set and
 gated before phase 2 uses it. The revised questions are verified
 offline only; a new maintainer-authorized live run is still pending.
+
+Phase-1 live result (2026-10-01/02): the maintainer-authorized run `2026-10-01-phase1-b` (pinned
+`jev-1.13.0`, 302 requests, 135,867 input tokens) passed most gates. Memory need on the dev set
+passed (accuracy 0.90, prior-memory recall 1.0, structure recall 0.93, no-memory precision 1.0).
+On the held-out set prior-memory recall was 0.8 against the 0.9 gate, so it failed; both misses
+were the correct label `past_sessions` at confidence 0.58 and 0.50, below the 0.6 bar, so they
+resolve to unknown and lazy pull (safe side), with no confident wrong answer. Filler check
+dropped 100% of filler and no relevant notes on both sets; tier recall was 1.0 for heavy and
+light; front-door latency was p50 372 ms, p95 449 ms, max 528 ms, 0% over 600 ms. Extraction:
+Jev worth-accuracy 0.957 against Ollama 0.812, kind accuracy 0.647 against 0.647;
+`baseline_answered` failed because one Ollama call hit a transport failure (a baseline
+infrastructure failure, not Jev's), now mitigated by one retry in the harness. Maintainer
+decision (2026-10-02): phase 1 is accepted as passed with those two documented exceptions. The
+0.6 confidence bar is not lowered from the holdout (that would be tuning on held-out data); a
+lower per-label bar would need a third fresh prompt set. Phase 2 still requires signed
+zero-data-retention terms plus the phase-2 prerequisites. ADR 0049 stays `proposed`.

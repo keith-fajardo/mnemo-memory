@@ -150,6 +150,32 @@ Nothing persists provider output.
 - The maintainer-authorized phase-1 evaluation report, with every gate true, before any
   phase-2 work.
 
+**Phase-1 result (2026-10-01/02).** The maintainer-authorized live run `2026-10-01-phase1-b`
+used pinned `jev-1.13.0`, 302 requests and 135,867 input tokens. Most gates passed; two did not.
+
+- Memory need, dev set (60 prompts): accuracy 0.90, prior-memory recall 1.0, structure recall
+  0.93, no-memory precision 1.0. All gates passed.
+- Memory need, held-out set (40 fresh prompts): accuracy 0.925, structure recall 1.0, no-memory
+  precision 1.0. Prior-memory recall was 0.8 against the 0.9 gate, so it failed. Both misses
+  (h-prior-01, h-prior-03) were the correct label `past_sessions`, at confidence 0.58 and 0.50,
+  below the 0.6 bar. They resolve to unknown and lead to lazy pull, which is the safe side. No
+  confident wrong answer occurred.
+- Filler check: dev and holdout both dropped 100% of filler and 0 relevant notes. Per-request p50
+  is about 383 ms and p95 about 500 to 512 ms.
+- Tier: heavy recall 1.0, light recall 1.0.
+- Latency: front-door p50 372 ms, p95 449 ms, max 528 ms; 0% over 600 ms.
+- Extraction: Jev worth-accuracy 0.957 against Ollama 0.812; kind accuracy 0.647 against 0.647.
+  `baseline_valid` passed (4 Ollama format failures). `baseline_answered` failed because one
+  Ollama call failed at the transport level. That is a failure of the baseline's infrastructure,
+  not of Jev.
+
+Maintainer decision (2026-10-02): phase 1 is accepted as passed with two documented exceptions:
+the two under-confident correct holdout answers (safe side), and the one Ollama transport
+failure, now mitigated by a single retry in the harness. The 0.6 confidence bar is not lowered
+based on the holdout, because that would be tuning on held-out data. A lower per-label bar
+(keeping "nothing" at 0.6) would need a third fresh prompt set to validate. This ADR stays
+`proposed`; acceptance is a separate maintainer step.
+
 ## References
 
 - `docs/superpowers/specs/2026-09-30-jev-typed-decision-routing-design.md`
