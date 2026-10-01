@@ -8,10 +8,33 @@ import pytest
 
 from mnemo_memory.connectors.typesafe import JEV_DEFAULT_MODEL, JEV_ENDPOINT, JevClassifier
 from mnemo_memory.packages.domain import TypedDecisionUnavailableReason
-from mnemo_memory.packages.model_gateway.decision_axes import FRONT_DOOR_AXES
+from mnemo_memory.packages.model_gateway.cascade_router import (
+    YES_NO_LABELS,
+    AxisKind,
+    ClassifierAxis,
+)
+from mnemo_memory.packages.model_gateway.decision_axes import COMPLEXITY, TOOL_NEED
 from mnemo_memory.packages.model_gateway.typed_decisions import TypedDecisionAdapterError
 
 KEY = "test-key-not-real-0000"
+# Local axes match the recorded smoke response, so connector tests do not depend on the catalogue.
+NEEDS_LONG_TERM = ClassifierAxis(
+    "needs_long_term",
+    "Answering needs stored memory from earlier sessions (past decisions, notes, history) "
+    "that is not in the current message",
+    YES_NO_LABELS,
+    0.0,
+    kind=AxisKind.YES_NO,
+)
+NEEDS_STRUCTURE = ClassifierAxis(
+    "needs_structure",
+    "Answering needs knowledge of source code or database structure "
+    "(files, symbols, migrations, lineage)",
+    YES_NO_LABELS,
+    0.0,
+    kind=AxisKind.YES_NO,
+)
+FRONT_DOOR_AXES = (NEEDS_LONG_TERM, NEEDS_STRUCTURE, COMPLEXITY, TOOL_NEED)
 # Recorded 2026-09-29 from jev-1.13.0 for a synthetic prompt (docs/superpowers/specs §4.2).
 SMOKE_RESPONSE = {
     "model": "jev-1.13.0",

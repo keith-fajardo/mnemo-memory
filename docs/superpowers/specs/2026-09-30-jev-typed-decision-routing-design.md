@@ -409,3 +409,59 @@ The 750 ms p95 target in `docs/evaluation-baseline.md` covers deterministic loca
 - Team mode.
 - Deleting the Ollama connector.
 - Contradiction detection at retrieval, lesson dedupe, obsolete-memory detection and the review queue.
+
+## 12. Revision 2026-10-01 (after the first live run)
+
+The first live run failed two gates. This section records what we changed and why. Earlier
+sections are left as they were written.
+
+**Memory need is now one choice question.** The two yes/no questions ("needs earlier sessions",
+"needs code structure") failed. Accuracy was 0.62, and 14 of 15 project-document prompts were
+missed because the first question was worded around "earlier sessions". Rewording made the two
+questions interfere: anything "not in the message" triggered both. A single five-way choice
+(`past_sessions`, `project_docs`, `code_structure`, `code_and_history`, `nothing`) passed every
+routing gate on the dev set: accuracy 0.90, prior-memory recall 1.0, structure recall 0.93,
+none precision 1.0. Every miss was a low-confidence answer, which becomes unknown and so leads
+to lazy pull.
+
+**Relevance becomes a per-note filler check.** Asking "does this note help the request?" dropped
+3 relevant notes and 0 filler. A relevant/unrelated choice dropped a critical "do not rerun"
+warning at 94% confidence. Judging the note alone works: "task information vs filler" gave
+p(info) of 0.97 to 1.00 for relevant notes and 0.11 to 0.27 for noise. It must be one request per
+note, because batching 8 notes broke the scores. Only confident filler (p(filler) >= 0.7) is
+dropped, and keep is the safe side. This check cannot judge whether a note is topically relevant
+to a request; that is deferred.
+
+**A held-out fixture joins the gates.** `typed-decision-holdout-v1.json` has 40 new routing
+prompts and 24 notes (16 relevant, 8 noise), written after the questions were tuned. Its
+front-door and relevance results are scored with the same gates, and phase 1 is complete only if
+they pass too. Latency is still measured on the original 60 routing prompts. The relevance gates
+now also require that at least 90% of noise is dropped, so a filter that drops nothing cannot
+pass.
+
+**The baseline is scored honestly.** A connection failure or timeout (including a refused or
+unreachable Ollama) is unanswered. If the local model replies but the output is unreadable
+(not JSON, truncated, or valid JSON in the wrong shape), that is a wrong answer: the row is
+answered with no proposals and counted as a format failure. A new gate, `baseline_valid`,
+requires at least 90% well-formed baseline output, because a mostly unreadable baseline would
+make "Jev is at least as good as the baseline" meaningless.
+
+**Cost and latency of one request per note.** For relevance this supersedes the single request
+of section 3 change 1. The 600 ms per-prompt deadline applies to the front-door request. The
+filler check sends one request per retrieved note, up to 16 per prompt. The evaluation reports
+its per-request latency (`request_p50_ms`, `request_p95_ms`) and count, but does not gate them.
+A concurrent total-time budget for those requests must be set and gated before the filler check
+goes live in phase 2.
+
+**Reading the holdout gates.** The holdout has 8 noise notes, so `filler_removed` (at least 90%
+of noise dropped) means all 8 must be dropped; 7 of 8 is 0.875 and fails. The report's
+`noise_dropped_share` is the share of all dropped notes that were noise, and is `None` when
+nothing was dropped.
+
+**Outcome (2026-10-02).** The live run `2026-10-01-phase1-b` passed every gate except two: the
+held-out prior-memory recall (0.8 against 0.9; both misses were correct `past_sessions` answers
+at confidence 0.58 and 0.50, below the 0.6 bar, so they resolve safely to lazy pull) and
+`baseline_answered` (one Ollama transport failure, now mitigated by one retry in the harness).
+The maintainer accepted phase 1 as passed with those two documented exceptions and did not lower
+the 0.6 bar, since tuning on the holdout would invalidate it; a lower per-label bar would need a
+third fresh prompt set.

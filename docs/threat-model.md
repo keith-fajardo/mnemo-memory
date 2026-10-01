@@ -1730,8 +1730,12 @@ runtime composition binds the runtime source itself and exposes no source parame
 secret-scans the original text, the bounded text actually sent, and every axis string (name,
 labels, instructions, criteria) before sending, never sends non-`normal`
 sensitivity, bounds text to 512 characters and every axis string to 400, reserves
-`typed_decision` budget, and enforces a hard deadline (600 ms per prompt) with no retry. The
-Mnemo (the runtime composition and the evaluation CLI) reads the key only from
+`typed_decision` budget, and enforces a hard deadline (600 ms per prompt) with no retry.
+Stored note snippets are sent as the judged text itself (revised 2026-10-01; only when a data
+route permits it, never in phase 1), one request per note, up to 16 per prompt beyond the
+front-door request. Each note is still secret-scanned, bounded and sensitivity-gated on its own,
+and the 600 ms deadline covers the front-door request only. Mnemo
+(the runtime composition and the evaluation CLI) reads the key only from
 `TYPESAFE_API_KEY` and hands it to the connector as a constructor argument. The connector
 redacts it from `repr`, rejects keys that are not printable ASCII, refuses HTTP redirects so the key is never forwarded,
 and raises payload-free errors without chained causes. Telemetry and evaluation reports record

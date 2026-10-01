@@ -16,7 +16,19 @@ KEY = "test-key-not-real-0000"
 ROUTING = json.loads((FIXTURES / "automatic-context-routing-v1.json").read_text("utf-8"))
 TYPED = json.loads((FIXTURES / "typed-decision-v1.json").read_text("utf-8"))
 VIABILITY = json.loads((FIXTURES / "viability-corpus-v1.json").read_text("utf-8"))
-EXPECTED_ROUTE = {case["prompt"]: case["expected_route"] for case in ROUTING["cases"]}
+HOLDOUT = json.loads((FIXTURES / "typed-decision-holdout-v1.json").read_text("utf-8"))
+EXPECTED_ROUTE = {
+    case["prompt"]: case["expected_route"]
+    for case in (*ROUTING["cases"], *HOLDOUT["front_door_cases"])
+}
+MEMORY_LABEL = {
+    "prior_memory": "past_sessions",
+    "knowledge": "project_docs",
+    "structure": "code_structure",
+    "none": "nothing",
+}
+MEMORY_LABELS = ("past_sessions", "project_docs", "code_structure", "code_and_history", "nothing")
+HOLDOUT_NOISE = {note["summary"] for note in HOLDOUT["notes"] if note["category"] == "noise"}
 TIER = {
     case["prompt"]: (case["expected_tier"], case["expected_tool_need"])
     for case in TYPED["tier_cases"]
@@ -62,18 +74,18 @@ class OracleTransport:
         route = EXPECTED_ROUTE.get(state)
         tier, tool = TIER.get(state, ("heavy", "read_heavy"))
         answers: dict[str, dict[str, object]] = {}
-        for name, question in request["questions"].items():
-            if name == "needs_long_term":
-                answers[name] = _noul(0.95 if route in {"prior_memory", "knowledge"} else 0.05)
-            elif name == "needs_structure":
-                answers[name] = _noul(0.95 if route == "structure" else 0.05)
+        for name in request["questions"]:
+            if name == "memory_need":
+                answers[name] = _choice(MEMORY_LABELS, MEMORY_LABEL[route or "none"], 0.8)
             elif name == "complexity":
                 answers[name] = _choice(("light", "heavy"), tier, 0.8)
             elif name == "tool_need":
                 answers[name] = _choice(("none", "read_heavy", "edit"), tool, 0.8)
-            elif name.startswith("helps_"):
-                noise = "Background conversation" in question["instructions"]
-                answers[name] = _noul(0.05 if noise else 0.9)
+            elif name == "note_substance":
+                noise = "Background conversation" in state or state in HOLDOUT_NOISE
+                answers[name] = _choice(
+                    ("task_information", "filler"), "filler" if noise else "task_information", 0.9
+                )
             elif name == "worth_remembering":
                 answers[name] = _noul(0.05 if state in NEGATIVES else 0.9)
             elif name == "episodic_kind":
@@ -125,6 +137,9 @@ def test_cli_passes_every_gate_with_an_oracle_and_ollama_baseline(tmp_path: Path
         "telehealth-long-horizon-phase2-qwen25coder7b.json": "no synthetic provenance declared"
     }
     assert report["latency"]["samples"] == 60
+    assert report["front_door_holdout"]["cases"] == 40
+    assert report["relevance_holdout"]["candidates"] == 24
+    assert report["run"]["total_requests"] == 302
 
 
 def test_cli_is_incomplete_without_the_ollama_baseline(tmp_path: Path) -> None:
@@ -140,6 +155,8 @@ def test_cli_report_is_content_free_and_key_free(tmp_path: Path) -> None:
     assert KEY not in text
     assert ROUTING["cases"][0]["prompt"] not in text
     assert TYPED["tier_cases"][0]["prompt"] not in text
+    assert HOLDOUT["front_door_cases"][0]["prompt"] not in text
+    assert all(note["summary"] not in text for note in HOLDOUT["notes"])
 
 
 def test_cli_refuses_to_overwrite_an_existing_report(tmp_path: Path) -> None:
@@ -159,7 +176,7 @@ class FrontDoorOnlyTransport(OracleTransport):
     """Answers front-door questions and fails every other request."""
 
     def __call__(self, url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
-        if "needs_long_term" not in json.loads(body)["questions"]:
+        if "memory_need" not in json.loads(body)["questions"]:
             self.calls += 1
             raise urllib.error.URLError("down")
         return super().__call__(url, body, headers, timeout)
@@ -176,6 +193,8 @@ def test_cli_is_incomplete_when_only_the_front_door_answers(tmp_path: Path) -> N
     report = _report(tmp_path)
     assert code == 1 and report["phase_1_complete"] is False
     assert report["relevance"]["gates"]["answered"] is False
+    assert report["relevance_holdout"]["gates"]["answered"] is False
+    assert report["front_door_holdout"]["gates"]["accuracy"] is True
     assert report["tier"]["gates"]["answered"] is False
     assert report["extraction"]["gates"]["jev_answered"] is False
 
@@ -211,3 +230,22 @@ def test_cli_is_incomplete_when_the_ollama_baseline_is_down(tmp_path: Path) -> N
     assert code == 1 and report["phase_1_complete"] is False
     assert report["extraction"]["gates"]["baseline_answered"] is False
     assert report["extraction"]["gates"]["jev_answered"] is True
+
+
+def test_cli_is_incomplete_when_the_ollama_baseline_output_is_unreadable(tmp_path: Path) -> None:
+    def garbage(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"response": "this is not json"}
+
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        "--ollama-model",
+        "fake",
+        transport=OracleTransport(),
+        ollama=garbage,
+    )
+    report = _report(tmp_path)
+    gates = report["extraction"]["gates"]
+    assert code == 1 and report["phase_1_complete"] is False
+    assert gates["baseline_answered"] is True and gates["baseline_valid"] is False
+    assert report["extraction"]["arms"]["ollama"]["format_failures"] == 69

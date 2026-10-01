@@ -6835,3 +6835,31 @@ Implemented:
 
 No runtime path calls the classifier, and ADR 0049 remains proposed. Phase 2 needs every phase-1
 gate true in a maintainer-authorized report, plus signed zero-data-retention terms.
+
+Revision 2026-10-01, after the first live run failed memory need (accuracy 0.62) and relevance:
+memory need is now one five-way choice question, and relevance is a per-note filler check (one
+request per note, only confident filler dropped, no topical-relevance judgement). A held-out
+fixture (`typed-decision-holdout-v1.json`: 40 prompts, 24 notes) adds `front_door_holdout` and
+`relevance_holdout` gates, the relevance gates now require at least 90% of noise dropped, and
+Ollama connection failures are unanswered while unreadable or malformed output is a wrong
+answer, and the comparison needs at least 90% well-formed baseline output (`baseline_valid`).
+The 600 ms deadline applies to the front-door request; the filler check sends up to 16 further
+requests per prompt, reported but not gated, and a concurrent total-time budget must be set and
+gated before phase 2 uses it. The revised questions are verified
+offline only; a new maintainer-authorized live run is still pending.
+
+Phase-1 live result (2026-10-01/02): the maintainer-authorized run `2026-10-01-phase1-b` (pinned
+`jev-1.13.0`, 302 requests, 135,867 input tokens) passed most gates. Memory need on the dev set
+passed (accuracy 0.90, prior-memory recall 1.0, structure recall 0.93, no-memory precision 1.0).
+On the held-out set prior-memory recall was 0.8 against the 0.9 gate, so it failed; both misses
+were the correct label `past_sessions` at confidence 0.58 and 0.50, below the 0.6 bar, so they
+resolve to unknown and lazy pull (safe side), with no confident wrong answer. Filler check
+dropped 100% of filler and no relevant notes on both sets; tier recall was 1.0 for heavy and
+light; front-door latency was p50 372 ms, p95 449 ms, max 528 ms, 0% over 600 ms. Extraction:
+Jev worth-accuracy 0.957 against Ollama 0.812, kind accuracy 0.647 against 0.647;
+`baseline_answered` failed because one Ollama call hit a transport failure (a baseline
+infrastructure failure, not Jev's), now mitigated by one retry in the harness. Maintainer
+decision (2026-10-02): phase 1 is accepted as passed with those two documented exceptions. The
+0.6 confidence bar is not lowered from the holdout (that would be tuning on held-out data); a
+lower per-label bar would need a third fresh prompt set. Phase 2 still requires signed
+zero-data-retention terms plus the phase-2 prerequisites. ADR 0049 stays `proposed`.

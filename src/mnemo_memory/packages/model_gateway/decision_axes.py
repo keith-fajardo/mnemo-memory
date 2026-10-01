@@ -2,6 +2,11 @@
 
 Every threshold is a starting value, tuned on synthetic fixtures and recorded with the pinned
 model version. Instructions stay short because they dominate billed input tokens.
+
+The memory need is a single five-way choice question (two interacting yes/no questions failed
+the first live run). The filler check runs once per stored note, with the note itself as the
+judged text; it cannot judge whether a note is relevant to a request, only whether it carries
+task information at all.
 """
 
 from __future__ import annotations
@@ -19,33 +24,41 @@ from .cascade_router import (
 )
 from .rule_axes import RISK_AXIS
 
-NEED_YES_AT = 0.7
-NEED_NO_AT = 0.3
-RELEVANCE_DROP_AT = 0.2
-RELEVANCE_SNIPPET_CHARACTERS = 300
+FILLER_DROP_AT = 0.7
+NOTE_TEXT_CHARACTERS = 300
 WORTH_SKIP_AT = 0.3
 CHOICE_CONFIDENCE_BAR = 0.6
 TIER_ESCALATION_THRESHOLD = 0.5
-_MAXIMUM_RELEVANCE_AXES = 32
-_RELEVANCE_PREFIX = "This stored note would help answer the request: "
 
 HINT_TEXT = "Mnemo: light, reading-heavy task; a Haiku subagent could do the reading."
 
-NEEDS_LONG_TERM = ClassifierAxis(
-    "needs_long_term",
-    "Answering needs stored memory from earlier sessions (past decisions, notes, history) "
-    "that is not in the current message",
-    YES_NO_LABELS,
+MEMORY_NEED = ClassifierAxis(
+    "memory_need",
+    "What must the assistant look up, beyond this message, to answer it",
+    ("past_sessions", "project_docs", "code_structure", "code_and_history", "nothing"),
     0.0,
-    kind=AxisKind.YES_NO,
+    criteria=(
+        ("past_sessions", "Decisions, progress or history from earlier work sessions"),
+        ("project_docs", "Project documents, policies, ADRs, runbooks or notes"),
+        ("code_structure", "Which files, modules, symbols, call paths, schemas or lineage exist"),
+        ("code_and_history", "Both code structure and earlier decisions or documents"),
+        ("nothing", "Everything needed is in the message or is general knowledge"),
+    ),
 )
-NEEDS_STRUCTURE = ClassifierAxis(
-    "needs_structure",
-    "Answering needs knowledge of source code or database structure "
-    "(files, symbols, migrations, lineage)",
-    YES_NO_LABELS,
+NOTE_SUBSTANCE = ClassifierAxis(
+    "note_substance",
+    "Does this stored note carry real task information",
+    ("task_information", "filler"),
     0.0,
-    kind=AxisKind.YES_NO,
+    criteria=(
+        (
+            "task_information",
+            "A goal, constraint, warning, failure, decision, fact, result, next step or "
+            "open question",
+        ),
+        ("filler", "Chit-chat or background noise with no task information"),
+    ),
+    label_scores=(0.0, 1.0),  # escalation_score == p(filler)
 )
 COMPLEXITY = ClassifierAxis(
     "complexity",
@@ -92,7 +105,7 @@ EPISODIC_KIND = ClassifierAxis(
     ),
 )
 
-FRONT_DOOR_AXES = (NEEDS_LONG_TERM, NEEDS_STRUCTURE, COMPLEXITY, TOOL_NEED)
+FRONT_DOOR_AXES = (MEMORY_NEED, COMPLEXITY, TOOL_NEED)
 TIER_AXES = (COMPLEXITY, TOOL_NEED, RISK_AXIS)
 
 
@@ -106,35 +119,39 @@ def tier_committee() -> CascadeCommittee:
     return CascadeCommittee(TIER_AXES, escalation_threshold=TIER_ESCALATION_THRESHOLD)
 
 
-def need_from_result(result: ClassifierResult | None) -> NeedAnswer:
-    """Map p(yes) to yes/no/unknown; a missing answer is unknown, which means lazy pull."""
+def needs_from_memory_choice(result: ClassifierResult | None) -> tuple[NeedAnswer, NeedAnswer]:
+    """Map the memory-need choice to ``(long_term, structure)`` answers.
 
-    if result is None:
-        return NeedAnswer.UNKNOWN
-    if result.escalation_score >= NEED_YES_AT:
-        return NeedAnswer.YES
-    if result.escalation_score <= NEED_NO_AT:
-        return NeedAnswer.NO
-    return NeedAnswer.UNKNOWN
+    A missing or low-confidence answer means unknown for both, which leads to lazy pull.
+    """
+
+    label = accepted_choice(result)
+    if label is None:
+        return NeedAnswer.UNKNOWN, NeedAnswer.UNKNOWN
+    if label in ("past_sessions", "project_docs"):
+        return NeedAnswer.YES, NeedAnswer.NO
+    if label == "code_structure":
+        return NeedAnswer.NO, NeedAnswer.YES
+    if label == "code_and_history":
+        return NeedAnswer.YES, NeedAnswer.YES
+    if label == "nothing":
+        return NeedAnswer.NO, NeedAnswer.NO
+    return NeedAnswer.UNKNOWN, NeedAnswer.UNKNOWN
 
 
-def relevance_axis(index: int, snippet: str) -> ClassifierAxis:
-    """Build one per-candidate yes/no question carrying a bounded snippet."""
+def note_text(snippet: str) -> str:
+    """Collapse whitespace and cap a stored note so it can be judged on its own."""
 
-    if isinstance(index, bool) or not 0 <= index < _MAXIMUM_RELEVANCE_AXES:
-        raise ValueError("relevance axis index is out of range")
-    text = " ".join(snippet.split())[:RELEVANCE_SNIPPET_CHARACTERS]
+    text = " ".join(snippet.split())[:NOTE_TEXT_CHARACTERS]
     if not text:
-        raise ValueError("relevance snippet is empty")
-    return ClassifierAxis(
-        f"helps_{index}", _RELEVANCE_PREFIX + text, YES_NO_LABELS, 0.0, kind=AxisKind.YES_NO
-    )
+        raise ValueError("note text is empty")
+    return text
 
 
-def should_drop_candidate(result: ClassifierResult | None) -> bool:
-    """Drop only on a confident no; keep is the safe side."""
+def should_drop_note(result: ClassifierResult | None) -> bool:
+    """Drop only confident filler; keep is the safe side."""
 
-    return result is not None and result.escalation_score <= RELEVANCE_DROP_AT
+    return result is not None and result.escalation_score >= FILLER_DROP_AT
 
 
 def worth_extracting(result: ClassifierResult | None) -> bool:
