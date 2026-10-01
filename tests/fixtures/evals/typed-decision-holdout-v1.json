@@ -19,7 +19,7 @@
     {
       "id": "h-prior-03",
       "expected_route": "prior_memory",
-      "prompt": "Remind me why we abandoned the first caching approach."
+      "prompt": "What was the reason behind shelving the websocket rewrite?"
     },
     {
       "id": "h-prior-04",
@@ -74,7 +74,7 @@
     {
       "id": "h-knowledge-04",
       "expected_route": "knowledge",
-      "prompt": "Does the checked-in release policy allow Friday deployments?"
+      "prompt": "Are Friday evening releases permitted under the team's shipping rules?"
     },
     {
       "id": "h-knowledge-05",
@@ -149,7 +149,7 @@
     {
       "id": "h-structure-09",
       "expected_route": "structure",
-      "prompt": "Show the call path from the CLI entry point to the database writer."
+      "prompt": "Which functions does the billing scheduler invoke when a payment retry fires?"
     },
     {
       "id": "h-structure-10",
@@ -159,7 +159,7 @@
     {
       "id": "h-none-01",
       "expected_route": "none",
-      "prompt": "Rename the variable tmp to buffer in this snippet: def f(tmp): return tmp * 2"
+      "prompt": "In this snippet, change every occurrence of cnt to total: cnt = 0; for r in rows: cnt += r.qty"
     },
     {
       "id": "h-none-02",
@@ -169,12 +169,12 @@
     {
       "id": "h-none-03",
       "expected_route": "none",
-      "prompt": "Format this JSON with two-space indentation: {\"a\":1,\"b\":[1,2]}"
+      "prompt": "Wrap this paragraph at 40 columns: The quick brown fox jumps over the lazy dog near the river bank."
     },
     {
       "id": "h-none-04",
       "expected_route": "none",
-      "prompt": "Here is my function: def add(a, b): return a - b. Why do my tests fail?"
+      "prompt": "Here is my function: def add(a, b): return a - b. The test assert add(2, 3) == 5 fails with 'assert -1 == 5'. What is the bug?"
     },
     {
       "id": "h-none-05",
@@ -211,12 +211,12 @@
     {
       "id": "h-note-01",
       "category": "relevant",
-      "summary": "Do not rerun the nightly import before the schema lock is released; it truncates the staging table."
+      "summary": "The nightly import truncates the staging table, so it must not run before the schema lock is released."
     },
     {
       "id": "h-note-02",
       "category": "relevant",
-      "summary": "Do not commit directly to release/2.4; every change goes through the merge queue."
+      "summary": "Pushing directly to release/2.4 is never allowed; everything lands through the merge queue."
     },
     {
       "id": "h-note-03",
@@ -226,27 +226,27 @@
     {
       "id": "h-note-04",
       "category": "relevant",
-      "summary": "Failure: the canary deploy of build 7731 rolled back after p99 latency passed 900 ms."
+      "summary": "Canary build 7731 was rolled back after p99 latency passed 900 ms."
     },
     {
       "id": "h-note-05",
       "category": "relevant",
-      "summary": "Failure: the CSV parser choked on files with a BOM header and rows 1-40 were lost."
+      "summary": "The CSV parser choked on files with a BOM header and rows 1-40 were lost."
     },
     {
       "id": "h-note-06",
       "category": "relevant",
-      "summary": "Goal: cut checkout page load time below 1.8 seconds on mid-range phones."
+      "summary": "Checkout page load time has to come in under 1.8 seconds on mid-range phones."
     },
     {
       "id": "h-note-07",
       "category": "relevant",
-      "summary": "Goal: move the reporting jobs off the shared cron host before the October freeze."
+      "summary": "The reporting jobs need to leave the shared cron host before the October freeze."
     },
     {
       "id": "h-note-08",
       "category": "relevant",
-      "summary": "Open question: should expired coupons be archived or hard-deleted?"
+      "summary": "Nobody has decided yet whether expired coupons get archived or hard-deleted."
     },
     {
       "id": "h-note-09",
@@ -256,7 +256,7 @@
     {
       "id": "h-note-10",
       "category": "relevant",
-      "summary": "Decision: use cursor pagination for the audit API."
+      "summary": "We agreed the audit API will use cursor pagination."
     },
     {
       "id": "h-note-11",
@@ -276,7 +276,7 @@
     {
       "id": "h-note-14",
       "category": "relevant",
-      "summary": "Next: rerun the contract tests against the sandbox with seed 4417."
+      "summary": "Contract tests get rerun against the sandbox with seed 4417."
     },
     {
       "id": "h-note-15",
@@ -286,7 +286,7 @@
     {
       "id": "h-note-16",
       "category": "relevant",
-      "summary": "Result: the reindex finished in 38 minutes with zero failed documents."
+      "summary": "The reindex finished in 38 minutes with zero failed documents."
     },
     {
       "id": "h-note-17",
@@ -316,17 +316,17 @@
     {
       "id": "h-note-22",
       "category": "noise",
-      "summary": "Thanks, appreciate it!"
+      "summary": "Looked at the dashboard for a bit."
     },
     {
       "id": "h-note-23",
       "category": "noise",
-      "summary": "Happy Friday, folks. Any weekend plans?"
+      "summary": "Still thinking about the migration."
     },
     {
       "id": "h-note-24",
       "category": "noise",
-      "summary": "Sorry, my headphones died for a second. Can you repeat that?"
+      "summary": "Opened the repo again after lunch."
     }
   ]
 }

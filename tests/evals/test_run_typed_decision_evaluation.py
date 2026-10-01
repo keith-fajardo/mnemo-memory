@@ -230,3 +230,22 @@ def test_cli_is_incomplete_when_the_ollama_baseline_is_down(tmp_path: Path) -> N
     assert code == 1 and report["phase_1_complete"] is False
     assert report["extraction"]["gates"]["baseline_answered"] is False
     assert report["extraction"]["gates"]["jev_answered"] is True
+
+
+def test_cli_is_incomplete_when_the_ollama_baseline_output_is_unreadable(tmp_path: Path) -> None:
+    def garbage(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"response": "this is not json"}
+
+    code = _run(
+        tmp_path,
+        "--live-calls-authorized",
+        "--ollama-model",
+        "fake",
+        transport=OracleTransport(),
+        ollama=garbage,
+    )
+    report = _report(tmp_path)
+    gates = report["extraction"]["gates"]
+    assert code == 1 and report["phase_1_complete"] is False
+    assert gates["baseline_answered"] is True and gates["baseline_valid"] is False
+    assert report["extraction"]["arms"]["ollama"]["format_failures"] == 69

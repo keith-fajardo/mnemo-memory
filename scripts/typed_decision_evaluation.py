@@ -6,7 +6,6 @@ source is ``synthetic_fixture``, and only fixtures that declare synthetic proven
 
 from __future__ import annotations
 
-import contextlib
 import json
 import math
 from collections.abc import Sequence
@@ -26,6 +25,7 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     COMPLEXITY,
     EPISODIC_KIND,
     FRONT_DOOR_AXES,
+    MEMORY_NEED,
     NOTE_SUBSTANCE,
     TOOL_NEED,
     WORTH_REMEMBERING,
@@ -112,6 +112,7 @@ class RelevanceRow:
     category: str  # "relevant", "superseded" or "noise"
     dropped: bool
     answered: bool
+    duration_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,7 @@ class ExtractionRow:
     predicted_worth: bool
     predicted_kind: str | None
     answered: bool
+    format_failure: bool = False  # the model replied, but not in a readable shape
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,13 +219,20 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
     dropped = sum(row.dropped for row in relevant)
     noise = [row for row in rows if row.category == "noise"]
     noise_drop_rate = _drop_rate(rows, "noise")
+    all_dropped = sum(row.dropped for row in rows)
+    durations = sorted(row.duration_ms for row in rows)
     return {
         "candidates": len(rows),
         "relevant_dropped": dropped,
         "noise_drop_rate": noise_drop_rate,
-        "noise_dropped_share": _share(
-            sum(row.dropped for row in noise), sum(row.dropped for row in rows)
+        # Share of all dropped notes that were noise; None when nothing was dropped.
+        "noise_dropped_share": (
+            sum(row.dropped for row in noise) / all_dropped if all_dropped else None
         ),
+        # One request per note; informational, not gated.
+        "requests": len(rows),
+        "request_p50_ms": _nearest_rank(durations, 0.50),
+        "request_p95_ms": _nearest_rank(durations, 0.95),
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
         "unanswered": sum(not row.answered for row in rows),
         "gates": {
@@ -250,6 +259,7 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
                 sum(row.predicted_kind == row.expected_kind for row in kinded), len(kinded)
             ),
             "unanswered": sum(not row.answered for row in arm_rows),
+            "format_failures": sum(row.format_failure for row in arm_rows),
         }
     if "jev" not in arms or "ollama" not in arms:
         return {"arms": arms, "gates": {"baseline": "not_evaluated"}}
@@ -258,6 +268,8 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
         "gates": {
             "jev_answered": arms["jev"]["unanswered"] == 0,
             "baseline_answered": arms["ollama"]["unanswered"] == 0,
+            # A mostly unreadable baseline makes "Jev >= baseline" meaningless.
+            "baseline_valid": arms["ollama"]["format_failures"] <= 0.1 * arms["ollama"]["events"],
             "worth_accuracy": arms["jev"]["worth_accuracy"] >= arms["ollama"]["worth_accuracy"],
             "kind_accuracy": arms["jev"]["kind_accuracy"] >= arms["ollama"]["kind_accuracy"],
         },
@@ -293,7 +305,7 @@ async def _front_door_rows(
     for case in cases:
         outcome = await guard.ask(FRONT_DOOR_AXES, case["prompt"])
         results = {result.axis_name: result for result in outcome.results}
-        long_term, structure = needs_from_memory_choice(results.get("memory_need"))
+        long_term, structure = needs_from_memory_choice(results.get(MEMORY_NEED.name))
         reason = outcome.unavailable_reason
         rows.append(
             FrontDoorRow(
@@ -326,6 +338,7 @@ async def _note_rows(
                 category,
                 should_drop_note(results.get(NOTE_SUBSTANCE.name)),
                 outcome.available,
+                outcome.duration_ms,
             )
         )
     return rows
@@ -414,15 +427,21 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
     rows: list[ExtractionRow] = []
     for event_id, summary, worth, kind in extraction_events():
         answered = True
+        format_failure = False
         proposals: tuple[EpisodicExtractionProposal, ...] = ()
         try:
             raw = provider.generate(_OllamaRequest(summary))
+        except (OSError, TimeoutError):
+            answered = False  # connection failure: no answer at all
+        except (ValueError, TypeError):
+            format_failure = True  # the model replied with unreadable output (e.g. bad JSON)
         except Exception:
-            answered = False  # transport failure: no answer at all
+            answered = False
         else:
-            # Unusable model output is a real wrong answer: answered, with no proposals.
-            with contextlib.suppress(ValueError, TypeError):
+            try:
                 proposals = parse_episodic_output(raw, 4)
+            except (ValueError, TypeError):
+                format_failure = True  # valid JSON in the wrong shape
         rows.append(
             ExtractionRow(
                 "ollama",
@@ -432,6 +451,7 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
                 bool(proposals),
                 proposals[0].kind.value if proposals else None,
                 answered,
+                format_failure,
             )
         )
     return rows

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -61,10 +62,6 @@ def test_notes_are_split_and_unique() -> None:
     assert len({note["id"] for note in notes}) == 24
     assert len({note["summary"] for note in notes}) == 24
     assert not any("Background conversation" in note["summary"] for note in notes)
-    warnings = [
-        n for n in notes if n["category"] == "relevant" and "do not" in n["summary"].lower()
-    ]
-    assert len(warnings) >= 3
 
 
 def test_no_holdout_text_appears_in_the_existing_fixtures() -> None:
@@ -75,3 +72,40 @@ def test_no_holdout_text_appears_in_the_existing_fixtures() -> None:
     texts = {case["prompt"] for case in holdout["front_door_cases"]}
     texts |= {note["summary"] for note in holdout["notes"]}
     assert not texts & existing
+
+
+def _tokens(text: str) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
+    return len(left & right) / len(left | right) if left | right else 0.0
+
+
+def test_no_holdout_prompt_is_a_near_duplicate_of_a_dev_prompt() -> None:
+    existing: set[str] = set()
+    for name in EXISTING:
+        existing |= _strings(json.loads((FIXTURES / name).read_text(encoding="utf-8")))
+    holdout = _holdout()
+    texts = [case["prompt"] for case in holdout["front_door_cases"]]
+    texts += [note["summary"] for note in holdout["notes"]]
+    worst = max(
+        (
+            (_jaccard(_tokens(text), _tokens(other)), text, other)
+            for text in texts
+            for other in existing
+        ),
+        key=lambda item: item[0],
+    )
+    assert worst[0] < 0.5, f"near-duplicate (jaccard {worst[0]:.2f}): {worst[1]!r} ~ {worst[2]!r}"
+
+
+def test_at_least_half_of_the_relevant_notes_have_no_category_prefix() -> None:
+    prefixes = ("goal:", "failure:", "decision:", "open question:", "next:", "result:", "do not")
+    relevant = [n["summary"] for n in _holdout()["notes"] if n["category"] == "relevant"]
+    plain = [text for text in relevant if not text.lower().startswith(prefixes)]
+    assert len(plain) >= 8
+    assert (
+        sum(any(w in text.lower() for w in ("do not", "never", "must not")) for text in relevant)
+        >= 3
+    )
