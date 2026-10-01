@@ -78,7 +78,8 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
    gated, and a concurrent total-time budget must be set and gated before it goes live in
    phase 2. A held-out fixture joins the phase-1 gates. Connection failures to Ollama are
    unanswered, unreadable or malformed output is a wrong answer, and the comparison requires at
-   least 90% well-formed baseline output.
+   least 90% well-formed baseline output. (Superseded by the 2026-10-02 hardening: the 0.8 s
+   concurrent filler-check budget is now set and gated by `within_budget`; see Consequences.)
 
 ## Alternatives considered
 
@@ -104,10 +105,21 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   to 600 ms once live, and vendor terms that changed twice in the week after launch.
 - Follow-up: phase 2 (ZDR route, redaction, Haiku connector, shadow runs on real traffic) and
   phase 3 (write-path decisions), each gated by the spec's evaluations. Before any runtime caller
-  exists (phase 2): the adapter must enforce a total monotonic deadline (the socket timeout is
-  per operation, and DNS is unbounded), abandoned calls must not block process exit, and the
-  runtime composition must turn a malformed TYPESAFE_API_KEY into no_credential instead of
-  raising.
+  exists (phase 2), three items were required; all three are done (2026-10-02 hardening):
+  - Done: total deadline. The guard waits at most its monotonic deadline for each call, and the
+    connector stops reading a trickling response body at the same deadline. The socket timeout
+    still limits each operation, and a stuck DNS lookup is abandoned rather than awaited.
+  - Done: non-blocking exit. Each call runs on a daemon worker thread, so an abandoned call
+    never blocks event-loop shutdown or process exit.
+  - Done: malformed key → no_credential. The runtime composition turns a malformed
+    TYPESAFE_API_KEY into no adapter (`no_credential`) instead of raising.
+
+  The filler check now has a total time budget of 0.8 s for one prompt's concurrent checks
+  (`FILLER_CHECK_BUDGET_SECONDS`, enforced by the guard's `ask_each`), and the evaluation gates
+  it with `within_budget`: at most 5% of filler checks may take longer than 0.8 s. Running filler
+  checks with `ask_each` needs a guard whose per-request deadline is at least
+  `FILLER_CHECK_BUDGET_SECONDS` (0.8 s); the current runtime guard's 0.6 s front-door deadline
+  would otherwise cut every check off at 0.6 s.
 
 ## Security and privacy implications
 

@@ -103,6 +103,12 @@ def main(
     api_key = variables.get("TYPESAFE_API_KEY", "").strip()
     if not api_key:
         return _refuse("TYPESAFE_API_KEY is not set")
+    try:
+        adapter: JevClassifier | None = JevClassifier(api_key, transport=jev_transport)
+    except ValueError:
+        adapter = None
+    if adapter is None:  # refused outside the ``except`` so nothing chains to the key
+        return _refuse("TYPESAFE_API_KEY is malformed")
     output = args.results_root / args.run_id / "report.json"
     if output.exists():
         return _refuse(f"{output} already exists")
@@ -110,7 +116,7 @@ def main(
     recorder = VersionRecorder()
     budget = CallCapBudget(args.max_calls)
     guard = GuardedTypedDecisionClassifier(
-        JevClassifier(api_key, transport=jev_transport),
+        adapter,
         data_route=TypedDecisionDataRoute.SYNTHETIC_ONLY,
         source=TypedDecisionSource.SYNTHETIC_FIXTURE,
         budget=budget,

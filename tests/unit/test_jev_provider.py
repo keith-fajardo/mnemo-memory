@@ -1,4 +1,7 @@
+import http.client
 import json
+import pickle
+import time
 from collections.abc import Mapping
 from email.message import Message
 from typing import Any
@@ -6,7 +9,12 @@ from urllib import error as urllib_error
 
 import pytest
 
-from mnemo_memory.connectors.typesafe import JEV_DEFAULT_MODEL, JEV_ENDPOINT, JevClassifier
+from mnemo_memory.connectors.typesafe import (
+    JEV_DEFAULT_MODEL,
+    JEV_ENDPOINT,
+    JevClassifier,
+    JevTransport,
+)
 from mnemo_memory.packages.domain import TypedDecisionUnavailableReason
 from mnemo_memory.packages.model_gateway.cascade_router import (
     YES_NO_LABELS,
@@ -158,6 +166,26 @@ def test_non_json_body_is_schema_invalid() -> None:
     assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
 
 
+def _huge_probability_body() -> bytes:
+    response = json.loads(json.dumps(SMOKE_RESPONSE))
+    response["answers"]["needs_long_term"]["noul"] = 10**400  # math.isfinite overflows
+    return json.dumps(response).encode()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"[" * 100_000 + b"]" * 100_000, _huge_probability_body()],
+    ids=["deeply_nested", "huge_integer_probability"],
+)
+def test_pathological_bodies_are_schema_invalid_without_a_chain(body: bytes) -> None:
+    with pytest.raises(TypedDecisionAdapterError) as caught:
+        JevClassifier(KEY, transport=RecordingTransport(body)).answer(
+            FRONT_DOOR_AXES, "prompt", timeout_seconds=0.6
+        )
+    assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
 def test_http_and_network_failures_map_to_closed_reasons() -> None:
     overloaded = urllib_error.HTTPError(JEV_ENDPOINT, 529, "overloaded", Message(), None)
     with pytest.raises(TypedDecisionAdapterError) as caught:
@@ -197,9 +225,193 @@ def test_redirects_are_never_followed() -> None:
     assert not any(type(h) is urllib_request.HTTPRedirectHandler for h in handlers)
 
 
+class DripResponse:
+    """A fake HTTP response that hands out its body slowly, like a trickling server."""
+
+    def __init__(self, body: bytes, *, chunk: int = 1, pause: float = 0.0) -> None:
+        self._body = body
+        self._chunk = chunk
+        self._pause = pause
+
+    def __enter__(self) -> "DripResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read1(self, size: int = -1) -> bytes:
+        time.sleep(self._pause)
+        piece, self._body = self._body[: self._chunk], self._body[self._chunk :]
+        return piece
+
+    def read(self, size: int = -1) -> bytes:
+        data = b""
+        while size < 0 or len(data) < size:
+            piece = self.read1()
+            if not piece:
+                break
+            data += piece
+        return data
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, response: DripResponse) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    monkeypatch.setattr(jev_provider._OPENER, "open", lambda request, timeout: response)
+
+
+def test_transport_enforces_a_total_deadline_on_a_trickling_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    _serve(monkeypatch, DripResponse(b"x" * 50, pause=0.03))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError) as caught:
+        jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 0.1)
+    assert time.monotonic() - started < 0.5
+    assert caught.value.args == ()
+
+
+def test_transport_keeps_the_response_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    cap = 262_144
+    _serve(monkeypatch, DripResponse(b"x" * cap, chunk=65_536))
+    assert len(jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0)) == cap
+    _serve(monkeypatch, DripResponse(b"x" * (cap + 1), chunk=65_536))
+    with pytest.raises(TypedDecisionAdapterError) as caught:
+        jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0)
+    assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+
+
+def _answer_with_model(reported: str, *, model_id: str = JEV_DEFAULT_MODEL) -> str:
+    response = json.loads(json.dumps(SMOKE_RESPONSE))
+    response["model"] = reported
+    classifier = JevClassifier(KEY, model_id=model_id, transport=RecordingTransport(response))
+    return classifier.answer(FRONT_DOOR_AXES, "prompt", timeout_seconds=0.6).model_version
+
+
+def test_pinned_model_accepts_the_recorded_smoke_response() -> None:
+    assert _answer_with_model("jev-1.13.0") == JEV_DEFAULT_MODEL == "jev-1.13.0"
+
+
+def test_pinned_model_rejects_a_different_reported_version() -> None:
+    with pytest.raises(TypedDecisionAdapterError) as caught:
+        _answer_with_model("jev-1.14.0")
+    assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+
+
+def test_unpinned_model_id_accepts_any_well_formed_reported_version() -> None:
+    assert _answer_with_model("jev-1.13.0", model_id="jev-latest") == "jev-1.13.0"
+    assert _answer_with_model("jev:2/beta_1-x", model_id="jev-latest") == "jev:2/beta_1-x"
+
+
+@pytest.mark.parametrize("model_id", [JEV_DEFAULT_MODEL, "jev-latest"])
+@pytest.mark.parametrize(
+    "reported",
+    ["jev 1.13.0", "jev-1.13.0\n", "jev-1.13.0\x00", "\tjev", "-jev", "j\u00e9v", "j" * 129],
+)
+def test_malformed_reported_model_is_schema_invalid(model_id: str, reported: str) -> None:
+    with pytest.raises(TypedDecisionAdapterError) as caught:
+        _answer_with_model(reported, model_id=model_id)
+    assert caught.value.reason is TypedDecisionUnavailableReason.SCHEMA_INVALID
+
+
 @pytest.mark.parametrize("key", ["bad\nkey", "bad\u201ckey", "bad key", "\u00e9"])
 def test_malformed_keys_are_rejected_without_echo(key: str) -> None:
     with pytest.raises(ValueError) as caught:
         JevClassifier(key)
     assert key not in str(caught.value)
     assert str(caught.value).startswith("MNEMO_TYPED_DECISION_CREDENTIAL_")
+
+
+def _raising(error: Exception) -> JevTransport:
+    """A transport that, like the real one, holds the headers (and so the key) in its frame."""
+
+    def transport(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        raise error
+
+    return transport
+
+
+def _frame_locals(error: BaseException) -> str:
+    """Every local in every frame of the error's traceback, as a crash reporter would show it."""
+
+    shown: list[str] = []
+    trace = error.__traceback__
+    while trace is not None:
+        shown += [f"{name}={value!r}" for name, value in trace.tb_frame.f_locals.items()]
+        trace = trace.tb_next
+    return "\n".join(shown)
+
+
+Reason = TypedDecisionUnavailableReason
+_TRANSPORT_FAILURES: list[tuple[JevTransport, type[Exception], Reason | None]] = [
+    (
+        _raising(urllib_error.HTTPError(JEV_ENDPOINT, 529, "overloaded", Message(), None)),
+        TypedDecisionAdapterError,
+        Reason.HTTP_ERROR,
+    ),
+    (_raising(urllib_error.URLError(TimeoutError("timed out"))), TimeoutError, None),
+    (_raising(urllib_error.URLError("refused")), TypedDecisionAdapterError, Reason.HTTP_ERROR),
+    (_raising(OSError("connection reset")), TypedDecisionAdapterError, Reason.HTTP_ERROR),
+    (_raising(TimeoutError()), TimeoutError, None),
+    (
+        _raising(http.client.IncompleteRead(b"partial")),
+        TypedDecisionAdapterError,
+        Reason.HTTP_ERROR,
+    ),
+    (_raising(RuntimeError("odd")), TypedDecisionAdapterError, Reason.HTTP_ERROR),
+    (
+        _raising(TypedDecisionAdapterError(Reason.SCHEMA_INVALID)),
+        TypedDecisionAdapterError,
+        Reason.SCHEMA_INVALID,
+    ),
+    (RecordingTransport(b"not json"), TypedDecisionAdapterError, Reason.SCHEMA_INVALID),
+]
+
+
+@pytest.mark.parametrize(
+    ("transport", "raised", "reason"),
+    _TRANSPORT_FAILURES,
+    ids=[
+        "http_status",
+        "url_timeout",
+        "url_refused",
+        "os_error",
+        "timeout",
+        "incomplete_read",
+        "runtime_error",
+        "adapter_error",
+        "not_json",
+    ],
+)
+def test_adapter_errors_carry_no_chain_and_no_key_in_any_frame(
+    transport: JevTransport, raised: type[Exception], reason: Reason | None
+) -> None:
+    classifier = JevClassifier(KEY, transport=transport)
+    with pytest.raises(raised) as caught:
+        classifier.answer(FRONT_DOOR_AXES, "prompt", timeout_seconds=0.6)
+    error = caught.value
+    assert type(error) is raised
+    assert getattr(error, "reason", None) is reason
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert KEY not in str(error) and KEY not in repr(error)
+    assert KEY not in _frame_locals(error)
+
+
+def test_stored_key_is_masked_in_the_classifier_state() -> None:
+    classifier = JevClassifier(KEY, transport=RecordingTransport())
+    assert KEY not in repr(vars(classifier))
+    assert repr(classifier._api_key) == str(classifier._api_key) == "***"
+    assert classifier._api_key.reveal() == KEY
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_classifier_cannot_be_pickled_with_its_key(protocol: int) -> None:
+    classifier = JevClassifier(KEY)
+    with pytest.raises(TypeError) as caught:
+        pickle.dumps(classifier, protocol=protocol)
+    assert KEY not in str(caught.value) and KEY not in repr(caught.value)

@@ -6863,3 +6863,16 @@ decision (2026-10-02): phase 1 is accepted as passed with those two documented e
 0.6 confidence bar is not lowered from the holdout (that would be tuning on held-out data); a
 lower per-label bar would need a third fresh prompt set. Phase 2 still requires signed
 zero-data-retention terms plus the phase-2 prerequisites. ADR 0049 stays `proposed`.
+
+Phase-2 hardening (2026-10-02, maintainer-approved; no runtime text is sent and nothing new is
+wired): (1) each Jev call has a total deadline, runs on a daemon thread so an abandoned call
+never blocks exit, and stops reading a slow response body at the deadline; (2) the filler check
+has a 0.8 s total budget for one prompt's concurrent checks (the guard's `ask_each`), and the
+evaluation now runs note checks 16 at a time and gates `within_budget` (at most 5% over 0.8 s);
+(3) a malformed `TYPESAFE_API_KEY` quietly disables the feature (`no_credential`) instead of
+crashing; (4) the architecture check now catches package and relative imports of the Jev
+connector; (5) a pinned `jev-X.Y.Z` model must be reported back exactly, or the answer is
+`schema_invalid`; (6) "no memory needed" precision is 0.0, not 1.0, when nothing was predicted
+"none", so that gate cannot pass on an empty set; (7) the key is stored masked, and adapter
+errors carry no chained exception, so the key stays out of crash reports. Phase 2 still requires
+signed zero-data-retention terms and new runtime wiring.

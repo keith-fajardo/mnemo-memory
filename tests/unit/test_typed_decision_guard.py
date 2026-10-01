@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from mnemo_memory.packages.domain import (
     TypedDecisionUnavailableReason,
     WorkspaceId,
 )
+from mnemo_memory.packages.model_gateway import typed_decisions
 from mnemo_memory.packages.model_gateway.cascade_router import (
     YES_NO_LABELS,
     AxisKind,
@@ -27,6 +29,7 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     AdapterAnswer,
     GuardedTypedDecisionClassifier,
     TypedDecisionAdapterError,
+    TypedDecisionOutcome,
     TypedDecisionRecord,
     TypedDecisionUnavailable,
     bounded_decision_text,
@@ -197,6 +200,188 @@ def test_deadline_returns_promptly_while_adapter_still_runs() -> None:
     assert outcome.duration_ms < 400  # ask() returned long before the 0.5 s adapter finished
     assert adapter.calls[0][2] == 0.05
     assert time.perf_counter() - started >= 0.05
+
+
+class SlowDaemonProbe(FakeAdapter):
+    """Sleeps 2 s and records whether its worker thread is a daemon."""
+
+    def __init__(self) -> None:
+        super().__init__(delay=2.0)
+        self.started = threading.Event()
+        self.daemon: list[bool] = []
+
+    def answer(
+        self, axes: tuple[ClassifierAxis, ...], text: str, *, timeout_seconds: float
+    ) -> AdapterAnswer:
+        self.daemon.append(threading.current_thread().daemon)
+        self.started.set()
+        return super().answer(axes, text, timeout_seconds=timeout_seconds)
+
+
+def test_slow_adapter_times_out_promptly_on_a_daemon_worker() -> None:
+    adapter = SlowDaemonProbe()
+    guard = _guard(adapter, deadline=0.05)
+
+    async def timed_ask() -> tuple[Reason | None, float]:
+        started = time.perf_counter()
+        outcome = await guard.ask((NEED,), "t")
+        return outcome.unavailable_reason, time.perf_counter() - started
+
+    reason, elapsed = asyncio.run(timed_ask())
+    assert reason is Reason.TIMEOUT
+    assert elapsed < 0.5
+    assert adapter.started.wait(1.0)
+    assert adapter.daemon == [True]
+
+
+def test_event_loop_shutdown_does_not_wait_for_an_abandoned_worker() -> None:
+    guard = _guard(SlowDaemonProbe(), deadline=0.05)
+    started = time.perf_counter()
+    outcome = asyncio.run(guard.ask((NEED,), "t"))
+    assert outcome.unavailable_reason is Reason.TIMEOUT
+    assert time.perf_counter() - started < 1.0  # asyncio.run did not join the 2 s worker
+
+
+class SlowTextAdapter(FakeAdapter):
+    """Answers at once, except for the text ``slow``, which takes 2 s."""
+
+    def answer(
+        self, axes: tuple[ClassifierAxis, ...], text: str, *, timeout_seconds: float
+    ) -> AdapterAnswer:
+        if text == "slow":
+            time.sleep(2.0)
+        return super().answer(axes, text, timeout_seconds=timeout_seconds)
+
+
+def _axis(name: str) -> ClassifierAxis:
+    return ClassifierAxis(name, "ask", YES_NO_LABELS, 0.0, kind=AxisKind.YES_NO)
+
+
+def test_ask_each_answers_fast_requests_and_times_out_the_slow_one() -> None:
+    recorder = ListRecorder()
+    guard = _guard(SlowTextAdapter(), recorder=recorder, deadline=5.0)
+    requests = [((_axis("q0"),), "fast"), ((_axis("q1"),), "slow")]
+    requests += [((_axis("q2"),), "fast"), ((_axis("q3"),), "fast")]
+    started = time.perf_counter()
+    outcomes = asyncio.run(guard.ask_each(requests, total_deadline_seconds=0.2))
+    assert time.perf_counter() - started < 0.6
+    assert [outcome.unavailable_reason for outcome in outcomes] == [
+        None,
+        Reason.TIMEOUT,
+        None,
+        None,
+    ]
+    assert outcomes[1] == TypedDecisionOutcome((), Reason.TIMEOUT, 200, None)
+    assert sorted(record.outcome for record in recorder.records) == [
+        "answered",
+        "answered",
+        "answered",
+        "timeout",
+    ]
+
+
+class LaterFinishesFirstAdapter(FakeAdapter):
+    def answer(
+        self, axes: tuple[ClassifierAxis, ...], text: str, *, timeout_seconds: float
+    ) -> AdapterAnswer:
+        time.sleep(0.03 * (6 - int(text.split()[-1])))  # request 5 finishes first
+        return super().answer(axes, text, timeout_seconds=timeout_seconds)
+
+
+def test_ask_each_returns_outcomes_in_request_order() -> None:
+    requests = [((_axis(f"q{index}"),), f"text {index}") for index in range(6)]
+    outcomes = asyncio.run(
+        _guard(LaterFinishesFirstAdapter()).ask_each(requests, total_deadline_seconds=2.0)
+    )
+    assert [outcome.results[0].axis_name for outcome in outcomes] == [
+        f"q{index}" for index in range(6)
+    ]
+
+
+def test_ask_each_never_raises_for_malformed_requests() -> None:
+    requests = [((NEED,), "t"), None, ((NEED,), 7)]
+    outcomes = asyncio.run(
+        _guard(FakeAdapter()).ask_each(requests, total_deadline_seconds=1.0)  # type: ignore[arg-type]
+    )
+    assert [outcome.unavailable_reason for outcome in outcomes] == [
+        None,
+        Reason.SCHEMA_INVALID,
+        Reason.SCHEMA_INVALID,
+    ]
+    assert asyncio.run(_guard(FakeAdapter()).ask_each([], total_deadline_seconds=1.0)) == ()
+
+
+def test_cancelling_ask_each_records_each_unfinished_request_once() -> None:
+    recorder = ListRecorder()
+    guard = _guard(SlowTextAdapter(), recorder=recorder, deadline=5.0)
+    requests = [((_axis("q0"),), "slow"), ((_axis("q1"), _axis("q2")), "slow")]
+    requests += [((_axis("q3"), _axis("q4"), _axis("q5")), "fast")]
+
+    async def cancel_midway() -> None:
+        task = asyncio.ensure_future(guard.ask_each(requests, total_deadline_seconds=5.0))
+        for _ in range(100):  # wait until the fast request has answered and been recorded
+            if recorder.records:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        await task
+
+    started = time.perf_counter()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cancel_midway())
+    assert time.perf_counter() - started < 1.0
+    assert sorted((record.outcome, record.axis_count) for record in recorder.records) == [
+        ("answered", 3),
+        ("timeout", 1),
+        ("timeout", 2),
+    ]
+    assert all(
+        record.duration_ms == 5_000 and record.model_version is None
+        for record in recorder.records
+        if record.outcome == "timeout"
+    )
+
+
+@pytest.mark.parametrize("late", ["result", "exception"])
+def test_a_worker_finishing_after_cancellation_is_dropped_quietly(
+    late: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    release = threading.Event()
+    workers: list[threading.Thread] = []
+
+    def work() -> str:
+        workers.append(threading.current_thread())
+        release.wait(1.0)
+        if late == "exception":
+            raise RuntimeError("late failure")
+        return "late result"
+
+    async def cancel_then_finish() -> list[dict[str, object]]:
+        seen: list[dict[str, object]] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: seen.append(context)
+        )
+        future = typed_decisions._run_in_daemon_thread(work)
+        future.cancel()
+        release.set()
+        for _ in range(100):
+            if workers:
+                break
+            await asyncio.sleep(0.01)
+        workers[0].join(1.0)  # the worker has now queued its late callback on this loop
+        await asyncio.sleep(0.05)  # let that callback run
+        return seen
+
+    assert asyncio.run(cancel_then_finish()) == []
+    assert "InvalidStateError" not in caplog.text
+
+
+@pytest.mark.parametrize("budget", [0.0, -1.0, 30.5, float("nan"), float("inf"), True])
+def test_ask_each_rejects_an_invalid_total_budget(budget: float) -> None:
+    adapter = FakeAdapter()
+    with pytest.raises(ValueError):
+        asyncio.run(_guard(adapter).ask_each([((NEED,), "t")], total_deadline_seconds=budget))
+    assert adapter.calls == []
 
 
 @pytest.mark.parametrize(
