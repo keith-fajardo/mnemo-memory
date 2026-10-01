@@ -1731,7 +1731,9 @@ secret-scans the original text, the bounded text actually sent, and every axis s
 labels, instructions, criteria) before sending, never sends non-`normal`
 sensitivity, bounds text to 512 characters and every axis string to 400, reserves
 `typed_decision` budget, and enforces a hard deadline (600 ms per prompt) with no retry. The
-Mnemo (the runtime composition and the evaluation CLI) reads the key only from
+Stored note snippets are sent as the judged text itself (revised 2026-10-01), one request per
+note, and each note is still secret-scanned, bounded and sensitivity-gated on its own. Mnemo
+(the runtime composition and the evaluation CLI) reads the key only from
 `TYPESAFE_API_KEY` and hands it to the connector as a constructor argument. The connector
 redacts it from `repr`, rejects keys that are not printable ASCII, refuses HTTP redirects so the key is never forwarded,
 and raises payload-free errors without chained causes. Telemetry and evaluation reports record

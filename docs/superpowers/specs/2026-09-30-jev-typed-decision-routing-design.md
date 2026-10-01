@@ -409,3 +409,36 @@ The 750 ms p95 target in `docs/evaluation-baseline.md` covers deterministic loca
 - Team mode.
 - Deleting the Ollama connector.
 - Contradiction detection at retrieval, lesson dedupe, obsolete-memory detection and the review queue.
+
+## 12. Revision 2026-10-01 (after the first live run)
+
+The first live run failed two gates. This section records what we changed and why. Earlier
+sections are left as they were written.
+
+**Memory need is now one choice question.** The two yes/no questions ("needs earlier sessions",
+"needs code structure") failed. Accuracy was 0.62, and 14 of 15 project-document prompts were
+missed because the first question was worded around "earlier sessions". Rewording made the two
+questions interfere: anything "not in the message" triggered both. A single five-way choice
+(`past_sessions`, `project_docs`, `code_structure`, `code_and_history`, `nothing`) passed every
+routing gate on the dev set: accuracy 0.90, prior-memory recall 1.0, structure recall 0.93,
+none precision 1.0. Every miss was a low-confidence answer, which becomes unknown and so leads
+to lazy pull.
+
+**Relevance becomes a per-note filler check.** Asking "does this note help the request?" dropped
+3 relevant notes and 0 filler. A relevant/unrelated choice dropped a critical "do not rerun"
+warning at 94% confidence. Judging the note alone works: "task information vs filler" gave
+p(info) of 0.97 to 1.00 for relevant notes and 0.11 to 0.27 for noise. It must be one request per
+note, because batching 8 notes broke the scores. Only confident filler (p(filler) >= 0.7) is
+dropped, and keep is the safe side. This check cannot judge whether a note is topically relevant
+to a request; that is deferred.
+
+**A held-out fixture joins the gates.** `typed-decision-holdout-v1.json` has 40 new routing
+prompts and 24 notes (16 relevant, 8 noise), written after the questions were tuned. Its
+front-door and relevance results are scored with the same gates, and phase 1 is complete only if
+they pass too. Latency is still measured on the original 60 routing prompts. The relevance gates
+now also require that at least 90% of noise is dropped, so a filter that drops nothing cannot
+pass.
+
+**Ollama parse failures count as wrong answers.** If the local model replies but the output
+cannot be parsed, the row is answered with no proposals. Only a transport failure is unanswered.
+

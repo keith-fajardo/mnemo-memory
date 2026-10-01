@@ -6835,3 +6835,11 @@ Implemented:
 
 No runtime path calls the classifier, and ADR 0049 remains proposed. Phase 2 needs every phase-1
 gate true in a maintainer-authorized report, plus signed zero-data-retention terms.
+
+Revision 2026-10-01, after the first live run failed memory need (accuracy 0.62) and relevance:
+memory need is now one five-way choice question, and relevance is a per-note filler check (one
+request per note, only confident filler dropped, no topical-relevance judgement). A held-out
+fixture (`typed-decision-holdout-v1.json`: 40 prompts, 24 notes) adds `front_door_holdout` and
+`relevance_holdout` gates, the relevance gates now require at least 90% of noise dropped, and
+Ollama parse failures count as answered wrong answers. The revised questions are verified
+offline only; a new maintainer-authorized live run is still pending.

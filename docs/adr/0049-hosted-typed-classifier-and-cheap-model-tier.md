@@ -33,6 +33,9 @@ TypeSafe's standard terms allow retention:
 - Zero data retention (ZDR) is offered only to enterprise customers through sales. Vercel's AI
   Gateway offers per-request ZDR under a negotiated clause.
 
+The first live run (2026-10-01) failed memory need and relevance. Memory need is now one choice
+question and relevance is a per-note filler check (Decision 9).
+
 Outside this decision: routing or proxying the coding agent's own model (ADR 0048).
 
 ## Decision
@@ -65,6 +68,12 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
    probabilities do not name exactly the allowed labels or whose chosen label is not the most
    likely one (schema_invalid). It rejects API keys that are not printable ASCII without
    whitespace, so malformed keys cannot surface in HTTP-library error text.
+9. **Question design (revised 2026-10-01).** Memory need is one five-way choice question
+   instead of two yes/no questions, because the two interfered and accuracy was 0.62 on the
+   first live run. Relevance became a per-note filler check: the stored note is the judged text,
+   one request per note, and only confident filler is dropped. It cannot judge topical
+   relevance, which is deferred. A held-out fixture joins the phase-1 gates, and Ollama output
+   that fails to parse counts as a wrong answer, not an unanswered one.
 
 ## Alternatives considered
 
