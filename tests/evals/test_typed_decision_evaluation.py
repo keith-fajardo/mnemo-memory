@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+import time
 import urllib.error
 from typing import Any
+from uuid import UUID
 
 import pytest
 
+from mnemo_memory.packages.domain import (
+    ModelBudgetReservation,
+    ModelTaskType,
+    TypedDecisionDataRoute,
+    TypedDecisionSource,
+    WorkspaceId,
+)
+from mnemo_memory.packages.model_gateway.cascade_router import ClassifierAxis, ClassifierResult
 from mnemo_memory.packages.model_gateway.decision_axes import NeedAnswer
+from mnemo_memory.packages.model_gateway.typed_decisions import (
+    AdapterAnswer,
+    GuardedTypedDecisionClassifier,
+)
 from scripts.typed_decision_evaluation import (
     HOLDOUT_FIXTURE,
     ROUTING_FIXTURE,
@@ -22,6 +38,7 @@ from scripts.typed_decision_evaluation import (
     TierRow,
     derived_route,
     evaluate_extraction_ollama,
+    evaluate_relevance_holdout,
     load_synthetic_fixture,
     phase_one_complete,
     score_extraction,
@@ -69,8 +86,10 @@ def test_front_door_scoring_applies_the_existing_routing_gates() -> None:
     leaky = [*perfect[:-1], FrontDoorRow("prior-x", "prior_memory", N, N, 100, None)]
     assert score_front_door(leaky)["gates"]["none_precision"] is False
 
-    cautious = _front("prior_memory", N, Y, 15) + _front("none", U, U, 15)
-    assert score_front_door(cautious)["none_precision"] == 1.0  # nothing predicted none
+    # Nothing predicted "none": precision is undefined, so it must not pass the gate by default.
+    cautious = score_front_door(_front("prior_memory", N, Y, 15) + _front("none", U, U, 15))
+    assert (cautious["none_predicted"], cautious["none_precision"]) == (0, 0.0)
+    assert cautious["gates"]["none_precision"] is False
 
 
 def test_latency_uses_nearest_rank_and_the_600ms_share() -> None:
@@ -136,6 +155,83 @@ class _FakeProvider:
         if self.error is not None:
             raise self.error
         return self.response
+
+
+def test_relevance_gate_fails_when_filler_checks_run_over_the_budget() -> None:
+    def rows(over: int) -> list[RelevanceRow]:
+        return [
+            RelevanceRow("t", f"n{i}", "noise", True, True, 801 if i < over else 800)
+            for i in range(20)
+        ]
+
+    ok = score_relevance(rows(1))
+    assert ok["over_budget_share"] == 0.05  # 800 ms is within the 0.8 s budget, 801 is not
+    assert ok["gates"]["within_budget"] is True
+    slow = score_relevance(rows(2))
+    assert slow["over_budget_share"] == 0.1
+    assert slow["gates"]["within_budget"] is False
+    empty = score_relevance([])
+    assert (empty["over_budget_share"], empty["gates"]["within_budget"]) == (0.0, False)
+
+
+class _ConcurrencyProbe:
+    """A slow adapter that records how many requests were in flight at once."""
+
+    provider_id = "probe"
+    model_id = "probe-1"
+
+    def __init__(self, pause: float) -> None:
+        self.pause = pause
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.most_in_flight = 0
+
+    def answer(
+        self, axes: tuple[ClassifierAxis, ...], text: str, *, timeout_seconds: float
+    ) -> AdapterAnswer:
+        with self.lock:
+            self.in_flight += 1
+            self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        time.sleep(self.pause)
+        with self.lock:
+            self.in_flight -= 1
+        return AdapterAnswer(
+            tuple(ClassifierResult(axis.name, axis.allowed_labels[0], 0.0, 0.9) for axis in axes),
+            "probe-1",
+            1,
+        )
+
+
+class _OpenBudget:
+    def reserve(
+        self,
+        workspace_id: WorkspaceId,
+        task_type: ModelTaskType,
+        reservation: ModelBudgetReservation,
+    ) -> None:
+        return None
+
+
+def test_note_checks_run_concurrently_in_chunks_of_sixteen() -> None:
+    probe = _ConcurrencyProbe(pause=0.1)
+    guard = GuardedTypedDecisionClassifier(
+        probe,
+        data_route=TypedDecisionDataRoute.SYNTHETIC_ONLY,
+        source=TypedDecisionSource.SYNTHETIC_FIXTURE,
+        budget=_OpenBudget(),
+        workspace_id=WorkspaceId(UUID(int=1)),
+        reservation=ModelBudgetReservation(input_tokens=1, output_tokens=1, cost_microusd=0),
+        deadline_seconds=5.0,
+    )
+    notes = load_synthetic_fixture(HOLDOUT_FIXTURE)["notes"]
+    assert len(notes) == 24  # one full chunk of 16, then 8
+    started = time.perf_counter()
+    rows = asyncio.run(evaluate_relevance_holdout(guard))
+    elapsed = time.perf_counter() - started
+    assert probe.most_in_flight == 16
+    assert elapsed < 1.0  # two chunks of ~0.1 s, not 24 sequential 0.1 s calls
+    assert [row.candidate_id for row in rows] == [note["id"] for note in notes]
+    assert all(row.answered for row in rows)
 
 
 def test_relevance_reports_request_latency_and_count() -> None:

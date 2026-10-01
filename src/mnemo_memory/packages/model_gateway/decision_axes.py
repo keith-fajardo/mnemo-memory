@@ -25,6 +25,7 @@ from .cascade_router import (
 from .rule_axes import RISK_AXIS
 
 FILLER_DROP_AT = 0.7
+FILLER_CHECK_BUDGET_SECONDS = 0.8  # total wall time for one prompt's concurrent filler checks
 NOTE_TEXT_CHARACTERS = 300
 WORTH_SKIP_AT = 0.3
 CHOICE_CONFIDENCE_BAR = 0.6

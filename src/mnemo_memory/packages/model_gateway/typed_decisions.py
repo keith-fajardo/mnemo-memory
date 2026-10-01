@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import math
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -150,12 +152,7 @@ class GuardedTypedDecisionClassifier:
             reservation, ModelBudgetReservation
         ):
             raise TypeError("typed decision budget scope is invalid")
-        if (
-            isinstance(deadline_seconds, bool)
-            or not isinstance(deadline_seconds, (int, float))
-            or not math.isfinite(deadline_seconds)
-            or not 0.0 < deadline_seconds <= _MAXIMUM_DEADLINE_SECONDS
-        ):
+        if not _deadline_valid(deadline_seconds):
             raise ValueError("typed decision deadline must be within (0, 30] seconds")
         self._adapter = adapter
         self._data_route = data_route
@@ -211,6 +208,60 @@ class GuardedTypedDecisionClassifier:
         )
         return outcome
 
+    async def ask_each(
+        self,
+        requests: Sequence[tuple[Sequence[ClassifierAxis], str]],
+        *,
+        total_deadline_seconds: float,
+        sensitivity: Sensitivity = Sensitivity.NORMAL,
+    ) -> tuple[TypedDecisionOutcome, ...]:
+        """Ask every request concurrently within one total budget; outcomes in request order.
+
+        Requests still running at the budget are cancelled and reported as ``timeout``. An
+        invalid budget is a caller programming error and raises ``ValueError``; nothing else
+        raises.
+        """
+
+        if not _deadline_valid(total_deadline_seconds):
+            raise ValueError("typed decision total deadline must be within (0, 30] seconds")
+        try:
+            pending_requests = tuple(requests)
+        except Exception:
+            pending_requests = ()
+        if not pending_requests:
+            return ()
+        tasks = [
+            asyncio.ensure_future(self._ask_request(request, sensitivity))
+            for request in pending_requests
+        ]
+        try:
+            await asyncio.wait(tasks, timeout=total_deadline_seconds)
+        finally:
+            unfinished = [task for task in tasks if not task.done()]
+            for task in unfinished:
+                task.cancel()
+            if unfinished:
+                await asyncio.wait(unfinished)
+        timed_out_ms = round(total_deadline_seconds * 1_000)
+        outcomes: list[TypedDecisionOutcome] = []
+        for request, task in zip(pending_requests, tasks, strict=True):
+            if task.cancelled():
+                outcome = TypedDecisionOutcome((), Reason.TIMEOUT, timed_out_ms, None)
+                self._record(_request_axis_count(request), outcome, 0)
+            else:
+                outcome = task.result()
+            outcomes.append(outcome)
+        return tuple(outcomes)
+
+    async def _ask_request(
+        self, request: tuple[Sequence[ClassifierAxis], str], sensitivity: Sensitivity
+    ) -> TypedDecisionOutcome:
+        try:
+            axes, text = request
+        except Exception:
+            axes, text = (), ""  # a malformed request runs the checks and is schema_invalid
+        return await self.ask(axes, text, sensitivity=sensitivity)
+
     async def classify_batch(
         self, axes: tuple[ClassifierAxis, ...], prompt: str
     ) -> tuple[ClassifierResult, ...]:
@@ -251,7 +302,9 @@ class GuardedTypedDecisionClassifier:
             return Reason.BUDGET_DENIED, None
         try:
             answer = await asyncio.wait_for(
-                asyncio.to_thread(adapter.answer, axes, bounded, timeout_seconds=self._deadline),
+                _run_in_daemon_thread(
+                    functools.partial(adapter.answer, axes, bounded, timeout_seconds=self._deadline)
+                ),
                 timeout=self._deadline,
             )
         except TypedDecisionAdapterError as error:
@@ -304,6 +357,54 @@ async def decide_tier(
     except Exception:
         return TierDecision("heavy", "unavailable:error", None)
     return TierDecision(decision.route, decision.reason, decision)
+
+
+def _deadline_valid(seconds: object) -> bool:
+    return (
+        not isinstance(seconds, bool)
+        and isinstance(seconds, (int, float))
+        and math.isfinite(seconds)
+        and 0.0 < seconds <= _MAXIMUM_DEADLINE_SECONDS
+    )
+
+
+def _request_axis_count(request: tuple[Sequence[ClassifierAxis], str]) -> int:
+    try:
+        return len(tuple(request[0]))
+    except Exception:
+        return 0
+
+
+def _run_in_daemon_thread[T](fn: Callable[[], T]) -> asyncio.Future[T]:
+    """Run ``fn`` on a daemon thread so an abandoned call never blocks loop shutdown or exit.
+
+    ``wait_for`` may cancel the future first; a late result is then dropped, and a result that
+    arrives after the loop closed is discarded.
+    """
+
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[T] = loop.create_future()
+
+    def deliver(value: T) -> None:
+        if not future.done():
+            future.set_result(value)
+
+    def fail(error: Exception) -> None:
+        if not future.done():
+            future.set_exception(error)
+
+    def work() -> None:
+        try:
+            value = fn()
+        except Exception as error:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(fail, error)
+            return
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(deliver, value)
+
+    threading.Thread(target=work, daemon=True, name="mnemo-typed-decision").start()
+    return future
 
 
 def _axis_strings(axis: ClassifierAxis) -> tuple[str, ...]:

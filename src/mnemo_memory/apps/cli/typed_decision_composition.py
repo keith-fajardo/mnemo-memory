@@ -50,14 +50,8 @@ def build_runtime_typed_decision_classifier(
     if not settings.experimental_typed_decisions_enabled:
         return None
     variables = os.environ if environ is None else environ
-    api_key = variables.get("TYPESAFE_API_KEY", "").strip()
-    adapter = (
-        JevClassifier(api_key, model_id=settings.typed_decision_model_id, transport=jev_transport)
-        if api_key
-        else None
-    )
     return GuardedTypedDecisionClassifier(
-        adapter,
+        _adapter_from_environment(settings, variables, jev_transport),
         data_route=TypedDecisionDataRoute(settings.typed_decision_data_route),
         source=TypedDecisionSource.RUNTIME,
         budget=DenyAllModelBudget(),
@@ -65,3 +59,25 @@ def build_runtime_typed_decision_classifier(
         reservation=_RUNTIME_RESERVATION,
         deadline_seconds=RUNTIME_DEADLINE_SECONDS,
     )
+
+
+def _adapter_from_environment(
+    settings: PersonalSettings,
+    environ: Mapping[str, str],
+    transport: JevTransport | None,
+) -> JevClassifier | None:
+    """Return a Jev adapter, or ``None`` when the key is missing or malformed.
+
+    A malformed key disables the feature quietly (the guard reports ``no_credential``) instead
+    of failing composition; the key is never echoed.
+    """
+
+    api_key = environ.get("TYPESAFE_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        return JevClassifier(
+            api_key, model_id=settings.typed_decision_model_id, transport=transport
+        )
+    except ValueError:
+        return None

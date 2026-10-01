@@ -6,6 +6,7 @@ source is ``synthetic_fixture``, and only fixtures that declare synthetic proven
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from collections.abc import Sequence
@@ -24,6 +25,7 @@ from mnemo_memory.packages.model_gateway.cascade_router import (
 from mnemo_memory.packages.model_gateway.decision_axes import (
     COMPLEXITY,
     EPISODIC_KIND,
+    FILLER_CHECK_BUDGET_SECONDS,
     FRONT_DOOR_AXES,
     MEMORY_NEED,
     NOTE_SUBSTANCE,
@@ -56,6 +58,8 @@ TELEHEALTH_FIXTURE = _FIXTURES / "telehealth-long-horizon-phase2-qwen25coder7b.j
 LATENCY_DEADLINE_MS = 600
 LATENCY_MINIMUM_SAMPLES = 50
 LATENCY_MAXIMUM_SHARE_OVER = 0.05
+FILLER_CHECK_MAXIMUM_SHARE_OVER = 0.05
+NOTE_CHECK_CHUNK = 16  # concurrent filler checks per batch, matching one prompt's note window
 _SYNTHETIC_PROVENANCE: tuple[object, ...] = (
     {
         "origin": "Mnemo-owned original synthetic prompts",
@@ -175,8 +179,9 @@ def score_front_door(rows: Sequence[FrontDoorRow]) -> dict[str, Any]:
     structure_recall = _share(
         sum(row.structure is NeedAnswer.YES for row in structure), len(structure)
     )
+    # No "none" predictions leaves precision undefined; 0.0 keeps that from passing the gate.
     none_precision = _share(
-        sum(row.expected_route == "none" for row in predicted_none), len(predicted_none), empty=1.0
+        sum(row.expected_route == "none" for row in predicted_none), len(predicted_none)
     )
     return {
         "cases": len(rows),
@@ -222,6 +227,8 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
     noise_drop_rate = _drop_rate(rows, "noise")
     all_dropped = sum(row.dropped for row in rows)
     durations = sorted(row.duration_ms for row in rows)
+    budget_ms = FILLER_CHECK_BUDGET_SECONDS * 1_000
+    over_budget_share = _share(sum(value > budget_ms for value in durations), len(durations))
     return {
         "candidates": len(rows),
         "relevant_dropped": dropped,
@@ -234,12 +241,15 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
         "requests": len(rows),
         "request_p50_ms": _nearest_rank(durations, 0.50),
         "request_p95_ms": _nearest_rank(durations, 0.95),
+        # Share of checks slower than the 0.8 s total budget for one prompt's filler checks.
+        "over_budget_share": over_budget_share,
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
         "unanswered": sum(not row.answered for row in rows),
         "gates": {
             "relevant_dropped": bool(relevant) and dropped == 0,
             "filler_removed": bool(noise) and noise_drop_rate >= 0.9,
             "answered": bool(rows) and all(row.answered for row in rows),
+            "within_budget": bool(rows) and over_budget_share <= FILLER_CHECK_MAXIMUM_SHARE_OVER,
         },
     }
 
@@ -327,22 +337,31 @@ async def _note_rows(
     notes: Sequence[tuple[str, str, str]],
     template_id: str,
 ) -> list[RelevanceRow]:
-    """Judge each note on its own: one request per note, no task prompt."""
+    """Judge each note on its own: one request per note, no task prompt.
+
+    Notes are checked concurrently, up to ``NOTE_CHECK_CHUNK`` at a time, as the runtime filler
+    check would be. Each request keeps the guard's own deadline, so slow answers are measured
+    against the filler budget rather than cut off.
+    """
 
     rows: list[RelevanceRow] = []
-    for note_id, summary, category in notes:
-        outcome = await guard.ask((NOTE_SUBSTANCE,), note_text(summary))
-        results = {result.axis_name: result for result in outcome.results}
-        rows.append(
-            RelevanceRow(
-                template_id,
-                note_id,
-                category,
-                should_drop_note(results.get(NOTE_SUBSTANCE.name)),
-                outcome.available,
-                outcome.duration_ms,
-            )
+    for start in range(0, len(notes), NOTE_CHECK_CHUNK):
+        chunk = notes[start : start + NOTE_CHECK_CHUNK]
+        outcomes = await asyncio.gather(
+            *(guard.ask((NOTE_SUBSTANCE,), note_text(summary)) for _, summary, _ in chunk)
         )
+        for (note_id, _, category), outcome in zip(chunk, outcomes, strict=True):
+            results = {result.axis_name: result for result in outcome.results}
+            rows.append(
+                RelevanceRow(
+                    template_id,
+                    note_id,
+                    category,
+                    should_drop_note(results.get(NOTE_SUBSTANCE.name)),
+                    outcome.available,
+                    outcome.duration_ms,
+                )
+            )
     return rows
 
 

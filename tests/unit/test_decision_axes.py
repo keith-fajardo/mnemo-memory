@@ -10,6 +10,7 @@ from mnemo_memory.packages.model_gateway.cascade_router import (
 )
 from mnemo_memory.packages.model_gateway.decision_axes import (
     EPISODIC_KIND,
+    FILLER_CHECK_BUDGET_SECONDS,
     FRONT_DOOR_AXES,
     HINT_TEXT,
     MEMORY_NEED,
@@ -131,3 +132,7 @@ def test_tier_committee_uses_the_spec_weights_and_threshold() -> None:
 
 def test_episodic_kind_labels_match_the_domain() -> None:
     assert EPISODIC_KIND.allowed_labels == tuple(kind.value for kind in EpisodicMemoryKind)
+
+
+def test_filler_check_has_a_total_time_budget() -> None:
+    assert FILLER_CHECK_BUDGET_SECONDS == 0.8
