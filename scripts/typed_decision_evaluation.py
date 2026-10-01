@@ -6,6 +6,7 @@ source is ``synthetic_fixture``, and only fixtures that declare synthetic proven
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 from collections.abc import Sequence
@@ -13,7 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from mnemo_memory.packages.domain import TypedDecisionUnavailableReason
+from mnemo_memory.packages.domain import (
+    EpisodicExtractionProposal,
+    TypedDecisionUnavailableReason,
+)
 from mnemo_memory.packages.model_gateway.cascade_router import (
     AxisRoutedClassifier,
     ClassifierResult,
@@ -22,14 +26,15 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     COMPLEXITY,
     EPISODIC_KIND,
     FRONT_DOOR_AXES,
+    NOTE_SUBSTANCE,
     TOOL_NEED,
     WORTH_REMEMBERING,
     NeedAnswer,
     accepted_choice,
     hint_eligible,
-    need_from_result,
-    relevance_axis,
-    should_drop_candidate,
+    needs_from_memory_choice,
+    note_text,
+    should_drop_note,
     tier_committee,
     worth_extracting,
 )
@@ -45,12 +50,12 @@ _FIXTURES = REPOSITORY_ROOT / "tests/fixtures/evals"
 ROUTING_FIXTURE = _FIXTURES / "automatic-context-routing-v1.json"
 VIABILITY_FIXTURE = _FIXTURES / "viability-corpus-v1.json"
 TYPED_DECISION_FIXTURE = _FIXTURES / "typed-decision-v1.json"
+HOLDOUT_FIXTURE = _FIXTURES / "typed-decision-holdout-v1.json"
 TELEHEALTH_FIXTURE = _FIXTURES / "telehealth-long-horizon-phase2-qwen25coder7b.json"
 
 LATENCY_DEADLINE_MS = 600
 LATENCY_MINIMUM_SAMPLES = 50
 LATENCY_MAXIMUM_SHARE_OVER = 0.05
-RELEVANCE_BATCH_SIZE = 8
 _SYNTHETIC_PROVENANCE: tuple[object, ...] = (
     {
         "origin": "Mnemo-owned original synthetic prompts",
@@ -71,7 +76,15 @@ _NOISE_SUMMARY = (
     "and must not displace active task state."
 )
 _MEASURED_OUTCOMES = (None, TypedDecisionUnavailableReason.TIMEOUT.value)
-_SECTIONS = ("front_door", "latency", "relevance", "extraction", "tier")
+_SECTIONS = (
+    "front_door",
+    "front_door_holdout",
+    "latency",
+    "relevance",
+    "relevance_holdout",
+    "extraction",
+    "tier",
+)
 
 
 class FixtureProvenanceError(ValueError):
@@ -202,14 +215,20 @@ def score_latency(durations_ms: Sequence[int]) -> dict[str, Any]:
 def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
     relevant = [row for row in rows if row.category == "relevant"]
     dropped = sum(row.dropped for row in relevant)
+    noise = [row for row in rows if row.category == "noise"]
+    noise_drop_rate = _drop_rate(rows, "noise")
     return {
         "candidates": len(rows),
         "relevant_dropped": dropped,
-        "noise_drop_rate": _drop_rate(rows, "noise"),
+        "noise_drop_rate": noise_drop_rate,
+        "noise_dropped_share": _share(
+            sum(row.dropped for row in noise), sum(row.dropped for row in rows)
+        ),
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
         "unanswered": sum(not row.answered for row in rows),
         "gates": {
             "relevant_dropped": bool(relevant) and dropped == 0,
+            "filler_removed": bool(noise) and noise_drop_rate >= 0.9,
             "answered": bool(rows) and all(row.answered for row in rows),
         },
     }
@@ -267,23 +286,59 @@ def score_tier(rows: Sequence[TierRow]) -> dict[str, Any]:
     }
 
 
-async def evaluate_front_door(guard: GuardedTypedDecisionClassifier) -> list[FrontDoorRow]:
+async def _front_door_rows(
+    guard: GuardedTypedDecisionClassifier, cases: Sequence[dict[str, Any]]
+) -> list[FrontDoorRow]:
     rows: list[FrontDoorRow] = []
-    for case in load_synthetic_fixture(ROUTING_FIXTURE)["cases"]:
+    for case in cases:
         outcome = await guard.ask(FRONT_DOOR_AXES, case["prompt"])
         results = {result.axis_name: result for result in outcome.results}
+        long_term, structure = needs_from_memory_choice(results.get("memory_need"))
         reason = outcome.unavailable_reason
         rows.append(
             FrontDoorRow(
                 case["id"],
                 case["expected_route"],
-                need_from_result(results.get("needs_structure")),
-                need_from_result(results.get("needs_long_term")),
+                structure,
+                long_term,
                 outcome.duration_ms,
                 None if reason is None else reason.value,
             )
         )
     return rows
+
+
+async def _note_rows(
+    guard: GuardedTypedDecisionClassifier,
+    notes: Sequence[tuple[str, str, str]],
+    template_id: str,
+) -> list[RelevanceRow]:
+    """Judge each note on its own: one request per note, no task prompt."""
+
+    rows: list[RelevanceRow] = []
+    for note_id, summary, category in notes:
+        outcome = await guard.ask((NOTE_SUBSTANCE,), note_text(summary))
+        results = {result.axis_name: result for result in outcome.results}
+        rows.append(
+            RelevanceRow(
+                template_id,
+                note_id,
+                category,
+                should_drop_note(results.get(NOTE_SUBSTANCE.name)),
+                outcome.available,
+            )
+        )
+    return rows
+
+
+async def evaluate_front_door(guard: GuardedTypedDecisionClassifier) -> list[FrontDoorRow]:
+    return await _front_door_rows(guard, load_synthetic_fixture(ROUTING_FIXTURE)["cases"])
+
+
+async def evaluate_front_door_holdout(guard: GuardedTypedDecisionClassifier) -> list[FrontDoorRow]:
+    return await _front_door_rows(
+        guard, load_synthetic_fixture(HOLDOUT_FIXTURE)["front_door_cases"]
+    )
 
 
 async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
@@ -306,22 +361,16 @@ async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[Rele
             )
             for index in (1, 2)
         ]
-        for start in range(0, len(candidates), RELEVANCE_BATCH_SIZE):
-            batch = candidates[start : start + RELEVANCE_BATCH_SIZE]
-            axes = tuple(relevance_axis(index, item[1]) for index, item in enumerate(batch))
-            outcome = await guard.ask(axes, template["task_prompt"])
-            results = {result.axis_name: result for result in outcome.results}
-            for index, (candidate_id, _, category) in enumerate(batch):
-                rows.append(
-                    RelevanceRow(
-                        template["template_id"],
-                        candidate_id,
-                        category,
-                        should_drop_candidate(results.get(f"helps_{index}")),
-                        outcome.available,
-                    )
-                )
+        rows += await _note_rows(guard, candidates, template["template_id"])
     return rows
+
+
+async def evaluate_relevance_holdout(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
+    notes = [
+        (note["id"], note["summary"], note["category"])
+        for note in load_synthetic_fixture(HOLDOUT_FIXTURE)["notes"]
+    ]
+    return await _note_rows(guard, notes, "holdout")
 
 
 def extraction_events() -> list[tuple[str, str, bool, str | None]]:
@@ -365,11 +414,15 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
     rows: list[ExtractionRow] = []
     for event_id, summary, worth, kind in extraction_events():
         answered = True
+        proposals: tuple[EpisodicExtractionProposal, ...] = ()
         try:
-            proposals = parse_episodic_output(provider.generate(_OllamaRequest(summary)), 4)
+            raw = provider.generate(_OllamaRequest(summary))
         except Exception:
-            proposals = ()
-            answered = False  # predicts no candidates, but is counted as unanswered
+            answered = False  # transport failure: no answer at all
+        else:
+            # Unusable model output is a real wrong answer: answered, with no proposals.
+            with contextlib.suppress(ValueError, TypeError):
+                proposals = parse_episodic_output(raw, 4)
         rows.append(
             ExtractionRow(
                 "ollama",
@@ -425,10 +478,12 @@ async def run_phase_one(
         extraction += evaluate_extraction_ollama(ollama)
     report: dict[str, Any] = {
         "front_door": score_front_door(front),
+        "front_door_holdout": score_front_door(await evaluate_front_door_holdout(guard)),
         "latency": score_latency(
             [row.duration_ms for row in front if row.unavailable_reason in _MEASURED_OUTCOMES]
         ),
         "relevance": score_relevance(await evaluate_relevance(guard)),
+        "relevance_holdout": score_relevance(await evaluate_relevance_holdout(guard)),
         "extraction": score_extraction(extraction),
         "tier": score_tier(await evaluate_tier(guard)),
         "excluded_fixtures": _excluded_fixtures(),

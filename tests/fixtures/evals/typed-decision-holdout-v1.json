@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "synthetic-typed-decision-holdout",
+  "provenance": {
+    "origin": "Mnemo-owned original synthetic prompts",
+    "competing_product_artifacts_used": false
+  },
+  "front_door_cases": [
+    {
+      "id": "h-prior-01",
+      "expected_route": "prior_memory",
+      "prompt": "Pick up where we left off on the invoice exporter."
+    },
+    {
+      "id": "h-prior-02",
+      "expected_route": "prior_memory",
+      "prompt": "What did we settle on for the retry backoff?"
+    },
+    {
+      "id": "h-prior-03",
+      "expected_route": "prior_memory",
+      "prompt": "Remind me why we abandoned the first caching approach."
+    },
+    {
+      "id": "h-prior-04",
+      "expected_route": "prior_memory",
+      "prompt": "Which queue library did you and I agree on yesterday?"
+    },
+    {
+      "id": "h-prior-05",
+      "expected_route": "prior_memory",
+      "prompt": "Carry on with the plan we made before the break."
+    },
+    {
+      "id": "h-prior-06",
+      "expected_route": "prior_memory",
+      "prompt": "Did we ever resolve the flaky login test we were chasing?"
+    },
+    {
+      "id": "h-prior-07",
+      "expected_route": "prior_memory",
+      "prompt": "What was the next step we wrote down for the billing cleanup?"
+    },
+    {
+      "id": "h-prior-08",
+      "expected_route": "prior_memory",
+      "prompt": "Resume the refactor from our earlier thread, starting at the step we paused on."
+    },
+    {
+      "id": "h-prior-09",
+      "expected_route": "prior_memory",
+      "prompt": "Which of the two schemas did we reject last time, and why?"
+    },
+    {
+      "id": "h-prior-10",
+      "expected_route": "prior_memory",
+      "prompt": "Where did we land on shipping the feature flag this sprint?"
+    },
+    {
+      "id": "h-knowledge-01",
+      "expected_route": "knowledge",
+      "prompt": "What does the on-call runbook say to do when the queue backs up?"
+    },
+    {
+      "id": "h-knowledge-02",
+      "expected_route": "knowledge",
+      "prompt": "Per ADR 0012, which database are services allowed to use?"
+    },
+    {
+      "id": "h-knowledge-03",
+      "expected_route": "knowledge",
+      "prompt": "What is our team convention for naming feature branches?"
+    },
+    {
+      "id": "h-knowledge-04",
+      "expected_route": "knowledge",
+      "prompt": "Does the checked-in release policy allow Friday deployments?"
+    },
+    {
+      "id": "h-knowledge-05",
+      "expected_route": "knowledge",
+      "prompt": "How does the incident playbook say we should page the secondary engineer?"
+    },
+    {
+      "id": "h-knowledge-06",
+      "expected_route": "knowledge",
+      "prompt": "What commit message format does the contributing guide require?"
+    },
+    {
+      "id": "h-knowledge-07",
+      "expected_route": "knowledge",
+      "prompt": "What retention period does our data handling policy set for audit logs?"
+    },
+    {
+      "id": "h-knowledge-08",
+      "expected_route": "knowledge",
+      "prompt": "Which reviewers does the code ownership policy require for payments changes?"
+    },
+    {
+      "id": "h-knowledge-09",
+      "expected_route": "knowledge",
+      "prompt": "What did the architecture decision on event sourcing conclude?"
+    },
+    {
+      "id": "h-knowledge-10",
+      "expected_route": "knowledge",
+      "prompt": "Check the style rules our team wrote down for error messages."
+    },
+    {
+      "id": "h-structure-01",
+      "expected_route": "structure",
+      "prompt": "Who calls the function that computes shipping tax?"
+    },
+    {
+      "id": "h-structure-02",
+      "expected_route": "structure",
+      "prompt": "Which module owns the session cache, and what does it import?"
+    },
+    {
+      "id": "h-structure-03",
+      "expected_route": "structure",
+      "prompt": "Which columns does the orders_archive table have?"
+    },
+    {
+      "id": "h-structure-04",
+      "expected_route": "structure",
+      "prompt": "Trace where the customer_email field flows from the signup form to the warehouse."
+    },
+    {
+      "id": "h-structure-05",
+      "expected_route": "structure",
+      "prompt": "List the modules that depend on the notifications package."
+    },
+    {
+      "id": "h-structure-06",
+      "expected_route": "structure",
+      "prompt": "Where is the retry decorator defined and which handlers use it?"
+    },
+    {
+      "id": "h-structure-07",
+      "expected_route": "structure",
+      "prompt": "What is the boundary between the ingestion layer and the scoring layer in this codebase?"
+    },
+    {
+      "id": "h-structure-08",
+      "expected_route": "structure",
+      "prompt": "Which migrations touched the payments.refunds table?"
+    },
+    {
+      "id": "h-structure-09",
+      "expected_route": "structure",
+      "prompt": "Show the call path from the CLI entry point to the database writer."
+    },
+    {
+      "id": "h-structure-10",
+      "expected_route": "structure",
+      "prompt": "Which classes implement the Exporter interface?"
+    },
+    {
+      "id": "h-none-01",
+      "expected_route": "none",
+      "prompt": "Rename the variable tmp to buffer in this snippet: def f(tmp): return tmp * 2"
+    },
+    {
+      "id": "h-none-02",
+      "expected_route": "none",
+      "prompt": "What is the difference between a mutex and a semaphore?"
+    },
+    {
+      "id": "h-none-03",
+      "expected_route": "none",
+      "prompt": "Format this JSON with two-space indentation: {\"a\":1,\"b\":[1,2]}"
+    },
+    {
+      "id": "h-none-04",
+      "expected_route": "none",
+      "prompt": "Here is my function: def add(a, b): return a - b. Why do my tests fail?"
+    },
+    {
+      "id": "h-none-05",
+      "expected_route": "none",
+      "prompt": "Explain what a Python module is and how import works."
+    },
+    {
+      "id": "h-none-06",
+      "expected_route": "none",
+      "prompt": "Write a regex that matches ISO 8601 dates."
+    },
+    {
+      "id": "h-none-07",
+      "expected_route": "none",
+      "prompt": "Convert the loop in this code to a list comprehension: out = []\nfor x in xs:\n    out.append(x + 1)"
+    },
+    {
+      "id": "h-none-08",
+      "expected_route": "none",
+      "prompt": "Explain how git stores history and what rebase does to it."
+    },
+    {
+      "id": "h-none-09",
+      "expected_route": "none",
+      "prompt": "Sort these previous release numbers by semantic version: 1.10.0, 1.2.0, 1.9.3"
+    },
+    {
+      "id": "h-none-10",
+      "expected_route": "none",
+      "prompt": "Add type hints to this module-level function: def greet(name): return 'hi ' + name"
+    }
+  ],
+  "notes": [
+    {
+      "id": "h-note-01",
+      "category": "relevant",
+      "summary": "Do not rerun the nightly import before the schema lock is released; it truncates the staging table."
+    },
+    {
+      "id": "h-note-02",
+      "category": "relevant",
+      "summary": "Do not commit directly to release/2.4; every change goes through the merge queue."
+    },
+    {
+      "id": "h-note-03",
+      "category": "relevant",
+      "summary": "Do not use the legacy token endpoint for the mobile client; it was retired in August."
+    },
+    {
+      "id": "h-note-04",
+      "category": "relevant",
+      "summary": "Failure: the canary deploy of build 7731 rolled back after p99 latency passed 900 ms."
+    },
+    {
+      "id": "h-note-05",
+      "category": "relevant",
+      "summary": "Failure: the CSV parser choked on files with a BOM header and rows 1-40 were lost."
+    },
+    {
+      "id": "h-note-06",
+      "category": "relevant",
+      "summary": "Goal: cut checkout page load time below 1.8 seconds on mid-range phones."
+    },
+    {
+      "id": "h-note-07",
+      "category": "relevant",
+      "summary": "Goal: move the reporting jobs off the shared cron host before the October freeze."
+    },
+    {
+      "id": "h-note-08",
+      "category": "relevant",
+      "summary": "Open question: should expired coupons be archived or hard-deleted?"
+    },
+    {
+      "id": "h-note-09",
+      "category": "relevant",
+      "summary": "Open question: who owns the alerting rules for the search cluster?"
+    },
+    {
+      "id": "h-note-10",
+      "category": "relevant",
+      "summary": "Decision: use cursor pagination for the audit API."
+    },
+    {
+      "id": "h-note-11",
+      "category": "relevant",
+      "summary": "Decision: keep the Postgres 15 pin until the extension vendor certifies 16."
+    },
+    {
+      "id": "h-note-12",
+      "category": "relevant",
+      "summary": "The staging webhook secret rotates every 30 days; the last rotation ticket is OPS-4821."
+    },
+    {
+      "id": "h-note-13",
+      "category": "relevant",
+      "summary": "The export bucket is acme-eu-exports-prod and files expire after 14 days."
+    },
+    {
+      "id": "h-note-14",
+      "category": "relevant",
+      "summary": "Next: rerun the contract tests against the sandbox with seed 4417."
+    },
+    {
+      "id": "h-note-15",
+      "category": "relevant",
+      "summary": "Next: ask Priya to approve the index migration before Thursday."
+    },
+    {
+      "id": "h-note-16",
+      "category": "relevant",
+      "summary": "Result: the reindex finished in 38 minutes with zero failed documents."
+    },
+    {
+      "id": "h-note-17",
+      "category": "noise",
+      "summary": "Good morning! Hope everyone's week is off to a nice start."
+    },
+    {
+      "id": "h-note-18",
+      "category": "noise",
+      "summary": "brb, grabbing coffee."
+    },
+    {
+      "id": "h-note-19",
+      "category": "noise",
+      "summary": "Lol, that meeting ran long again."
+    },
+    {
+      "id": "h-note-20",
+      "category": "noise",
+      "summary": "Ping, are you still there?"
+    },
+    {
+      "id": "h-note-21",
+      "category": "noise",
+      "summary": "It is pouring rain here today, so I am working from the couch."
+    },
+    {
+      "id": "h-note-22",
+      "category": "noise",
+      "summary": "Thanks, appreciate it!"
+    },
+    {
+      "id": "h-note-23",
+      "category": "noise",
+      "summary": "Happy Friday, folks. Any weekend plans?"
+    },
+    {
+      "id": "h-note-24",
+      "category": "noise",
+      "summary": "Sorry, my headphones died for a second. Can you repeat that?"
+    }
+  ]
+}

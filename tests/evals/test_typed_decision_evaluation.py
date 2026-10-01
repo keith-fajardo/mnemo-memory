@@ -8,6 +8,7 @@ import pytest
 
 from mnemo_memory.packages.model_gateway.decision_axes import NeedAnswer
 from scripts.typed_decision_evaluation import (
+    HOLDOUT_FIXTURE,
     ROUTING_FIXTURE,
     TELEHEALTH_FIXTURE,
     TYPED_DECISION_FIXTURE,
@@ -18,6 +19,7 @@ from scripts.typed_decision_evaluation import (
     RelevanceRow,
     TierRow,
     derived_route,
+    evaluate_extraction_ollama,
     load_synthetic_fixture,
     phase_one_complete,
     score_extraction,
@@ -31,7 +33,7 @@ Y, N, U = NeedAnswer.YES, NeedAnswer.NO, NeedAnswer.UNKNOWN
 
 
 def test_only_fixtures_with_synthetic_provenance_are_accepted() -> None:
-    for path in (ROUTING_FIXTURE, VIABILITY_FIXTURE, TYPED_DECISION_FIXTURE):
+    for path in (ROUTING_FIXTURE, VIABILITY_FIXTURE, TYPED_DECISION_FIXTURE, HOLDOUT_FIXTURE):
         assert isinstance(load_synthetic_fixture(path), dict)
     with pytest.raises(FixtureProvenanceError):
         load_synthetic_fixture(TELEHEALTH_FIXTURE)
@@ -90,13 +92,61 @@ def test_relevance_gate_fails_if_any_relevant_candidate_is_dropped() -> None:
 def test_relevance_gate_fails_when_any_row_is_unanswered() -> None:
     rows = [
         RelevanceRow("t", "a", "relevant", False, True),
-        RelevanceRow("t", "n", "noise", False, False),
+        RelevanceRow("t", "n", "noise", True, False),
     ]
     score = score_relevance(rows)
     assert score["unanswered"] == 1
     assert score["gates"]["answered"] is False
     assert score["gates"]["relevant_dropped"] is True
     assert score_relevance([])["gates"]["answered"] is False
+
+
+def test_relevance_gate_fails_when_no_noise_is_dropped() -> None:
+    rows = [
+        RelevanceRow("t", "a", "relevant", False, True),
+        RelevanceRow("t", "n", "noise", False, True),
+    ]
+    score = score_relevance(rows)
+    assert score["gates"]["filler_removed"] is False
+    assert score["noise_dropped_share"] == 0.0
+    assert score["gates"]["relevant_dropped"] is True
+    assert score["gates"]["answered"] is True
+    assert score_relevance(rows[:1])["gates"]["filler_removed"] is False  # no noise rows
+
+
+def test_relevance_filler_gate_needs_ninety_percent_of_noise_dropped() -> None:
+    relevant = RelevanceRow("t", "a", "relevant", False, True)
+    noise = [RelevanceRow("t", f"n{i}", "noise", i != 0, True) for i in range(10)]
+    score = score_relevance([relevant, *noise])
+    assert score["noise_drop_rate"] == 0.9
+    assert score["noise_dropped_share"] == 1.0
+    assert score["gates"]["filler_removed"] is True
+    noise[1] = RelevanceRow("t", "n1", "noise", False, True)
+    assert score_relevance([relevant, *noise])["gates"]["filler_removed"] is False
+
+
+class _FakeProvider:
+    def __init__(self, response: object = None, error: Exception | None = None) -> None:
+        self.response = response
+        self.error = error
+
+    def generate(self, request: object) -> object:
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+def test_ollama_parse_failure_is_a_wrong_answer_not_an_unanswered_row() -> None:
+    rows = evaluate_extraction_ollama(_FakeProvider({"bad": 1}))
+    assert rows and all(row.answered for row in rows)
+    assert all(row.predicted_worth is False and row.predicted_kind is None for row in rows)
+    assert score_extraction(rows)["arms"]["ollama"]["unanswered"] == 0
+
+
+def test_ollama_transport_exception_is_unanswered() -> None:
+    rows = evaluate_extraction_ollama(_FakeProvider(error=ConnectionRefusedError("down")))
+    assert rows and not any(row.answered for row in rows)
+    assert score_extraction(rows)["arms"]["ollama"]["unanswered"] == len(rows)
 
 
 def test_extraction_gate_needs_the_ollama_baseline() -> None:
@@ -144,8 +194,19 @@ def test_tier_gate_fails_when_any_case_was_unavailable() -> None:
 def test_phase_one_completion_requires_every_gate_true() -> None:
     report: dict[str, Any] = {
         section: {"gates": {"g": True}}
-        for section in ("front_door", "latency", "relevance", "extraction", "tier")
+        for section in (
+            "front_door",
+            "front_door_holdout",
+            "latency",
+            "relevance",
+            "relevance_holdout",
+            "extraction",
+            "tier",
+        )
     }
     assert phase_one_complete(report) is True
     report["extraction"]["gates"] = {"baseline": "not_evaluated"}
+    assert phase_one_complete(report) is False
+    report["extraction"]["gates"] = {"g": True}
+    report["relevance_holdout"]["gates"] = {"g": False}
     assert phase_one_complete(report) is False

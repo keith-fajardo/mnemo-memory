@@ -12,13 +12,16 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     EPISODIC_KIND,
     FRONT_DOOR_AXES,
     HINT_TEXT,
+    MEMORY_NEED,
+    NOTE_SUBSTANCE,
+    NOTE_TEXT_CHARACTERS,
     TIER_AXES,
     NeedAnswer,
     accepted_choice,
     hint_eligible,
-    need_from_result,
-    relevance_axis,
-    should_drop_candidate,
+    needs_from_memory_choice,
+    note_text,
+    should_drop_note,
     tier_committee,
     worth_extracting,
 )
@@ -31,58 +34,64 @@ def _result(
     return ClassifierResult(name, label, -0.1, score, confidence=confidence)
 
 
-def test_front_door_asks_two_needs_and_two_tier_axes() -> None:
-    assert [axis.name for axis in FRONT_DOOR_AXES] == [
-        "needs_long_term",
-        "needs_structure",
-        "complexity",
-        "tool_need",
-    ]
-    assert [axis.kind for axis in FRONT_DOOR_AXES[:2]] == [AxisKind.YES_NO, AxisKind.YES_NO]
+def test_front_door_asks_one_memory_choice_and_two_tier_axes() -> None:
+    assert [axis.name for axis in FRONT_DOOR_AXES] == ["memory_need", "complexity", "tool_need"]
+    assert FRONT_DOOR_AXES[0] is MEMORY_NEED
+    assert MEMORY_NEED.kind is AxisKind.CHOICE
     assert [axis.name for axis in TIER_AXES] == ["complexity", "tool_need", "risk"]
     assert TIER_AXES[2] is RISK_AXIS
 
 
 def test_every_catalogue_axis_fits_the_guard_text_limit() -> None:
-    for axis in (*FRONT_DOOR_AXES, EPISODIC_KIND):
+    for axis in (*FRONT_DOOR_AXES, NOTE_SUBSTANCE, EPISODIC_KIND):
         assert len(axis.instructions) <= 400
         assert all(len(text) <= 400 for _, text in axis.criteria)
 
 
 @pytest.mark.parametrize(
-    ("probability", "expected"),
+    ("label", "expected"),
     [
-        (0.7, NeedAnswer.YES),
-        (0.69, NeedAnswer.UNKNOWN),
-        (0.31, NeedAnswer.UNKNOWN),
-        (0.3, NeedAnswer.NO),
+        ("past_sessions", (NeedAnswer.YES, NeedAnswer.NO)),
+        ("project_docs", (NeedAnswer.YES, NeedAnswer.NO)),
+        ("code_structure", (NeedAnswer.NO, NeedAnswer.YES)),
+        ("code_and_history", (NeedAnswer.YES, NeedAnswer.YES)),
+        ("nothing", (NeedAnswer.NO, NeedAnswer.NO)),
     ],
 )
-def test_need_thresholds(probability: float, expected: NeedAnswer) -> None:
-    assert need_from_result(_result("needs_long_term", "yes", probability)) is expected
+def test_memory_choice_maps_every_label(
+    label: str, expected: tuple[NeedAnswer, NeedAnswer]
+) -> None:
+    assert needs_from_memory_choice(_result("memory_need", label, 0.2, 0.8)) == expected
 
 
-def test_missing_need_answer_is_unknown() -> None:
-    assert need_from_result(None) is NeedAnswer.UNKNOWN
+def test_memory_choice_below_the_confidence_bar_is_unknown() -> None:
+    unknown = (NeedAnswer.UNKNOWN, NeedAnswer.UNKNOWN)
+    assert needs_from_memory_choice(None) == unknown
+    assert needs_from_memory_choice(_result("memory_need", "nothing", 0.0)) == unknown
+    assert needs_from_memory_choice(_result("memory_need", "nothing", 0.0, 0.59)) == unknown
+    assert needs_from_memory_choice(_result("memory_need", "nothing", 0.0, 0.6)) == (
+        NeedAnswer.NO,
+        NeedAnswer.NO,
+    )
 
 
-def test_relevance_axis_embeds_a_bounded_snippet() -> None:
-    axis = relevance_axis(3, "  heading \n\n" + "x" * 500)
-    assert axis.name == "helps_3"
-    assert axis.kind is AxisKind.YES_NO
-    assert axis.instructions.startswith("This stored note would help answer the request: heading x")
-    assert len(axis.instructions) <= 400
-    for bad_index in (-1, 32):
-        with pytest.raises(ValueError):
-            relevance_axis(bad_index, "note")
+def test_note_text_collapses_whitespace_and_caps_length() -> None:
+    text = note_text("  heading \n\n" + "x" * 500)
+    assert text.startswith("heading x")
+    assert len(text) == NOTE_TEXT_CHARACTERS == 300
     with pytest.raises(ValueError):
-        relevance_axis(0, "   ")
+        note_text("  \n ")
 
 
-def test_relevance_drops_only_a_confident_no() -> None:
-    assert should_drop_candidate(None) is False
-    assert should_drop_candidate(_result("helps_0", "no", 0.2)) is True
-    assert should_drop_candidate(_result("helps_0", "no", 0.21)) is False
+def test_note_substance_scores_filler_as_the_escalation_side() -> None:
+    assert NOTE_SUBSTANCE.allowed_labels == ("task_information", "filler")
+    assert NOTE_SUBSTANCE.label_scores == (0.0, 1.0)
+
+
+def test_filler_is_dropped_only_at_a_confident_score() -> None:
+    assert should_drop_note(None) is False
+    assert should_drop_note(_result("note_substance", "filler", 0.69)) is False
+    assert should_drop_note(_result("note_substance", "filler", 0.7)) is True
 
 
 def test_worth_extracting_skips_only_a_confident_no() -> None:
