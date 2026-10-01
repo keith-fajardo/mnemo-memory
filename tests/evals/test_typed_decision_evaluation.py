@@ -170,6 +170,44 @@ def test_ollama_connection_and_unknown_failures_are_unanswered() -> None:
     assert not any(row.answered for row in rows)
 
 
+class _ScriptedProvider:
+    """Raises the scripted errors on the first calls, then returns a valid empty reply."""
+
+    def __init__(self, errors: list[Exception]) -> None:
+        self.errors = errors
+        self.calls = 0
+
+    def generate(self, request: object) -> object:
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return {"candidates": []}
+
+
+def test_ollama_transport_error_is_retried_once_and_can_recover() -> None:
+    provider = _ScriptedProvider([urllib.error.URLError("blip")])
+    rows = evaluate_extraction_ollama(provider)
+    assert provider.calls == len(rows) + 1
+    assert rows[0].answered and rows[0].retried and not rows[0].format_failure
+    assert not any(row.retried for row in rows[1:])
+    arm = score_extraction(rows)["arms"]["ollama"]
+    assert (arm["retries"], arm["unanswered"]) == (1, 0)
+
+
+def test_ollama_row_is_unanswered_when_the_retry_also_fails() -> None:
+    provider = _ScriptedProvider([urllib.error.URLError("down"), urllib.error.URLError("down")])
+    rows = evaluate_extraction_ollama(provider)
+    assert not rows[0].answered and rows[0].retried
+    assert all(row.answered for row in rows[1:])
+
+
+def test_ollama_format_failure_is_not_retried() -> None:
+    provider = _ScriptedProvider([ValueError("bad json")])
+    rows = evaluate_extraction_ollama(provider)
+    assert provider.calls == len(rows)
+    assert rows[0].answered and rows[0].format_failure and not rows[0].retried
+
+
 def test_baseline_valid_gate_needs_ninety_percent_well_formed_output() -> None:
     jev = ExtractionRow("jev", "e0", True, "decision", True, "decision", True)
 

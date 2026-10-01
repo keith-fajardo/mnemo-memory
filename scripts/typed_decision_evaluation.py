@@ -125,6 +125,7 @@ class ExtractionRow:
     predicted_kind: str | None
     answered: bool
     format_failure: bool = False  # the model replied, but not in a readable shape
+    retried: bool = False  # a transport error was retried once (informational, not a gate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +261,7 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
             ),
             "unanswered": sum(not row.answered for row in arm_rows),
             "format_failures": sum(row.format_failure for row in arm_rows),
+            "retries": sum(row.retried for row in arm_rows),
         }
     if "jev" not in arms or "ollama" not in arms:
         return {"arms": arms, "gates": {"baseline": "not_evaluated"}}
@@ -428,9 +430,14 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
     for event_id, summary, worth, kind in extraction_events():
         answered = True
         format_failure = False
+        retried = False
         proposals: tuple[EpisodicExtractionProposal, ...] = ()
         try:
-            raw = provider.generate(_OllamaRequest(summary))
+            try:
+                raw = provider.generate(_OllamaRequest(summary))
+            except (OSError, TimeoutError):
+                retried = True  # one retry for a transport blip; nothing else is retried
+                raw = provider.generate(_OllamaRequest(summary))
         except (OSError, TimeoutError):
             answered = False  # connection failure: no answer at all
         except (ValueError, TypeError):
@@ -452,6 +459,7 @@ def evaluate_extraction_ollama(provider: EpisodicProvider) -> list[ExtractionRow
                 proposals[0].kind.value if proposals else None,
                 answered,
                 format_failure,
+                retried,
             )
         )
     return rows
