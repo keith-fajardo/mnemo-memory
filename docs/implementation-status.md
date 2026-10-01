@@ -6841,5 +6841,9 @@ memory need is now one five-way choice question, and relevance is a per-note fil
 request per note, only confident filler dropped, no topical-relevance judgement). A held-out
 fixture (`typed-decision-holdout-v1.json`: 40 prompts, 24 notes) adds `front_door_holdout` and
 `relevance_holdout` gates, the relevance gates now require at least 90% of noise dropped, and
-Ollama parse failures count as answered wrong answers. The revised questions are verified
+Ollama connection failures are unanswered while unreadable or malformed output is a wrong
+answer, and the comparison needs at least 90% well-formed baseline output (`baseline_valid`).
+The 600 ms deadline applies to the front-door request; the filler check sends up to 16 further
+requests per prompt, reported but not gated, and a concurrent total-time budget must be set and
+gated before phase 2 uses it. The revised questions are verified
 offline only; a new maintainer-authorized live run is still pending.

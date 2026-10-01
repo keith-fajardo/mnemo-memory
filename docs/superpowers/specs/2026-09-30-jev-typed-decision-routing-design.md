@@ -439,6 +439,21 @@ they pass too. Latency is still measured on the original 60 routing prompts. The
 now also require that at least 90% of noise is dropped, so a filter that drops nothing cannot
 pass.
 
-**Ollama parse failures count as wrong answers.** If the local model replies but the output
-cannot be parsed, the row is answered with no proposals. Only a transport failure is unanswered.
+**The baseline is scored honestly.** A connection failure or timeout (including a refused or
+unreachable Ollama) is unanswered. If the local model replies but the output is unreadable
+(not JSON, truncated, or valid JSON in the wrong shape), that is a wrong answer: the row is
+answered with no proposals and counted as a format failure. A new gate, `baseline_valid`,
+requires at least 90% well-formed baseline output, because a mostly unreadable baseline would
+make "Jev is at least as good as the baseline" meaningless.
 
+**Cost and latency of one request per note.** For relevance this supersedes the single request
+of section 3 change 1. The 600 ms per-prompt deadline applies to the front-door request. The
+filler check sends one request per retrieved note, up to 16 per prompt. The evaluation reports
+its per-request latency (`request_p50_ms`, `request_p95_ms`) and count, but does not gate them.
+A concurrent total-time budget for those requests must be set and gated before the filler check
+goes live in phase 2.
+
+**Reading the holdout gates.** The holdout has 8 noise notes, so `filler_removed` (at least 90%
+of noise dropped) means all 8 must be dropped; 7 of 8 is 0.875 and fails. The report's
+`noise_dropped_share` is the share of all dropped notes that were noise, and is `None` when
+nothing was dropped.

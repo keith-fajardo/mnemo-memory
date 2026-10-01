@@ -69,11 +69,16 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
    likely one (schema_invalid). It rejects API keys that are not printable ASCII without
    whitespace, so malformed keys cannot surface in HTTP-library error text.
 9. **Question design (revised 2026-10-01).** Memory need is one five-way choice question
-   instead of two yes/no questions, because the two interfered and accuracy was 0.62 on the
-   first live run. Relevance became a per-note filler check: the stored note is the judged text,
-   one request per note, and only confident filler is dropped. It cannot judge topical
-   relevance, which is deferred. A held-out fixture joins the phase-1 gates, and Ollama output
-   that fails to parse counts as a wrong answer, not an unanswered one.
+   instead of two yes/no questions. The first live run scored 0.62 because the first question
+   was worded narrowly around "earlier sessions"; rewording it made the two questions interfere.
+   Relevance became a per-note filler check: the stored note is the judged text, one request
+   per note, and only confident filler is dropped. It cannot judge topical relevance, which is
+   deferred. The 600 ms per-prompt deadline applies to the front-door request; the filler check
+   sends up to 16 further requests per prompt, its per-request latency is reported but not
+   gated, and a concurrent total-time budget must be set and gated before it goes live in
+   phase 2. A held-out fixture joins the phase-1 gates. Connection failures to Ollama are
+   unanswered, unreadable or malformed output is a wrong answer, and the comparison requires at
+   least 90% well-formed baseline output.
 
 ## Alternatives considered
 
@@ -108,7 +113,7 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
 
 - Assets: prompts, stored memory snippets and event summaries.
 - Phase 1 sends only synthetic fixture text, and runtime text is blocked before any network call.
-  The secret scan covers every string sent, including snippets embedded in question text.
+  The secret scan covers every string sent, including stored note snippets sent as the judged text.
   Non-`normal` sensitivity is never sent.
 - The key never appears in settings, logs, telemetry, reports, `repr` or exception text.
   Telemetry and reports are content-free.
