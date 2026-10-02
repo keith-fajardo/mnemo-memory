@@ -17,6 +17,7 @@ from mnemo_memory.packages.domain import (
     ApprovedEpisodicEventPinAction,
     ApprovedEventGovernanceKind,
     ApprovedEventKind,
+    ApprovedEventLifecycleStatus,
     CheckpointAggregate,
     CheckpointContent,
     CheckpointEventKind,
@@ -777,6 +778,30 @@ class CheckpointApplicationService:
                 "approved episodic event storage is unavailable"
             ) from error
 
+    def approved_event_context_item(
+        self, scope: MemoryScope, event_id: EventId
+    ) -> tuple[ContextItem, ProvenanceNotice] | OmissionReason:
+        """Rebuild one approved fact for an exact item-ID fetch, or say why it cannot be served.
+
+        Not found in this scope is ``unauthorized_scope``; a corrected fact is ``superseded``;
+        a retracted one is ``expired`` (spec 2026-10-02 §5). Storage failures still raise.
+        """
+
+        self._validate_scope(scope)
+        try:
+            record = self._approved_repository().get_approved_event_record(scope, event_id)
+        except ApprovedEpisodicEventNotFound:
+            return OmissionReason.UNAUTHORIZED_SCOPE
+        except ApprovedEpisodicEventRepositoryError as error:
+            raise CheckpointApplicationStorageFailure(
+                "approved episodic event storage is unavailable"
+            ) from error
+        if record.status is ApprovedEventLifecycleStatus.CORRECTED:
+            return OmissionReason.SUPERSEDED
+        if record.status is not ApprovedEventLifecycleStatus.ACTIVE or record.event is None:
+            return OmissionReason.EXPIRED
+        return _approved_event_context_item(record.event)
+
     def set_approved_event_pin(
         self, command: SetApprovedEpisodicEventPin
     ) -> ApprovedEpisodicEventPinView:
@@ -1356,45 +1381,13 @@ class CheckpointApplicationService:
         notices: list[ProvenanceNotice] = []
         omitted = page.next_offset is not None
         for event in page.items[:maximum_events]:
-            content = json.dumps(
-                {
-                    "event_kind": event.kind.value,
-                    "occurred_at": event.occurred_at.isoformat(),
-                    "summary": event.summary,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            tokens = (len(content) + 3) // 4
-            if tokens > remaining:
+            item, notice = _approved_event_context_item(event)
+            if item.token_estimate > remaining:
                 omitted = True
                 continue
-            item = ContextItem(
-                item_id=f"approved-episodic:{event.event_id}",
-                item_type=ContextItemType.EPISODIC_MEMORY,
-                source_scope=event.scope,
-                content=content,
-                content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
-                token_estimate=tokens,
-                evidence_references=event.evidence_references,
-                source_trust=SourceTrustClass.USER_AUTHORED,
-                sensitivity=Sensitivity.NORMAL,
-                validity=ValidityState.UNKNOWN,
-                ranking=None,
-                conflict_state=ConflictState.NONE,
-                observed_at=event.occurred_at,
-            )
             items.append(item)
-            notices.append(
-                ProvenanceNotice(
-                    provenance_id=f"provenance:{item.item_id}",
-                    item_id=item.item_id,
-                    source_reference=f"mnemo:approved-episodic/{event.event_id}",
-                    source_digest=hashlib.sha256(content.encode()).hexdigest(),
-                    evidence_references=event.evidence_references,
-                )
-            )
-            remaining -= tokens
+            notices.append(notice)
+            remaining -= item.token_estimate
         omissions = (
             ()
             if not omitted
@@ -1473,6 +1466,44 @@ class CheckpointApplicationService:
         except Exception as error:
             translated = self._translate(error)
             raise translated from error
+
+
+def _approved_event_context_item(
+    event: ApprovedEpisodicEvent,
+) -> tuple[ContextItem, ProvenanceNotice]:
+    """Render one approved fact exactly as task context shows it (also used by item-ID fetches)."""
+
+    content = json.dumps(
+        {
+            "event_kind": event.kind.value,
+            "occurred_at": event.occurred_at.isoformat(),
+            "summary": event.summary,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    item = ContextItem(
+        item_id=f"approved-episodic:{event.event_id}",
+        item_type=ContextItemType.EPISODIC_MEMORY,
+        source_scope=event.scope,
+        content=content,
+        content_representation=ContentRepresentation.UNTRUSTED_EVIDENCE,
+        token_estimate=(len(content) + 3) // 4,
+        evidence_references=event.evidence_references,
+        source_trust=SourceTrustClass.USER_AUTHORED,
+        sensitivity=Sensitivity.NORMAL,
+        validity=ValidityState.UNKNOWN,
+        ranking=None,
+        conflict_state=ConflictState.NONE,
+        observed_at=event.occurred_at,
+    )
+    return item, ProvenanceNotice(
+        provenance_id=f"provenance:{item.item_id}",
+        item_id=item.item_id,
+        source_reference=f"mnemo:approved-episodic/{event.event_id}",
+        source_digest=hashlib.sha256(content.encode()).hexdigest(),
+        evidence_references=event.evidence_references,
+    )
 
 
 def estimate_checkpoint_tokens(content: CheckpointContent) -> int:

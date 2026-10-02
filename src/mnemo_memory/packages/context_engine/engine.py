@@ -267,6 +267,8 @@ class UnifiedContextEngine:
         return self._planner.plan(request)
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
+        if request.item_ids:
+            return self._assembler.get_context(request)
         plan = self.plan(request)
         packet = self._assembler.get_context(_planned_request(request, plan))
         if RetrievalCategory.EPISODIC not in plan.categories:

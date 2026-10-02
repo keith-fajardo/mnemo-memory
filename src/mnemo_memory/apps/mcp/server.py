@@ -486,6 +486,19 @@ def _create_full_server(
                 ),
             ),
         ] = False,
+        item_ids: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                min_length=1,
+                max_length=16,
+                description=(
+                    "Optional exact item IDs from an earlier MNEMO_OMISSION line (1-16). Returns "
+                    "exactly those items after the usual scope, currentness and sensitivity "
+                    "checks; cannot be combined with other retrieval fields."
+                ),
+            ),
+        ] = None,
         render_for: Annotated[
             str | None,
             Field(
@@ -539,6 +552,7 @@ def _create_full_server(
                 "source_overview": source_overview,
                 "include_lifecycle_events": include_lifecycle_events,
                 "include_approved_events": include_approved_events,
+                "item_ids": item_ids,
                 "active_task_checkpoint_tokens": active_task_checkpoint_tokens,
                 "total_tokens": total_tokens,
             }
@@ -1071,6 +1085,9 @@ def _create_compact_server(port: McpContextPort) -> FastMCP:
         query: Annotated[str | None, Field(default=None, min_length=1, max_length=512)] = None,
         recap_days: Annotated[int | None, Field(default=None, ge=0, le=90)] = None,
         total_tokens: Annotated[int, Field(ge=100, le=1_300)] = 600,
+        item_ids: Annotated[
+            list[str] | None, Field(default=None, min_length=1, max_length=16)
+        ] = None,
     ) -> dict[str, object]:
         return port.get_context(
             {
@@ -1079,6 +1096,7 @@ def _create_compact_server(port: McpContextPort) -> FastMCP:
                 "include_approved_events": True,
                 "active_task_checkpoint_tokens": min(600, total_tokens),
                 "total_tokens": total_tokens,
+                "item_ids": item_ids,
             }
         )
 
