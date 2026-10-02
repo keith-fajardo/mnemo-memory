@@ -6,7 +6,7 @@ import fcntl
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -32,6 +32,54 @@ _ROUTES = frozenset(
 _SHADOW_NEEDS = frozenset({"yes", "no", "unknown"})
 _SHADOW_ACTIONS = frozenset({"none", "push_structure", "push_long_term", "push_both", "lazy_pull"})
 _SEMANTIC_ROUTES = frozenset({"none", "prior_memory", "knowledge", "structure"})
+_TYPED_MODES = frozenset({"off", "shadow", "live"})
+_TYPED_UNAVAILABLE_REASONS = frozenset(
+    {
+        "disabled",
+        "data_route_blocked",
+        "no_credential",
+        "secret_blocked",
+        "sensitivity_blocked",
+        "budget_denied",
+        "timeout",
+        "http_error",
+        "schema_invalid",
+    }
+)
+_TYPED_FRONT_DOOR_OUTCOMES = _TYPED_UNAVAILABLE_REASONS | {
+    "answered",
+    "not_asked",
+    "typed_step_error",
+}
+_TYPED_MEMORY_LABELS = frozenset(
+    {"past_sessions", "project_docs", "code_structure", "code_and_history", "nothing", "unsure"}
+)
+_TYPED_CONFIDENCE_BUCKETS = frozenset({"<0.5", "0.5-0.6", "0.6-0.8", "0.8-0.9", ">=0.9"})
+_TYPED_TIERS = frozenset({"light", "heavy"})
+_TYPED_HINTS = frozenset({"shown", "would_show", "none"})
+_TYPED_SKILL_OUTCOMES = frozenset({"agreed", "differs", "unsure", "skipped", "not_asked"})
+# The one definition of the pinned Jev version pattern; the hook imports it from here.
+TYPED_MODEL_VERSION = re.compile(r"jev-[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
+_MAXIMUM_TYPED_NOTES = 16
+AUTOMATIC_ROUTE_TYPED_V1_FIELDS: tuple[str, ...] = (
+    "typed_front_door_mode",
+    "typed_relevance_mode",
+    "typed_tier_hint_mode",
+    "typed_skill_mode",
+    "typed_front_door_outcome",
+    "typed_step_ms",
+    "typed_model_version",
+    "typed_memory_label",
+    "typed_memory_confidence_bucket",
+    "typed_action",
+    "typed_agrees_with_rules",
+    "typed_notes_checked",
+    "typed_notes_dropped",
+    "typed_notes_unanswered",
+    "typed_tier",
+    "typed_hint",
+    "typed_skill",
+)
 
 
 class AutomaticRouteTelemetryError(RuntimeError):
@@ -143,6 +191,109 @@ class AutomaticRouteScope:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomaticRouteTypedDecisions:
+    """Content-free ``typed_v1`` group for one prompt (spec 2026-10-02 §7): closed values only."""
+
+    front_door_mode: str
+    relevance_mode: str
+    tier_hint_mode: str
+    skill_mode: str
+    front_door_outcome: str
+    step_ms: int
+    model_version: str | None
+    memory_label: str | None
+    memory_confidence_bucket: str | None
+    action: str | None
+    agrees_with_rules: bool | None
+    notes_checked: int
+    notes_dropped: int
+    notes_unanswered: int
+    tier: str | None
+    hint: str
+    skill: str
+
+    def __post_init__(self) -> None:
+        modes = (self.front_door_mode, self.relevance_mode, self.tier_hint_mode, self.skill_mode)
+        if any(mode not in _TYPED_MODES for mode in modes):
+            raise ValueError("automatic route typed mode is invalid")
+        if self.front_door_outcome not in _TYPED_FRONT_DOOR_OUTCOMES:
+            raise ValueError("automatic route typed outcome is invalid")
+        if not _bounded_integer(self.step_ms, 10_000_000):
+            raise ValueError("automatic route typed duration is invalid")
+        if self.model_version is not None and (
+            not isinstance(self.model_version, str)
+            or TYPED_MODEL_VERSION.fullmatch(self.model_version) is None
+        ):
+            raise ValueError("automatic route typed model version is invalid")
+        if self.memory_label is not None and self.memory_label not in _TYPED_MEMORY_LABELS:
+            raise ValueError("automatic route typed memory label is invalid")
+        if (
+            self.memory_confidence_bucket is not None
+            and self.memory_confidence_bucket not in _TYPED_CONFIDENCE_BUCKETS
+        ):
+            raise ValueError("automatic route typed confidence bucket is invalid")
+        if self.action is not None and self.action not in _SHADOW_ACTIONS:
+            raise ValueError("automatic route typed action is invalid")
+        if self.agrees_with_rules is not None and not isinstance(self.agrees_with_rules, bool):
+            raise ValueError("automatic route typed agreement is invalid")
+        counts = (self.notes_checked, self.notes_dropped, self.notes_unanswered)
+        if (
+            not all(_bounded_integer(value, _MAXIMUM_TYPED_NOTES) for value in counts)
+            or self.notes_dropped + self.notes_unanswered > self.notes_checked
+        ):
+            raise ValueError("automatic route typed note counts are invalid")
+        if self.tier is not None and self.tier not in _TYPED_TIERS:
+            raise ValueError("automatic route typed tier is invalid")
+        if self.hint not in _TYPED_HINTS:
+            raise ValueError("automatic route typed hint is invalid")
+        if self.skill not in _TYPED_SKILL_OUTCOMES:
+            raise ValueError("automatic route typed skill outcome is invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "typed_front_door_mode": self.front_door_mode,
+            "typed_relevance_mode": self.relevance_mode,
+            "typed_tier_hint_mode": self.tier_hint_mode,
+            "typed_skill_mode": self.skill_mode,
+            "typed_front_door_outcome": self.front_door_outcome,
+            "typed_step_ms": self.step_ms,
+            "typed_model_version": self.model_version,
+            "typed_memory_label": self.memory_label,
+            "typed_memory_confidence_bucket": self.memory_confidence_bucket,
+            "typed_action": self.action,
+            "typed_agrees_with_rules": self.agrees_with_rules,
+            "typed_notes_checked": self.notes_checked,
+            "typed_notes_dropped": self.notes_dropped,
+            "typed_notes_unanswered": self.notes_unanswered,
+            "typed_tier": self.tier,
+            "typed_hint": self.hint,
+            "typed_skill": self.skill,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> AutomaticRouteTypedDecisions:
+        return cls(
+            front_door_mode=_string(value["typed_front_door_mode"]),
+            relevance_mode=_string(value["typed_relevance_mode"]),
+            tier_hint_mode=_string(value["typed_tier_hint_mode"]),
+            skill_mode=_string(value["typed_skill_mode"]),
+            front_door_outcome=_string(value["typed_front_door_outcome"]),
+            step_ms=_integer(value["typed_step_ms"]),
+            model_version=_optional_string(value["typed_model_version"]),
+            memory_label=_optional_string(value["typed_memory_label"]),
+            memory_confidence_bucket=_optional_string(value["typed_memory_confidence_bucket"]),
+            action=_optional_string(value["typed_action"]),
+            agrees_with_rules=_optional_boolean(value["typed_agrees_with_rules"]),
+            notes_checked=_integer(value["typed_notes_checked"]),
+            notes_dropped=_integer(value["typed_notes_dropped"]),
+            notes_unanswered=_integer(value["typed_notes_unanswered"]),
+            tier=_optional_string(value["typed_tier"]),
+            hint=_string(value["typed_hint"]),
+            skill=_string(value["typed_skill"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AutomaticRouteEvent:
     event_id: UUID
     scope: AutomaticRouteScope
@@ -178,6 +329,7 @@ class AutomaticRouteEvent:
     feedback: AutomaticRouteFeedback | None = None
     live_gate_applied: bool = False
     injected_context_tokens: int = 0
+    typed: AutomaticRouteTypedDecisions | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, UUID) or self.event_id.version != 4:
@@ -300,6 +452,8 @@ class AutomaticRouteEvent:
             raise ValueError("automatic route injected tokens require the live gate")
         if self.live_gate_applied and self.shadow_action is None:
             raise ValueError("automatic route live gate requires a deterministic plan")
+        if self.typed is not None and not isinstance(self.typed, AutomaticRouteTypedDecisions):
+            raise TypeError("automatic route typed decisions are invalid")
 
     def with_tool_observation(
         self, category: AutomaticRouteToolCategory, result_characters: int | None
@@ -409,6 +563,8 @@ class AutomaticRouteEvent:
                     "injected_context_tokens": self.injected_context_tokens,
                 }
             )
+        if self.typed is not None:
+            value.update(self.typed.to_dict())
         return value
 
     @classmethod
@@ -452,7 +608,12 @@ class AutomaticRouteEvent:
             "shadow_duration_ms",
         }
         live_gate = {"live_gate_applied", "injected_context_tokens"}
-        if not isinstance(value, dict) or frozenset(value) not in {
+        typed_v1 = frozenset(AUTOMATIC_ROUTE_TYPED_V1_FIELDS)
+        if not isinstance(value, dict):
+            raise ValueError("automatic route event is invalid")
+        keys = frozenset(value)
+        has_typed = bool(keys & typed_v1)
+        if (has_typed and not typed_v1 <= keys) or keys - typed_v1 not in {
             frozenset(required),
             frozenset(required | shadow),
             frozenset(required | shadow_v2),
@@ -519,6 +680,7 @@ class AutomaticRouteEvent:
             None if feedback is None else AutomaticRouteFeedback(feedback),
             _boolean(value.get("live_gate_applied", False)),
             _integer(value.get("injected_context_tokens", 0)),
+            typed=AutomaticRouteTypedDecisions.from_dict(value) if has_typed else None,
         )
 
 
@@ -904,3 +1066,15 @@ def _boolean(value: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError("automatic route boolean is invalid")
     return value
+
+
+def _optional_string(value: object) -> str | None:
+    return None if value is None else _string(value)
+
+
+def _optional_boolean(value: object) -> bool | None:
+    return None if value is None else _boolean(value)
+
+
+def _bounded_integer(value: object, maximum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum

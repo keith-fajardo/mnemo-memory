@@ -46,7 +46,11 @@ from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT
 from mnemo_memory.packages.model_gateway.typed_decisions import GuardedTypedDecisionClassifier
 from mnemo_memory.packages.skills_registry import KnowledgeDocumentSkillRegistry
 from mnemo_memory.packages.storage import SQLiteCheckpointRepository
-from mnemo_memory.packages.telemetry import AutomaticRouteEvent, LocalAutomaticRouteTelemetryStore
+from mnemo_memory.packages.telemetry import (
+    AutomaticRouteEvent,
+    AutomaticRouteOutcome,
+    LocalAutomaticRouteTelemetryStore,
+)
 from scripts.typed_decision_test_support import (
     FAKE_TYPESAFE_KEY,
     FILLER_EVENT,
@@ -640,3 +644,174 @@ def test_the_real_hook_path_builds_the_runtime_guard_and_keeps_todays_output(
     assert (seen.context, seen.delivery_keys) == (off.context, off.delivery_keys)
     assert built and all(guard._source is TypedDecisionSource.RUNTIME for guard in built)
     assert sent == []
+
+
+def test_shadow_writes_the_typed_v1_group(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    shadow = synthetic_overrides(
+        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW)
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, shadow)
+    typed = _latest_event(fixture).typed
+    assert typed is not None
+    assert typed.front_door_outcome == "answered"
+    assert typed.model_version == "jev-1.13.0"
+    assert (typed.memory_label, typed.memory_confidence_bucket, typed.action) == (
+        "nothing",
+        ">=0.9",
+        "none",
+    )
+    assert typed.agrees_with_rules is False
+    assert (typed.notes_checked, typed.notes_dropped, typed.notes_unanswered) == (3, 2, 0)
+    assert (typed.tier, typed.hint, typed.skill) == ("light", "would_show", "differs")
+    assert 0 <= typed.step_ms <= 10_000
+
+
+def test_live_typed_plan_is_recorded_as_typed_decision(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"memory_need": ("project_docs", 0.95)}),
+        TypedHookModes(front_door=LIVE),
+    )
+    run_hook(fixture, LAZY_PROMPT, live)
+    event = _latest_event(fixture)
+    assert event.shadow_reason == "typed_decision"
+    assert event.shadow_action == "push_long_term"
+    assert event.typed is not None and event.typed.agrees_with_rules is False
+
+
+def test_live_notes_dropped_counts_only_drops_that_happened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    applied = _latest_event(fixture).typed
+    assert applied is not None and applied.notes_dropped == 2
+
+    def oversized(item_id: str) -> OmissionNotice:
+        return OmissionNotice(item_id, OmissionReason.LOWER_RANK, "x" * 6_000)
+
+    monkeypatch.setattr(typed_decision_hook, "filler_omission", oversized)
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    cancelled = _latest_event(fixture).typed
+    assert cancelled is not None and cancelled.notes_dropped == 0
+
+
+def test_a_step_error_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("synthetic local failure")
+
+    monkeypatch.setattr(cli, "_typed_local_inputs", broken)
+    run_hook(
+        fixture,
+        KNOWLEDGE_PROMPT,
+        synthetic_overrides(
+            fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(LIVE, LIVE, LIVE, LIVE)
+        ),
+    )
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.front_door_outcome == "typed_step_error"
+
+
+def test_a_step_error_with_no_buildable_record_writes_no_typed_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("synthetic local failure")
+
+    monkeypatch.setattr(cli, "_typed_local_inputs", broken)
+    monkeypatch.setattr(typed_decision_hook, "typed_step_error_decisions", broken)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(LIVE))
+    off = run_hook(fixture, KNOWLEDGE_PROMPT)
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == off.context
+    assert _latest_event(fixture).typed is None
+
+
+@pytest.mark.parametrize("failure", ["raises", "invalid_object"])
+def test_invalid_typed_telemetry_never_costs_the_context_or_the_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert len(_filler_omission_ids(dropped)) == 2
+
+    def raises(values: object) -> object:
+        raise ValueError("synthetic invalid typed value")
+
+    def invalid_object(values: object) -> object:
+        return object()
+
+    broken = raises if failure == "raises" else invalid_object
+    monkeypatch.setattr(typed_decision_hook, "route_telemetry", broken)
+    seen = run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert seen.context == dropped  # the applied live context survives
+    assert seen.telemetry_event_id is not None
+    event = _latest_event(fixture)
+    assert event.event_id == seen.telemetry_event_id and event.typed is None
+
+
+HINT_ANSWERS = {"complexity": ("light", 0.95), "tool_need": ("read_heavy", 0.95)}
+
+
+def test_hint_only_attachment_with_the_gate_off_is_no_attachment(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(
+        fixture, ScriptedJevTransport(HINT_ANSWERS), TypedHookModes(tier_hint=LIVE)
+    )
+    attached = run_hook(fixture, "Refactor this function to be shorter", live)
+    assert attached.context == HINT_TEXT  # the hint is all that went out
+    event = _latest_event(fixture)
+    assert event.outcome is AutomaticRouteOutcome.NO_ATTACHMENT
+    assert event.typed is not None and event.typed.hint == "shown"
+
+
+def test_hint_only_attachment_after_a_gate_none_action_is_no_attachment(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({**HINT_ANSWERS, "memory_need": ("nothing", 0.95)}),
+        TypedHookModes(front_door=LIVE, tier_hint=LIVE),
+    )
+    attached = run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert attached.context == HINT_TEXT
+    event = _latest_event(fixture)
+    assert event.shadow_action == "none"
+    assert event.outcome is AutomaticRouteOutcome.NO_ATTACHMENT
+    assert event.typed is not None and event.typed.hint == "shown"
+
+
+def test_a_hint_beside_memory_keeps_the_hit_label(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"complexity": ("light", 0.95), "tool_need": ("read_heavy", 0.95)}),
+        TypedHookModes(tier_hint=LIVE),
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert _latest_event(fixture).outcome is AutomaticRouteOutcome.HIT
+
+
+def test_hook_telemetry_never_holds_prompt_note_or_skill_text(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    shadow = synthetic_overrides(
+        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW)
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT + " private-marker-5d2e", shadow)
+    encoded = LocalAutomaticRouteTelemetryStore(fixture.data).path.read_text("utf-8")
+    assert "typed_front_door_mode" in encoded
+    for marker in (
+        "private-marker-5d2e",
+        "invoice",
+        "ledger",
+        "FILLER",
+        "release-notes",
+        "test-plan",
+    ):
+        assert marker not in encoded

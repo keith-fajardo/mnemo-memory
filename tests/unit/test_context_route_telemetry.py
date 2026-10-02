@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from mnemo_memory.apps.cli.main import app
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.telemetry import (
+    AUTOMATIC_ROUTE_TYPED_V1_FIELDS,
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
     AutomaticRouteEvent,
@@ -23,6 +24,7 @@ from mnemo_memory.packages.telemetry import (
     AutomaticRouteScope,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    AutomaticRouteTypedDecisions,
     CheckpointSaveDiagnosticEvent,
     CheckpointSaveOutcome,
     LocalAutomaticRouteDiagnosticsSettingsStore,
@@ -364,3 +366,79 @@ def test_shadow_reason_typed_decision_is_accepted_by_telemetry() -> None:
         shadow_estimated_tokens=1_300,
     )
     assert AutomaticRouteEvent.from_dict(event.to_dict()).shadow_reason == "typed_decision"
+
+
+TYPED = AutomaticRouteTypedDecisions(
+    front_door_mode="shadow",
+    relevance_mode="shadow",
+    tier_hint_mode="off",
+    skill_mode="shadow",
+    front_door_outcome="data_route_blocked",
+    step_ms=4,
+    model_version=None,
+    memory_label="unsure",
+    memory_confidence_bucket=None,
+    action=None,
+    agrees_with_rules=None,
+    notes_checked=3,
+    notes_dropped=0,
+    notes_unanswered=3,
+    tier=None,
+    hint="none",
+    skill="unsure",
+)
+
+
+def _lazy_shadow(seed: int) -> AutomaticRouteEvent:
+    return replace(
+        _event(seed),
+        shadow_structural_need="unknown",
+        shadow_long_term_need="unknown",
+        shadow_reason="uncertain",
+        shadow_shared_maximum_tokens=1_300,
+        shadow_action="lazy_pull",
+        shadow_estimated_tokens=29,
+    )
+
+
+def test_typed_v1_group_round_trips_with_every_existing_key_tier() -> None:
+    plain = replace(_event(1), typed=TYPED)
+    shadowed = replace(_lazy_shadow(2), typed=TYPED)
+    live = replace(shadowed, live_gate_applied=True, injected_context_tokens=29)
+    for event in (plain, shadowed, live):
+        encoded = event.to_dict()
+        assert set(AUTOMATIC_ROUTE_TYPED_V1_FIELDS) <= set(encoded)
+        assert AutomaticRouteEvent.from_dict(encoded) == event
+    older = _lazy_shadow(3)
+    assert not set(AUTOMATIC_ROUTE_TYPED_V1_FIELDS) & set(older.to_dict())
+    assert AutomaticRouteEvent.from_dict(older.to_dict()).typed is None
+
+
+def test_typed_v1_keys_must_arrive_together() -> None:
+    encoded = replace(_event(1), typed=TYPED).to_dict()
+    del encoded["typed_skill"]
+    with pytest.raises(ValueError, match="automatic route event is invalid"):
+        AutomaticRouteEvent.from_dict(encoded)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("front_door_mode", "on"),
+        ("front_door_outcome", "What did we decide last week?"),
+        ("step_ms", -1),
+        ("model_version", "jev-latest"),
+        ("memory_label", "private prompt text"),
+        ("memory_confidence_bucket", "0.73"),
+        ("action", "push_everything"),
+        ("agrees_with_rules", "yes"),
+        ("notes_checked", 17),
+        ("notes_dropped", 4),
+        ("tier", "medium"),
+        ("hint", "Mnemo: try a subagent"),
+        ("skill", "release-notes"),
+    ],
+)
+def test_typed_v1_accepts_only_closed_values(field: str, value: object) -> None:
+    with pytest.raises(ValueError):
+        AutomaticRouteTypedDecisions.from_dict({**TYPED.to_dict(), f"typed_{field}": value})

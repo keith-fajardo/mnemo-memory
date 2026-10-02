@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 from mnemo_memory.packages.application import PersonalSettings
@@ -71,6 +70,7 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     decide_tier,
 )
 from mnemo_memory.packages.policy.content_safety import contains_high_confidence_secret
+from mnemo_memory.packages.telemetry import TYPED_MODEL_VERSION, AutomaticRouteTypedDecisions
 
 OFF = TypedDecisionMode.OFF
 SHADOW = TypedDecisionMode.SHADOW
@@ -87,7 +87,6 @@ APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"
 UNSURE = "unsure"
 _YES = AutomaticContextNeed.YES
 _NO = AutomaticContextNeed.NO
-_PINNED_MODEL_VERSION = re.compile(r"jev-[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 _RETRIEVAL_ROUTES = frozenset(
     {
         AutomaticContextRoute.PRIOR_MEMORY,
@@ -610,7 +609,7 @@ def pinned_model_version(records: Sequence[TypedDecisionRecord]) -> str | None:
         if (
             record.outcome == "answered"
             and version is not None
-            and _PINNED_MODEL_VERSION.fullmatch(version) is not None
+            and TYPED_MODEL_VERSION.fullmatch(version) is not None
         ):
             return version
     return None
@@ -698,3 +697,9 @@ def _unavailable_answers(
 
 def _elapsed_ms(started: float, clock: Callable[[], float]) -> int:
     return max(0, min(10_000_000, round((clock() - started) * 1_000)))
+
+
+def route_telemetry(values: TypedTelemetryValues) -> AutomaticRouteTypedDecisions:
+    """Validate the plain values as the persisted, closed-value ``typed_v1`` group."""
+
+    return AutomaticRouteTypedDecisions(**asdict(values))

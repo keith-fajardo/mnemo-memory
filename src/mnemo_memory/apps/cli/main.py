@@ -223,6 +223,7 @@ from mnemo_memory.packages.telemetry import (
     AutomaticRouteScope,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    AutomaticRouteTypedDecisions,
     CheckpointSaveDiagnosticEvent,
     CheckpointSaveTelemetryError,
     LocalAutomaticRouteDiagnosticsSettingsStore,
@@ -919,9 +920,10 @@ def _automatic_prompt_context_for_hook(
     render = _rules_prompt_render(
         data_directory, scope, prompt, client, trace, experimental_live_gate=experimental_live_gate
     )
+    typed_telemetry: AutomaticRouteTypedDecisions | None = None
     modes = _typed_modes(settings, replay_overrides)
     if modes is not None:
-        render, trace = _typed_prompt_render(
+        render, trace, typed_telemetry = _typed_prompt_render(
             data_directory, scope, prompt, client, settings, modes, trace, render, replay_overrides
         )
     result = render.result
@@ -938,9 +940,10 @@ def _automatic_prompt_context_for_hook(
 
     if result.failed:
         outcome = AutomaticRouteOutcome.ERROR
-    elif live_attachment is not None and (
-        live_attachment.action is AutomaticContextShadowAction.NONE
-    ):
+    elif (
+        live_attachment is not None
+        and (live_attachment.action is AutomaticContextShadowAction.NONE)
+    ) or _only_hints_attached(result, rendered, typed_telemetry):
         outcome = AutomaticRouteOutcome.NO_ATTACHMENT
     elif result.skill_candidates:
         outcome = AutomaticRouteOutcome.CANDIDATE
@@ -1002,6 +1005,8 @@ def _automatic_prompt_context_for_hook(
             0 if live_attachment is None else live_attachment.injected_context_tokens
         ),
     )
+    with suppress(TypeError, ValueError):  # typed telemetry never costs the event or context
+        event = replace(event, typed=typed_telemetry)
     try:
         LocalAutomaticRouteTelemetryStore(
             data_directory, retention_days=diagnostic_settings.retention_days
@@ -1009,6 +1014,27 @@ def _automatic_prompt_context_for_hook(
     except (AutomaticRouteTelemetryError, OSError, ValueError):
         return PromptContextAttachment(rendered, delivery_keys=delivery_keys)
     return PromptContextAttachment(rendered, event_id, delivery_keys)
+
+
+def _only_hints_attached(
+    result: _AutomaticPromptContextResult,
+    rendered: str | None,
+    typed_telemetry: AutomaticRouteTypedDecisions | None,
+) -> bool:
+    """A live task-size hint went out and nothing else did: no memory, skill or guidance text.
+
+    Such an attachment is ``NO_ATTACHMENT``; ``typed_hint`` records that the hint was shown.
+    """
+
+    return (
+        typed_telemetry is not None
+        and typed_telemetry.hint == "shown"
+        and rendered is not None
+        and result.packet is None
+        and not result.skill_candidates
+        and result.decision.route is not AutomaticContextRoute.LOCAL_DIAGNOSTICS
+        and not _rendered_item_ids(rendered)
+    )
 
 
 _SUPPRESSED_ACTIONS = frozenset(
@@ -1221,7 +1247,7 @@ def _typed_prompt_render(
     trace: _AutomaticShadowTrace | None,
     rules: _PromptRender,
     overrides: TypedHookOverrides | None,
-) -> tuple[_PromptRender, _AutomaticShadowTrace | None]:
+) -> tuple[_PromptRender, _AutomaticShadowTrace | None, AutomaticRouteTypedDecisions | None]:
     """Run the typed step on top of today's result; any exception keeps today's result.
 
     The whole step is wrapped (spec §7): the module import, the local preparation, the Jev
@@ -1288,8 +1314,33 @@ def _typed_prompt_render(
             data_directory, scope, prompt, client, trace, rules, decisions, local, step
         )
     except Exception:
-        return rules, trace
-    return applied.render, applied.trace
+        return rules, trace, _typed_step_error_telemetry(modes, started)
+    values = decisions.telemetry
+    if modes.relevance is TypedDecisionMode.LIVE:
+        values = replace(values, notes_dropped=applied.notes_dropped)
+    try:
+        telemetry: AutomaticRouteTypedDecisions | None = typed.route_telemetry(
+            replace(values, step_ms=_elapsed_milliseconds(started))
+        )
+        if not isinstance(telemetry, AutomaticRouteTypedDecisions):
+            telemetry = None
+    except Exception:
+        telemetry = None  # losing the record is acceptable; losing the applied context is not
+    return applied.render, applied.trace, telemetry
+
+
+def _typed_step_error_telemetry(
+    modes: TypedHookModes, started: float
+) -> AutomaticRouteTypedDecisions | None:
+    """The ``typed_step_error`` record, or ``None`` when even that cannot be built."""
+
+    try:
+        from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+        failed = typed.typed_step_error_decisions(modes, _elapsed_milliseconds(started))
+        return typed.route_telemetry(failed.telemetry)
+    except Exception:
+        return None
 
 
 def _apply_typed_decisions(
