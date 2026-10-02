@@ -1,6 +1,8 @@
 import http.client
 import json
 import pickle
+import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from email.message import Message
@@ -220,7 +222,7 @@ def test_redirects_are_never_followed() -> None:
     handler: Any = jev_provider._NoRedirect()
     redirect = handler.redirect_request(req, None, 302, "Found", Message(), "http://evil.example/")
     assert redirect is None
-    opener: Any = jev_provider._OPENER
+    opener: Any = jev_provider._opener()
     handlers = opener.handlers
     assert not any(type(h) is urllib_request.HTTPRedirectHandler for h in handlers)
 
@@ -257,7 +259,51 @@ class DripResponse:
 def _serve(monkeypatch: pytest.MonkeyPatch, response: DripResponse) -> None:
     from mnemo_memory.connectors.typesafe import jev_provider
 
-    monkeypatch.setattr(jev_provider._OPENER, "open", lambda request, timeout: response)
+    monkeypatch.setattr(jev_provider._opener(), "open", lambda request, timeout: response)
+
+
+def test_importing_the_connector_builds_no_opener() -> None:
+    """The opener (and its TLS context) is built on first use, inside the request deadline."""
+
+    code = (
+        "import urllib.request\n"
+        "calls = []\n"
+        "build = urllib.request.build_opener\n"
+        "def counted(*handlers):\n"
+        "    calls.append(handlers)\n"
+        "    return build(*handlers)\n"
+        "urllib.request.build_opener = counted\n"
+        "from mnemo_memory.apps.cli import typed_decision_composition\n"
+        "from mnemo_memory.connectors.typesafe import jev_provider\n"
+        "print(len(calls), jev_provider._OPENER is None)\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=60
+    )
+    assert completed.stdout.split() == ["0", "True"]
+
+
+def test_the_opener_is_built_once_across_transport_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib import request as urllib_request
+
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    built: list[tuple[object, ...]] = []
+
+    class Opener:
+        def open(self, request: object, timeout: float) -> DripResponse:
+            return DripResponse(b"{}", chunk=65_536)
+
+    def build(*handlers: object) -> Opener:
+        built.append(handlers)
+        return Opener()
+
+    monkeypatch.setattr(jev_provider, "_OPENER", None)
+    monkeypatch.setattr(urllib_request, "build_opener", build)
+    assert jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0) == b"{}"
+    assert jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0) == b"{}"
+    assert len(built) == 1
+    assert [type(handler) for handler in built[0]] == [jev_provider._NoRedirect]
 
 
 def test_transport_enforces_a_total_deadline_on_a_trickling_body(

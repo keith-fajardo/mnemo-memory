@@ -7,6 +7,7 @@ import json
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from uuid import UUID
@@ -18,6 +19,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     APPROVED_EVENT_ITEM_PREFIX,
     FILLER_OMISSION_DETAIL,
     MAXIMUM_FILLER_CHECKS,
+    MINIMUM_STEP_DEADLINE_SECONDS,
     FillerCandidate,
     GuardFactory,
     RuntimeTypedDecisionRecorder,
@@ -38,6 +40,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     omission_line,
     pinned_model_version,
     skill_comparison,
+    step_deadline_seconds,
     typed_hook_modes,
     typed_step_error_decisions,
     with_task_size_hint,
@@ -809,6 +812,69 @@ def test_requests_still_running_at_the_cap_count_as_timeouts() -> None:
     assert telemetry.notes_unanswered == 4 and telemetry.notes_dropped == 0
     assert telemetry.tier == "heavy" and telemetry.hint == "none"
     assert telemetry.model_version is None
+
+
+def _recorded_decide(
+    adapter: ScriptedAdapter, *, started: float, clock: Callable[[], float] = time.monotonic
+) -> tuple[TypedPromptDecisions, list[TypedDecisionRecord]]:
+    """Decide one prompt and return the guard's records (each timeout carries the cap used)."""
+
+    recorders: list[RuntimeTypedDecisionRecorder] = []
+    build = _factory(adapter)
+
+    def factory(recorder: TypedDecisionRecorder) -> GuardedTypedDecisionClassifier | None:
+        assert isinstance(recorder, RuntimeTypedDecisionRecorder)
+        recorders.append(recorder)
+        return build(recorder)
+
+    decisions = decide_typed_prompt(factory, STEP, started=started, clock=clock)
+    return decisions, recorders[0].records
+
+
+def test_the_cap_counts_from_the_start_of_the_typed_step() -> None:
+    """0.3 s already spent when the step reaches Jev leaves 0.5 s of the 0.8 s cap."""
+
+    def advanced() -> float:
+        return time.monotonic() + 0.3
+
+    decisions, records = _recorded_decide(
+        ScriptedAdapter(SCRIPT, delay=1.5), started=time.monotonic(), clock=advanced
+    )
+    assert decisions.telemetry.front_door_outcome == "timeout"
+    assert len(records) == 1 + len(STEP.filler_candidates)
+    assert {record.outcome for record in records} == {"timeout"}
+    assert all(480 <= record.duration_ms <= 500 for record in records)
+
+
+def test_a_step_with_no_time_left_still_asks_under_the_floor() -> None:
+    decisions, records = _recorded_decide(
+        ScriptedAdapter(SCRIPT, delay=1.5), started=time.monotonic() - 5.0
+    )
+    assert decisions.telemetry.front_door_outcome == "timeout"  # not typed_step_error
+    assert {record.duration_ms for record in records} == {100}
+    answered, _ = _recorded_decide(ScriptedAdapter(SCRIPT), started=time.monotonic() - 5.0)
+    assert answered.telemetry.front_door_outcome == "answered"
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    [
+        (0.0, 0.8),
+        (0.3, 0.5),
+        (0.75, MINIMUM_STEP_DEADLINE_SECONDS),
+        (5.0, MINIMUM_STEP_DEADLINE_SECONDS),
+        (math.inf, MINIMUM_STEP_DEADLINE_SECONDS),
+        (-2.0, 0.8),  # a clock that went backwards never extends the cap
+        (math.nan, 0.8),
+    ],
+)
+def test_the_step_deadline_stays_within_the_floor_and_the_cap(
+    elapsed: float, expected: float
+) -> None:
+    deadline = step_deadline_seconds(100.0, lambda: 100.0 + elapsed)
+    assert deadline == pytest.approx(expected)
+    assert MINIMUM_STEP_DEADLINE_SECONDS == 0.1
+    assert 0.0 < deadline <= 30.0 and math.isfinite(deadline)  # ask_each's ValueError guard
 
 
 def test_model_version_is_folded_from_the_records() -> None:

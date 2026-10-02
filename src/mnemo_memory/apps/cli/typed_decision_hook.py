@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -82,6 +83,8 @@ HOOK_KINDS: tuple[TypedDecisionKind, ...] = (
     TypedDecisionKind.SKILL,
 )
 MAXIMUM_FILLER_CHECKS = 16
+# The least of the cap a step still gives Jev when its local preparation ran long.
+MINIMUM_STEP_DEADLINE_SECONDS = 0.1
 FILLER_OMISSION_DETAIL = "judged filler; fetch with get_context item_ids"
 APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"
 UNSURE = "unsure"
@@ -616,9 +619,12 @@ def pinned_model_version(records: Sequence[TypedDecisionRecord]) -> str | None:
 
 
 async def ask_typed_questions(
-    guard: GuardedTypedDecisionClassifier, step: TypedStepInput
+    guard: GuardedTypedDecisionClassifier,
+    step: TypedStepInput,
+    *,
+    total_deadline_seconds: float = FILLER_CHECK_BUDGET_SECONDS,
 ) -> TypedAnswers:
-    """Send the front-door request and every note request at once under one 0.8 s cap."""
+    """Send the front-door request and every note request at once under one total cap."""
 
     axes = front_door_axes(step)
     requests: list[tuple[Sequence[ClassifierAxis], str]] = []
@@ -627,9 +633,7 @@ async def ask_typed_questions(
     requests.extend(((NOTE_SUBSTANCE,), candidate.text) for candidate in step.filler_candidates)
     outcomes: tuple[TypedDecisionOutcome, ...] = ()
     if requests:
-        outcomes = await guard.ask_each(
-            requests, total_deadline_seconds=FILLER_CHECK_BUDGET_SECONDS
-        )
+        outcomes = await guard.ask_each(requests, total_deadline_seconds=total_deadline_seconds)
     front = outcomes[0] if axes else None
     fillers = outcomes[1:] if axes else outcomes
     tier: TierDecision | None = None
@@ -654,6 +658,19 @@ async def _tier(front: TypedDecisionOutcome, prompt: str) -> TierDecision:
     return await decide_tier(tier_committee(), classifier, prompt)
 
 
+def step_deadline_seconds(started: float, clock: Callable[[], float] = time.monotonic) -> float:
+    """The cap left for this step's requests: 0.8 s counted from the step's start (spec §3).
+
+    It is never below ``MINIMUM_STEP_DEADLINE_SECONDS`` and never above the 0.8 s cap, so a
+    slow or broken clock can neither trip ``ask_each``'s deadline check nor extend the cap.
+    """
+
+    remaining = FILLER_CHECK_BUDGET_SECONDS - (clock() - started)
+    if math.isnan(remaining):
+        return FILLER_CHECK_BUDGET_SECONDS
+    return min(FILLER_CHECK_BUDGET_SECONDS, max(MINIMUM_STEP_DEADLINE_SECONDS, remaining))
+
+
 def decide_typed_prompt(
     guard_factory: GuardFactory,
     step: TypedStepInput,
@@ -661,7 +678,11 @@ def decide_typed_prompt(
     started: float,
     clock: Callable[[], float] = time.monotonic,
 ) -> TypedPromptDecisions:
-    """Run the step with exactly one ``asyncio.run``; any exception is ``typed_step_error``."""
+    """Run the step with exactly one ``asyncio.run``; any exception is ``typed_step_error``.
+
+    The requests get what is left of the 0.8 s cap since ``started``, the start of the typed
+    step, so local preparation and the guard build count against the cap too.
+    """
 
     try:
         recorder = RuntimeTypedDecisionRecorder()
@@ -669,7 +690,9 @@ def decide_typed_prompt(
         if guard is None:
             answers = _unavailable_answers(step, TypedDecisionUnavailableReason.DISABLED)
         else:
-            coroutine = ask_typed_questions(guard, step)
+            coroutine = ask_typed_questions(
+                guard, step, total_deadline_seconds=step_deadline_seconds(started, clock)
+            )
             try:
                 answers = asyncio.run(coroutine)
             finally:
