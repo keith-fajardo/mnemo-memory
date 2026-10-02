@@ -16,12 +16,11 @@ import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TextIO
 
-from scripts.typed_decision_evaluation import REPOSITORY_ROOT
+from scripts.typed_decision_fixtures import REPOSITORY_ROOT
 from scripts.typed_decision_replay import (
     ARMS,
     SETS,
@@ -49,13 +48,8 @@ def main(
     runner: Runner | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
-    typed_import_ms: int = 0,
 ) -> int:
-    """Run the replay, or with ``--child`` one case.
-
-    ``typed_import_ms`` is set only by ``scripts.typed_decision_replay_child``: the cold import
-    of the typed hook module that the real hook pays inside the hook call.
-    """
+    """Run the replay, or with ``--child`` one case."""
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id")
@@ -70,7 +64,6 @@ def main(
             variables,
             stdin or sys.stdin,
             stdout or sys.stdout,
-            typed_import_ms,
         )
     if args.run_id is None or not _RUN_ID.fullmatch(args.run_id):
         return _refuse("--run-id must be 1-64 letters, digits, '.', '_' or '-'")
@@ -104,9 +97,11 @@ def _child(
     environ: Mapping[str, str],
     stdin: TextIO,
     stdout: TextIO,
-    typed_import_ms: int,
 ) -> int:
     """One replay case in this fresh process; the prompt is re-read from the fixtures.
+
+    The reported hook time is the timed hook call alone. Nothing of the typed step was imported
+    before it, so a typed case pays the cold typed import inside that call, as a real hook does.
 
     The request carries a case ID, never prompt text. No refusal echoes prompt text or note
     content: an unknown case and a refused seed have their own fixed messages, and every other
@@ -138,8 +133,6 @@ def _child(
         return _refuse(str(error))
     except Exception as error:
         return _refuse(f"replay case failed ({type(error).__name__})")
-    if request.arm == "typed":
-        result = replace(result, hook_ms=result.hook_ms + typed_import_ms)
     stdout.write(result.to_json() + "\n")
     return 0
 

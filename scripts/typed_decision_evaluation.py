@@ -7,11 +7,8 @@ source is ``synthetic_fixture``, and only fixtures that declare synthetic proven
 from __future__ import annotations
 
 import asyncio
-import json
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from mnemo_memory.packages.domain import (
@@ -46,28 +43,24 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
     decide_tier,
 )
-
-REPOSITORY_ROOT = Path(__file__).parents[1]
-_FIXTURES = REPOSITORY_ROOT / "tests/fixtures/evals"
-ROUTING_FIXTURE = _FIXTURES / "automatic-context-routing-v1.json"
-VIABILITY_FIXTURE = _FIXTURES / "viability-corpus-v1.json"
-TYPED_DECISION_FIXTURE = _FIXTURES / "typed-decision-v1.json"
-HOLDOUT_FIXTURE = _FIXTURES / "typed-decision-holdout-v1.json"
-TELEHEALTH_FIXTURE = _FIXTURES / "telehealth-long-horizon-phase2-qwen25coder7b.json"
+from scripts.typed_decision_fixtures import HOLDOUT_FIXTURE as HOLDOUT_FIXTURE
+from scripts.typed_decision_fixtures import NOISE_SUMMARY as NOISE_SUMMARY
+from scripts.typed_decision_fixtures import REPOSITORY_ROOT as REPOSITORY_ROOT
+from scripts.typed_decision_fixtures import ROUTING_FIXTURE as ROUTING_FIXTURE
+from scripts.typed_decision_fixtures import TELEHEALTH_FIXTURE as TELEHEALTH_FIXTURE
+from scripts.typed_decision_fixtures import TYPED_DECISION_FIXTURE as TYPED_DECISION_FIXTURE
+from scripts.typed_decision_fixtures import VIABILITY_FIXTURE as VIABILITY_FIXTURE
+from scripts.typed_decision_fixtures import FixtureProvenanceError as FixtureProvenanceError
+from scripts.typed_decision_fixtures import load_synthetic_fixture as load_synthetic_fixture
+from scripts.typed_decision_fixtures import nearest_rank as nearest_rank
+from scripts.typed_decision_fixtures import relevance_notes as relevance_notes
+from scripts.typed_decision_fixtures import share as share
 
 LATENCY_DEADLINE_MS = 600
 LATENCY_MINIMUM_SAMPLES = 50
 LATENCY_MAXIMUM_SHARE_OVER = 0.05
 FILLER_CHECK_MAXIMUM_SHARE_OVER = 0.05
 NOTE_CHECK_CHUNK = 16  # concurrent filler checks per batch, matching one prompt's note window
-_SYNTHETIC_PROVENANCE: tuple[object, ...] = (
-    {
-        "origin": "Mnemo-owned original synthetic prompts",
-        "competing_product_artifacts_used": False,
-    },
-    "Original synthetic Mnemo evaluation data; no production, personal, secret, or competitor "
-    "content.",
-)
 _EXPECTED_NEED = {
     "prior_memory": "long_term",
     "knowledge": "long_term",
@@ -75,10 +68,6 @@ _EXPECTED_NEED = {
     "none": "none",
 }
 _EPISODIC_KIND_BY_PREFIX = {"decision": "decision", "failure": "failure", "result": "outcome"}
-NOISE_SUMMARY = (
-    "Background conversation {index:04d} for synthetic workflow {template}; it is unrelated "
-    "and must not displace active task state."
-)
 _MEASURED_OUTCOMES = (None, TypedDecisionUnavailableReason.TIMEOUT.value)
 _SECTIONS = (
     "front_door",
@@ -89,10 +78,6 @@ _SECTIONS = (
     "extraction",
     "tier",
 )
-
-
-class FixtureProvenanceError(ValueError):
-    """A fixture does not declare synthetic provenance, so it may not be sent to Jev."""
 
 
 class EpisodicProvider(Protocol):
@@ -147,13 +132,6 @@ class TierRow:
 class _OllamaRequest:
     summary: str
     max_candidates: int = 4
-
-
-def load_synthetic_fixture(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("provenance") not in _SYNTHETIC_PROVENANCE:
-        raise FixtureProvenanceError(path.name)
-    return value
 
 
 def derived_route(structure: NeedAnswer, long_term: NeedAnswer) -> str:
@@ -375,35 +353,6 @@ async def evaluate_front_door_holdout(guard: GuardedTypedDecisionClassifier) -> 
     )
 
 
-def relevance_notes() -> dict[str, list[tuple[str, str, str]]]:
-    """The dev filler-check notes per viability template, as ``(note ID, summary, category)``.
-
-    Each template's events are ``relevant`` or ``superseded``; two generated ``noise`` notes
-    follow. Note IDs are unique across templates.
-    """
-
-    notes: dict[str, list[tuple[str, str, str]]] = {}
-    for template in load_synthetic_fixture(VIABILITY_FIXTURE)["templates"]:
-        template_id = template["template_id"]
-        relevant = set(template["ground_truth"]["relevant_evidence"])
-        notes[template_id] = [
-            (
-                event["event_key"],
-                event["summary"],
-                "relevant" if event["event_key"] in relevant else "superseded",
-            )
-            for event in template["events"]
-        ] + [
-            (
-                f"noise-{template_id}-{index}",
-                NOISE_SUMMARY.format(index=index, template=template_id),
-                "noise",
-            )
-            for index in (1, 2)
-        ]
-    return notes
-
-
 async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
     rows: list[RelevanceRow] = []
     for template_id, candidates in relevance_notes().items():
@@ -559,20 +508,6 @@ def _excluded_fixtures() -> dict[str, str]:
     return {}
 
 
-def share(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
-    """``numerator / denominator``, or ``empty`` when there is nothing to divide by."""
-
-    return numerator / denominator if denominator else empty
-
-
 def _drop_rate(rows: Sequence[RelevanceRow], category: str) -> float:
     selected = [row for row in rows if row.category == category]
     return share(sum(row.dropped for row in selected), len(selected))
-
-
-def nearest_rank(ordered: Sequence[int], quantile: float) -> int | None:
-    """The nearest-rank percentile of already sorted values, or ``None`` for none."""
-
-    if not ordered:
-        return None
-    return ordered[max(0, math.ceil(quantile * len(ordered)) - 1)]

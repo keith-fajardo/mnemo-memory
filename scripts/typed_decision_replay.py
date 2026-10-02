@@ -10,6 +10,11 @@ Nothing here opens a network connection itself. A typed case reaches Jev only th
 synthetic-source guard, and only after its data directory is verified to hold exactly the seeded
 fixture content: the prompt is re-read from a provenance-checked fixture by case ID, and every
 note, event and skill the hook could send must match the seed.
+
+Importing this module loads nothing of the typed step (``typed_decision_hook``, the model
+gateway, ``asyncio``): those are imported inside the functions that run after the hook call. A
+fresh-process child therefore pays the cold typed import inside the timed hook call, in the
+hook's mode read, exactly as a real hook process does.
 """
 
 from __future__ import annotations
@@ -29,13 +34,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from mnemo_memory.apps.cli import main as cli
-from mnemo_memory.apps.cli.typed_decision_hook import (
-    FILLER_OMISSION_DETAIL,
-    TypedHookModes,
-    TypedHookOverrides,
-    TypedPromptDecisions,
-    TypedStepInput,
-)
+from mnemo_memory.apps.cli.typed_hook_overrides import TypedHookModes, TypedHookOverrides
 from mnemo_memory.packages.application import (
     LocalConfig,
     PersonalSettings,
@@ -61,12 +60,6 @@ from mnemo_memory.packages.domain import (
     TypedDecisionMode,
     VerificationStatus,
 )
-from mnemo_memory.packages.model_gateway.decision_axes import SKILL_PICK_NONE, NeedAnswer
-from mnemo_memory.packages.model_gateway.typed_decisions import (
-    GuardedTypedDecisionClassifier,
-    TypedDecisionRecord,
-    TypedDecisionRecorder,
-)
 from mnemo_memory.packages.skills_registry import KnowledgeDocumentSkillRegistry
 from mnemo_memory.packages.storage import SQLiteKnowledgeDocumentRepository
 from mnemo_memory.packages.telemetry import (
@@ -76,22 +69,27 @@ from mnemo_memory.packages.telemetry import (
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
-from scripts.typed_decision_evaluation import (
+from scripts.typed_decision_fixtures import (
     HOLDOUT_FIXTURE,
     REPOSITORY_ROOT,
     ROUTING_FIXTURE,
     TYPED_DECISION_FIXTURE,
-    FrontDoorRow,
     load_synthetic_fixture,
     nearest_rank,
     relevance_notes,
-    score_front_door,
     share,
 )
 
 if TYPE_CHECKING:
+    from mnemo_memory.apps.cli.typed_decision_hook import TypedPromptDecisions, TypedStepInput
     from mnemo_memory.connectors.automatic_memory.client_config import ClientName
     from mnemo_memory.connectors.typesafe import JevTransport
+    from mnemo_memory.packages.model_gateway.typed_decisions import (
+        GuardedTypedDecisionClassifier,
+        TypedDecisionRecord,
+        TypedDecisionRecorder,
+    )
+    from scripts.typed_decision_evaluation import FrontDoorRow
 
 _FIXTURES = REPOSITORY_ROOT / "tests/fixtures/evals"
 SKILLS_FIXTURE = _FIXTURES / "typed-decision-skills-v1.json"
@@ -578,6 +576,8 @@ def run_replay_case(
 def _applied_drops(context: str) -> tuple[str, ...]:
     """Notes the hook really dropped: its per-note ``lower_rank`` filler omission lines."""
 
+    from mnemo_memory.apps.cli.typed_decision_hook import FILLER_OMISSION_DETAIL
+
     applied: list[str] = []
     for line in context.split("\n"):
         if not line.startswith("MNEMO_OMISSION "):
@@ -611,6 +611,8 @@ def _skill_pick(
     makes, run even where the hook skips it (hard routes and ADR 0046 suppression). Both arms
     are therefore scored against one baseline on every prompt.
     """
+
+    from mnemo_memory.packages.model_gateway.decision_axes import SKILL_PICK_NONE
 
     if decisions is not None and decisions.skill is not None:
         return decisions.skill
@@ -765,6 +767,8 @@ def _score_memory(
     Jev result: its count and the ones whose rules answer misses the fixture label.
     """
 
+    from scripts.typed_decision_evaluation import score_front_door
+
     asked = [case for case in cases if result(case, "typed").hard_rule is not True]
     preempted = [case for case in cases if result(case, "typed").hard_rule is True]
     hard_rule = score_front_door(
@@ -785,6 +789,9 @@ def _score_memory(
 
 
 def _front_door_row(case: ReplayCase, result: ReplayResult) -> FrontDoorRow:
+    from mnemo_memory.packages.model_gateway.decision_axes import NeedAnswer
+    from scripts.typed_decision_evaluation import FrontDoorRow
+
     outcome = result.front_door_outcome
     return FrontDoorRow(
         case.case_id,
@@ -858,6 +865,8 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
 def _score_skill(
     cases: Sequence[ReplayCase], result: Callable[[ReplayCase, str], ReplayResult]
 ) -> dict[str, Any]:
+    from mnemo_memory.packages.model_gateway.decision_axes import SKILL_PICK_NONE
+
     scored = [case for case in cases if not _step_error(result(case, "typed"))]
 
     def correct(case: ReplayCase, arm: str) -> bool:

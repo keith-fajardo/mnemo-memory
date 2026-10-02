@@ -16,6 +16,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
+from mnemo_memory.apps.cli.typed_hook_overrides import TypedHookModes as TypedHookModes
+from mnemo_memory.apps.cli.typed_hook_overrides import TypedHookOverrides as TypedHookOverrides
 from mnemo_memory.packages.application import PersonalSettings
 from mnemo_memory.packages.application.context_routing import (
     AutomaticContextNeed,
@@ -111,27 +113,6 @@ _ROUTE_BY_LABEL: dict[str, AutomaticContextRoute | None] = {
     "code_structure": AutomaticContextRoute.STRUCTURE,
     "nothing": None,
 }
-
-
-@dataclass(frozen=True, slots=True)
-class TypedHookModes:
-    """The four hook decision modes; all ``off`` means today's path, byte for byte."""
-
-    front_door: TypedDecisionMode = TypedDecisionMode.OFF
-    relevance: TypedDecisionMode = TypedDecisionMode.OFF
-    tier_hint: TypedDecisionMode = TypedDecisionMode.OFF
-    skill: TypedDecisionMode = TypedDecisionMode.OFF
-
-    def __post_init__(self) -> None:
-        if any(not isinstance(mode, TypedDecisionMode) for mode in self._modes()):
-            raise TypeError("typed hook modes are invalid")
-
-    def _modes(self) -> tuple[TypedDecisionMode, ...]:
-        return (self.front_door, self.relevance, self.tier_hint, self.skill)
-
-    @property
-    def any_on(self) -> bool:
-        return any(mode is not TypedDecisionMode.OFF for mode in self._modes())
 
 
 def typed_hook_modes(settings: PersonalSettings) -> TypedHookModes:
@@ -236,19 +217,6 @@ class TypedPromptDecisions:
 
 GuardFactory = Callable[[TypedDecisionRecorder], GuardedTypedDecisionClassifier | None]
 DecisionObserver = Callable[[TypedStepInput, TypedPromptDecisions], None]
-
-
-@dataclass(frozen=True, slots=True)
-class TypedHookOverrides:
-    """Replay-only seam: a synthetic-source guard factory and fixed modes (spec §3).
-
-    The ``automatic-memory-hook`` command never builds one, so the real hook always uses the
-    runtime guard and the locked settings. ``observer`` lets the replay score decisions.
-    """
-
-    guard_factory: GuardFactory
-    modes: TypedHookModes
-    observer: DecisionObserver | None = None
 
 
 _NO_MEMORY_ANSWER = MemoryNeedOutcome(None, None, None)

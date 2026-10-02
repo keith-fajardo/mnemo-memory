@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -567,7 +568,6 @@ def _child(
     request: ReplayRequest | dict[str, str],
     *flags: str,
     environ: Mapping[str, str] | None = None,
-    typed_import_ms: int = 0,
 ) -> tuple[int, str]:
     value = request if isinstance(request, dict) else _as_dict(request)
     stdout = io.StringIO()
@@ -576,7 +576,6 @@ def _child(
         environ={} if environ is None else environ,
         stdin=io.StringIO(json.dumps(value)),
         stdout=stdout,
-        typed_import_ms=typed_import_ms,
     )
     return code, stdout.getvalue()
 
@@ -619,9 +618,11 @@ def test_child_reports_other_failures_by_type_only(
     assert "synthetic fixture" not in error and prompt not in error
 
 
-def test_child_adds_the_typed_import_time_to_typed_cases_only(
+def test_child_reports_the_measured_hook_time_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The cold typed import is already inside the timed hook call; nothing is added twice."""
+
     def fake(request: ReplayRequest, **kwargs: object) -> ReplayResult:
         return _result(find_case(request.set_name, request.group, request.case_id), request.arm)
 
@@ -629,12 +630,79 @@ def test_child_adds_the_typed_import_time_to_typed_cases_only(
     hook_ms = {}
     for arm in ("rules", "typed"):
         request = ReplayRequest("dev", "memory", "prior-01", arm, str(tmp_path), str(tmp_path))
-        code, output = _child(
-            request, "--live-calls-authorized", environ=FAKE_ENVIRON, typed_import_ms=40
-        )
+        code, output = _child(request, "--live-calls-authorized", environ=FAKE_ENVIRON)
         assert code == 0
         hook_ms[arm] = ReplayResult.from_json(output).hook_ms
-    assert hook_ms == {"rules": 100, "typed": 140}
+    assert hook_ms == {"rules": 100, "typed": 100}
+
+
+_COLD_IMPORT_PROBE = """
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+import scripts.typed_decision_replay_child  # everything a child loads before its case runs
+
+TYPED_PATH = (
+    "asyncio",
+    "mnemo_memory.apps.cli.typed_decision_composition",
+    "mnemo_memory.apps.cli.typed_decision_hook",
+    "mnemo_memory.connectors.typesafe",
+    "mnemo_memory.packages.model_gateway",
+)
+
+
+def loaded():
+    return sorted(name for name in sys.modules if name.startswith(TYPED_PATH))
+
+
+at_import = loaded()
+from mnemo_memory.apps.cli import main as cli
+from scripts import typed_decision_replay as replay
+
+seen = {}
+hook = cli._automatic_prompt_context_for_hook
+
+
+def timed(*args, **kwargs):
+    seen["entry"] = loaded()
+    try:
+        return hook(*args, **kwargs)
+    finally:
+        seen["exit"] = "mnemo_memory.apps.cli.typed_decision_hook" in sys.modules
+
+
+def unreachable(url, body, headers, timeout):
+    raise OSError("tests never reach the network")
+
+
+cli._automatic_prompt_context_for_hook = timed
+with tempfile.TemporaryDirectory() as root:
+    seed = replay.seed_replay_set(Path(root), "holdout")
+    case = replay.find_case("holdout", "memory", "h-prior-01")
+    replay.run_replay_case(
+        replay.replay_request(seed, case, "typed"),
+        environ={"TYPESAFE_API_KEY": "test-key-not-real-0000"},
+        jev_transport=unreachable,
+    )
+print(json.dumps({"at_import": at_import, "entry": seen["entry"], "exit": seen["exit"]}))
+"""
+
+
+def test_a_child_imports_the_typed_step_cold_inside_the_timed_hook_call() -> None:
+    """As in a real hook process, nothing of the typed path is loaded before the hook runs."""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _COLD_IMPORT_PROBE],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+        cwd=Path(__file__).parents[2],
+    )
+    seen = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert seen == {"at_import": [], "entry": [], "exit": True}
 
 
 def _as_dict(request: ReplayRequest) -> dict[str, str]:
