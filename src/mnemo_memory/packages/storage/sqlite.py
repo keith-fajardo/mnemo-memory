@@ -3651,6 +3651,23 @@ class SQLiteCheckpointRepository:
                 "approved episodic event governance operation failed"
             ) from error
 
+    def get_approved_event_records(
+        self, scope: MemoryScope, event_ids: tuple[EventId, ...]
+    ) -> tuple[ApprovedEpisodicEventRecord, ...]:
+        self._require_approved_episodic_scope(scope)
+        try:
+            with self._connect() as connection:
+                return tuple(
+                    self._approved_event_record(connection, scope, event_id)
+                    for event_id in event_ids
+                )
+        except ApprovedEpisodicEventNotFound:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as error:
+            raise ApprovedEpisodicEventStorageFailure(
+                "approved episodic event governance operation failed"
+            ) from error
+
     def list_approved_event_records(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventRecordPage:
@@ -6891,6 +6908,30 @@ class _KnowledgeOperations:
             raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
 
     @staticmethod
+    def list_current_knowledge_revisions(
+        backend: SQLiteCheckpointRepository, scope: MemoryScope
+    ) -> tuple[KnowledgeDocumentRevision, ...]:
+        """Every active document's current revision through one connection, in list order."""
+        backend._require_project_scope(scope)
+        try:
+            with backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT revision.* FROM knowledge_document_sources AS source JOIN "
+                    "knowledge_document_revisions AS revision "
+                    "ON revision.revision_id = source.current_revision_id "
+                    "WHERE source.owner_id = ? AND source.workspace_id IS ? "
+                    "AND source.project_id = ? AND source.is_deleted = 0 "
+                    "ORDER BY source.relative_path ASC, source.document_id ASC",
+                    (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id)),
+                ).fetchall()
+                return tuple(
+                    _KnowledgeOperations._knowledge_revision_from_row(connection, row, scope)
+                    for row in rows
+                )
+        except sqlite3.Error as error:
+            raise KnowledgeDocumentStorageFailure("knowledge storage operation failed") from error
+
+    @staticmethod
     def get_current_knowledge_revision_by_path(
         backend: SQLiteCheckpointRepository, scope: MemoryScope, relative_path: str
     ) -> KnowledgeDocumentRevision:
@@ -7553,6 +7594,9 @@ class SQLiteKnowledgeDocumentRepository:
         return _KnowledgeOperations.get_current_knowledge_revision(
             self._backend, scope, document_id
         )
+
+    def list_current_revisions(self, scope: MemoryScope) -> tuple[KnowledgeDocumentRevision, ...]:
+        return _KnowledgeOperations.list_current_knowledge_revisions(self._backend, scope)
 
     def get_current_revision_by_path(
         self, scope: MemoryScope, relative_path: str

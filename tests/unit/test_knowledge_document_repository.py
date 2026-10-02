@@ -32,6 +32,7 @@ from mnemo_memory.packages.storage import (
     KnowledgeDocumentRepository,
     KnowledgeDocumentSecretRejected,
     ReferenceKnowledgeDocumentRepository,
+    SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
     SQLiteMigrationError,
 )
@@ -356,3 +357,58 @@ def test_sqlite_repository_rolls_back_invalid_batch_and_hides_cross_scope(tmp_pa
     repository.apply_sync(scope(), (accepted,), ())
     with pytest.raises(KnowledgeDocumentNotFound):
         repository.get_current_revision(scope(2), accepted.document.document_id)
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_current_revisions_equal_the_one_by_one_reads_in_one_connection(
+    adapter: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository: ReferenceKnowledgeDocumentRepository | SQLiteKnowledgeDocumentRepository
+    if adapter == "reference":
+        repository = ReferenceKnowledgeDocumentRepository()
+    else:
+        repository = SQLiteKnowledgeDocumentRepository(
+            tmp_path / "current.sqlite3", base_directory=tmp_path
+        )
+        repository.migrate()
+    linked = revision("notes/b-linked.md", "# Linked\nSee [the plan](plan.md).\n## Detail\nMore.")
+    first = revision("notes/a-decision.md", "# Decision\nUse deterministic parsing.")
+    deleted = revision("notes/c-deleted.md", "# Deleted\nGone soon.")
+    other = revision("notes/other.md", "# Other\nAnother project.", scope_value=scope(2))
+    repository.apply_sync(scope(), (linked, first, deleted), ())
+    repository.apply_sync(scope(2), (other,), ())
+    second = revision(
+        "notes/a-decision.md",
+        "# Decision\nUse bounded deterministic parsing.",
+        number=2,
+        predecessor=first.revision_id,
+        document_id=first.document.document_id,
+    )
+    tombstone = KnowledgeDocumentTombstone(
+        deleted.document.document_id,
+        scope(),
+        deleted.document.relative_path,
+        deleted.document.content_digest,
+        deleted.revision_id,
+        NOW + timedelta(minutes=1),
+    )
+    repository.apply_sync(scope(), (second,), (tombstone,))
+    one_by_one = tuple(
+        repository.get_current_revision(scope(), known.document_id)
+        for known in repository.list_active_documents(scope())
+    )
+    assert one_by_one == (second, linked)
+    connections = 0
+    connect = SQLiteCheckpointRepository._connect
+
+    def counted(backend: SQLiteCheckpointRepository) -> sqlite3.Connection:
+        nonlocal connections
+        connections += 1
+        return connect(backend)
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "_connect", counted)
+
+    assert repository.list_current_revisions(scope()) == one_by_one
+    assert connections == (1 if adapter == "sqlite" else 0)
+    assert repository.list_current_revisions(scope(2)) == (other,)
+    assert repository.list_current_revisions(scope(3)) == ()

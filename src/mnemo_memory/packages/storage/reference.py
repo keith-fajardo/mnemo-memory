@@ -251,6 +251,12 @@ class ReferenceKnowledgeDocumentRepository:
             raise KnowledgeDocumentNotFound("knowledge document was not found")
         return self._revisions[state.current_revision_id]
 
+    def list_current_revisions(self, scope: MemoryScope) -> tuple[KnowledgeDocumentRevision, ...]:
+        return tuple(
+            self._revisions[known.current_revision_id]
+            for known in self.list_active_documents(scope)
+        )
+
     def get_current_revision_by_path(
         self, scope: MemoryScope, relative_path: str
     ) -> KnowledgeDocumentRevision:
@@ -2068,6 +2074,11 @@ class ReferenceApprovedEpisodicEventRepository:
                 governance,
             )
         raise ApprovedEpisodicEventNotFound("approved episodic event was not found")
+
+    def get_approved_event_records(
+        self, scope: MemoryScope, event_ids: tuple[EventId, ...]
+    ) -> tuple[ApprovedEpisodicEventRecord, ...]:
+        return tuple(self.get_approved_event_record(scope, event_id) for event_id in event_ids)
 
     def list_approved_event_records(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50

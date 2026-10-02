@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -36,7 +38,11 @@ from mnemo_memory.packages.skills_registry import (
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointRepository,
     ReferenceKnowledgeDocumentRepository,
+    SQLiteCheckpointRepository,
+    SQLiteKnowledgeDocumentRepository,
 )
+from scripts.typed_decision_evaluation import load_synthetic_fixture
+from scripts.typed_decision_replay import SKILLS_FIXTURE, skill_markdown
 
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "procedural"
@@ -492,3 +498,69 @@ def test_current_skill_listing_reports_more_than_thirty_two() -> None:
     assert listing.more_than_limit is True
     with pytest.raises(ValueError, match="limit"):
         KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex", 33)
+
+
+def _replay_skills_and_notes() -> tuple[KnowledgeDocumentRevision, ...]:
+    """The replay's twelve synthetic skills plus twenty plain project notes."""
+
+    skills = tuple(
+        _revision(
+            _scope(),
+            f"skills/{skill['name']}.md",
+            skill_markdown(skill["name"], skill["tags"], skill["when"]),
+        )
+        for skill in load_synthetic_fixture(SKILLS_FIXTURE)["skills"]
+    )
+    notes = tuple(
+        _revision(_scope(), f"notes/note-{index:02d}.md", f"# Note {index:02d}\nPlain note.")
+        for index in range(20)
+    )
+    return (*skills, *notes)
+
+
+def test_skill_listing_reads_all_documents_in_one_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each registry read opens one SQLite connection, not one per document, and returns
+    exactly what the in-memory reference returns for the same documents."""
+
+    revisions = _replay_skills_and_notes()
+    assert len(revisions) == 32
+    stored = SQLiteKnowledgeDocumentRepository(tmp_path / "skills.sqlite3", base_directory=tmp_path)
+    stored.migrate()
+    stored.apply_sync(_scope(), revisions, ())
+    reference = ReferenceKnowledgeDocumentRepository()
+    reference.apply_sync(_scope(), revisions, ())
+    connections = 0
+    connect = SQLiteCheckpointRepository._connect
+
+    def counted(backend: SQLiteCheckpointRepository) -> sqlite3.Connection:
+        nonlocal connections
+        connections += 1
+        return connect(backend)
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "_connect", counted)
+    prompt = "Write the changelog entry and release notes for version 2.4"
+    reads: dict[str, Callable[[KnowledgeDocumentSkillRegistry], object]] = {
+        "listing": lambda registry: registry.current_skill_listing(_scope(), "claude-code"),
+        "list": lambda registry: registry.list_current_skills(_scope(), "claude-code"),
+        "discover": lambda registry: registry.discover_current_skills(
+            _scope(), prompt, "claude-code"
+        ),
+        "listing_and_discovery": lambda registry: registry.current_skill_discovery(
+            _scope(), prompt, "claude-code"
+        ),
+        "agent": lambda registry: registry.get_current_agent(_scope(), "reviewer", "codex"),
+    }
+    for name, read in reads.items():
+        connections = 0
+        got = read(KnowledgeDocumentSkillRegistry(stored))
+        assert connections == 1, name
+        assert got == read(KnowledgeDocumentSkillRegistry(reference)), name
+    listing, candidates = KnowledgeDocumentSkillRegistry(stored).current_skill_discovery(
+        _scope(), prompt, "claude-code"
+    )
+    assert len(listing.skills) == 12 and listing.more_than_limit is False
+    assert candidates and candidates == KnowledgeDocumentSkillRegistry(
+        stored
+    ).discover_current_skills(_scope(), prompt, "claude-code")

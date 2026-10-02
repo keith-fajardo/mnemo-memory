@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +21,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     TypedStepInput,
 )
 from mnemo_memory.connectors.automatic_memory.hook import PromptContextAttachment
+from mnemo_memory.connectors.automatic_memory.learned_routes import LocalLearnedRouteStore
 from mnemo_memory.connectors.typesafe import jev_provider
 from mnemo_memory.packages.application import (
     CheckpointRuntime,
@@ -31,11 +31,17 @@ from mnemo_memory.packages.application import (
 )
 from mnemo_memory.packages.application.context_routing import (
     AUTOMATIC_CONTEXT_LAZY_PULL_HINT,
+    AutomaticContextRoute,
     AutomaticContextRouteDecision,
+    CompactMemoryRoute,
+    LearnedRoutePhrase,
+    typed_route_decision,
 )
 from mnemo_memory.packages.application.settings import with_typed_decision_mode
 from mnemo_memory.packages.domain import (
     ContextPacket,
+    EventId,
+    KnowledgeDocumentRevision,
     MemoryScope,
     OmissionNotice,
     OmissionReason,
@@ -44,8 +50,11 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT
 from mnemo_memory.packages.model_gateway.typed_decisions import GuardedTypedDecisionClassifier
-from mnemo_memory.packages.skills_registry import KnowledgeDocumentSkillRegistry
-from mnemo_memory.packages.storage import SQLiteCheckpointRepository
+from mnemo_memory.packages.storage import (
+    ApprovedEpisodicEventRecord,
+    SQLiteCheckpointRepository,
+    SQLiteKnowledgeDocumentRepository,
+)
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteEvent,
     AutomaticRouteOutcome,
@@ -60,6 +69,7 @@ from scripts.typed_decision_test_support import (
     KNOWLEDGE_PROMPT,
     LAZY_PROMPT,
     PINNED_EVENT,
+    PRIOR_PROMPT,
     SKILL_PROMPT,
     HookFixture,
     ScriptedJevTransport,
@@ -69,6 +79,7 @@ from scripts.typed_decision_test_support import (
 )
 
 SHADOW, LIVE = TypedDecisionMode.SHADOW, TypedDecisionMode.LIVE
+ARCHITECTURE_PROMPT = "Explain the architecture of this repository."
 EVERYTHING = {
     "memory_need": ("nothing", 0.95),
     "complexity": ("light", 0.95),
@@ -193,6 +204,94 @@ def test_a_changed_route_is_fetched_after_the_answer_unfiltered(tmp_path: Path) 
         "typed_decision",
     )
     assert _filler_omission_ids(fetched.context) == []
+
+
+def _counted_route_fetches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[AutomaticContextRouteDecision]:
+    fetches: list[AutomaticContextRouteDecision] = []
+    fetch = cli._automatic_prompt_context_for_route
+
+    def counted(
+        data_directory: Path,
+        scope: MemoryScope,
+        prompt: str,
+        decision: AutomaticContextRouteDecision,
+        *,
+        experimental_semantic_memory_enabled: bool = False,
+    ) -> cli._AutomaticPromptContextResult:
+        fetches.append(decision)
+        return fetch(
+            data_directory,
+            scope,
+            prompt,
+            decision,
+            experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
+        )
+
+    monkeypatch.setattr(cli, "_automatic_prompt_context_for_route", counted)
+    return fetches
+
+
+def test_a_confirmed_route_whose_fetch_found_nothing_is_not_fetched_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)  # no handoff: nothing to recap
+    scope = fixture.binding.checkpoint_scope
+    typed_decision = typed_route_decision(AutomaticContextRoute.PRIOR_MEMORY)
+    again = cli._automatic_prompt_context_for_route(
+        fixture.data, scope, PRIOR_PROMPT, typed_decision, experimental_semantic_memory_enabled=True
+    )
+    assert (again.packet, again.failed) == (None, False)  # a second fetch would find nothing
+    fetches = _counted_route_fetches(monkeypatch)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"memory_need": ("past_sessions", 0.95)}),
+        TypedHookModes(front_door=LIVE),
+    )
+    seen = run_hook(fixture, PRIOR_PROMPT, live)
+    assert fetches == []
+    event = _latest_event(fixture)
+    assert (event.route, event.reason, event.maximum_attachment_tokens) == (
+        "prior_memory",
+        "typed_decision",
+        typed_decision.maximum_attachment_tokens,
+    )
+    assert (event.outcome, seen.delivery_keys) == (AutomaticRouteOutcome.MISS, ())
+
+
+def test_a_gate_suppressed_route_is_fetched_when_a_live_answer_pushes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today's gate suppressed this prompt, so nothing was fetched to reuse."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    fetches = _counted_route_fetches(monkeypatch)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"memory_need": ("project_docs", 0.95)}),
+        TypedHookModes(front_door=LIVE),
+    )
+    context = run_hook(fixture, LAZY_PROMPT, live).context
+    assert fetches == [typed_route_decision(AutomaticContextRoute.KNOWLEDGE)]
+    assert fixture.filler_event_id in _item_ids(context)
+
+
+def test_an_overview_fetch_is_not_reused_for_a_query_fetch_of_the_same_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today's architecture fetch asks for a source overview; the typed structure route asks a
+    query, so its empty overview is not reused."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    fetches = _counted_route_fetches(monkeypatch)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"memory_need": ("code_structure", 0.95)}),
+        TypedHookModes(front_door=LIVE),
+    )
+    run_hook(fixture, ARCHITECTURE_PROMPT, live)
+    assert fetches == [typed_route_decision(AutomaticContextRoute.STRUCTURE)]
 
 
 def test_drops_never_apply_to_a_route_fetched_after_the_answer(
@@ -499,12 +598,49 @@ def test_an_unreadable_pin_state_keeps_the_event(
     def unreadable(*args: object, **kwargs: object) -> None:
         raise RuntimeError("synthetic storage failure")
 
+    monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_records", unreadable)
     monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_record", unreadable)
     transport = ScriptedJevTransport()
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
     ids = _filler_omission_ids(run_hook(fixture, KNOWLEDGE_PROMPT, live).context)
     assert len(ids) == 1 and ids[0].startswith(fixture.filler_note_prefix)
     assert all(FILLER_EVENT not in state for state in transport.states)
+
+
+def test_pin_states_are_read_in_one_pass_and_one_by_one_only_after_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    together_reads: list[int] = []
+    one_reads: list[EventId] = []
+    together = SQLiteCheckpointRepository.get_approved_event_records
+    one = SQLiteCheckpointRepository.get_approved_event_record
+
+    def counted_together(
+        repository: SQLiteCheckpointRepository, scope: MemoryScope, event_ids: tuple[EventId, ...]
+    ) -> tuple[ApprovedEpisodicEventRecord, ...]:
+        together_reads.append(len(event_ids))
+        return together(repository, scope, event_ids)
+
+    def counted_one(
+        repository: SQLiteCheckpointRepository, scope: MemoryScope, event_id: EventId
+    ) -> ApprovedEpisodicEventRecord:
+        one_reads.append(event_id)
+        return one(repository, scope, event_id)
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_records", counted_together)
+    monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_record", counted_one)
+    context = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert (together_reads, one_reads) == ([2], [])  # both events' pin states, one read
+    assert fixture.filler_event_id in _filler_omission_ids(context)
+
+    def unreadable(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("synthetic storage failure")
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_records", unreadable)
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == context
+    assert len(one_reads) == 2  # each event read on its own, so one failure hides no other
 
 
 def test_filler_checks_run_only_on_push_actions(tmp_path: Path) -> None:
@@ -521,18 +657,18 @@ def test_filler_checks_run_only_on_push_actions(tmp_path: Path) -> None:
 def test_the_step_adds_no_local_work_its_modes_do_not_need(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Skill documents are read once per prompt: the typed step reuses the rules path's listing
+    and lists them itself only where the rules path did not (a hard route)."""
+
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
-    counts: Counter[str] = Counter()
-    registry = KnowledgeDocumentSkillRegistry
-    discover, listing = registry.discover_current_skills, registry.current_skill_listing
+    reads: list[MemoryScope] = []
+    current = SQLiteKnowledgeDocumentRepository.list_current_revisions
 
-    def counted_discover(self: object, *args: object, **kwargs: object) -> object:
-        counts["discover"] += 1
-        return discover(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    def counted_listing(self: object, *args: object, **kwargs: object) -> object:
-        counts["listing"] += 1
-        return listing(self, *args, **kwargs)  # type: ignore[arg-type]
+    def counted_reads(
+        repository: SQLiteKnowledgeDocumentRepository, scope: MemoryScope
+    ) -> tuple[KnowledgeDocumentRevision, ...]:
+        reads.append(scope)
+        return current(repository, scope)
 
     pin_reads: list[ContextPacket] = []
     pinned = cli._pinned_approved_item_ids
@@ -541,21 +677,50 @@ def test_the_step_adds_no_local_work_its_modes_do_not_need(
         pin_reads.append(packet)
         return pinned(runtime, packet)
 
-    monkeypatch.setattr(registry, "discover_current_skills", counted_discover)
-    monkeypatch.setattr(registry, "current_skill_listing", counted_listing)
+    monkeypatch.setattr(SQLiteKnowledgeDocumentRepository, "list_current_revisions", counted_reads)
     monkeypatch.setattr(cli, "_pinned_approved_item_ids", counted_pins)
 
     quiet = TypedHookModes(front_door=SHADOW, tier_hint=SHADOW)
     run_hook(fixture, KNOWLEDGE_PROMPT, synthetic_overrides(fixture, ScriptedJevTransport(), quiet))
-    assert (counts, pin_reads) == (Counter(discover=1), [])  # the rules path's own discovery
+    assert (len(reads), pin_reads) == (1, [])  # the rules path's own discovery
 
-    counts.clear()
+    reads.clear()
     skill = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(skill=SHADOW))
     run_hook(fixture, SKILL_PROMPT, skill)
-    assert counts == Counter(discover=1, listing=1)  # keyword discovery is reused, not re-run
+    assert len(reads) == 1  # the rules path's listing is reused, not read again
     run_hook(fixture, GREETING_PROMPT, skill)
-    assert counts == Counter(discover=1, listing=2)  # a hard route never runs discovery
+    assert len(reads) == 2  # a hard route never runs discovery, so the step lists the skills
     assert pin_reads == []
+
+
+def test_the_typed_step_reuses_the_traced_learned_phrases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    LocalLearnedRouteStore(fixture.data).learn(
+        fixture.binding.scope, "blast radius", CompactMemoryRoute.STRUCTURE
+    )
+    learned = cli._learned_route_phrases(fixture.data, fixture.binding.checkpoint_scope)
+    assert learned
+    reads: list[MemoryScope] = []
+    read = cli._learned_route_phrases
+
+    def counted(data_directory: Path, scope: MemoryScope) -> tuple[LearnedRoutePhrase, ...]:
+        reads.append(scope)
+        return read(data_directory, scope)
+
+    monkeypatch.setattr(cli, "_learned_route_phrases", counted)
+    steps: list[TypedStepInput] = []
+
+    def observe(step: TypedStepInput, decisions: TypedPromptDecisions) -> None:
+        steps.append(step)
+
+    live = synthetic_overrides(
+        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(LIVE, LIVE, LIVE, LIVE), observe
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert len(reads) == 1  # the shadow trace's read; the typed step does not read again
+    assert [step.learned_phrases for step in steps] == [learned]
 
 
 @pytest.mark.parametrize("failure", ["import", "mode_read"])

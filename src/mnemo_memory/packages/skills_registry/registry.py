@@ -74,6 +74,7 @@ class KnowledgeDocumentSkillRegistry:
 
     There is deliberately no registry cache. A synchronized new document revision is visible on
     the next call, while the existing knowledge repository retains its predecessor revision.
+    Each call reads the current revisions in one repository pass, not one read per document.
     """
 
     def __init__(self, documents: KnowledgeDocumentRepository) -> None:
@@ -141,15 +142,31 @@ class KnowledgeDocumentSkillRegistry:
     ) -> tuple[SkillDiscoveryCandidate, ...]:
         """Return metadata-only candidates using transient deterministic term overlap."""
 
+        return self.current_skill_discovery(scope, prompt, client, maximum_skills)[1]
+
+    def current_skill_discovery(
+        self,
+        scope: MemoryScope,
+        prompt: str,
+        client: str,
+        maximum_skills: int = 3,
+    ) -> tuple[CurrentSkillListing, tuple[SkillDiscoveryCandidate, ...]]:
+        """List current skills once and run keyword discovery on that same listing.
+
+        The candidates equal ``discover_current_skills`` and the listing equals
+        ``current_skill_listing``; the request is validated before anything is read.
+        """
+
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
             raise ValueError("skill discovery prompt is invalid")
         _require_limit(maximum_skills)
         if maximum_skills > 3:
             raise ValueError("automatic skill discovery is limited to three candidates")
         compatible_client = _require_supported_client(client)
+        listing = self.current_skill_listing(scope, compatible_client)
         prompt_terms = _discovery_terms(prompt)
         candidates: list[SkillDiscoveryCandidate] = []
-        for skill in self.list_current_skills(scope, compatible_client, 32):
+        for skill in listing.skills:
             description_terms = _discovery_terms(skill.when_to_use)
             tag_hits = len(prompt_terms.intersection(skill.applicability_tags))
             description_hits = len(prompt_terms.intersection(description_terms))
@@ -162,7 +179,7 @@ class KnowledgeDocumentSkillRegistry:
                     tag_hits * 4 + description_hits,
                 )
             )
-        return tuple(
+        return listing, tuple(
             sorted(candidates, key=lambda candidate: (-candidate.score, candidate.skill.name))[
                 :maximum_skills
             ]
@@ -184,8 +201,7 @@ class KnowledgeDocumentSkillRegistry:
 
     def _iter_current_skills(self, scope: MemoryScope) -> tuple[ProjectSkill, ...]:
         result: list[ProjectSkill] = []
-        for known in self._documents.list_active_documents(scope):
-            revision = self._documents.get_current_revision(scope, known.document_id)
+        for revision in self._documents.list_current_revisions(scope):
             document = revision.document
             if document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
                 continue
@@ -210,8 +226,7 @@ class KnowledgeDocumentSkillRegistry:
 
     def _iter_current_agents(self, scope: MemoryScope) -> tuple[ProjectAgent, ...]:
         result: list[ProjectAgent] = []
-        for known in self._documents.list_active_documents(scope):
-            revision = self._documents.get_current_revision(scope, known.document_id)
+        for revision in self._documents.list_current_revisions(scope):
             document = revision.document
             if document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
                 continue

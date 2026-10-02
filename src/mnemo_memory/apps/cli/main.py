@@ -388,15 +388,21 @@ class _AutomaticPromptContextResult:
     skill_candidates: tuple[SkillDiscoveryCandidate, ...]
     duration_ms: int
     failed: bool = False
-    # Keyword discovery output even when the route did not attach it, so the typed step reuses
-    # it instead of running discovery again. Nothing renders or records it.
+    # A route fetch for ``decision`` ran and succeeded; its packet may still be empty.
+    fetched: bool = False
+    # Keyword discovery output even when the route did not attach it, and the skill listing it
+    # ran on, so the typed step reuses both instead of reading the skills again. Nothing renders
+    # or records either.
     discovered_skills: tuple[SkillDiscoveryCandidate, ...] = ()
+    skill_listing: CurrentSkillListing | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _AutomaticShadowTrace:
     plan: AutomaticContextShadowPlan
     shadow_duration_ms: int
+    # The learned phrases the plan was made with, so the typed step does not read them again.
+    learned_phrases: tuple[LearnedRoutePhrase, ...] = ()
 
 
 def _service(data_dir: Path | None) -> LifecycleService:
@@ -563,6 +569,7 @@ def _automatic_prompt_context_result(
         return _AutomaticPromptContextResult(preliminary, None, (), _elapsed_milliseconds(started))
     decision = preliminary
     candidates: tuple[SkillDiscoveryCandidate, ...] = ()
+    listing: CurrentSkillListing | None = None
     try:
         with build_checkpoint_runtime(
             resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
@@ -576,7 +583,7 @@ def _automatic_prompt_context_result(
                 scope.project_id,
             )
             skills = KnowledgeDocumentSkillRegistry(runtime.knowledge_document_repository)
-            candidates = skills.discover_current_skills(project_scope, prompt, client)
+            listing, candidates = skills.current_skill_discovery(project_scope, prompt, client)
             decision = choose_automatic_context_route(prompt, skill_candidate_count=len(candidates))
             if decision.route is AutomaticContextRoute.SKILL_DISCOVERY:
                 return _AutomaticPromptContextResult(
@@ -585,6 +592,7 @@ def _automatic_prompt_context_result(
                     candidates,
                     _elapsed_milliseconds(started),
                     discovered_skills=candidates,
+                    skill_listing=listing,
                 )
 
             packet = _fetch_route_packet(
@@ -603,13 +611,17 @@ def _automatic_prompt_context_result(
             _elapsed_milliseconds(started),
             failed=True,
             discovered_skills=candidates,
+            skill_listing=listing,
         )
-    if not _packet_has_automatic_context(packet):
-        return _AutomaticPromptContextResult(
-            decision, None, (), _elapsed_milliseconds(started), discovered_skills=candidates
-        )
+    packet_or_none = packet if _packet_has_automatic_context(packet) else None
     return _AutomaticPromptContextResult(
-        decision, packet, (), _elapsed_milliseconds(started), discovered_skills=candidates
+        decision,
+        packet_or_none,
+        (),
+        _elapsed_milliseconds(started),
+        fetched=True,
+        discovered_skills=candidates,
+        skill_listing=listing,
     )
 
 
@@ -714,9 +726,10 @@ def _automatic_prompt_context_for_route(
         return _AutomaticPromptContextResult(
             decision, None, (), _elapsed_milliseconds(started), failed=True
         )
-    if not _packet_has_automatic_context(packet):
-        return _AutomaticPromptContextResult(decision, None, (), _elapsed_milliseconds(started))
-    return _AutomaticPromptContextResult(decision, packet, (), _elapsed_milliseconds(started))
+    packet_or_none = packet if _packet_has_automatic_context(packet) else None
+    return _AutomaticPromptContextResult(
+        decision, packet_or_none, (), _elapsed_milliseconds(started), fetched=True
+    )
 
 
 def _automatic_route_query(prompt: str, decision: AutomaticContextRouteDecision) -> str:
@@ -793,6 +806,27 @@ def _automatic_prompt_context_service(
     )
 
 
+def _is_architecture_overview(decision: AutomaticContextRouteDecision) -> bool:
+    return (
+        decision.route is AutomaticContextRoute.STRUCTURE
+        and decision.reason.value == "architecture"
+    )
+
+
+def _same_route_fetch(
+    first: AutomaticContextRouteDecision, second: AutomaticContextRouteDecision
+) -> bool:
+    """Both decisions fetch the same request for one prompt.
+
+    A route fetch reads only the decision's route, except that an architecture decision asks for
+    a source overview instead of a query.
+    """
+
+    return first.route is second.route and (
+        _is_architecture_overview(first) == _is_architecture_overview(second)
+    )
+
+
 def _automatic_prompt_context_request(
     scope: MemoryScope,
     prompt: str,
@@ -809,10 +843,7 @@ def _automatic_prompt_context_request(
             budget=budget,
             checkpoint_recap=ContextCheckpointRecapQuery(days=days),
         )
-    if (
-        decision.route is AutomaticContextRoute.STRUCTURE
-        and decision.reason.value == "architecture"
-    ):
+    if _is_architecture_overview(decision):
         return GetUnifiedContext(
             scope,
             budget=budget,
@@ -905,7 +936,7 @@ def _automatic_shadow_trace(
         plan = plan_automatic_context_needs(prompt, learned_phrases=learned)
     except (OSError, RuntimeError, TypeError, ValueError):
         plan = plan_automatic_context_needs(prompt)
-    return _AutomaticShadowTrace(plan, _elapsed_milliseconds(started))
+    return _AutomaticShadowTrace(plan, _elapsed_milliseconds(started), learned)
 
 
 def _automatic_prompt_context_for_hook(
@@ -1165,16 +1196,20 @@ def _typed_local_inputs(
     packet: ContextPacket | None,
     *,
     list_skills: bool,
+    listing: CurrentSkillListing | None,
 ) -> _TypedLocalInputs:
     """Local preparation for the typed step (spec §3 step 2): metadata only, nothing sent.
 
     The skills are listed only when skill pick is on, and pin state is read only for a
-    pre-fetched packet whose notes may be checked. Keyword discovery is never repeated: the
-    rules path already ran it wherever today's hook does.
+    pre-fetched packet whose notes may be checked. Keyword discovery is never repeated, and
+    the rules path's ``listing`` is reused: the skills are read here only where the rules path
+    did not read them. A runtime is opened only when something must be read.
     """
 
-    if not list_skills and packet is None:
-        return _TypedLocalInputs((), False, frozenset())
+    if not list_skills:
+        listing = CurrentSkillListing((), False)
+    if listing is not None and packet is None:
+        return _TypedLocalInputs(listing.skills, listing.more_than_limit, frozenset())
     project_scope = MemoryScope(
         scope.owner_id,
         ScopeLevel.PROJECT,
@@ -1183,8 +1218,7 @@ def _typed_local_inputs(
         scope.project_id,
     )
     with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
-        listing = CurrentSkillListing((), False)
-        if list_skills:
+        if listing is None:
             if runtime.knowledge_document_repository is None:
                 raise RuntimeError("knowledge repository is unavailable")
             listing = KnowledgeDocumentSkillRegistry(
@@ -1195,23 +1229,41 @@ def _typed_local_inputs(
 
 
 def _pinned_approved_item_ids(runtime: CheckpointRuntime, packet: ContextPacket) -> frozenset[str]:
-    """Pinned approved events in ``packet``; an unreadable pin state counts as pinned."""
+    """Pinned approved events in ``packet``; an unreadable pin state counts as pinned.
+
+    Each scope's pin states are read in one pass. If that read fails, each event is read on its
+    own, so one unreadable event never hides the others' pin states.
+    """
 
     pinned: set[str] = set()
+    by_scope: dict[MemoryScope, list[tuple[str, EventId]]] = {}
     for item in packet.episodic_memories:
         if not item.item_id.startswith("approved-episodic:"):
             continue
         try:
-            record = runtime.repository.get_approved_event_record(
-                item.source_scope,
-                EventId.from_string(item.item_id.removeprefix("approved-episodic:")),
-            )
+            event_id = EventId.from_string(item.item_id.removeprefix("approved-episodic:"))
         except Exception:
             pinned.add(item.item_id)  # keep is the safe side
             continue
-        if record.pinned:
-            pinned.add(item.item_id)
+        by_scope.setdefault(item.source_scope, []).append((item.item_id, event_id))
+    for scope, items in by_scope.items():
+        event_ids = tuple(event_id for _, event_id in items)
+        try:
+            states = [
+                record.pinned
+                for record in runtime.repository.get_approved_event_records(scope, event_ids)
+            ]
+        except Exception:
+            states = [_pin_state(runtime, scope, event_id) for event_id in event_ids]
+        pinned.update(item_id for (item_id, _), state in zip(items, states, strict=True) if state)
     return frozenset(pinned)
+
+
+def _pin_state(runtime: CheckpointRuntime, scope: MemoryScope, event_id: EventId) -> bool:
+    try:
+        return runtime.repository.get_approved_event_record(scope, event_id).pinned
+    except Exception:
+        return True  # keep is the safe side
 
 
 def _runtime_guard_factory(
@@ -1275,7 +1327,11 @@ def _typed_prompt_render(
         from mnemo_memory.apps.cli import typed_decision_hook as typed
 
         bounded = bounded_automatic_context_prompt(prompt)
-        learned = _learned_route_phrases(data_directory, scope)
+        learned = (
+            trace.learned_phrases
+            if trace is not None
+            else _learned_route_phrases(data_directory, scope)
+        )
         rules_plan = (
             trace.plan
             if trace is not None
@@ -1293,6 +1349,7 @@ def _typed_prompt_render(
             client,
             checked,
             list_skills=modes.skill is not TypedDecisionMode.OFF,
+            listing=rules.result.skill_listing,
         )
         step = typed.TypedStepInput(
             prompt=bounded,
@@ -1381,7 +1438,7 @@ def _apply_typed_decisions(
         typed_plan = plan_automatic_context_needs(
             step.prompt, learned_phrases=step.learned_phrases, typed_needs=decisions.typed_needs
         )
-        gate_trace = _AutomaticShadowTrace(typed_plan, trace.shadow_duration_ms)
+        gate_trace = replace(trace, plan=typed_plan)
         memory_route = decisions.memory_route
     render = rules
     if gate_trace is not None and gate_trace.plan.action in _SUPPRESSED_ACTIONS:
@@ -1423,8 +1480,9 @@ def _typed_selected_render(
 
     A hard route is never changed. Skill discovery holds when the effective candidates still
     trigger it; otherwise the live memory route, else today's retrieval route, decides. The
-    same route reuses today's pre-fetched packet; any other route is fetched now, after the
-    answer, unfiltered. A failed fetch raises, so the step falls back to today's render.
+    same route reuses today's pre-fetched packet, and an identical request whose fetch found
+    nothing is not fetched again; any other route is fetched now, after the answer, unfiltered.
+    A failed fetch raises, so the step falls back to today's render.
     """
 
     if rules.result.decision.route in _NO_RETRIEVAL_ROUTES:
@@ -1437,8 +1495,13 @@ def _typed_selected_render(
         )
     if memory_route is not None:
         decision = typed_route_decision(memory_route)
-    if decision.route is rules.result.decision.route and rules.result.packet is not None:
-        return _render_selected_result(rules.result, client, trace)
+    today = rules.result
+    if decision.route is today.decision.route and today.packet is not None:
+        return _render_selected_result(today, client, trace)
+    if today.fetched and _same_route_fetch(decision, today.decision):
+        # Today's fetch of this request ran and found nothing, so fetching it again would too.
+        empty = _AutomaticPromptContextResult(decision, None, (), today.duration_ms, fetched=True)
+        return _render_selected_result(empty, client, trace)
     result = _automatic_prompt_context_for_route(
         data_directory,
         scope,

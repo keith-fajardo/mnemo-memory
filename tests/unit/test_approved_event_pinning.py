@@ -18,6 +18,7 @@ from mnemo_memory.packages.application import (
 )
 from mnemo_memory.packages.domain import (
     ApprovedEventKind,
+    EventId,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
@@ -41,6 +42,7 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteMigrationError,
 )
+from mnemo_memory.packages.storage.contracts import ApprovedEpisodicEventNotFound
 from scripts.sqlite_migration_test_support import (
     drop_checkpoint_deletion_schema as _drop_checkpoint_deletion_schema,
 )
@@ -219,6 +221,59 @@ def test_pin_is_scoped_idempotent_prioritized_and_follows_governance(
             ).fetchall()
         assert len(actions) == 6
         assert actions[-1] == (str(replacement_id), 0)
+
+
+@pytest.mark.parametrize("adapter", ["reference", "sqlite"])
+def test_records_read_together_equal_the_one_by_one_reads_in_one_connection(
+    adapter: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(adapter, tmp_path)
+    scope = _scope()
+    events = [
+        service.record_approved_event(
+            RecordApprovedEpisodicEvent(
+                scope,
+                ApprovedEventKind.DECISION,
+                f"Batch fact {index}.",
+                f"batch:{index}",
+                (_evidence(f"batch-{index}"),),
+            )
+        ).event
+        for index in range(3)
+    ]
+    service.set_approved_event_pin(
+        SetApprovedEpisodicEventPin(
+            scope, events[1].event_id, True, "batch:pin", (_evidence("batch-pin", user=True),)
+        )
+    )
+    service.retract_approved_event(
+        RetractApprovedEpisodicEvent(
+            scope, events[2].event_id, "Withdrawn.", "batch:retract", (_evidence("retract"),)
+        )
+    )
+    ids = (events[2].event_id, events[0].event_id, events[1].event_id)
+    one_by_one = tuple(repository.get_approved_event_record(scope, event_id) for event_id in ids)
+    assert [(record.event is None, record.pinned) for record in one_by_one] == [
+        (True, False),
+        (False, False),
+        (False, True),
+    ]
+    connections = 0
+    connect = SQLiteCheckpointRepository._connect
+
+    def counted(backend: SQLiteCheckpointRepository) -> sqlite3.Connection:
+        nonlocal connections
+        connections += 1
+        return connect(backend)
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "_connect", counted)
+
+    assert repository.get_approved_event_records(scope, ids) == one_by_one
+    assert connections == (1 if adapter == "sqlite" else 0)
+    with pytest.raises(ApprovedEpisodicEventNotFound):
+        repository.get_approved_event_records(scope, (events[0].event_id, EventId.new()))
+    with pytest.raises(ApprovedEpisodicEventNotFound):
+        repository.get_approved_event_records(_scope(), (events[0].event_id,))
 
 
 def test_migration_27_is_atomic_and_recoverable_from_version_26(tmp_path: Path) -> None:

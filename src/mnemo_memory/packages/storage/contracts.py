@@ -933,6 +933,15 @@ class ApprovedEpisodicEventRepository(Protocol):
         self, scope: MemoryScope, event_id: EventId
     ) -> ApprovedEpisodicEventRecord: ...
 
+    def get_approved_event_records(
+        self, scope: MemoryScope, event_ids: tuple[EventId, ...]
+    ) -> tuple[ApprovedEpisodicEventRecord, ...]:
+        """Return ``get_approved_event_record`` for each ID, in order, read in one pass.
+
+        Any missing event raises ``ApprovedEpisodicEventNotFound``, as the single read does.
+        """
+        ...
+
     def list_approved_event_records(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventRecordPage: ...
@@ -963,6 +972,13 @@ class KnowledgeDocumentRepository(Protocol):
     def get_current_revision(
         self, scope: MemoryScope, document_id: KnowledgeDocumentId
     ) -> KnowledgeDocumentRevision: ...
+
+    def list_current_revisions(self, scope: MemoryScope) -> tuple[KnowledgeDocumentRevision, ...]:
+        """Return every active document's current revision, in ``list_active_documents`` order.
+
+        The result equals ``get_current_revision`` for each listed document, read in one pass.
+        """
+        ...
 
     def get_current_revision_by_path(
         self, scope: MemoryScope, relative_path: str

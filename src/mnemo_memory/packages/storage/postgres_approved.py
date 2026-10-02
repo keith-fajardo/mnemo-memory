@@ -288,6 +288,15 @@ class PostgreSQLApprovedEpisodicEventRepository:
         with self._transaction(TeamOperation.READ) as cursor:
             return self._record(cursor, scope, event_id)
 
+    def get_approved_event_records(
+        self, scope: MemoryScope, event_ids: tuple[EventId, ...]
+    ) -> tuple[ApprovedEpisodicEventRecord, ...]:
+        self._require_scope(scope)
+        if not all(isinstance(event_id, EventId) for event_id in event_ids):
+            raise TypeError("event_id must be an EventId")
+        with self._transaction(TeamOperation.READ) as cursor:
+            return tuple(self._record(cursor, scope, event_id) for event_id in event_ids)
+
     def list_approved_event_records(
         self, scope: MemoryScope, *, offset: int = 0, limit: int = 50
     ) -> ApprovedEpisodicEventRecordPage:
