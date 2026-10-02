@@ -39,6 +39,8 @@ def test_closed_vocabularies_match_the_spec() -> None:
         "dedupe",
         "semantic_kind",
         "verify",
+        "tier_hint",
+        "skill",
     }
     assert [mode.value for mode in TypedDecisionMode] == ["off", "shadow", "live"]
     assert ModelTaskType.TYPED_DECISION.value == "typed_decision"

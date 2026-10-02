@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, ClassVar, Self
@@ -42,8 +43,32 @@ _FIELDS = {
     "repository_knowledge_sync_enabled",
     "experimental_typed_decisions_enabled",
     "typed_decision_data_route",
+    "typed_decision_daily_input_tokens",
     "typed_decision_model_id",
     "typed_decision_modes",
+}
+DEFAULT_TYPED_DECISION_DAILY_INPUT_TOKENS = 10_000_000
+_MAXIMUM_TYPED_DECISION_DAILY_INPUT_TOKENS = 1_000_000_000
+
+
+class TypedDecisionLock(StrEnum):
+    """Why a typed-decision mode is refused (spec 2026-10-02 §6); checked in this order."""
+
+    MASTER_SWITCH = "master_switch"
+    SEMANTIC_MEMORY_GATE = "semantic_memory_gate"
+    DATA_ROUTE = "data_route"
+
+
+TYPED_DECISION_LOCK_MESSAGES: dict[TypedDecisionLock, str] = {
+    TypedDecisionLock.MASTER_SWITCH: (
+        "typed decision modes other than off need experimental_typed_decisions_enabled"
+    ),
+    TypedDecisionLock.SEMANTIC_MEMORY_GATE: (
+        "front_door live needs experimental_semantic_memory_enabled"
+    ),
+    TypedDecisionLock.DATA_ROUTE: (
+        "live typed decisions are locked while the data route is synthetic_only; use off or shadow"
+    ),
 }
 
 
@@ -74,6 +99,7 @@ class PersonalSettings:
     typed_decision_data_route: str = TypedDecisionDataRoute.SYNTHETIC_ONLY.value
     typed_decision_model_id: str = "jev-1.13.0"
     typed_decision_modes: tuple[tuple[str, str], ...] = ()
+    typed_decision_daily_input_tokens: int = DEFAULT_TYPED_DECISION_DAILY_INPUT_TOKENS
 
     def __post_init__(self) -> None:
         for name in (
@@ -114,11 +140,34 @@ class PersonalSettings:
         object.__setattr__(
             self, "typed_decision_modes", _typed_decision_modes(self.typed_decision_modes)
         )
+        modes = dict(self.typed_decision_modes)
         if not self.experimental_typed_decisions_enabled and any(
-            mode != TypedDecisionMode.OFF.value for _, mode in self.typed_decision_modes
+            mode != TypedDecisionMode.OFF.value for mode in modes.values()
         ):
             raise PersonalSettingsError(
-                "typed decision modes require experimental_typed_decisions_enabled"
+                TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.MASTER_SWITCH]
+            )
+        if (
+            modes.get(TypedDecisionKind.FRONT_DOOR.value) == TypedDecisionMode.LIVE.value
+            and not self.experimental_semantic_memory_enabled
+        ):
+            raise PersonalSettingsError(
+                TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.SEMANTIC_MEMORY_GATE]
+            )
+        if (
+            TypedDecisionDataRoute(self.typed_decision_data_route)
+            is TypedDecisionDataRoute.SYNTHETIC_ONLY
+            and TypedDecisionMode.LIVE.value in modes.values()
+        ):
+            raise PersonalSettingsError(TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.DATA_ROUTE])
+        daily = self.typed_decision_daily_input_tokens
+        if (
+            isinstance(daily, bool)
+            or not isinstance(daily, int)
+            or not 1 <= daily <= _MAXIMUM_TYPED_DECISION_DAILY_INPUT_TOKENS
+        ):
+            raise PersonalSettingsError(
+                "typed decision daily input tokens must be between 1 and 1000000000"
             )
         try:
             _ = self.context_budget
@@ -178,6 +227,7 @@ class PersonalSettings:
             "optional_model_enabled": self.optional_model_enabled,
             "repository_knowledge_sync_enabled": self.repository_knowledge_sync_enabled,
             "typed_decision_data_route": self.typed_decision_data_route,
+            "typed_decision_daily_input_tokens": self.typed_decision_daily_input_tokens,
             "typed_decision_model_id": self.typed_decision_model_id,
             "typed_decision_modes": dict(self.typed_decision_modes),
         }
@@ -189,6 +239,7 @@ class PersonalSettings:
         "context_save_growth_bytes": 200_000,
         "experimental_typed_decisions_enabled": False,
         "typed_decision_data_route": TypedDecisionDataRoute.SYNTHETIC_ONLY.value,
+        "typed_decision_daily_input_tokens": DEFAULT_TYPED_DECISION_DAILY_INPUT_TOKENS,
         "typed_decision_model_id": "jev-1.13.0",
         "typed_decision_modes": {},
     }
@@ -278,3 +329,29 @@ def _typed_decision_modes(value: object) -> tuple[tuple[str, str], ...]:
             raise PersonalSettingsError("typed decision modes are invalid")
         modes[kind] = mode
     return tuple(sorted(modes.items()))
+
+
+def active_typed_decision_locks(settings: PersonalSettings) -> tuple[TypedDecisionLock, ...]:
+    """Return the locks that would refuse some mode today, in check order."""
+
+    locks: list[TypedDecisionLock] = []
+    if not settings.experimental_typed_decisions_enabled:
+        locks.append(TypedDecisionLock.MASTER_SWITCH)
+    if not settings.experimental_semantic_memory_enabled:
+        locks.append(TypedDecisionLock.SEMANTIC_MEMORY_GATE)
+    if (
+        TypedDecisionDataRoute(settings.typed_decision_data_route)
+        is TypedDecisionDataRoute.SYNTHETIC_ONLY
+    ):
+        locks.append(TypedDecisionLock.DATA_ROUTE)
+    return tuple(locks)
+
+
+def with_typed_decision_mode(
+    settings: PersonalSettings, kind: TypedDecisionKind, mode: TypedDecisionMode
+) -> PersonalSettings:
+    """Return ``settings`` with one mode changed; a lock refuses it with its plain message."""
+
+    modes = dict(settings.typed_decision_modes)
+    modes[TypedDecisionKind(kind).value] = TypedDecisionMode(mode).value
+    return replace(settings, typed_decision_modes=tuple(sorted(modes.items())))

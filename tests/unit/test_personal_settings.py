@@ -17,6 +17,12 @@ from mnemo_memory.packages.application import (
     build_lifecycle_service,
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.application.settings import (
+    TYPED_DECISION_LOCK_MESSAGES,
+    TypedDecisionLock,
+    active_typed_decision_locks,
+    with_typed_decision_mode,
+)
 from mnemo_memory.packages.domain import TypedDecisionKind, TypedDecisionMode
 from mnemo_memory.packages.storage import SQLiteKnowledgeDocumentRepository
 
@@ -50,6 +56,7 @@ def test_settings_defaults_are_strict_bounded_and_secret_free() -> None:
         "optional_model_enabled",
         "repository_knowledge_sync_enabled",
         "typed_decision_data_route",
+        "typed_decision_daily_input_tokens",
         "typed_decision_model_id",
         "typed_decision_modes",
     }
@@ -284,9 +291,102 @@ def test_legacy_settings_without_typed_decision_fields_load(tmp_path: Path) -> N
     for name in (
         "experimental_typed_decisions_enabled",
         "typed_decision_data_route",
+        "typed_decision_daily_input_tokens",
         "typed_decision_model_id",
         "typed_decision_modes",
     ):
         del legacy[name]
     path.write_text(json.dumps(legacy), encoding="utf-8")
     assert store.load() == PersonalSettings()
+
+
+_HOOK_KINDS = ("front_door", "relevance", "tier_hint", "skill")
+
+
+def _typed(**overrides: object) -> dict[str, object]:
+    return {
+        **PersonalSettings().to_dict(),
+        "experimental_typed_decisions_enabled": True,
+        **overrides,
+    }
+
+
+def test_typed_decision_daily_input_tokens_default_bounds_and_migration() -> None:
+    assert PersonalSettings().typed_decision_daily_input_tokens == 10_000_000
+    legacy = PersonalSettings().to_dict()
+    legacy.pop("typed_decision_daily_input_tokens")
+    assert PersonalSettings.from_dict(legacy).typed_decision_daily_input_tokens == 10_000_000
+    assert (
+        PersonalSettings(typed_decision_daily_input_tokens=1).typed_decision_daily_input_tokens == 1
+    )
+    for value in (0, 1_000_000_001, True, "10"):
+        with pytest.raises(PersonalSettingsError, match="daily input tokens"):
+            PersonalSettings.from_dict(
+                {**PersonalSettings().to_dict(), "typed_decision_daily_input_tokens": value}
+            )
+
+
+@pytest.mark.parametrize("kind", _HOOK_KINDS)
+def test_live_is_refused_while_the_route_is_synthetic_only(kind: str) -> None:
+    with pytest.raises(PersonalSettingsError) as raised:
+        PersonalSettings.from_dict(
+            _typed(experimental_semantic_memory_enabled=True, typed_decision_modes={kind: "live"})
+        )
+    assert str(raised.value) == TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.DATA_ROUTE]
+
+
+def test_front_door_live_is_refused_without_the_semantic_memory_gate() -> None:
+    with pytest.raises(PersonalSettingsError) as raised:
+        PersonalSettings.from_dict(_typed(typed_decision_modes={"front_door": "live"}))
+    assert str(raised.value) == TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.SEMANTIC_MEMORY_GATE]
+
+
+def test_any_mode_other_than_off_needs_the_master_switch() -> None:
+    with pytest.raises(PersonalSettingsError) as raised:
+        PersonalSettings.from_dict(
+            {**PersonalSettings().to_dict(), "typed_decision_modes": {"skill": "shadow"}}
+        )
+    assert str(raised.value) == TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.MASTER_SWITCH]
+
+
+def test_shadow_is_allowed_on_synthetic_only_for_every_hook_kind() -> None:
+    settings = PersonalSettings.from_dict(
+        _typed(typed_decision_modes={kind: "shadow" for kind in _HOOK_KINDS})
+    )
+    for kind in _HOOK_KINDS:
+        assert settings.typed_decision_mode(TypedDecisionKind(kind)) is TypedDecisionMode.SHADOW
+
+
+def test_with_typed_decision_mode_applies_the_locks() -> None:
+    base = PersonalSettings(experimental_typed_decisions_enabled=True)
+    shadow = with_typed_decision_mode(base, TypedDecisionKind.SKILL, TypedDecisionMode.SHADOW)
+    assert shadow.typed_decision_mode(TypedDecisionKind.SKILL) is TypedDecisionMode.SHADOW
+    with pytest.raises(PersonalSettingsError, match="synthetic_only"):
+        with_typed_decision_mode(shadow, TypedDecisionKind.RELEVANCE, TypedDecisionMode.LIVE)
+    off = with_typed_decision_mode(shadow, TypedDecisionKind.SKILL, TypedDecisionMode.OFF)
+    assert off.typed_decision_mode(TypedDecisionKind.SKILL) is TypedDecisionMode.OFF
+
+
+def test_active_typed_decision_locks_name_each_closed_lock() -> None:
+    assert active_typed_decision_locks(PersonalSettings()) == (
+        TypedDecisionLock.MASTER_SWITCH,
+        TypedDecisionLock.SEMANTIC_MEMORY_GATE,
+        TypedDecisionLock.DATA_ROUTE,
+    )
+    opened = PersonalSettings(
+        experimental_typed_decisions_enabled=True, experimental_semantic_memory_enabled=True
+    )
+    assert active_typed_decision_locks(opened) == (TypedDecisionLock.DATA_ROUTE,)
+    assert all(message.strip() for message in TYPED_DECISION_LOCK_MESSAGES.values())
+
+
+def test_a_stored_live_mode_is_refused_on_load(tmp_path: Path) -> None:
+    store = PersonalSettingsStore(tmp_path / "profile")
+    store.save(PersonalSettings(experimental_typed_decisions_enabled=True))
+    path = tmp_path / "profile" / "settings.json"
+    stored = json.loads(path.read_text("utf-8"))
+    stored["typed_decision_modes"] = {"skill": "live"}
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    with pytest.raises(PersonalSettingsError, match="MNEMO_SETTINGS_INVALID") as raised:
+        store.load()
+    assert str(raised.value.__cause__) == TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.DATA_ROUTE]
