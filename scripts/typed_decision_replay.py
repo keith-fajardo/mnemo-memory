@@ -3,8 +3,9 @@
 ``seed_replay_set`` builds a data directory from fixtures that declare synthetic provenance and
 marks it as a replay seed. ``run_replay_case`` runs one fixture prompt through
 ``_automatic_prompt_context_for_hook``; ``run_case_in_fresh_process`` does the same in a new
-interpreter, as the real hook does. ``score_replay`` turns the per-prompt results into the §8.3
-gates.
+interpreter, as the real hook does. ``run_replay`` records a case that fails as a failed result
+and keeps going. ``score_replay`` turns the per-prompt results into the §8.3 gates; a degraded
+run (Jev unavailable, or cases that failed) never passes them.
 
 Nothing here opens a network connection itself. A typed case reaches Jev only through the
 synthetic-source guard, and only after its data directory is verified to hold exactly the seeded
@@ -26,7 +27,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -99,6 +100,7 @@ ARMS = ("rules", "typed")
 NOTE_BATCH = 3  # notes per probe: every note of a batch fits the 1,300-token automatic render
 MAXIMUM_ADDED_HOOK_MS = 850
 MAXIMUM_CAP_SHARE = 0.05
+MINIMUM_ANSWERED_SHARE = 0.95
 SEED_MARKER = "typed-replay-seed.json"
 STEP_ERROR = "typed_step_error"
 CLIENT: ClientName = "claude-code"
@@ -109,6 +111,11 @@ _OBSERVED_AT = datetime(2026, 10, 2, tzinfo=UTC)
 _KNOWLEDGE_ITEM_PREFIX = "knowledge:"
 _EVENT_ITEM_PREFIX = "approved-episodic:"
 _NOT_UNAVAILABLE = frozenset({None, "answered", "not_asked"})
+_ANSWERED = "answered"
+# Outcomes whose hook result is scored as it stands: Jev's answer, or the 0.8 s cap working as
+# designed (gated by the cap share). Any other outcome on an asked prompt is no answer at all.
+_SCORED_OUTCOMES = frozenset({_ANSWERED, "timeout"})
+_SKILL_QUESTION_NOT_SENT = frozenset({"skipped", "not_asked"})
 
 
 class ReplayChildError(RuntimeError):
@@ -168,7 +175,10 @@ class ReplayResult:
     """One prompt, one arm. ``front_door_outcome`` and ``hard_rule`` describe the typed step.
 
     When the hook fell back to the rules (``typed_step_error``), nothing Jev decided was applied,
-    so no checks, drops or Jev skill pick are recorded for that prompt.
+    so no checks, drops or Jev skill pick are recorded for that prompt. ``notes_unanswered``
+    counts checked notes Jev gave no answer for, and ``skill_comparison`` is the telemetry's
+    closed skill value (``skipped`` or ``not_asked`` when no skill question was sent). A case
+    that could not run carries only its identity and a content-free ``error_type``.
     """
 
     set_name: str
@@ -188,9 +198,39 @@ class ReplayResult:
     applied_drop_item_ids: tuple[str, ...]
     front_door_outcome: str | None
     hard_rule: bool | None
+    notes_unanswered: int
+    skill_comparison: str | None
+    error_type: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
+
+    @classmethod
+    def failed(cls, request: ReplayRequest, error_type: str) -> ReplayResult:
+        """A case and arm that could not run; scoring leaves it out and fails its gate."""
+
+        return cls(
+            set_name=request.set_name,
+            group=request.group,
+            case_id=request.case_id,
+            arm=request.arm,
+            attached_tokens=0,
+            hook_ms=0,
+            step_ms=None,
+            cap_hit=False,
+            structural_need=None,
+            long_term_need=None,
+            tier=None,
+            skill_pick="",
+            checked_item_ids=(),
+            dropped_item_ids=(),
+            applied_drop_item_ids=(),
+            front_door_outcome=None,
+            hard_rule=None,
+            notes_unanswered=0,
+            skill_comparison=None,
+            error_type=error_type,
+        )
 
     @classmethod
     def from_json(cls, text: str) -> ReplayResult:
@@ -570,6 +610,8 @@ def run_replay_case(
         applied_drop_item_ids=_applied_drops(context),
         front_door_outcome=outcome,
         hard_rule=hard_rule,
+        notes_unanswered=0 if typed is None or step is None else typed.notes_unanswered,
+        skill_comparison=None if typed is None else typed.skill,
     )
 
 
@@ -675,11 +717,21 @@ def replay_request(seed: ReplaySeed, case: ReplayCase, arm: str) -> ReplayReques
 def run_replay(
     seeds: Mapping[str, ReplaySeed], cases: Sequence[ReplayCase], runner: Runner
 ) -> list[ReplayResult]:
-    """Run every case twice, rules-only then typed-live, in its own set's data directory."""
+    """Run every case twice, rules-only then typed-live, in its own set's data directory.
 
-    return [
-        runner(replay_request(seeds[case.set_name], case, arm)) for case in cases for arm in ARMS
-    ]
+    A case that fails (a child that exits, times out or writes no result) never stops the run:
+    it is recorded as a failed result holding its case ID and the exception's type name only.
+    """
+
+    results: list[ReplayResult] = []
+    for case in cases:
+        for arm in ARMS:
+            request = replay_request(seeds[case.set_name], case, arm)
+            try:
+                results.append(runner(request))
+            except Exception as error:
+                results.append(ReplayResult.failed(request, type(error).__name__))
+    return results
 
 
 def score_replay(
@@ -691,10 +743,15 @@ def score_replay(
 
     A set with note probes always gets a filler gate, so a run that checked no notes fails it
     instead of leaving the decision unscored. A prompt whose typed step failed counts against
-    ``steps`` and is left out of the filler and skill scores.
+    ``steps`` and is left out of the filler and skill scores. Each decision's gates include an
+    ``answered_share`` sub-gate over the prompts (or notes) where Jev was asked it. A case that
+    failed in either arm is left out of every score and fails ``steps`` (``no_case_failures``).
     """
 
-    by_key = {(r.set_name, r.group, r.case_id, r.arm): r for r in results}
+    failures = [item for item in results if item.error_type is not None]
+    failed = {(item.set_name, item.group, item.case_id) for item in failures}
+    cases = [case for case in cases if (case.set_name, case.group, case.case_id) not in failed]
+    by_key = {(r.set_name, r.group, r.case_id, r.arm): r for r in results if r.error_type is None}
 
     def result(case: ReplayCase, arm: str) -> ReplayResult:
         return by_key[(case.set_name, case.group, case.case_id, arm)]
@@ -725,7 +782,7 @@ def score_replay(
     if tier:
         report["tier"] = _score_tier(tier, result)
         gates["tier"] = all(report["tier"]["gates"].values())
-    report["steps"] = _score_steps([result(case, "typed") for case in cases])
+    report["steps"] = _score_steps([result(case, "typed") for case in cases], failures)
     gates["steps"] = all(report["steps"]["gates"].values())
     report["latency"] = _score_latency(cases, result)
     gates["latency"] = all(report["latency"]["gates"].values())
@@ -745,8 +802,9 @@ def _outcome_counts(results: Sequence[ReplayResult]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _score_steps(typed: Sequence[ReplayResult]) -> dict[str, Any]:
-    """The typed step ran on every prompt: no ``typed_step_error`` and no missing outcome."""
+def _score_steps(typed: Sequence[ReplayResult], failures: Sequence[ReplayResult]) -> dict[str, Any]:
+    """Every case ran, and the typed step ran on every prompt: no ``typed_step_error`` and no
+    missing outcome. A failed case is listed by its identity and error type only."""
 
     errors = sum(_step_error(item) for item in typed)
     missing = sum(item.front_door_outcome is None for item in typed)
@@ -754,8 +812,43 @@ def _score_steps(typed: Sequence[ReplayResult]) -> dict[str, Any]:
         "prompts": len(typed),
         "step_errors": errors,
         "missing_outcomes": missing,
-        "gates": {"no_step_errors": bool(typed) and errors == 0 and missing == 0},
+        "case_failures": [
+            {
+                "set_name": item.set_name,
+                "group": item.group,
+                "case_id": item.case_id,
+                "arm": item.arm,
+                "error_type": item.error_type,
+            }
+            for item in failures
+        ],
+        "gates": {
+            "no_step_errors": bool(typed) and errors == 0 and missing == 0,
+            "no_case_failures": not failures,
+        },
     }
+
+
+def _answered_share(asked: int, answered: int) -> dict[str, Any]:
+    return {"asked": asked, "answered": answered, "share": share(answered, asked)}
+
+
+def _answered_gate(value: Mapping[str, Any]) -> bool:
+    """At least 95% answered where Jev was asked; never asked is never evidence."""
+
+    return bool(value["asked"]) and value["share"] >= MINIMUM_ANSWERED_SHARE
+
+
+def _prompts_answered(asked: Sequence[ReplayResult]) -> dict[str, Any]:
+    return _answered_share(len(asked), sum(item.front_door_outcome == _ANSWERED for item in asked))
+
+
+def _not_answered(result: ReplayResult) -> bool:
+    """Jev gave no answer on this asked prompt, other than at the cap (no credential, an HTTP
+    error, a denied budget, a bad schema, a failed step): the hook used the rules' answer, which
+    must never count as Jev's."""
+
+    return result.front_door_outcome not in _SCORED_OUTCOMES
 
 
 def _score_memory(
@@ -764,7 +857,8 @@ def _score_memory(
     """Jev's memory-need gates on the prompts Jev was asked; hard-rule prompts are reported apart.
 
     Jev never overrides a hard rule (spec §4.1), so a hard-rule prompt is a rules finding, not a
-    Jev result: its count and the ones whose rules answer misses the fixture label.
+    Jev result: its count and the ones whose rules answer misses the fixture label. An asked
+    prompt Jev did not answer scores as no answer, never as the rules' fallback.
     """
 
     from scripts.typed_decision_evaluation import score_front_door
@@ -774,10 +868,11 @@ def _score_memory(
     hard_rule = score_front_door(
         [_front_door_row(case, result(case, "typed")) for case in preempted]
     )
+    typed = score_front_door([_jev_row(case, result(case, "typed")) for case in asked])
+    typed["answered"] = _prompts_answered([result(case, "typed") for case in asked])
+    typed["gates"]["answered_share"] = _answered_gate(typed["answered"])
     return {
-        "memory_typed": score_front_door(
-            [_front_door_row(case, result(case, "typed")) for case in asked]
-        ),
+        "memory_typed": typed,
         "memory_rules": score_front_door(
             [_front_door_row(case, result(case, "rules")) for case in asked]
         ),
@@ -801,6 +896,17 @@ def _front_door_row(case: ReplayCase, result: ReplayResult) -> FrontDoorRow:
         result.hook_ms,
         None if outcome in _NOT_UNAVAILABLE else outcome,
     )
+
+
+def _jev_row(case: ReplayCase, result: ReplayResult) -> FrontDoorRow:
+    """Jev's row for an asked prompt: one Jev did not answer has no needs to score."""
+
+    from mnemo_memory.packages.model_gateway.decision_axes import NeedAnswer
+
+    row = _front_door_row(case, result)
+    if not _not_answered(result):
+        return row
+    return replace(row, structure=NeedAnswer.UNKNOWN, long_term=NeedAnswer.UNKNOWN)
 
 
 def _seed_key(seed: ReplaySeed, item_id: str) -> str | None:
@@ -837,6 +943,8 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
     noise_rate = share(sum(noise), len(noise))
     judged = sum(len(result.dropped_item_ids) for result in results)
     applied = sum(len(result.applied_drop_item_ids) for result in results)
+    sent = sum(len(result.checked_item_ids) for result in results)
+    answered = _answered_share(sent, sent - sum(result.notes_unanswered for result in results))
     return {
         "checks": len(rows),
         "drops_judged": judged,
@@ -854,10 +962,12 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
         "superseded_dropped": sum(
             dropped for category, dropped in rows if category == "superseded"
         ),
+        "answered": answered,
         "gates": {
             "relevant_dropped": bool(relevant) and sum(relevant) == 0,
             "filler_removed": bool(noise) and noise_rate >= 0.9,
             "all_notes_checked": bool(notes) and notes_checked == len(notes),
+            "answered_share": _answered_gate(answered),
         },
     }
 
@@ -878,6 +988,13 @@ def _score_skill(
     typed_none = share(sum(correct(case, "typed") for case in without), len(without))
     typed_all = share(sum(correct(case, "typed") for case in scored), len(scored))
     keyword_all = share(sum(correct(case, "rules") for case in scored), len(scored))
+    answered = _prompts_answered(
+        [
+            result(case, "typed")
+            for case in cases
+            if result(case, "typed").skill_comparison not in _SKILL_QUESTION_NOT_SENT
+        ]
+    )
     return {
         "skill_prompts": len(with_skill),
         "no_skill_prompts": len(without),
@@ -886,10 +1003,12 @@ def _score_skill(
         "typed_correct_none": typed_none,
         "typed_accuracy": typed_all,
         "keyword_accuracy": keyword_all,
+        "answered": answered,
         "gates": {
             "correct_skill": not with_skill or typed_skill >= 0.85,
             "correct_none": not without or typed_none >= 0.95,
             "better_than_keyword": typed_all > keyword_all,
+            "answered_share": _answered_gate(answered),
         },
     }
 
@@ -897,13 +1016,26 @@ def _score_skill(
 def _score_tier(
     cases: Sequence[ReplayCase], result: Callable[[ReplayCase, str], ReplayResult]
 ) -> dict[str, Any]:
-    heavy = [case for case in cases if case.expected_tier == "heavy"]
-    recalled = sum(result(case, "typed").tier != "light" for case in heavy)
-    recall = share(recalled, len(heavy))
+    """Heavy recall, where an asked prompt Jev did not answer is never recalled: the
+    unavailable fallback is ``heavy``, which would pass the gate on no answer at all."""
+
+    def recalled(item: ReplayResult) -> bool:
+        # A hard rule never asks the tier, so its heavy default stands; an asked prompt needs
+        # an answer (or the cap's fallback) behind it.
+        return item.tier != "light" and (item.hard_rule is True or not _not_answered(item))
+
+    typed = [(case, result(case, "typed")) for case in cases]
+    heavy = [item for case, item in typed if case.expected_tier == "heavy"]
+    recall = share(sum(recalled(item) for item in heavy), len(heavy))
+    answered = _prompts_answered([item for _, item in typed if item.hard_rule is not True])
     return {
         "heavy_cases": len(heavy),
         "heavy_recall": recall,
-        "gates": {"heavy_recall": bool(heavy) and recall >= 0.95},
+        "answered": answered,
+        "gates": {
+            "heavy_recall": bool(heavy) and recall >= 0.95,
+            "answered_share": _answered_gate(answered),
+        },
     }
 
 

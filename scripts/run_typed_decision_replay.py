@@ -2,7 +2,8 @@
 
 Every prompt runs in a fresh process, twice (rules-only and typed-live). A run sends fixture
 text to Jev, so it needs --live-calls-authorized (the maintainer's go-ahead, each time) and
-TYPESAFE_API_KEY in the environment. Example:
+TYPESAFE_API_KEY in the environment. A case whose child fails is recorded by case ID and error
+type, the run goes on, and the report is still written (and is not complete). Example:
 
     uv run python -m scripts.run_typed_decision_replay --run-id 2026-10-03-replay-a \
         --live-calls-authorized

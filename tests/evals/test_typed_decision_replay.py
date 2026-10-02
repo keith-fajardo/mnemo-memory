@@ -285,6 +285,8 @@ def _result(
     applied: tuple[str, ...] = (),
     outcome: str | None = "answered",
     hard_rule: bool | None = False,
+    unanswered: int = 0,
+    skill: str = "agreed",
 ) -> ReplayResult:
     typed = arm == "typed"
     return ReplayResult(
@@ -305,6 +307,8 @@ def _result(
         applied,
         outcome if typed else None,
         hard_rule if typed else None,
+        unanswered if typed else 0,
+        skill if typed else None,
     )
 
 
@@ -373,6 +377,19 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
     ]
     assert score_replay(cases, unchecked, {"dev": seed})["gates"]["filler_dev"] is False
 
+    unanswered = [*passing[:-1], replace_result(passing[-1], notes_unanswered=1)]
+    filler = score_replay(cases, unanswered, {"dev": seed})["sets"]["dev"]["filler"]
+    assert filler["answered"] == {"asked": 2, "answered": 1, "share": 0.5}
+    assert filler["gates"]["answered_share"] is False
+
+    skipped = [
+        replace_result(result, skill_comparison="skipped") if result.arm == "typed" else result
+        for result in passing
+    ]
+    skill = score_replay(cases, skipped, {"dev": seed})["sets"]["dev"]["skill"]
+    assert skill["answered"] == {"asked": 0, "answered": 0, "share": 0.0}
+    assert skill["gates"]["answered_share"] is False  # never asked is never evidence
+
 
 def test_filler_gate_needs_every_seeded_note_checked() -> None:
     """A drop rate over a few checked notes says nothing about the notes never checked."""
@@ -404,6 +421,7 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
         "relevant_dropped": True,
         "filler_removed": True,
         "all_notes_checked": False,
+        "answered_share": True,
     }
     assert report["gates"]["filler_dev"] is False
 
@@ -423,6 +441,89 @@ def test_memory_gates_count_only_prompts_jev_was_asked() -> None:
     assert dev["memory_typed"]["cases"] == dev["memory_rules"]["cases"] == 1
     assert dev["memory_typed"]["missed_case_ids"] == []
     assert dev["memory_hard_rule"] == {"prompts": 1, "mismatched_case_ids": ["preempted"]}
+
+
+class _HttpErrors:
+    """Every Jev call fails at the transport, so the guard records ``http_error``."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        self.calls += 1
+        raise OSError("synthetic transport failure")
+
+
+def test_a_run_jev_never_answers_fails_every_answered_share_gate(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "dev")
+    cases = [
+        *(find_case("dev", "memory", case_id) for case_id in ("prior-01", "structure-01")),
+        *(find_case("dev", "tier", f"heavy-{number:02d}") for number in (1, 2, 3)),
+        find_case("dev", "skill", "skill-02"),
+        find_case("dev", "notes", "notes-dev-b00"),
+    ]
+    failing = _HttpErrors()
+    results = run_replay({"dev": seed}, cases, _in_process(failing))
+    assert failing.calls > 0
+    assert {result.front_door_outcome for result in results if result.arm == "typed"} == {
+        "http_error"
+    }
+
+    report = score_replay(cases, results, {"dev": seed})
+    dev = report["sets"]["dev"]
+    for section in (dev["memory_typed"], dev["filler"], dev["skill"], report["tier"]):
+        assert section["answered"]["asked"] > 0 and section["answered"]["share"] == 0.0
+        assert section["gates"]["answered_share"] is False
+    # The rules' fallback answers are right here; they must not count as Jev's.
+    assert dev["memory_rules"]["accuracy"] == 1.0 and dev["memory_typed"]["accuracy"] == 0.0
+    assert report["tier"]["heavy_recall"] == 0.0
+    assert not any(report["gates"][name] for name in ("memory_dev", "tier", "skill_dev"))
+    assert report["gates"]["filler_dev"] is False and report["complete"] is False
+
+
+def _fallback_rows(cases: list[ReplayCase], outcome: str) -> list[ReplayResult]:
+    """Both arms with each case's right needs (as the rules decided them), all one outcome."""
+
+    needs: dict[str | None, tuple[str, str]] = {
+        "prior_memory": ("no", "yes"),
+        "structure": ("yes", "no"),
+        "none": ("no", "no"),
+        None: ("no", "yes"),  # a tier case
+    }
+    rows: list[ReplayResult] = []
+    for case in cases:
+        structural, long_term = needs[case.expected_route]
+        rows.extend(
+            _result(case, arm, structural=structural, long_term=long_term, outcome=outcome)
+            for arm in ("rules", "typed")
+        )
+    return rows
+
+
+def test_rules_fallback_answers_never_pass_jev_memory_or_tier_gates() -> None:
+    """A prompt Jev did not answer scores as not answered; a timeout (the cap working as
+    designed, gated by the cap share) keeps the hook's own result but is still no answer."""
+
+    cases = [
+        ReplayCase("dev", "memory", "prior", "p1", expected_route="prior_memory"),
+        ReplayCase("dev", "memory", "structure", "p2", expected_route="structure"),
+        ReplayCase("dev", "memory", "none", "p3", expected_route="none"),
+        ReplayCase("dev", "tier", "heavy", "p4", expected_tier="heavy"),
+    ]
+    seeds = {"dev": _seed({})}
+    answered = score_replay(cases, _fallback_rows(cases, "answered"), seeds)
+    assert answered["gates"]["memory_dev"] is True and answered["gates"]["tier"] is True
+
+    for outcome in ("http_error", "no_credential", "budget_denied", "schema_invalid"):
+        degraded = score_replay(cases, _fallback_rows(cases, outcome), seeds)
+        assert degraded["sets"]["dev"]["memory_typed"]["accuracy"] == 0.0, outcome
+        assert degraded["tier"]["heavy_recall"] == 0.0, outcome
+        assert degraded["gates"]["memory_dev"] is False and degraded["gates"]["tier"] is False
+
+    capped = score_replay(cases, _fallback_rows(cases, "timeout"), seeds)
+    memory = capped["sets"]["dev"]["memory_typed"]
+    assert memory["accuracy"] == 1.0 and capped["tier"]["heavy_recall"] == 1.0
+    assert memory["answered"]["share"] == 0.0 and capped["gates"]["memory_dev"] is False
 
 
 def test_score_replay_counts_outcomes_and_fails_on_missing_or_failed_steps() -> None:
@@ -791,3 +892,62 @@ def test_cli_writes_a_report_with_an_in_process_runner(
     assert code in {0, 1}
     assert report["run"] == {"run_id": "test-run", "prompts": 5, "requests": 10}
     assert set(report["gates"]) >= {"latency", "tokens", "tier", "steps"}
+
+
+def test_a_failing_child_is_recorded_and_the_report_is_still_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small = (find_case("dev", "memory", "prior-01"), find_case("holdout", "memory", "h-prior-01"))
+    monkeypatch.setattr(replay_cli, "replay_cases", lambda: small)
+    in_process = _in_process(ReplayOracle())
+    secret = find_case("dev", "memory", "prior-01").prompt
+
+    def runner(request: ReplayRequest) -> ReplayResult:
+        if (request.case_id, request.arm) == ("prior-01", "typed"):
+            raise ReplayChildError(f"child failed: {secret}")
+        return in_process(request)
+
+    code = replay_cli.main(
+        ["--run-id", "failed-run", "--results-root", str(tmp_path), "--live-calls-authorized"],
+        environ=FAKE_ENVIRON,
+        runner=runner,
+    )
+    output = tmp_path / "failed-run" / "report.json"
+    report = json.loads(output.read_text("utf-8"))
+    assert code == 1 and report["complete"] is False
+    assert report["steps"]["case_failures"] == [
+        {
+            "set_name": "dev",
+            "group": "memory",
+            "case_id": "prior-01",
+            "arm": "typed",
+            "error_type": "ReplayChildError",
+        }
+    ]
+    assert report["steps"]["gates"]["no_case_failures"] is False
+    assert report["gates"]["steps"] is False
+    assert set(report["sets"]) == {"holdout"}  # the failed case is left out of every score
+    assert report["sets"]["holdout"]["memory_typed"]["cases"] == 1
+    assert report["run"] == {"run_id": "failed-run", "prompts": 2, "requests": 4}
+    assert secret not in output.read_text("utf-8")
+
+
+def test_run_replay_records_a_real_child_failure_and_keeps_going(tmp_path: Path) -> None:
+    """A typed child without the authorization flag refuses and exits; the run continues."""
+
+    seed = seed_replay_set(tmp_path, "holdout")
+    case = find_case("holdout", "memory", "h-prior-01")
+
+    def fresh(request: ReplayRequest) -> ReplayResult:
+        return run_case_in_fresh_process(request, live_calls_authorized=False)
+
+    rules, typed = run_replay({"holdout": seed}, [case], fresh)
+    assert (rules.arm, rules.error_type, rules.case_id) == ("rules", None, case.case_id)
+    assert (typed.arm, typed.error_type, typed.case_id) == (
+        "typed",
+        "ReplayChildError",
+        case.case_id,
+    )
+    steps = score_replay([case], [rules, typed], {"holdout": seed})["steps"]
+    assert steps["gates"]["no_case_failures"] is False
+    assert [failure["case_id"] for failure in steps["case_failures"]] == [case.case_id]
