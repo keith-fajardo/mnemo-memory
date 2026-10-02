@@ -98,10 +98,14 @@ def _evidence(seed: str) -> EvidenceReference:
 
 
 def _revision(
-    path: str, body: str, predecessor: KnowledgeDocumentRevision | None = None
+    path: str,
+    body: str,
+    predecessor: KnowledgeDocumentRevision | None = None,
+    *,
+    scope: MemoryScope | None = None,
 ) -> KnowledgeDocumentRevision:
     document = KnowledgeDocumentParser().parse(
-        KnowledgeDocumentParseRequest(_project_scope(), path), body
+        KnowledgeDocumentParseRequest(_project_scope() if scope is None else scope, path), body
     )
     return KnowledgeDocumentRevision(
         KnowledgeDocumentRevisionId.new(),
@@ -185,6 +189,20 @@ def test_changed_or_missing_knowledge_comes_back_as_an_omission() -> None:
         missing: OmissionReason.EXPIRED,
         _knowledge_id(second, section=7): OmissionReason.UNAUTHORIZED_SCOPE,
     }
+
+
+def test_knowledge_from_another_project_comes_back_as_expired_never_as_the_item() -> None:
+    _, service, knowledge = _services()
+    other = _project_scope(2)
+    foreign = _revision("notes/export.md", "# Invoice export\nAnother project's note.", scope=other)
+    knowledge.apply_sync(other, (foreign,), ())
+
+    packet = service.get_context(
+        GetUnifiedContext(_task_scope(), item_ids=(_knowledge_id(foreign),))
+    )
+
+    assert packet.items == ()
+    assert _reasons(packet.omissions) == {_knowledge_id(foreign): OmissionReason.EXPIRED}
 
 
 def test_corrected_retracted_and_foreign_events_come_back_as_omissions() -> None:
@@ -311,3 +329,22 @@ def test_mcp_port_fetches_item_ids_and_refuses_mixed_requests() -> None:
         port.get_context({"item_ids": [event_id], "dbt_lineage": {"unique_id": "model.x.y"}})
     with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
         port.get_context({"item_ids": [event_id, "source-structure"]})
+
+
+@pytest.mark.parametrize(
+    "request_values",
+    [
+        {"item_ids": []},
+        {"item_ids": [], "include_approved_events": True},
+        {"item_ids": [], "query": "invoice export"},
+    ],
+)
+def test_mcp_port_refuses_an_empty_item_id_list(request_values: dict[str, Any]) -> None:
+    """An empty list is a request error, never the default path (which drops the include
+    flags and allows mixing with other retrieval fields)."""
+
+    checkpoints, service, _ = _services()
+    _record(checkpoints, "Keep invoice export retries idempotent.", "lookup:empty")
+    port = DurableMcpContextPort(checkpoints, context_service=service, default_scope=_task_scope())
+    with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+        port.get_context(request_values)

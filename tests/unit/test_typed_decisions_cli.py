@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner, Result
 
 from mnemo_memory.apps.cli.main import app
@@ -13,6 +14,7 @@ from mnemo_memory.packages.application.settings import (
     TYPED_DECISION_LOCK_MESSAGES,
     TypedDecisionLock,
 )
+from mnemo_memory.packages.domain import TypedDecisionKind, TypedDecisionMode
 
 FAKE_KEY = "test-key-not-real-0000"
 runner = CliRunner()
@@ -104,10 +106,10 @@ def test_status_reports_an_unreadable_counter(tmp_path: Path) -> None:
     assert budget == {"counter": "unavailable", "limit": 10_000_000, "reserved_today": None}
 
 
-def test_help_lists_both_commands() -> None:
-    result = runner.invoke(app, ["typed-decisions", "--help"])
+def test_help_lists_every_command() -> None:
+    result = runner.invoke(app, ["typed-decisions", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
-    assert "status" in result.output and "set" in result.output
+    assert all(name in result.output for name in ("status", "set", "enable", "disable"))
 
 
 def test_set_reports_a_locked_settings_file_like_status(tmp_path: Path) -> None:
@@ -124,3 +126,76 @@ def test_set_reports_a_locked_settings_file_like_status(tmp_path: Path) -> None:
         "status": "settings_invalid",
         "reason": TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.DATA_ROUTE],
     }
+
+
+def test_enable_turns_the_master_switch_on_so_set_succeeds(tmp_path: Path) -> None:
+    enabled = _invoke(tmp_path, "enable")
+    assert enabled.exit_code == 0, enabled.output
+    assert json.loads(enabled.output) == {"status": "enabled", "master_switch": True}
+    assert PersonalSettingsStore(tmp_path).load().experimental_typed_decisions_enabled is True
+
+    updated = _invoke(tmp_path, "set", "skill", "shadow")
+    assert updated.exit_code == 0, updated.output
+    assert json.loads(updated.output) == {"status": "updated", "kind": "skill", "mode": "shadow"}
+
+
+def test_disable_turns_the_master_switch_and_every_mode_off(tmp_path: Path) -> None:
+    PersonalSettingsStore(tmp_path).save(
+        PersonalSettings(
+            experimental_semantic_memory_enabled=True,
+            experimental_typed_decisions_enabled=True,
+            typed_decision_modes=(
+                ("extraction_gate", "shadow"),
+                ("front_door", "shadow"),
+                ("relevance", "shadow"),
+                ("skill", "shadow"),
+                ("tier_hint", "shadow"),
+            ),
+        )
+    )
+    disabled = _invoke(tmp_path, "disable")
+    assert disabled.exit_code == 0, disabled.output
+    assert json.loads(disabled.output) == {
+        "status": "disabled",
+        "master_switch": False,
+        "modes": {"front_door": "off", "relevance": "off", "tier_hint": "off", "skill": "off"},
+    }
+    settings = PersonalSettingsStore(tmp_path).load()
+    assert settings.experimental_typed_decisions_enabled is False
+    assert {settings.typed_decision_mode(kind) for kind in TypedDecisionKind} == {
+        TypedDecisionMode.OFF
+    }
+    assert settings.experimental_semantic_memory_enabled is True  # nothing else changes
+    refused = _invoke(tmp_path, "set", "skill", "shadow")
+    assert refused.exit_code == 1  # the master-switch lock is back
+
+
+def _hand_edit_live(data: Path) -> None:
+    """A settings file whose skill mode was hand-edited to ``live``: it no longer loads."""
+
+    PersonalSettingsStore(data).save(PersonalSettings(experimental_typed_decisions_enabled=True))
+    path = data / "settings.json"
+    stored = json.loads(path.read_text("utf-8"))
+    stored["typed_decision_modes"] = {"skill": "live"}
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+
+@pytest.mark.parametrize("command", ["enable", "disable"])
+@pytest.mark.parametrize("damage", ["locked", "broken"])
+def test_enable_and_disable_report_a_settings_file_that_will_not_load(
+    tmp_path: Path, command: str, damage: str
+) -> None:
+    path = tmp_path / "settings.json"
+    if damage == "locked":
+        _hand_edit_live(tmp_path)
+        reason = TYPED_DECISION_LOCK_MESSAGES[TypedDecisionLock.DATA_ROUTE]
+    else:
+        path.write_text("{not json", encoding="utf-8")
+        reason = "MNEMO_SETTINGS_INVALID"
+    before = path.read_text("utf-8")
+
+    result = _invoke(tmp_path, command)
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {"status": "settings_invalid", "reason": reason}
+    assert path.read_text("utf-8") == before  # never rewritten

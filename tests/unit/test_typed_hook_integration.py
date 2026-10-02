@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -645,11 +646,32 @@ def test_pin_states_are_read_in_one_pass_and_one_by_one_only_after_a_failure(
     assert len(one_reads) == 2  # each event read on its own, so one failure hides no other
 
 
-def test_filler_checks_run_only_on_push_actions(tmp_path: Path) -> None:
+def test_without_the_gate_every_retrieved_packet_is_filler_checked(tmp_path: Path) -> None:
+    """With the semantic gate off there is no plan to gate on, so "push" means the rules
+    retrieved a packet (spec §4.2): this router-uncertain prompt plans ``lazy_pull`` but today's
+    hook still attaches its notes, so they are checked."""
+
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     off = run_hook(fixture, LAZY_PROMPT).context
-    # Without the semantic gate today's hook still attaches notes for this lazy-pull prompt.
     assert off is not None and fixture.filler_event_id in _item_ids(off)
+    transport = ScriptedJevTransport()
+    live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
+    context = run_hook(fixture, LAZY_PROMPT, live).context
+    assert transport.calls > 0
+    assert _filler_omission_ids(context) == [fixture.filler_event_id]
+    assert _item_ids(context) == _item_ids(off) - {fixture.filler_event_id}
+    typed = _latest_event(fixture).typed
+    assert typed is not None and (typed.notes_checked, typed.notes_dropped) == (1, 1)
+    # Shadow checks the same notes and still changes nothing.
+    watched = ScriptedJevTransport()
+    shadow = synthetic_overrides(fixture, watched, TypedHookModes(relevance=SHADOW))
+    assert run_hook(fixture, LAZY_PROMPT, shadow).context == off
+    assert watched.calls > 0
+
+
+def test_behind_the_gate_filler_checks_run_only_on_push_actions(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    off = run_hook(fixture, LAZY_PROMPT).context
     transport = ScriptedJevTransport()
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
     assert run_hook(fixture, LAZY_PROMPT, live).context == off
@@ -949,6 +971,32 @@ def test_invalid_typed_telemetry_never_costs_the_context_or_the_event(
     monkeypatch.setattr(typed_decision_hook, "route_telemetry", broken)
     seen = run_hook(fixture, KNOWLEDGE_PROMPT, live)
     assert seen.context == dropped  # the applied live context survives
+    assert seen.telemetry_event_id is not None
+    event = _latest_event(fixture)
+    assert event.event_id == seen.telemetry_event_id and event.typed is None
+
+
+def test_unusable_typed_values_never_cost_the_applied_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live drop count is folded into the values inside the telemetry guard: a failure
+    there keeps the applied render and records the event without a typed group."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert len(_filler_omission_ids(dropped)) == 2
+    decide = typed_decision_hook.decide_typed_prompt
+    not_values: Any = object()  # ``dataclasses.replace`` refuses it
+
+    def unusable_values(
+        guard_factory: typed_decision_hook.GuardFactory, step: TypedStepInput, *, started: float
+    ) -> TypedPromptDecisions:
+        return replace(decide(guard_factory, step, started=started), telemetry=not_values)
+
+    monkeypatch.setattr(typed_decision_hook, "decide_typed_prompt", unusable_values)
+    seen = run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert seen.context == dropped
     assert seen.telemetry_event_id is not None
     event = _latest_event(fixture)
     assert event.event_id == seen.telemetry_event_id and event.typed is None

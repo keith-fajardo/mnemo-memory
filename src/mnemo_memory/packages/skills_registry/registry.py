@@ -83,15 +83,9 @@ class KnowledgeDocumentSkillRegistry:
     def list_current_skills(
         self, scope: MemoryScope, client: str, maximum_skills: int = 32
     ) -> tuple[ProjectSkill, ...]:
-        project_scope = _require_project_scope(scope)
-        compatible_client = _require_supported_client(client)
-        _require_limit(maximum_skills)
-        skills = tuple(
-            skill
-            for skill in self._iter_current_skills(project_scope)
-            if compatible_client in skill.compatible_clients
-        )
-        return _unique_skills(skills)[:maximum_skills]
+        """The listed skills, by the one rule the skills Jev can pick are listed with too."""
+
+        return self.current_skill_listing(scope, client, maximum_skills).skills
 
     def current_skill_listing(
         self, scope: MemoryScope, client: str, maximum_skills: int = 32

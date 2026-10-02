@@ -46,7 +46,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     with_task_size_hint,
     without_filler_notes,
 )
-from mnemo_memory.packages.application import PersonalSettings
+from mnemo_memory.packages.application import PersonalSettings, context_routing
 from mnemo_memory.packages.application.context_routing import (
     AutomaticContextNeed,
     AutomaticContextRoute,
@@ -87,7 +87,13 @@ from mnemo_memory.packages.domain import (
     WorkspaceId,
 )
 from mnemo_memory.packages.model_gateway.cascade_router import ClassifierAxis, ClassifierResult
-from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT, NOTE_SUBSTANCE
+from mnemo_memory.packages.model_gateway.decision_axes import (
+    HINT_TEXT,
+    MEMORY_NEED,
+    NOTE_SUBSTANCE,
+    NeedAnswer,
+    needs_from_memory_choice,
+)
 from mnemo_memory.packages.model_gateway.typed_decisions import (
     AdapterAnswer,
     GuardedTypedDecisionClassifier,
@@ -294,6 +300,25 @@ def test_memory_label_table_maps_needs_and_routes(
         _choice("memory_need", label, 0.9), AutomaticContextRoute.PRIOR_MEMORY
     )
     assert (outcome.label, outcome.needs, outcome.route) == (label, needs, route)
+
+
+def test_the_hook_label_tables_agree_with_the_tables_they_restate() -> None:
+    """The hook's needs per label and its retrieval routes restate ``decision_axes`` and
+    ``context_routing``; this ties them so the copies cannot drift apart."""
+
+    as_need = {
+        NeedAnswer.YES: AutomaticContextNeed.YES,
+        NeedAnswer.NO: AutomaticContextNeed.NO,
+        NeedAnswer.UNKNOWN: AutomaticContextNeed.UNKNOWN,
+    }
+    labels = MEMORY_NEED.allowed_labels
+    assert len(labels) == 5 and set(typed_decision_hook._NEEDS_BY_LABEL) == set(labels)
+    for label in labels:
+        long_term, structure = needs_from_memory_choice(_choice(MEMORY_NEED.name, label, 0.9))
+        assert (as_need[long_term], as_need[structure]) == (
+            typed_decision_hook._NEEDS_BY_LABEL[label]
+        ), label
+    assert typed_decision_hook._RETRIEVAL_ROUTES == context_routing._TYPED_RETRIEVAL_ROUTES
 
 
 @pytest.mark.parametrize(
@@ -834,16 +859,14 @@ def _recorded_decide(
 def test_the_cap_counts_from_the_start_of_the_typed_step() -> None:
     """0.3 s already spent when the step reaches Jev leaves 0.5 s of the 0.8 s cap."""
 
-    def advanced() -> float:
-        return time.monotonic() + 0.3
-
+    start = time.monotonic()
     decisions, records = _recorded_decide(
-        ScriptedAdapter(SCRIPT, delay=1.5), started=time.monotonic(), clock=advanced
+        ScriptedAdapter(SCRIPT, delay=1.5), started=start, clock=lambda: start + 0.3
     )
     assert decisions.telemetry.front_door_outcome == "timeout"
     assert len(records) == 1 + len(STEP.filler_candidates)
     assert {record.outcome for record in records} == {"timeout"}
-    assert all(480 <= record.duration_ms <= 500 for record in records)
+    assert {record.duration_ms for record in records} == {500}
 
 
 def test_a_step_with_no_time_left_still_asks_under_the_floor() -> None:

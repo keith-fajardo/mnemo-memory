@@ -1351,10 +1351,13 @@ def _typed_prompt_render(
             if trace is not None
             else plan_automatic_context_needs(bounded, learned_phrases=learned)
         )
-        # Filler checks run only on the notes a push action pre-fetched (spec §4.2).
+        # Filler checks run only on the notes a push action pre-fetched (spec §4.2). Without
+        # the semantic gate (no trace) nothing gates on the plan, so a retrieved packet is the
+        # push. Skill discovery and hard routes retrieve none.
         checked = (
             rules.result.packet
-            if modes.relevance is not TypedDecisionMode.OFF and rules_plan.action in _PUSH_ACTIONS
+            if modes.relevance is not TypedDecisionMode.OFF
+            and (trace is None or rules_plan.action in _PUSH_ACTIONS)
             else None
         )
         local = _typed_local_inputs(
@@ -1401,10 +1404,10 @@ def _typed_prompt_render(
         )
     except Exception:
         return rules, trace, _typed_step_error_telemetry(modes, started)
-    values = decisions.telemetry
-    if modes.relevance is TypedDecisionMode.LIVE:
-        values = replace(values, notes_dropped=applied.notes_dropped)
     try:
+        values = decisions.telemetry
+        if modes.relevance is TypedDecisionMode.LIVE:
+            values = replace(values, notes_dropped=applied.notes_dropped)
         telemetry: AutomaticRouteTypedDecisions | None = typed.route_telemetry(
             replace(values, step_ms=_elapsed_milliseconds(started))
         )
@@ -4039,6 +4042,58 @@ def typed_decisions_set(
     except PersonalSettingsError as error:
         raise typer.BadParameter("MNEMO_SETTINGS_WRITE_FAILED") from error
     _show({"status": "updated", "kind": kind, "mode": target.value})
+
+
+def _save_typed_decisions_switch(data_dir: Path | None, enabled: bool) -> PersonalSettings:
+    """Set the master switch; turning it off also turns every mode off (lock 3 stays valid)."""
+
+    try:
+        config = resolve_local_config(data_dir)
+        store = PersonalSettingsStore(config.data_directory)
+        current = store.load()
+    except PersonalSettingsError as error:
+        raise _typed_decision_settings_invalid(error) from error
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_TYPED_DECISIONS_UNAVAILABLE") from error
+    modes = (
+        current.typed_decision_modes
+        if enabled
+        else tuple((kind, TypedDecisionMode.OFF.value) for kind, _ in current.typed_decision_modes)
+    )
+    try:
+        return store.save(
+            replace(
+                current, experimental_typed_decisions_enabled=enabled, typed_decision_modes=modes
+            )
+        )
+    except PersonalSettingsError as error:
+        raise typer.BadParameter("MNEMO_SETTINGS_WRITE_FAILED") from error
+
+
+@typed_decisions_app.command("enable", help="Turn the typed-decisions master switch on.")
+def typed_decisions_enable(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    settings = _save_typed_decisions_switch(data_dir, True)
+    _show({"status": "enabled", "master_switch": settings.experimental_typed_decisions_enabled})
+
+
+@typed_decisions_app.command(
+    "disable", help="Turn the typed-decisions master switch off and every mode off."
+)
+def typed_decisions_disable(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    from mnemo_memory.apps.cli.typed_decision_hook import HOOK_KINDS
+
+    settings = _save_typed_decisions_switch(data_dir, False)
+    _show(
+        {
+            "status": "disabled",
+            "master_switch": settings.experimental_typed_decisions_enabled,
+            "modes": {kind.value: settings.typed_decision_mode(kind).value for kind in HOOK_KINDS},
+        }
+    )
 
 
 def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:

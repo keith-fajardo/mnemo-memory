@@ -544,10 +544,12 @@ class DurableMcpContextPort:
             )
             item_ids = request.get("item_ids")
             if item_ids is not None:
-                if not isinstance(item_ids, list) or any(
-                    not isinstance(value, str) for value in item_ids
+                if (
+                    not isinstance(item_ids, list)
+                    or not item_ids
+                    or any(not isinstance(value, str) for value in item_ids)
                 ):
-                    raise ValueError("item_ids must be an array of strings")
+                    raise ValueError("item_ids must be a non-empty array of strings")
                 if any(
                     value is not None
                     for value in (lineage, test_coverage, dbt_selector, dbt_freshness, dbt_changes)

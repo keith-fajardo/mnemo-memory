@@ -25,11 +25,12 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
 )
 from scripts.typed_decision_test_support import FAKE_TYPESAFE_KEY, run_hook, seed_hook_fixture
 
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "evals"
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURES = ROOT / "tests" / "fixtures" / "evals"
 ROUTING = json.loads((FIXTURES / "automatic-context-routing-v1.json").read_text("utf-8"))
 SAMPLE: tuple[str, ...] = tuple(case["prompt"] for case in ROUTING["cases"][::6])
 OFF, SHADOW, LIVE = TypedDecisionMode.OFF, TypedDecisionMode.SHADOW, TypedDecisionMode.LIVE
-SOURCE = Path("src/mnemo_memory")
+SOURCE = ROOT / "src" / "mnemo_memory"
 
 
 def test_real_hook_path_makes_zero_transport_calls_in_every_mode(
@@ -103,7 +104,7 @@ def test_the_hook_builds_its_guard_with_the_runtime_source(
 
 def test_only_the_composition_module_mentions_the_synthetic_builder() -> None:
     mentions = sorted(
-        str(path)
+        path.relative_to(ROOT).as_posix()
         for path in SOURCE.rglob("*.py")
         if "build_synthetic_typed_decision_classifier" in path.read_text(encoding="utf-8")
     )
