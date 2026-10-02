@@ -350,3 +350,17 @@ def test_diagnostic_cli_turns_trace_on_labels_and_purges_exact_scope(tmp_path: P
     assert shown_empty.output.splitlines()[0].split()[-1] == "EVENT_ID"
     assert str(event.event_id) not in shown_empty.output
     assert shown_empty.output.rstrip().endswith("does not prove causation.")
+
+
+def test_shadow_reason_typed_decision_is_accepted_by_telemetry() -> None:
+    event = replace(
+        _event(1),
+        shadow_structural_need="no",
+        shadow_long_term_need="yes",
+        shadow_reason="typed_decision",
+        shadow_long_term_tokens=1_300,
+        shadow_shared_maximum_tokens=1_300,
+        shadow_action="push_long_term",
+        shadow_estimated_tokens=1_300,
+    )
+    assert AutomaticRouteEvent.from_dict(event.to_dict()).shadow_reason == "typed_decision"

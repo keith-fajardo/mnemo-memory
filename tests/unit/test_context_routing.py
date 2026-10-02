@@ -18,6 +18,7 @@ from mnemo_memory.packages.application.context_routing import (
     gate_automatic_context_injection,
     is_exact_automatic_context_redelivery,
     plan_automatic_context_needs,
+    typed_route_decision,
 )
 
 
@@ -325,3 +326,90 @@ def test_live_gate_maps_no_unknown_and_yes_without_loading_suppressed_slices() -
         (len("selected bounded slice") + 3) // 4,
     )
     assert loaded == ["slice"]
+
+
+YES, NO, UNKNOWN = AutomaticContextNeed.YES, AutomaticContextNeed.NO, AutomaticContextNeed.UNKNOWN
+
+
+def test_typed_needs_replace_the_keyword_cues_when_no_hard_rule_fired() -> None:
+    rules = plan_automatic_context_needs("finance reconciliation variance")
+    typed = plan_automatic_context_needs("finance reconciliation variance", typed_needs=(YES, NO))
+    nothing = plan_automatic_context_needs("finance reconciliation variance", typed_needs=(NO, NO))
+    both = plan_automatic_context_needs("finance reconciliation variance", typed_needs=(YES, YES))
+
+    assert rules.action is AutomaticContextShadowAction.LAZY_PULL and rules.hard_rule is False
+    assert typed.reason == "typed_decision"
+    assert (typed.long_term_need, typed.structural_need) == (YES, NO)
+    assert typed.action is AutomaticContextShadowAction.PUSH_LONG_TERM
+    assert nothing.action is AutomaticContextShadowAction.NONE
+    assert both.action is AutomaticContextShadowAction.PUSH_BOTH
+    assert typed.hard_rule is False
+
+
+@pytest.mark.parametrize(
+    ("prompt", "reason"),
+    [
+        ("hello", "deterministic"),
+        ("Where is parse_row defined?", "deterministic"),
+        ("What mnemo version is installed?", "deterministic"),
+        ("This is the output; what is your conclusion?", "current_session"),
+    ],
+)
+def test_hard_rules_ignore_typed_needs(prompt: str, reason: str) -> None:
+    plan = plan_automatic_context_needs(prompt, typed_needs=(YES, YES))
+    assert plan.hard_rule is True
+    assert plan.reason == reason
+    assert plan == plan_automatic_context_needs(prompt)
+
+
+def test_a_learned_phrase_is_a_hard_rule_for_typed_needs() -> None:
+    phrase = LearnedRoutePhrase("reconcile the ledger", CompactMemoryRoute.STRUCTURE)
+    plan = plan_automatic_context_needs(
+        "Please reconcile the ledger for this request.",
+        learned_phrases=(phrase,),
+        typed_needs=(NO, NO),
+    )
+    assert plan.hard_rule is True
+    assert plan.reason == "learned_phrase"
+    assert plan.action is AutomaticContextShadowAction.PUSH_STRUCTURE
+
+
+class _RecordingSemanticRouter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def classify(self, prompt: str) -> CompactMemoryRouteDecision:
+        self.calls += 1
+        return CompactMemoryRouteDecision(CompactMemoryRoute.STRUCTURE, 0.9, 0.8)
+
+
+def test_typed_needs_skip_the_semantic_router() -> None:
+    router = _RecordingSemanticRouter()
+    plan = plan_automatic_context_needs(
+        "finance reconciliation variance", semantic_router=router, typed_needs=(YES, NO)
+    )
+    assert router.calls == 0
+    assert plan.semantic_invoked is False and plan.reason == "typed_decision"
+
+
+def test_typed_needs_must_be_two_closed_needs() -> None:
+    with pytest.raises(TypeError, match="typed needs"):
+        plan_automatic_context_needs("finance reconciliation variance", typed_needs=("yes", "no"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="typed needs"):
+        plan_automatic_context_needs("finance reconciliation variance", typed_needs=(YES,))  # type: ignore[arg-type]
+
+
+def test_typed_route_decision_uses_the_route_ceiling_and_a_typed_reason() -> None:
+    prior = typed_route_decision(AutomaticContextRoute.PRIOR_MEMORY)
+    knowledge = typed_route_decision(AutomaticContextRoute.KNOWLEDGE)
+    assert prior.maximum_attachment_tokens == knowledge.maximum_attachment_tokens == 1_300
+    structure = typed_route_decision(AutomaticContextRoute.STRUCTURE)
+    assert structure.maximum_attachment_tokens == 1_000
+    assert structure.reason is AutomaticContextRouteReason.TYPED_DECISION
+    for route in (
+        AutomaticContextRoute.NONE,
+        AutomaticContextRoute.DIRECT_LOOKUP,
+        AutomaticContextRoute.SKILL_DISCOVERY,
+    ):
+        with pytest.raises(ValueError, match="typed retrieval route"):
+            typed_route_decision(route)

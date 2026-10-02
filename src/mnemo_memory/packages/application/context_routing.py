@@ -214,6 +214,7 @@ class AutomaticContextRouteReason(StrEnum):
     ROUTER_KNOWLEDGE = "router_knowledge"
     ROUTER_STRUCTURE = "router_structure"
     ROUTER_UNCERTAIN = "router_uncertain"
+    TYPED_DECISION = "typed_decision"
 
 
 _MAXIMUM_ROUTE_TOKENS = {
@@ -225,6 +226,21 @@ _MAXIMUM_ROUTE_TOKENS = {
     AutomaticContextRoute.STRUCTURE: 1_000,
     AutomaticContextRoute.SKILL_DISCOVERY: 256,
 }
+_HARD_RULE_ROUTES = frozenset(
+    {
+        AutomaticContextRoute.NONE,
+        AutomaticContextRoute.DIRECT_LOOKUP,
+        AutomaticContextRoute.LOCAL_DIAGNOSTICS,
+        AutomaticContextRoute.SKILL_DISCOVERY,
+    }
+)
+_TYPED_RETRIEVAL_ROUTES = frozenset(
+    {
+        AutomaticContextRoute.PRIOR_MEMORY,
+        AutomaticContextRoute.KNOWLEDGE,
+        AutomaticContextRoute.STRUCTURE,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +311,7 @@ class AutomaticContextShadowPlan:
     estimated_attachment_tokens: int
     semantic_invoked: bool = False
     semantic_route: CompactMemoryRoute | None = None
+    hard_rule: bool = False
 
     def __post_init__(self) -> None:
         if self.shared_maximum_tokens != 1_300:
@@ -310,9 +327,14 @@ class AutomaticContextShadowPlan:
             "deterministic",
             "learned_phrase",
             "potion_proposal",
+            "typed_decision",
             "uncertain",
         }:
             raise ValueError("shadow route reason is invalid")
+        if not isinstance(self.hard_rule, bool):
+            raise TypeError("shadow route hard-rule flag is invalid")
+        if self.reason == "typed_decision" and self.hard_rule:
+            raise ValueError("a typed decision cannot override a hard rule")
         if not isinstance(self.action, AutomaticContextShadowAction):
             raise TypeError("shadow route action is invalid")
         if (
@@ -408,21 +430,28 @@ def plan_automatic_context_needs(
     *,
     learned_phrases: tuple[LearnedRoutePhrase, ...] = (),
     semantic_router: CompactMemoryRouter | None = None,
+    typed_needs: tuple[AutomaticContextNeed, AutomaticContextNeed] | None = None,
 ) -> AutomaticContextShadowPlan:
-    """Plan independent needs without itself changing the live attachment route."""
+    """Plan independent needs without itself changing the live attachment route.
+
+    ``typed_needs`` is ``(long_term, structural)`` from an accepted typed answer. It replaces the
+    keyword cues unless a hard rule fired: the route rules returned a no-retrieval route, a
+    learned phrase matched, or the current-session cue matched (spec 2026-10-02 §4.1).
+    """
 
     bounded = bounded_automatic_context_prompt(prompt)
     if any(not isinstance(item, LearnedRoutePhrase) for item in learned_phrases):
         raise TypeError("learned route phrases are invalid")
+    if typed_needs is not None and (
+        not isinstance(typed_needs, tuple)
+        or len(typed_needs) != 2
+        or any(not isinstance(need, AutomaticContextNeed) for need in typed_needs)
+    ):
+        raise TypeError("typed needs are invalid")
     live = choose_automatic_context_route(bounded)
     terms = frozenset(_ROUTER_TERM.findall(bounded.casefold()))
 
-    if live.route in {
-        AutomaticContextRoute.NONE,
-        AutomaticContextRoute.DIRECT_LOOKUP,
-        AutomaticContextRoute.LOCAL_DIAGNOSTICS,
-        AutomaticContextRoute.SKILL_DISCOVERY,
-    }:
+    if live.route in _HARD_RULE_ROUTES:
         structural = AutomaticContextNeed.NO
         long_term = AutomaticContextNeed.NO
     elif live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN:
@@ -468,9 +497,16 @@ def plan_automatic_context_needs(
         long_term = AutomaticContextNeed.NO
         current_session = True
 
+    hard_rule = live.route in _HARD_RULE_ROUTES or learned or current_session
+    typed_applies = False
+    if typed_needs is not None and not hard_rule:
+        long_term, structural = typed_needs
+        typed_applies = True
+
     semantic_route: CompactMemoryRoute | None = None
     if (
-        live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
+        not typed_applies
+        and live.reason is AutomaticContextRouteReason.ROUTER_UNCERTAIN
         and not current_session
         and semantic_router is not None
     ):
@@ -483,7 +519,9 @@ def plan_automatic_context_needs(
         elif proposal.route in {CompactMemoryRoute.PRIOR_MEMORY, CompactMemoryRoute.KNOWLEDGE}:
             long_term = AutomaticContextNeed.YES
 
-    if semantic_route is not None:
+    if typed_applies:
+        reason = "typed_decision"
+    elif semantic_route is not None:
         reason = "potion_proposal"
     elif learned:
         reason = "learned_phrase"
@@ -511,6 +549,7 @@ def plan_automatic_context_needs(
         estimated_attachment_tokens,
         semantic_route is not None,
         semantic_route,
+        hard_rule,
     )
 
 
@@ -727,6 +766,14 @@ def _decision(
     route: AutomaticContextRoute, reason: AutomaticContextRouteReason
 ) -> AutomaticContextRouteDecision:
     return AutomaticContextRouteDecision(route, reason, _MAXIMUM_ROUTE_TOKENS[route])
+
+
+def typed_route_decision(route: AutomaticContextRoute) -> AutomaticContextRouteDecision:
+    """Return the retrieval decision for a route chosen from a typed answer (spec §4.1)."""
+
+    if route not in _TYPED_RETRIEVAL_ROUTES:
+        raise ValueError("typed retrieval route is invalid")
+    return _decision(route, AutomaticContextRouteReason.TYPED_DECISION)
 
 
 def _has_deterministic_structural_cue(prompt: str, terms: frozenset[str]) -> bool:
