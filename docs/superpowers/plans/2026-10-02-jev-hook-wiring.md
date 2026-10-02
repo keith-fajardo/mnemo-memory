@@ -32,7 +32,7 @@ The five input classes most likely to bite a real user that the spec implies but
 2. **Two hook processes reserving budget at the same moment** (two terminals, two sessions): expected no lost update and no crash. Test: Task 2, `test_concurrent_reservations_never_lose_an_update`.
 3. **A corrupt or truncated budget counter**: expected every request is denied (`budget_denied`) and `typed-decisions status` says the counter is unavailable rather than crashing. Tests: Task 2, `test_corrupt_counter_denies_and_is_left_untouched`; Task 11, `test_status_reports_an_unreadable_counter`.
 4. **A long pasted prompt with private text in the middle**: expected Jev only ever sees the 512-character head/tail view. Test: Task 8, `test_long_prompt_reaches_the_adapter_only_as_the_bounded_view`.
-5. **The step running inside an already-running event loop** (a future async caller): `asyncio.run` raises; expected `typed_step_error` and today's output. Test: Task 8, `test_running_event_loop_falls_back_to_a_step_error`.
+5. **An agent copies the `item_id` of an older `lower_rank` omission that is not a note** (for example `source-structure`, which shares the reason now used for filler drops) into `get_context item_ids`: expected a clear `MNEMO_INVALID_INPUT` error, not a crash and not a silently partial answer. Test: Task 6, `test_mcp_port_fetches_item_ids_and_refuses_mixed_requests` (the `source-structure` case). (The already-running event loop case is pinned separately in Task 8.)
 
 ## Decisions this plan makes where the spec is silent
 
@@ -50,7 +50,9 @@ Executors and reviewers should treat these as settled for this plan; each is als
 - **`TypedHookOverrides` gains an optional `observer`** so the replay can score decisions (skill picks, would-drop notes) without putting names into telemetry.
 - **Telemetry:** `typed_memory_label` is `unsure` whenever the question was asked but no accepted answer came back (including blocked requests); the outcome field says why. `typed_action` and `typed_agrees_with_rules` are null unless Jev gave an accepted answer. `typed_tier` is null when the tier question was not asked.
 - **Telemetry field types are defined twice on purpose:** `TypedTelemetryValues` (apps, Task 7) and `AutomaticRouteTypedDecisions` (telemetry, Task 10, validated). `packages/telemetry` may import nothing internal, and keeping the brief's task order means Task 7 cannot use the Task 10 type.
-- **MCP surface:** `item_ids` is added to both profiles; every call without it returns byte-identical packets, and the packet schema change is additive (recorded in `docs/context-packet-schema.md`).
+- **No packet schema change (maintainer decision, spec §5 as amended).** Each dropped filler note leaves one standard `OmissionNotice` with the existing reason `lower_rank`: `item_id` is the note's own ID and `detail` is `judged filler; fetch with get_context item_ids`. `context-packet-v1.json`, `OmissionReason` and `docs/context-packet-schema.md` stay unchanged; tests in Tasks 6 and 12 pin that the omissions validate under the unchanged schema.
+- **Per-note "keep if it doesn't fit" is iterative.** The hook renders with all drops, cancels the drops whose own omission line is missing, and renders again with the rest; the drop set shrinks every round, so it ends within 16 renders. Telemetry `typed_notes_dropped` (live) counts only drops that stayed applied.
+- **MCP surface:** `item_ids` is a `get_context` tool input on both profiles, never part of a packet; every call without it returns byte-identical packets.
 
 ## Tasks
 
@@ -59,7 +61,7 @@ Executors and reviewers should treat these as settled for this plan; each is als
 3. Runtime composition — 0.8 s deadline, local budget, recorder, synthetic builder
 4. Skill-pick axis and the current skill listing
 5. Planner typed needs, hard-rule flag and typed route decisions
-6. Low-relevance omission and `get_context item_ids`
+6. `get_context item_ids` — exact item lookup (no packet schema change)
 7. Pure combine functions in `typed_decision_hook.py`
 8. The async step — one `asyncio.run`, one `ask_each`, a runtime recorder
 9. Hook integration in `main.py`
@@ -85,13 +87,11 @@ Executors and reviewers should treat these as settled for this plan; each is als
 | `src/mnemo_memory/packages/model_gateway/decision_axes.py` | `skill_pick_axis`, `accepted_skill` | 4 |
 | `src/mnemo_memory/packages/skills_registry/registry.py`, `__init__.py` | `CurrentSkillListing`, `current_skill_listing` | 4 |
 | `src/mnemo_memory/packages/application/context_routing.py` | planner `typed_needs`, plan `hard_rule`, reason `typed_decision`, `typed_route_decision` | 5 |
-| `src/mnemo_memory/packages/domain/context_packet.py` | `OmissionReason.LOW_RELEVANCE`, `OmissionNotice.item_ids` | 6 |
-| `src/mnemo_memory/resources/schemas/context-packet-v1.json`, `docs/context-packet-schema.md` | schema enum and optional `item_ids` | 6 |
 | `src/mnemo_memory/packages/application/checkpoints.py` | `approved_event_context_item` | 6 |
-| `src/mnemo_memory/packages/application/unified_context.py` | `GetUnifiedContext.item_ids`, exact item lookup | 6 |
+| `src/mnemo_memory/packages/application/unified_context.py` | `GetUnifiedContext.item_ids` (a request field, not a packet field), exact item lookup | 6 |
 | `src/mnemo_memory/packages/context_engine/engine.py` | pass `item_ids` requests straight through | 6 |
 | `src/mnemo_memory/packages/application/mcp_durable.py`, `src/mnemo_memory/apps/mcp/server.py` | `get_context item_ids` (full and compact) | 6 |
-| `src/mnemo_memory/apps/cli/typed_decision_hook.py` (new) | modes, overrides, pure combine (Task 7), async step (Task 8), telemetry conversion (Task 10) | 7, 8, 10 |
+| `src/mnemo_memory/apps/cli/typed_decision_hook.py` (new) | modes, overrides, pure combine and per-note `lower_rank` filler omissions (Task 7), async step (Task 8), telemetry conversion (Task 10) | 7, 8, 10 |
 | `src/mnemo_memory/apps/cli/main.py` | rules render extraction, typed path, live application, telemetry, CLI | 9, 10, 11 |
 | `scripts/typed_decision_test_support.py` (new) | test-only scripted Jev transport and hook fixture | 9 |
 | `src/mnemo_memory/packages/telemetry/automatic_routes.py`, `__init__.py` | `AutomaticRouteTypedDecisions` (`typed_v1`) and the new key-set tier | 10 |
@@ -1726,12 +1726,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
 ```
 
 ---
-### Task 6: Low-relevance omission and `get_context item_ids`
+### Task 6: `get_context item_ids` — exact item lookup (no packet schema change)
 
 **Files:**
-- Modify: `src/mnemo_memory/packages/domain/context_packet.py:62-71` (`OmissionReason`), `:436-457` (`OmissionNotice`)
-- Modify: `src/mnemo_memory/resources/schemas/context-packet-v1.json` (`$defs.omission`, around `:615-650`)
-- Modify: `docs/context-packet-schema.md` (append a dated note)
 - Modify: `src/mnemo_memory/packages/application/checkpoints.py`: imports (`:13-48`), new public method after `get_approved_event_record` (`:763-778`), `_approved_event_items` loop (`:1355-1393`), new module function after the class
 - Modify: `src/mnemo_memory/packages/application/unified_context.py`: imports (`:3-10`, `:74-120`), `GetUnifiedContext` (`:449-524`), `UnifiedContextService.get_context` (`:554`), new methods, new module helpers after `_with_omission` (`:2702-2724`)
 - Modify: `src/mnemo_memory/packages/context_engine/engine.py:269` (`UnifiedContextEngine.get_context`)
@@ -1739,180 +1736,65 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
 - Modify: `src/mnemo_memory/apps/mcp/server.py`: full `get_context` (`:321-525`), compact `get_context` (`:1070-1082`)
 - Test: `tests/unit/test_context_packet.py`, `tests/unit/test_context_item_lookup.py` (new), `tests/unit/test_mcp_server.py:115-160` and `:379-410`
 
+**Not modified, by maintainer decision (spec §5 as amended 2026-10-02):** `packages/domain/context_packet.py`, `resources/schemas/context-packet-v1.json` and `docs/context-packet-schema.md`. Schema 1.x allows no new fields or enum values. Dropped filler notes (Task 9) therefore use the **existing** `OmissionReason.LOWER_RANK`, one standard `OmissionNotice(item_id=<the note's own ID>, reason=LOWER_RANK, detail="judged filler; fetch with get_context item_ids")` per dropped note. `item_ids` exists only as a `get_context` tool input, never in a packet.
+
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
 - Produces:
-  - `OmissionReason.LOW_RELEVANCE = "low_relevance"` (last member).
-  - `OmissionNotice(item_id: str, reason: OmissionReason, detail: str | None = None, item_ids: tuple[str, ...] = ())` — `item_ids` holds 0–16 unique non-empty strings; `to_dict()` returns `dict[str, object]` and includes `"item_ids"` **only when non-empty**, so every existing packet serializes byte-for-byte as today.
   - `CheckpointApplicationService.approved_event_context_item(scope: MemoryScope, event_id: EventId) -> tuple[ContextItem, ProvenanceNotice] | OmissionReason`.
   - `GetUnifiedContext.item_ids: tuple[str, ...] = ()` — 1–16 unique IDs shaped `knowledge:<uuid>:revision:<uuid>:section:<n>` or `approved-episodic:<uuid>`; cannot be combined with any other retrieval field (the `include_*` flags and `skill_client` are ignored).
   - `MAXIMUM_REQUESTED_ITEM_IDS = 16` in `unified_context`.
   - MCP `get_context` (full and compact) gains `item_ids: list[str] | None` (1–16) and forwards `"item_ids"` to the port.
-  - Omission reasons for an item that cannot be served: knowledge document gone from this scope → `expired`; knowledge revision changed → `superseded`; knowledge section index beyond the revision → `unauthorized_scope`; approved event corrected → `superseded`; retracted → `expired`; not in this scope → `unauthorized_scope`; sensitivity not `normal` → `prohibited_sensitivity`; over budget → `token_budget`.
+  - Omission reasons for an item that cannot be served: knowledge document gone from this scope → `expired`; knowledge revision changed → `superseded`; knowledge section index beyond the revision → `unauthorized_scope`; approved event corrected → `superseded`; retracted → `expired`; not in this scope → `unauthorized_scope`; sensitivity not `normal` → `prohibited_sensitivity`; over budget → `token_budget`. All are existing v1 reasons.
 
-Compatibility note: `docs/context-packet-schema.md` says v1 accepts only the closed 1.0 fields. The approved spec (§5) adds one enum value and one optional omission field. The plan keeps every existing packet byte-identical (`item_ids` is omitted when empty) and records the additive change in that document; the low-relevance omission only appears in hook-rendered automatic context, never in a canonical packet returned by `get_context`.
-
-- [ ] **Step 1: Write the failing packet tests**
+- [ ] **Step 1: Pin the no-schema-change decision**
 
 Append to `tests/unit/test_context_packet.py`:
 
 ```python
-def test_low_relevance_omission_carries_item_ids_and_round_trips() -> None:
-    notice = OmissionNotice(
-        "low-relevance",
-        OmissionReason.LOW_RELEVANCE,
-        "2 notes judged filler; fetch with get_context item_ids",
-        ("approved-episodic:a", "knowledge:b"),
-    )
-    result = packet(omissions=(notice,))
-    serialized = result.to_dict()
-    assert serialized["omissions"] == [
-        {
-            "item_id": "low-relevance",
-            "reason": "low_relevance",
-            "detail": "2 notes judged filler; fetch with get_context item_ids",
-            "item_ids": ["approved-episodic:a", "knowledge:b"],
-        }
-    ]
-    assert ContextPacket.from_dict(serialized) == result
+FILLER_DETAIL = "judged filler; fetch with get_context item_ids"
 
 
-def test_omissions_without_item_ids_serialize_exactly_as_before() -> None:
-    notice = OmissionNotice("unselected", OmissionReason.LOWER_RANK)
-    assert notice.to_dict() == {"item_id": "unselected", "reason": "lower_rank", "detail": None}
-    assert OmissionNotice.from_dict(notice.to_dict()) == notice
-
-
-@pytest.mark.parametrize(
-    "item_ids",
-    [("a", "a"), ("",), (" ",), tuple(f"id-{index}" for index in range(17))],
-)
-def test_omission_item_ids_are_bounded_unique_and_non_empty(item_ids: tuple[str, ...]) -> None:
-    with pytest.raises(ValueError, match="item_ids"):
-        OmissionNotice("low-relevance", OmissionReason.LOW_RELEVANCE, None, item_ids)
-
-
-def test_omission_from_dict_rejects_an_empty_item_id_list() -> None:
-    with pytest.raises(ValueError, match="item_ids"):
-        OmissionNotice.from_dict(
-            {"item_id": "x", "reason": "low_relevance", "detail": None, "item_ids": []}
-        )
-
-
-def test_schema_allows_optional_bounded_omission_item_ids() -> None:
+def test_per_note_filler_omissions_fit_the_unchanged_v1_schema() -> None:
     schema = json.loads(
         resources.files("mnemo_memory")
         .joinpath("resources/schemas/context-packet-v1.json")
         .read_text()
     )
-    omission = schema["$defs"]["omission"]
-    assert "item_ids" not in omission["required"]
-    assert omission["properties"]["item_ids"]["maxItems"] == 16
-    assert omission["properties"]["item_ids"]["minItems"] == 1
+    definition = schema["$defs"]["omission"]
+    notices = (
+        OmissionNotice(
+            "approved-episodic:00000000-0000-4000-8000-000000000001",
+            OmissionReason.LOWER_RANK,
+            FILLER_DETAIL,
+        ),
+        OmissionNotice(
+            "knowledge:00000000-0000-4000-8000-000000000002:revision:"
+            "00000000-0000-4000-8000-000000000003:section:0",
+            OmissionReason.LOWER_RANK,
+            FILLER_DETAIL,
+        ),
+    )
+    result = packet(omissions=notices)
+    serialized = result.to_dict()
+    assert ContextPacket.from_dict(serialized) == result
+    omissions = serialized["omissions"]
+    assert isinstance(omissions, list) and len(omissions) == 2
+    assert definition["additionalProperties"] is False
+    for omission in omissions:
+        assert set(omission) == set(definition["required"]) == set(definition["properties"])
+        assert omission["reason"] == "lower_rank"
+        assert omission["reason"] in definition["properties"]["reason"]["enum"]
+        assert omission["detail"] == FILLER_DETAIL
+    assert definition["properties"]["reason"]["enum"] == [reason.value for reason in OmissionReason]
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
-
-Run: `uv run pytest tests/unit/test_context_packet.py -q`
-Expected: FAIL — `AttributeError: LOW_RELEVANCE`.
-
-- [ ] **Step 3: Implement the domain change and the schema**
-
-In `context_packet.py`, append to `OmissionReason`:
-
-```python
-    LOW_RELEVANCE = "low_relevance"
-```
-
-Replace `OmissionNotice` with:
-
-```python
-_MAXIMUM_OMISSION_ITEM_IDS = 16
-
-
-@dataclass(frozen=True, slots=True)
-class OmissionNotice:
-    item_id: str
-    reason: OmissionReason
-    detail: str | None = None
-    item_ids: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        _text(self.item_id, "item_id")
-        if self.detail is not None:
-            _text(self.detail, "detail")
-        item_ids = tuple(self.item_ids)
-        if (
-            len(item_ids) > _MAXIMUM_OMISSION_ITEM_IDS
-            or len(set(item_ids)) != len(item_ids)
-            or any(not isinstance(value, str) or not value.strip() for value in item_ids)
-        ):
-            raise ValueError("omission item_ids are invalid")
-        object.__setattr__(self, "item_ids", item_ids)
-
-    def to_dict(self) -> dict[str, object]:
-        value: dict[str, object] = {
-            "item_id": self.item_id,
-            "reason": self.reason.value,
-            "detail": self.detail,
-        }
-        if self.item_ids:
-            value["item_ids"] = list(self.item_ids)
-        return value
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> Self:
-        expected = {"item_id", "reason", "detail"}
-        if "item_ids" in value:
-            expected.add("item_ids")
-        _strict_fields(value, expected, "omission notice")
-        detail = value["detail"]
-        if detail is not None:
-            _text(detail, "detail")
-        raw_ids = value.get("item_ids", [])
-        if not isinstance(raw_ids, list) or ("item_ids" in value and not raw_ids):
-            raise ValueError("omission item_ids are invalid")
-        return cls(
-            _text(value["item_id"], "item_id"),
-            OmissionReason(_text(value["reason"], "reason")),
-            cast(str | None, detail),
-            tuple(_text(item, "item_ids") for item in raw_ids),
-        )
-```
-
-In `src/mnemo_memory/resources/schemas/context-packet-v1.json`, inside `$defs.omission`: append `"low_relevance"` as the last entry of `properties.reason.enum`, and add this property after `"detail"` (leave `required` unchanged):
-
-```json
-        "item_ids": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 16,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-```
-
-Append to `docs/context-packet-schema.md`:
-
-```markdown
-
-**2026-10-02 additive change (Jev hook wiring spec §5).** Version `1.0` gains one omission reason,
-`low_relevance`, and one optional omission field, `item_ids` (1–16 item IDs). Every packet without
-a low-relevance omission serializes exactly as before, because `item_ids` is written only when it
-is non-empty. The low-relevance omission appears only in hook-rendered automatic context; a
-canonical packet returned by `get_context` never contains it, because explicit fetches are never
-filtered.
-```
-
-- [ ] **Step 4: Run the packet tests and the schema check**
+This test passes before and after this task. It pins the decision: the omissions Task 9 writes are valid under the unchanged v1 schema, and the schema and `OmissionReason` stay exactly as they are.
 
 Run: `uv run pytest tests/unit/test_context_packet.py -q && npm run -s schema:check`
 Expected: PASS, then `Context packet JSON Schema and representative fixture validation passed.`
 
-- [ ] **Step 5: Write the failing item-lookup tests**
+- [ ] **Step 2: Write the failing item-lookup tests**
 
 Create `tests/unit/test_context_item_lookup.py`:
 
@@ -2228,18 +2110,20 @@ def test_mcp_port_fetches_item_ids_and_refuses_mixed_requests() -> None:
         port.get_context({"item_ids": [event_id], "query": "invoice"})
     with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
         port.get_context({"item_ids": [event_id], "dbt_lineage": {"unique_id": "model.x.y"}})
+    with pytest.raises(ValueError, match="MNEMO_INVALID_INPUT"):
+        port.get_context({"item_ids": [event_id, "source-structure"]})
 ```
 
 In `tests/unit/test_mcp_server.py`:
 - in `test_server_lists_exact_tools_with_safety_annotations`, after `assert "include_approved_events" in tools[0].inputSchema["properties"]` add `assert "item_ids" in tools[0].inputSchema["properties"]`;
 - in `test_compact_profile_reduces_schema_and_keeps_only_bound_project_operations`, change the compact `get_context` set to `{"query", "recap_days", "total_tokens", "item_ids"}`.
 
-- [ ] **Step 6: Run them to verify they fail**
+- [ ] **Step 3: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_context_item_lookup.py tests/unit/test_mcp_server.py -q`
-Expected: FAIL — `TypeError: GetUnifiedContext.__init__() got an unexpected keyword argument 'item_ids'`, and the two schema assertions fail.
+Expected: FAIL — `TypeError: GetUnifiedContext.__init__() got an unexpected keyword argument 'item_ids'`, and the two MCP tool-input-schema assertions fail.
 
-- [ ] **Step 7: Implement the approved-event lookup**
+- [ ] **Step 4: Implement the approved-event lookup**
 
 In `checkpoints.py`, add `ApprovedEventLifecycleStatus,` to the `mnemo_memory.packages.domain` import list (after `ApprovedEventKind,`).
 
@@ -2325,7 +2209,7 @@ def _approved_event_context_item(
     )
 ```
 
-- [ ] **Step 8: Implement the item-ID request and lookup**
+- [ ] **Step 5: Implement the item-ID request and lookup**
 
 In `unified_context.py`: add `import re` to the standard-library imports; add `EventId`, `KnowledgeDocumentId` and `KnowledgeDocumentRevisionId` to the `mnemo_memory.packages.domain` import list (sorted position).
 
@@ -2516,7 +2400,7 @@ In `packages/context_engine/engine.py`, at the top of `UnifiedContextEngine.get_
             return self._assembler.get_context(request)
 ```
 
-- [ ] **Step 9: Implement the MCP surface**
+- [ ] **Step 6: Implement the MCP surface**
 
 In `mcp_durable.py` `DurableMcpContextPort.get_context`, directly before the first `if (` whose first condition is `lineage is not None` (just after the `overview = (...)` assignment), insert:
 
@@ -2587,23 +2471,20 @@ Compact `get_context`: add the parameter after `total_tokens`:
 
 and add `"item_ids": item_ids,` to its dict after `"total_tokens": total_tokens,`.
 
-- [ ] **Step 10: Run the tests to verify they pass**
+- [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_context_item_lookup.py tests/unit/test_context_packet.py tests/unit/test_mcp_server.py tests/unit/test_knowledge_context.py tests/unit/test_approved_event_pinning.py tests/integration/test_mcp_durability.py -q`
 Expected: PASS.
 
-- [ ] **Step 11: Lint, type-check, schema and commit**
+- [ ] **Step 8: Lint, type-check, schema check and commit**
 
 Run: `uv run ruff format src tests/unit && uv run ruff check src tests && uv run mypy && npm run -s schema:check && npm run -s architecture:check`
-Expected: no errors.
+Expected: no errors; the schema check passes against the unchanged `context-packet-v1.json`.
 
 ```bash
-git commit -m "feat(context): low-relevance omission and get_context item_ids
+git commit -m "feat(context): get_context item_ids exact item lookup
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
-  src/mnemo_memory/packages/domain/context_packet.py \
-  src/mnemo_memory/resources/schemas/context-packet-v1.json \
-  docs/context-packet-schema.md \
   src/mnemo_memory/packages/application/checkpoints.py \
   src/mnemo_memory/packages/application/unified_context.py \
   src/mnemo_memory/packages/context_engine/engine.py \
@@ -2625,7 +2506,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
   - Task 1: `TypedDecisionKind.TIER_HINT`, `TypedDecisionKind.SKILL`; `PersonalSettings.typed_decision_mode(kind) -> TypedDecisionMode`.
   - Task 4: `SKILL_PICK_NAME`, `SKILL_PICK_NONE`, `skill_pick_axis(names) -> ClassifierAxis | None`, `accepted_skill(result) -> str | None`.
   - Task 5: `AutomaticContextShadowPlan.hard_rule`, `plan_automatic_context_needs(..., typed_needs=(long_term, structural))`.
-  - Task 6: `OmissionReason.LOW_RELEVANCE`, `OmissionNotice(..., item_ids=...)`.
+  - Existing, unchanged: `OmissionReason.LOWER_RANK`, `OmissionNotice(item_id, reason, detail)` (no packet schema change, spec §5).
   - Existing: `MEMORY_NEED`, `NOTE_SUBSTANCE`, `COMPLEXITY`, `TOOL_NEED`, `HINT_TEXT`, `accepted_choice`, `hint_eligible`, `note_text`, `should_drop_note` (`decision_axes`); `TypedDecisionOutcome`, `TierDecision`, `GuardedTypedDecisionClassifier`, `TypedDecisionRecorder` (`typed_decisions`); `contains_high_confidence_secret` (`policy.content_safety`).
 - Produces (module `mnemo_memory.apps.cli.typed_decision_hook`):
   - `HOOK_KINDS: tuple[TypedDecisionKind, ...]` = front_door, relevance, tier_hint, skill.
@@ -2640,10 +2521,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
   - `@dataclass(frozen=True, slots=True) class TypedPromptDecisions(typed_needs: tuple[AutomaticContextNeed, AutomaticContextNeed] | None, memory_route: AutomaticContextRoute | None, drop_item_ids: tuple[str, ...], skill: str | None, show_hint: bool, telemetry: TypedTelemetryValues)` — the live fields are set **only** for decisions whose mode is `live`; shadow answers live only in `telemetry`.
   - `GuardFactory = Callable[[TypedDecisionRecorder], GuardedTypedDecisionClassifier | None]`; `DecisionObserver = Callable[[TypedStepInput, TypedPromptDecisions], None]`.
   - `@dataclass(frozen=True, slots=True) class TypedHookOverrides(guard_factory: GuardFactory, modes: TypedHookModes, observer: DecisionObserver | None = None)`.
-  - Functions: `confidence_bucket(confidence: float | None) -> str | None`; `memory_need_outcome(result: ClassifierResult | None, rules_route: AutomaticContextRoute) -> MemoryNeedOutcome`; `skill_axis_for(step: TypedStepInput) -> ClassifierAxis | None`; `front_door_axes(step: TypedStepInput) -> tuple[ClassifierAxis, ...]`; `filler_candidates(packet: ContextPacket, *, pinned_item_ids: frozenset[str]) -> tuple[FillerCandidate, ...]`; `notes_to_drop(candidates: Sequence[FillerCandidate], outcomes: Sequence[TypedDecisionOutcome]) -> tuple[str, ...]`; `low_relevance_omission(item_ids: Sequence[str]) -> OmissionNotice`; `without_low_relevance_notes(packet: ContextPacket, item_ids: Sequence[str]) -> tuple[ContextPacket, OmissionNotice | None]`; `omission_line(notice: OmissionNotice) -> str`; `skill_comparison(mode: TypedDecisionMode, *, axis_built: bool, accepted: str | None, keyword_top: str) -> SkillComparison`; `effective_skill_names(keyword_names: Sequence[str], accepted: str | None) -> tuple[str, ...]`; `with_task_size_hint(rendered: str | None) -> str`; `combine_typed_decisions(step: TypedStepInput, answers: TypedAnswers, *, step_ms: int, model_version: str | None) -> TypedPromptDecisions`; `typed_step_error_decisions(modes: TypedHookModes, step_ms: int) -> TypedPromptDecisions`.
-  - Constants: `MAXIMUM_FILLER_CHECKS = 16`, `LOW_RELEVANCE_ITEM_ID = "low-relevance"`, `APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"`, `UNSURE = "unsure"`.
+  - Functions: `confidence_bucket(confidence: float | None) -> str | None`; `memory_need_outcome(result: ClassifierResult | None, rules_route: AutomaticContextRoute) -> MemoryNeedOutcome`; `skill_axis_for(step: TypedStepInput) -> ClassifierAxis | None`; `front_door_axes(step: TypedStepInput) -> tuple[ClassifierAxis, ...]`; `filler_candidates(packet: ContextPacket, *, pinned_item_ids: frozenset[str]) -> tuple[FillerCandidate, ...]`; `notes_to_drop(candidates: Sequence[FillerCandidate], outcomes: Sequence[TypedDecisionOutcome]) -> tuple[str, ...]`; `filler_omission(item_id: str) -> OmissionNotice` (reason `LOWER_RANK`, detail `FILLER_OMISSION_DETAIL`); `without_filler_notes(packet: ContextPacket, item_ids: Sequence[str]) -> tuple[ContextPacket, tuple[OmissionNotice, ...]]` (one omission per removed note, packet order); `omission_line(notice: OmissionNotice) -> str`; `skill_comparison(mode: TypedDecisionMode, *, axis_built: bool, accepted: str | None, keyword_top: str) -> SkillComparison`; `effective_skill_names(keyword_names: Sequence[str], accepted: str | None) -> tuple[str, ...]`; `with_task_size_hint(rendered: str | None) -> str`; `combine_typed_decisions(step: TypedStepInput, answers: TypedAnswers, *, step_ms: int, model_version: str | None) -> TypedPromptDecisions`; `typed_step_error_decisions(modes: TypedHookModes, step_ms: int) -> TypedPromptDecisions`.
+  - Constants: `MAXIMUM_FILLER_CHECKS = 16`, `FILLER_OMISSION_DETAIL = "judged filler; fetch with get_context item_ids"`, `APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"`, `UNSURE = "unsure"`.
 
-Spec rules implemented here: §4.1 route table including "unsure or no answer means the rules' own needs"; §4.2 eligibility, exemptions and the 0.7 drop rule; §4.3 hint only for light + `read_heavy` + no veto; §4.4 skill outcomes compared with the keyword top candidate. This module must not import `mnemo_memory.connectors.typesafe` or `apps/cli/main.py`.
+Spec rules implemented here: §4.1 route table including "unsure or no answer means the rules' own needs"; §4.2 eligibility, exemptions and the 0.7 drop rule; §5 one standard `lower_rank` omission per dropped note; §4.3 hint only for light + `read_heavy` + no veto; §4.4 skill outcomes compared with the keyword top candidate. This module must not import `mnemo_memory.connectors.typesafe` or `apps/cli/main.py`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2663,7 +2544,7 @@ import pytest
 
 from mnemo_memory.apps.cli.typed_decision_hook import (
     APPROVED_EVENT_ITEM_PREFIX,
-    LOW_RELEVANCE_ITEM_ID,
+    FILLER_OMISSION_DETAIL,
     MAXIMUM_FILLER_CHECKS,
     FillerCandidate,
     SkillComparison,
@@ -2674,8 +2555,8 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     confidence_bucket,
     effective_skill_names,
     filler_candidates,
+    filler_omission,
     front_door_axes,
-    low_relevance_omission,
     memory_need_outcome,
     notes_to_drop,
     omission_line,
@@ -2683,7 +2564,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     typed_hook_modes,
     typed_step_error_decisions,
     with_task_size_hint,
-    without_low_relevance_notes,
+    without_filler_notes,
 )
 from mnemo_memory.packages.application import PersonalSettings
 from mnemo_memory.packages.application.context_routing import (
@@ -3019,31 +2900,47 @@ def test_notes_to_drop_only_drops_confident_filler() -> None:
     assert notes_to_drop(candidates, outcomes) == ("knowledge:0",)
 
 
-def test_low_relevance_summary_removes_notes_and_keeps_the_packet_valid() -> None:
+def test_filler_notes_leave_one_lower_rank_omission_each() -> None:
     packet = _packet(
         _note("knowledge:useful", "Invoice export", "Keep ledger order."),
         _note("knowledge:filler", "Chatter", "FILLER talk."),
         _event(f"{APPROVED_EVENT_ITEM_PREFIX}filler", "FILLER lunch."),
     )
-    reduced, notice = without_low_relevance_notes(
+    reduced, notices = without_filler_notes(
         packet,
         (f"{APPROVED_EVENT_ITEM_PREFIX}filler", "knowledge:filler", "knowledge:not-present"),
     )
-    assert notice is not None
-    assert notice.item_id == LOW_RELEVANCE_ITEM_ID
-    assert notice.reason is OmissionReason.LOW_RELEVANCE
-    assert notice.detail == "2 notes judged filler; fetch with get_context item_ids"
-    assert notice.item_ids == (f"{APPROVED_EVENT_ITEM_PREFIX}filler", "knowledge:filler")
+    assert notices == (
+        filler_omission(f"{APPROVED_EVENT_ITEM_PREFIX}filler"),
+        filler_omission("knowledge:filler"),
+    )
+    assert FILLER_OMISSION_DETAIL == "judged filler; fetch with get_context item_ids"
+    assert notices[0].to_dict() == {
+        "item_id": f"{APPROVED_EVENT_ITEM_PREFIX}filler",
+        "reason": "lower_rank",
+        "detail": FILLER_OMISSION_DETAIL,
+    }
+    assert all(notice.reason is OmissionReason.LOWER_RANK for notice in notices)
     assert [item.item_id for item in reduced.items] == ["knowledge:useful"]
     assert reduced.declared_total_tokens == reduced.computed_total_tokens
-    assert reduced.omissions[-1] == notice
-    assert omission_line(notice) == "MNEMO_OMISSION " + json.dumps(
-        notice.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    assert reduced.omissions[-2:] == notices
+    assert ContextPacket.from_dict(reduced.to_dict()) == reduced
+    assert omission_line(notices[1]) == "MNEMO_OMISSION " + json.dumps(
+        notices[1].to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
     )
-    assert without_low_relevance_notes(packet, ()) == (packet, None)
-    assert low_relevance_omission(("knowledge:x",)).detail == (
-        "1 note judged filler; fetch with get_context item_ids"
+    assert without_filler_notes(packet, ()) == (packet, ())
+
+
+def test_conflict_participants_are_never_removed() -> None:
+    conflict = ConflictNotice(
+        "knowledge-conflict:a:b", ("knowledge:a", "knowledge:b"), (EVIDENCE,), ConflictState.UNRESOLVED
     )
+    packet = _packet(
+        _note("knowledge:a", "Grain", "FILLER daily grain."),
+        _note("knowledge:b", "Grain", "Hourly grain."),
+        conflicts=(conflict,),
+    )
+    assert without_filler_notes(packet, ("knowledge:a",)) == (packet, ())
 
 
 @pytest.mark.parametrize(
@@ -3302,7 +3199,7 @@ HOOK_KINDS: tuple[TypedDecisionKind, ...] = (
     TypedDecisionKind.SKILL,
 )
 MAXIMUM_FILLER_CHECKS = 16
-LOW_RELEVANCE_ITEM_ID = "low-relevance"
+FILLER_OMISSION_DETAIL = "judged filler; fetch with get_context item_ids"
 APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"
 UNSURE = "unsure"
 _YES = AutomaticContextNeed.YES
@@ -3600,23 +3497,20 @@ def notes_to_drop(
     return tuple(drops)
 
 
-def low_relevance_omission(item_ids: Sequence[str]) -> OmissionNotice:
-    """The one summary omission per prompt for notes judged filler (spec §5)."""
+def filler_omission(item_id: str) -> OmissionNotice:
+    """One standard omission for one dropped note, valid under the unchanged v1 schema (§5)."""
 
-    ids = tuple(item_ids)
-    noun = "note" if len(ids) == 1 else "notes"
-    return OmissionNotice(
-        LOW_RELEVANCE_ITEM_ID,
-        OmissionReason.LOW_RELEVANCE,
-        f"{len(ids)} {noun} judged filler; fetch with get_context item_ids",
-        ids,
-    )
+    return OmissionNotice(item_id, OmissionReason.LOWER_RANK, FILLER_OMISSION_DETAIL)
 
 
-def without_low_relevance_notes(
+def without_filler_notes(
     packet: ContextPacket, item_ids: Sequence[str]
-) -> tuple[ContextPacket, OmissionNotice | None]:
-    """Remove judged-filler notes and add the summary omission; ``None`` if nothing moved."""
+) -> tuple[ContextPacket, tuple[OmissionNotice, ...]]:
+    """Remove judged-filler notes and add one ``lower_rank`` omission per removed note.
+
+    Only knowledge sections and approved events that are not conflict participants can be
+    removed; anything else in ``item_ids`` is ignored. Freed space is not refilled.
+    """
 
     requested = frozenset(item_ids)
     protected = {item_id for conflict in packet.conflicts for item_id in conflict.item_ids}
@@ -3631,12 +3525,12 @@ def without_low_relevance_notes(
         )
     )
     if not removable:
-        return packet, None
+        return packet, ()
     dropped = frozenset(removable)
-    notice = low_relevance_omission(removable)
+    notices = tuple(filler_omission(item_id) for item_id in removable)
     removed_tokens = sum(
         item.token_estimate for item in packet.items if item.item_id in dropped
-    ) + sum(notice_item.token_estimate for notice_item in packet.provenance if notice_item.item_id in dropped)
+    ) + sum(notice.token_estimate for notice in packet.provenance if notice.item_id in dropped)
     reduced = replace(
         packet,
         declared_total_tokens=packet.declared_total_tokens - removed_tokens,
@@ -3647,9 +3541,9 @@ def without_low_relevance_notes(
             item for item in packet.episodic_memories if item.item_id not in dropped
         ),
         provenance=tuple(item for item in packet.provenance if item.item_id not in dropped),
-        omissions=(*packet.omissions, notice),
+        omissions=(*packet.omissions, *notices),
     )
-    return reduced, notice
+    return reduced, notices
 
 
 def omission_line(notice: OmissionNotice) -> str:
@@ -4310,7 +4204,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
   - Task 3: `build_runtime_typed_decision_classifier(settings, *, data_directory, recorder=...)`, `build_synthetic_typed_decision_classifier(settings, *, data_directory, environ, jev_transport, recorder)`.
   - Task 4: `KnowledgeDocumentSkillRegistry.current_skill_listing(scope, client) -> CurrentSkillListing`; `SKILL_PICK_NONE`.
   - Task 5: `AutomaticContextShadowPlan.hard_rule`; `plan_automatic_context_needs(..., typed_needs=...)`; `typed_route_decision(route)`.
-  - Task 7/8: `TypedHookModes`, `TypedHookOverrides`, `TypedStepInput`, `TypedPromptDecisions`, `typed_hook_modes`, `filler_candidates`, `without_low_relevance_notes`, `omission_line`, `with_task_size_hint`, `decide_typed_prompt`.
+  - Task 7/8: `TypedHookModes`, `TypedHookOverrides`, `TypedStepInput`, `TypedPromptDecisions`, `typed_hook_modes`, `filler_candidates`, `without_filler_notes`, `omission_line`, `FILLER_OMISSION_DETAIL`, `with_task_size_hint`, `decide_typed_prompt`.
 - Produces:
   - `_automatic_prompt_context_for_hook(data_directory: Path, scope: MemoryScope, prompt: str, client: ClientName, *, replay_overrides: TypedHookOverrides | None = None) -> PromptContextAttachment`.
   - `@dataclass(frozen=True, slots=True) class _PromptRender(result: _AutomaticPromptContextResult, rendered: str | None, canonical_tokens: int, live_attachment: AutomaticContextLiveAttachment | None)`.
@@ -4324,7 +4218,7 @@ Behaviour this task pins (spec §3, §4, §7):
 - All modes off (the default): only today's code runs and `typed_decision_hook` is not even imported.
 - Shadow: answers are computed and discarded; output is today's output.
 - Memory-need live needs the semantic-memory gate (a trace). The typed plan replaces the rules plan for gating; a changed route is fetched after the answer, unfiltered.
-- Filler drops apply only to the pre-fetched rules packet; the single summary omission must appear in the render or every drop is cancelled.
+- Filler drops apply only to the pre-fetched rules packet. Each dropped note leaves its own standard `lower_rank` omission (spec §5, no packet schema change). If a note's omission line does not fit the render, that note's drop is cancelled, the note is kept, and the rest are rendered again.
 - Skill live: one named skill, none, or (unsure) keyword candidates; hard routes are never changed.
 - The hint is appended last.
 - Any exception in the typed step returns today's result.
@@ -4671,7 +4565,7 @@ import pytest
 
 from mnemo_memory.apps.cli import main as cli
 from mnemo_memory.apps.cli import typed_decision_hook
-from mnemo_memory.apps.cli.typed_decision_hook import TypedHookModes
+from mnemo_memory.apps.cli.typed_decision_hook import FILLER_OMISSION_DETAIL, TypedHookModes
 from mnemo_memory.connectors.automatic_memory.hook import PromptContextAttachment
 from mnemo_memory.packages.application import LocalConfig
 from mnemo_memory.packages.application.context_routing import AUTOMATIC_CONTEXT_LAZY_PULL_HINT
@@ -4699,13 +4593,18 @@ EVERYTHING = {
 }
 
 
-def _low_relevance_ids(context: str | None) -> list[str]:
+def _filler_omission_ids(context: str | None) -> list[str]:
+    """Item IDs named by per-note ``lower_rank`` filler omissions in a rendered attachment."""
+
     assert context is not None
+    ids: list[str] = []
     for line in context.split("\n"):
-        if line.startswith("MNEMO_OMISSION ") and '"reason":"low_relevance"' in line:
-            value = json.loads(line.removeprefix("MNEMO_OMISSION "))
-            return list(value["item_ids"])
-    return []
+        if not line.startswith("MNEMO_OMISSION "):
+            continue
+        value = json.loads(line.removeprefix("MNEMO_OMISSION "))
+        if value["reason"] == "lower_rank" and value["detail"] == FILLER_OMISSION_DETAIL:
+            ids.append(value["item_id"])
+    return ids
 
 
 @pytest.mark.parametrize("semantic_gate", [False, True])
@@ -4722,7 +4621,7 @@ def test_shadow_answers_change_nothing(tmp_path: Path, semantic_gate: bool) -> N
     assert transport.calls > 0
 
 
-def test_live_filler_drops_are_listed_in_one_summary_omission(tmp_path: Path) -> None:
+def test_each_live_filler_drop_leaves_its_own_lower_rank_omission(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     transport = ScriptedJevTransport()
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
@@ -4730,8 +4629,9 @@ def test_live_filler_drops_are_listed_in_one_summary_omission(tmp_path: Path) ->
     off = run_hook(fixture, KNOWLEDGE_PROMPT)
     dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live)
 
-    assert _low_relevance_ids(off.context) == []
-    ids = _low_relevance_ids(dropped.context)
+    assert _filler_omission_ids(off.context) == []
+    ids = _filler_omission_ids(dropped.context)
+    assert len(ids) == 2
     assert fixture.filler_event_id in ids
     assert any(item_id.startswith(fixture.filler_note_prefix) for item_id in ids)
     assert not any(item_id.startswith(fixture.useful_note_prefix) for item_id in ids)
@@ -4739,16 +4639,27 @@ def test_live_filler_drops_are_listed_in_one_summary_omission(tmp_path: Path) ->
     assert all(PINNED_EVENT not in state for state in transport.states)  # pinned never sent
 
 
-def test_drops_are_cancelled_when_the_summary_line_does_not_fit(
+def test_a_drop_is_cancelled_when_its_omission_line_does_not_fit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    original = typed_decision_hook.filler_omission
 
-    def oversized(item_ids: tuple[str, ...]) -> OmissionNotice:
-        return OmissionNotice("low-relevance", OmissionReason.LOW_RELEVANCE, "x" * 6_000, item_ids)
+    def oversized_for_the_note(item_id: str) -> OmissionNotice:
+        if item_id.startswith(fixture.filler_note_prefix):
+            return OmissionNotice(item_id, OmissionReason.LOWER_RANK, "x" * 6_000)
+        return original(item_id)
 
-    monkeypatch.setattr(typed_decision_hook, "low_relevance_omission", oversized)
+    monkeypatch.setattr(typed_decision_hook, "filler_omission", oversized_for_the_note)
     live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    partial = run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    # The note whose line cannot fit is kept; the event's drop still applies.
+    assert _filler_omission_ids(partial.context) == [fixture.filler_event_id]
+
+    def oversized(item_id: str) -> OmissionNotice:
+        return OmissionNotice(item_id, OmissionReason.LOWER_RANK, "x" * 6_000)
+
+    monkeypatch.setattr(typed_decision_hook, "filler_omission", oversized)
     assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == (
         run_hook(fixture, KNOWLEDGE_PROMPT).context
     )
@@ -4776,7 +4687,7 @@ def test_a_changed_route_is_fetched_after_the_answer_unfiltered(tmp_path: Path) 
     fetched = run_hook(fixture, KNOWLEDGE_PROMPT, live)
     assert fetched.context is not None and fetched.context != off.context
     assert HANDOFF_OBJECTIVE in fetched.context
-    assert _low_relevance_ids(fetched.context) == []
+    assert _filler_omission_ids(fetched.context) == []
 
 
 def test_front_door_live_without_the_semantic_gate_is_not_applied(tmp_path: Path) -> None:
@@ -5410,9 +5321,7 @@ def _apply_typed_decisions(
         )
     dropped = 0
     if decisions.drop_item_ids and render.result is rules.result:
-        render, dropped = _with_low_relevance_drops(
-            render, client, gate_trace, decisions.drop_item_ids
-        )
+        render, dropped = _with_filler_drops(render, client, gate_trace, decisions.drop_item_ids)
     if decisions.show_hint:
         render = _with_rendered(render, typed.with_task_size_hint(render.rendered))
     return _TypedApplication(render, gate_trace, dropped)
@@ -5478,28 +5387,38 @@ def _effective_skill_candidates(
     return (SkillDiscoveryCandidate(selected, normalize_agent_client(client), 0),)
 
 
-def _with_low_relevance_drops(
+def _with_filler_drops(
     render: _PromptRender,
     client: ClientName,
     trace: _AutomaticShadowTrace | None,
     drop_item_ids: tuple[str, ...],
 ) -> tuple[_PromptRender, int]:
-    """Drop judged filler behind one summary omission; keep every note if it won't fit."""
+    """Drop judged filler, one ``lower_rank`` omission per note (spec §5).
+
+    A note whose omission line does not fit the attachment budget is kept: its drop is
+    cancelled and the remaining drops are rendered again, until every remaining line fits.
+    The drop set shrinks every round, so this ends after at most 16 renders.
+    """
 
     from mnemo_memory.apps.cli import typed_decision_hook as typed
 
     packet = render.result.packet
     if packet is None:
         return render, 0
-    reduced, notice = typed.without_low_relevance_notes(packet, drop_item_ids)
-    if notice is None:
-        return render, 0
-    candidate = _render_selected_result(replace(render.result, packet=reduced), client, trace)
-    if candidate.rendered is None or typed.omission_line(notice) not in (
-        candidate.rendered.split("\n")
-    ):
-        return render, 0
-    return candidate, len(notice.item_ids)
+    drops = drop_item_ids
+    while drops:
+        reduced, notices = typed.without_filler_notes(packet, drops)
+        if not notices:
+            return render, 0
+        candidate = _render_selected_result(replace(render.result, packet=reduced), client, trace)
+        lines = set((candidate.rendered or "").split("\n"))
+        missing = {
+            notice.item_id for notice in notices if typed.omission_line(notice) not in lines
+        }
+        if not missing:
+            return candidate, len(notices)
+        drops = tuple(notice.item_id for notice in notices if notice.item_id not in missing)
+    return render, 0
 
 
 def _with_rendered(render: _PromptRender, rendered: str) -> _PromptRender:
@@ -5548,7 +5467,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
   - `typed_decision_hook.route_telemetry(values: TypedTelemetryValues) -> AutomaticRouteTypedDecisions`.
   - `_typed_prompt_render(...) -> tuple[_PromptRender, _AutomaticShadowTrace | None, AutomaticRouteTypedDecisions]`.
 
-The record is written only when diagnostics are `summary` or `trace` (the existing gate at `main.py:876-884`), under today's retention (256 events, 1–90 days). `typed_notes_dropped` means "would drop" in shadow and "actually dropped" in live (0 when the summary line did not fit). `typed_step_ms` is the whole step: local preparation, the Jev requests and the combine.
+The record is written only when diagnostics are `summary` or `trace` (the existing gate at `main.py:876-884`), under today's retention (256 events, 1–90 days). `typed_notes_dropped` means "would drop" in shadow and "actually dropped" in live (a note whose omission line did not fit is kept and not counted). `typed_step_ms` is the whole step: local preparation, the Jev requests and the combine.
 
 - [ ] **Step 1: Write the failing telemetry tests**
 
@@ -5684,10 +5603,10 @@ def test_live_notes_dropped_counts_only_drops_that_happened(
     applied = _latest_event(fixture).typed
     assert applied is not None and applied.notes_dropped == 2
 
-    def oversized(item_ids: tuple[str, ...]) -> OmissionNotice:
-        return OmissionNotice("low-relevance", OmissionReason.LOW_RELEVANCE, "x" * 6_000, item_ids)
+    def oversized(item_id: str) -> OmissionNotice:
+        return OmissionNotice(item_id, OmissionReason.LOWER_RANK, "x" * 6_000)
 
-    monkeypatch.setattr(typed_decision_hook, "low_relevance_omission", oversized)
+    monkeypatch.setattr(typed_decision_hook, "filler_omission", oversized)
     run_hook(fixture, KNOWLEDGE_PROMPT, live)
     cancelled = _latest_event(fixture).typed
     assert cancelled is not None and cancelled.notes_dropped == 0
@@ -6303,11 +6222,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
 - Create: `tests/security/test_typed_hook_network_boundary.py`
 
 **Interfaces:**
-- Consumes: `scripts/typed_decision_test_support.py` (Task 9); `build_runtime_typed_decision_classifier` (Task 3); `with_typed_decision_mode` (Task 1); `TypedHookModes`, `TypedHookOverrides`, `HOOK_KINDS` (Task 7); `cli._typed_prompt_render`, `cli._automatic_prompt_context_attachment`; `jev_provider._urllib_transport` (`connectors/typesafe/jev_provider.py:60`).
+- Consumes: `scripts/typed_decision_test_support.py` (Task 9); `build_runtime_typed_decision_classifier` (Task 3); `with_typed_decision_mode` (Task 1); `TypedHookModes`, `TypedHookOverrides`, `HOOK_KINDS` (Task 7); `cli._typed_prompt_render`, `cli._automatic_prompt_context_attachment`; `FILLER_OMISSION_DETAIL` (Task 7); `jev_provider._urllib_transport` (`connectors/typesafe/jev_provider.py:60`).
 - Produces: tests only.
 
 Spec §8.1 contracts pinned here:
-- **Off is unchanged.** With the master switch off, or on with every mode off, the typed step never runs, so the output is today's code path. The existing hook suite in `tests/unit/test_automatic_memory.py` is the byte-level regression net for that path. Packets without a low-relevance omission keep their exact wire shape.
+- **Off is unchanged.** With the master switch off, or on with every mode off, the typed step never runs, so the output is today's code path. The existing hook suite in `tests/unit/test_automatic_memory.py` is the byte-level regression net for that path. Canonical packets keep their exact wire shape.
+- **No packet schema change.** The per-note `lower_rank` filler omissions a live hook writes validate against the unchanged `context-packet-v1.json` omission definition.
 - **Shadow is unchanged.** Over the 60 routing prompts plus the 40 holdout prompts, with and without the semantic-memory gate, a fake Jev answers every question and the output stays byte-identical to off.
 - **Nothing sends while blocked.** The real hook path (no overrides) makes zero transport calls in `off` and `shadow` for every hook kind; settings refuse `live`; and even forced `live` modes with the runtime guard send nothing.
 - **The entry point is pinned to runtime.** Nothing under `src/` but the composition module mentions the synthetic builder; no call to `_automatic_prompt_context_for_hook` in `main.py` passes `replay_overrides`; the hook's guard is built with the runtime source.
@@ -6322,12 +6242,13 @@ Create `tests/contract/test_typed_hook_contract.py`:
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
 from mnemo_memory.apps.cli import main as cli
-from mnemo_memory.apps.cli.typed_decision_hook import TypedHookModes
+from mnemo_memory.apps.cli.typed_decision_hook import FILLER_OMISSION_DETAIL, TypedHookModes
 from mnemo_memory.packages.application import PersonalSettings, PersonalSettingsStore
 from mnemo_memory.packages.domain import TypedDecisionMode
 from mnemo_memory.packages.telemetry import LocalAutomaticRouteTelemetryStore
@@ -6393,9 +6314,7 @@ def test_off_never_enters_the_typed_step(tmp_path: Path, monkeypatch: pytest.Mon
         run_hook(fixture, prompt)
 
 
-def test_packets_without_a_low_relevance_omission_keep_their_wire_shape(
-    tmp_path: Path,
-) -> None:
+def test_canonical_packets_keep_their_wire_shape(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     attached = cli._automatic_prompt_context_attachment(
         fixture.data, fixture.binding.checkpoint_scope, KNOWLEDGE_PROMPT
@@ -6404,6 +6323,32 @@ def test_packets_without_a_low_relevance_omission_keep_their_wire_shape(
     omissions = json.loads(attached)["omissions"]
     assert omissions
     assert all(set(omission) == {"item_id", "reason", "detail"} for omission in omissions)
+
+
+def test_live_filler_omission_lines_fit_the_unchanged_v1_schema(tmp_path: Path) -> None:
+    schema = json.loads(
+        resources.files("mnemo_memory")
+        .joinpath("resources/schemas/context-packet-v1.json")
+        .read_text(encoding="utf-8")
+    )
+    definition = schema["$defs"]["omission"]
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    live = synthetic_overrides(
+        fixture, ScriptedJevTransport(), TypedHookModes(relevance=TypedDecisionMode.LIVE)
+    )
+    context = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert context is not None
+    omissions = [
+        json.loads(line.removeprefix("MNEMO_OMISSION "))
+        for line in context.split("\n")
+        if line.startswith("MNEMO_OMISSION ")
+    ]
+    filler = [omission for omission in omissions if omission["detail"] == FILLER_OMISSION_DETAIL]
+    assert len(filler) == 2
+    assert all(omission["reason"] == "lower_rank" for omission in filler)
+    for omission in omissions:
+        assert set(omission) == set(definition["required"]) == set(definition["properties"])
+        assert omission["reason"] in definition["properties"]["reason"]["enum"]
 ```
 
 - [ ] **Step 2: Write the security tests**
@@ -6806,7 +6751,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
 **Interfaces:**
 - Consumes:
   - Task 3: `build_synthetic_typed_decision_classifier(settings, *, data_directory, environ, jev_transport, recorder)`.
-  - Task 7/8: `TypedHookModes`, `TypedHookOverrides(guard_factory, modes, observer)`, `TypedStepInput`, `TypedPromptDecisions`.
+  - Task 7/8: `TypedHookModes`, `TypedHookOverrides(guard_factory, modes, observer)`, `TypedStepInput`, `TypedPromptDecisions`, `FILLER_OMISSION_DETAIL`.
   - Task 9: `cli._automatic_prompt_context_for_hook(..., replay_overrides=...)`, `cli._refresh_project_knowledge`, `cli._automatic_route_scope`; `scripts/typed_decision_test_support.choice_answer` (tests only).
   - Task 10: `AutomaticRouteEvent.typed`.
   - Task 13: the two skill fixtures.
@@ -6817,7 +6762,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- \
   - `@dataclass(frozen=True, slots=True) class ReplayNote(note_id, summary, category)`.
   - `@dataclass(frozen=True, slots=True) class ReplaySeed(set_name, data_directory: Path, project_directory: Path, categories: Mapping[str, str])`.
   - `@dataclass(frozen=True, slots=True) class ReplayRequest(set_name, group, case_id, arm, data_directory: str, project_directory: str)`.
-  - `@dataclass(frozen=True, slots=True) class ReplayResult(set_name, group, case_id, arm, attached_tokens: int, hook_ms: int, step_ms: int | None, cap_hit: bool, structural_need: str | None, long_term_need: str | None, tier: str | None, skill_pick: str, checked_item_ids: tuple[str, ...], dropped_item_ids: tuple[str, ...])` with `to_json()` / `from_json(text)`.
+  - `@dataclass(frozen=True, slots=True) class ReplayResult(set_name, group, case_id, arm, attached_tokens: int, hook_ms: int, step_ms: int | None, cap_hit: bool, structural_need: str | None, long_term_need: str | None, tier: str | None, skill_pick: str, checked_item_ids: tuple[str, ...], dropped_item_ids: tuple[str, ...], applied_drop_item_ids: tuple[str, ...])` with `to_json()` / `from_json(text)`. `dropped_item_ids` are Jev's would-drop decisions; `applied_drop_item_ids` are the notes the hook really dropped, read from the per-note `lower_rank` filler omissions in the rendered attachment.
   - `replay_notes(set_name) -> tuple[ReplayNote, ...]`, `replay_cases() -> tuple[ReplayCase, ...]`, `find_case(set_name, group, case_id) -> ReplayCase`, `seed_replay_set(root: Path, set_name: str) -> ReplaySeed`, `run_replay_case(request, *, environ, jev_transport=None) -> ReplayResult`, `run_case_in_fresh_process(request, *, live_calls_authorized, timeout_seconds=120.0) -> ReplayResult`, `run_replay(seeds, cases, runner) -> list[ReplayResult]`, `score_replay(cases, results, seeds) -> dict[str, Any]`, `class ReplayChildError(RuntimeError)`.
 - Produces (`scripts/run_typed_decision_replay.py`): `main(argv=None, *, environ=None, runner=None, stdin=None, stdout=None) -> int`; report at `evaluation-results/typed-decisions/replay/<run-id>/report.json`.
 
@@ -6825,7 +6770,7 @@ How it runs (spec §8.2): each set gets its own temporary data directory, seeded
 
 Scoring (spec §8.3), per decision:
 - memory need: `score_front_door` on the final plan's needs (from the route event), typed arm, dev and holdout;
-- filler: Jev's would-drop decisions mapped to seeded categories — zero relevant drops and ≥ 90% of noise dropped, per set;
+- filler: Jev's would-drop decisions mapped to seeded categories — zero relevant drops and ≥ 90% of noise dropped, per set; the report also counts the drops actually applied (per-note `lower_rank` omissions in the output) and the judged drops not applied (an omission line did not fit, or the route changed after the answer);
 - tier hint: heavy recall ≥ 0.95 on the phase-1 tier set (a hard-rule prompt that was not asked counts as heavy, the safe side);
 - skill pick: ≥ 85% correct skill, ≥ 95% correct `none`, and accuracy strictly above keyword matching, per set;
 - all: ≤ 5% of typed prompts hit the 0.8 s cap; the largest added hook time (typed minus rules, per prompt) ≤ 850 ms;
@@ -6981,6 +6926,7 @@ def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> Non
         if category is None:
             continue  # a skill document matched the probe; it is not a scored note
         assert (item_id in notes.dropped_item_ids) == (category == "noise")
+    assert set(notes.applied_drop_item_ids) <= set(notes.dropped_item_ids)
 
     report = score_replay(subset, results, {"holdout": seed})
     assert set(report["sets"]) == {"holdout"}
@@ -6999,6 +6945,7 @@ def _result(
     skill_pick: str = "none",
     checked: tuple[str, ...] = (),
     dropped: tuple[str, ...] = (),
+    applied: tuple[str, ...] = (),
 ) -> ReplayResult:
     return ReplayResult(
         case.set_name,
@@ -7015,6 +6962,7 @@ def _result(
         skill_pick,
         checked,
         dropped,
+        applied,
     )
 
 
@@ -7039,6 +6987,7 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
             hook_ms=500,
             checked=("knowledge:good:r:section:0", "knowledge:noise:r:section:0"),
             dropped=("knowledge:noise:r:section:0",),
+            applied=("knowledge:noise:r:section:0",),
         ),
     ]
     report = score_replay(cases, passing, {"dev": seed})
@@ -7049,6 +6998,12 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
         "tokens": True,
     }
     assert report["complete"] is True
+    filler = report["sets"]["dev"]["filler"]
+    assert (filler["drops_judged"], filler["drops_applied"], filler["drops_not_applied"]) == (
+        1,
+        1,
+        0,
+    )
 
     slow = [*passing[:-1], replace_result(passing[-1], hook_ms=1_200, cap_hit=True)]
     failing = score_replay(cases, slow, {"dev": seed})
@@ -7197,6 +7152,7 @@ from mnemo_memory.apps.cli.typed_decision_composition import (
     build_synthetic_typed_decision_classifier,
 )
 from mnemo_memory.apps.cli.typed_decision_hook import (
+    FILLER_OMISSION_DETAIL,
     TypedHookModes,
     TypedHookOverrides,
     TypedPromptDecisions,
@@ -7330,6 +7286,7 @@ class ReplayResult:
     skill_pick: str
     checked_item_ids: tuple[str, ...]
     dropped_item_ids: tuple[str, ...]
+    applied_drop_item_ids: tuple[str, ...]
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -7339,6 +7296,7 @@ class ReplayResult:
         value = json.loads(text)
         value["checked_item_ids"] = tuple(value["checked_item_ids"])
         value["dropped_item_ids"] = tuple(value["dropped_item_ids"])
+        value["applied_drop_item_ids"] = tuple(value["applied_drop_item_ids"])
         return cls(**value)
 
 
@@ -7594,7 +7552,21 @@ def run_replay_case(
             () if step is None else tuple(item.item_id for item in step.filler_candidates)
         ),
         dropped_item_ids=() if decisions is None else decisions.drop_item_ids,
+        applied_drop_item_ids=_applied_drops(context),
     )
+
+
+def _applied_drops(context: str) -> tuple[str, ...]:
+    """Notes the hook really dropped: its per-note ``lower_rank`` filler omission lines."""
+
+    applied: list[str] = []
+    for line in context.split("\n"):
+        if not line.startswith("MNEMO_OMISSION "):
+            continue
+        value = json.loads(line.removeprefix("MNEMO_OMISSION "))
+        if value.get("reason") == "lower_rank" and value.get("detail") == FILLER_OMISSION_DETAIL:
+            applied.append(str(value["item_id"]))
+    return tuple(applied)
 
 
 def _event(
@@ -7756,8 +7728,13 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
     relevant = [dropped for category, dropped in rows if category == "relevant"]
     noise = [dropped for category, dropped in rows if category == "noise"]
     noise_rate = _share(sum(noise), len(noise))
+    judged = sum(len(result.dropped_item_ids) for result in results)
+    applied = sum(len(result.applied_drop_item_ids) for result in results)
     return {
         "checks": len(rows),
+        "drops_judged": judged,
+        "drops_applied": applied,
+        "drops_not_applied": judged - applied,
         "uncategorized_checks": uncategorized,
         "relevant_checks": len(relevant),
         "relevant_dropped": sum(relevant),
@@ -8048,8 +8025,9 @@ Insert after the paragraph that ends "would otherwise cut every check off at 0.6
   together under one 0.8 s `ask_each` cap, in one `asyncio.run` per prompt.
   `DenyAllModelBudget` is replaced by a file-locked local daily counter
   (`typed_decision_daily_input_tokens`, default 10,000,000 input tokens, about $0.42 a day at
-  $0.042 per million). Dropped notes stay reachable through one `low_relevance` omission and
-  `get_context item_ids`. A synthetic fresh-process replay (`scripts/run_typed_decision_replay.py`)
+  $0.042 per million). Each dropped note stays reachable: it leaves one standard `lower_rank`
+  omission naming its own item ID (no packet schema change), and `get_context item_ids` fetches
+  it again; a note whose omission line does not fit the attachment budget is kept. A synthetic fresh-process replay (`scripts/run_typed_decision_replay.py`)
   scores the gates per decision; a decision that fails stays at most in shadow. Real-traffic
   promotion still needs a ZDR route, then shadow on real traffic, then live.
 ```
@@ -8099,8 +8077,8 @@ the filler check, the task-size hint and skill pick in `off`, `shadow` or `live`
 (`mnemo-memory typed-decisions status|set`). Real data still never leaves the machine: the route
 stays `synthetic_only`, every runtime request is `data_route_blocked`, and settings refuse `live`.
 Shadow output is byte-identical to off over the 100 routing and holdout prompts. Also new: a
-file-locked local daily typed-decision budget, a `low_relevance` omission with
-`get_context item_ids`, content-free `typed_v1` route telemetry, a skill-pick axis with two
+file-locked local daily typed-decision budget, per-note `lower_rank` omissions for dropped notes
+(no packet schema change) with `get_context item_ids` to fetch them again, content-free `typed_v1` route telemetry, a skill-pick axis with two
 synthetic skill fixtures, and a fresh-process synthetic replay with per-decision gates. The filler
 guard deadline (phase-2 open item 2) is closed: the runtime guard now uses 0.8 s. No live replay
 has run; it needs the maintainer's go-ahead. Still open: the worker-thread cap for the long-lived
@@ -8138,12 +8116,14 @@ master switch, `front_door: live` needs `experimental_semantic_memory_enabled`, 
 directory) is ever damaged, every request is denied and `status` shows the counter as
 `unavailable`; delete the file to reset it.
 
-When the filler check is live and drops notes, the attached context keeps one `MNEMO_OMISSION`
-line with reason `low_relevance` and the dropped `item_ids`. An agent can fetch exactly those
-notes again with `get_context` and `item_ids` (1–16 IDs, on both the full and compact MCP
-profiles). The fetch rechecks scope, currentness and sensitivity: a note that changed comes back
-as `superseded`, a deleted or retracted one as `expired`, one outside this project as
-`unauthorized_scope`. Explicit `get_context` calls are never filtered.
+When the filler check is live and drops a note, the attached context keeps one standard
+`MNEMO_OMISSION` line for that note: its `item_id` is the note's own ID, the reason is
+`lower_rank` and the detail is `judged filler; fetch with get_context item_ids`. If that line would
+not fit the attachment budget, the note is kept instead. An agent can fetch dropped notes again
+with `get_context` and `item_ids` (1–16 IDs, on both the full and compact MCP profiles). The fetch
+rechecks scope, currentness and sensitivity: a note that changed comes back as `superseded`, a
+deleted or retracted one as `expired`, one outside this project as `unauthorized_scope`. Explicit
+`get_context` calls are never filtered.
 ````
 
 - [ ] **Step 5: Close open item 2 in the phase-2 memory (not committed)**

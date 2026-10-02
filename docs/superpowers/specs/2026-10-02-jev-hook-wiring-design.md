@@ -183,15 +183,16 @@ Complexity and tool need ride in the front-door request, so they add no calls.
 
 ## 5. Dropped notes stay reachable
 
-1. **New omission reason.** `OmissionReason.LOW_RELEVANCE = "low_relevance"`.
-2. **One summary omission per prompt**, not one per note:
+1. **No packet schema change.** `docs/context-packet-schema.md` forbids adding fields or enum values to schema 1.x without a new major version. Dropped notes therefore use the **existing** `OmissionReason.LOWER_RANK` and the existing `OmissionNotice` fields.
+   - Amended 2026-10-02 with the maintainer, replacing a `low_relevance` reason and an `item_ids` field.
+2. **One standard omission per dropped note.** Its `item_id` is the dropped note's own ID:
    ```
-   MNEMO_OMISSION {"item_id":"low-relevance","reason":"low_relevance",
-     "detail":"2 notes judged filler; fetch with get_context item_ids",
-     "item_ids":["approved-episodic:<id>","knowledge:<doc>:revision:<rev>:section:3"]}
+   MNEMO_OMISSION {"item_id":"approved-episodic:<id>","reason":"lower_rank",
+     "detail":"judged filler; fetch with get_context item_ids"}
    ```
    - The IDs are the ones the agent already sees on attached items. There is no new identifier scheme and no new store.
-   - **If the summary line does not fit the automatic attachment budget, the drops are cancelled and the notes are kept.** A note is never dropped without a way back to it.
+   - Each line costs about 35 tokens, against the 150 or more of a typical dropped note.
+   - **If a note's omission line does not fit the automatic attachment budget, that note's drop is cancelled and the note is kept.** A note is never dropped without a way back to it.
 3. **`get_context` gains an optional `item_ids` parameter** (1–16 IDs). It returns exactly those items.
    - It runs the same scope, authorization and sensitivity checks as any fetch, and never involves Jev.
    - An item that no longer exists, has changed or is not permitted comes back as an omission with the usual reason (`superseded`, `expired`, `unauthorized_scope`, `prohibited_sensitivity`).
@@ -287,7 +288,8 @@ When a reservation would exceed the daily limit, the guard returns `budget_denie
   - the three locks
   - the daily budget counter (limit, UTC reset, file lock, corrupt-file fallback to deny)
   - `get_context item_ids`: scope, sensitivity, changed and missing items
-  - the summary omission and the "keep if it doesn't fit" rule
+  - the per-note `lower_rank` omission and the "keep if it doesn't fit" rule
+  - packets are still valid under the unchanged `context-packet-v1.json`
   - the whole-step fallback on an exception
   - the telemetry content-free check and the `from_dict` key-set tiers
   - the `typed-decisions` CLI
