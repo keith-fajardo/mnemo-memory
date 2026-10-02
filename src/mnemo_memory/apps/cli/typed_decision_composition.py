@@ -1,63 +1,102 @@
-"""Runtime composition for typed decisions (phase 1: never sends runtime text).
+"""Runtime composition for typed decisions (spec 2026-10-02 §3, §6).
 
-Phase 1 composes the guard only so the data-route rule is enforced and tested at a real
-composition root. Nothing in the hook or the MCP server calls it yet (spec §9).
+The prompt hook asks Jev only through a guard built here and bound to the runtime source, so the
+``synthetic_only`` data route blocks every real prompt before credential, budget or network
+work. The replay's synthetic-source builder lives here too, so this module stays the only
+importer of the Jev connector.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from uuid import UUID
 
 from mnemo_memory.connectors.typesafe import JevClassifier, JevTransport
 from mnemo_memory.packages.application import PersonalSettings
 from mnemo_memory.packages.domain import (
-    ModelBudgetDenied,
     ModelBudgetReservation,
     ModelTaskType,
     TypedDecisionDataRoute,
     TypedDecisionSource,
     WorkspaceId,
 )
-from mnemo_memory.packages.model_gateway.typed_decisions import GuardedTypedDecisionClassifier
+from mnemo_memory.packages.model_gateway.decision_axes import FILLER_CHECK_BUDGET_SECONDS
+from mnemo_memory.packages.model_gateway.typed_decisions import (
+    GuardedTypedDecisionClassifier,
+    TypedDecisionRecorder,
+)
+from mnemo_memory.packages.storage import LocalDailyModelBudget
 
-RUNTIME_DEADLINE_SECONDS = 0.6
+RUNTIME_DEADLINE_SECONDS = FILLER_CHECK_BUDGET_SECONDS
 _RUNTIME_RESERVATION = ModelBudgetReservation(input_tokens=1_000, output_tokens=1, cost_microusd=0)
 _LOCAL_WORKSPACE = WorkspaceId(UUID(int=0))
-
-
-class DenyAllModelBudget:
-    """Phase 1 has no personal typed-decision budget, so every reservation is denied."""
-
-    def reserve(
-        self,
-        workspace_id: WorkspaceId,
-        task_type: ModelTaskType,
-        reservation: ModelBudgetReservation,
-    ) -> None:
-        raise ModelBudgetDenied("MNEMO_TYPED_DECISION_BUDGET_UNAVAILABLE")
 
 
 def build_runtime_typed_decision_classifier(
     settings: PersonalSettings,
     *,
+    data_directory: Path,
     environ: Mapping[str, str] | None = None,
     jev_transport: JevTransport | None = None,
+    recorder: TypedDecisionRecorder | None = None,
 ) -> GuardedTypedDecisionClassifier | None:
     """Return ``None`` when disabled; otherwise a guard bound to the runtime source."""
 
     if not settings.experimental_typed_decisions_enabled:
         return None
+    return _guard(
+        settings, TypedDecisionSource.RUNTIME, data_directory, environ, jev_transport, recorder
+    )
+
+
+def build_synthetic_typed_decision_classifier(
+    settings: PersonalSettings,
+    *,
+    data_directory: Path,
+    environ: Mapping[str, str] | None = None,
+    jev_transport: JevTransport | None = None,
+    recorder: TypedDecisionRecorder | None = None,
+) -> GuardedTypedDecisionClassifier:
+    """Return a synthetic-fixture guard for the replay (spec §8.2); the hook never calls it.
+
+    Its source lets fixture text through the ``synthetic_only`` route, so callers must pass only
+    text read from fixtures that declare synthetic provenance.
+    """
+
+    return _guard(
+        settings,
+        TypedDecisionSource.SYNTHETIC_FIXTURE,
+        data_directory,
+        environ,
+        jev_transport,
+        recorder,
+    )
+
+
+def _guard(
+    settings: PersonalSettings,
+    source: TypedDecisionSource,
+    data_directory: Path,
+    environ: Mapping[str, str] | None,
+    transport: JevTransport | None,
+    recorder: TypedDecisionRecorder | None,
+) -> GuardedTypedDecisionClassifier:
     variables = os.environ if environ is None else environ
     return GuardedTypedDecisionClassifier(
-        _adapter_from_environment(settings, variables, jev_transport),
+        _adapter_from_environment(settings, variables, transport),
         data_route=TypedDecisionDataRoute(settings.typed_decision_data_route),
-        source=TypedDecisionSource.RUNTIME,
-        budget=DenyAllModelBudget(),
+        source=source,
+        budget=LocalDailyModelBudget(
+            data_directory,
+            task_type=ModelTaskType.TYPED_DECISION,
+            daily_input_tokens=settings.typed_decision_daily_input_tokens,
+        ),
         workspace_id=_LOCAL_WORKSPACE,
         reservation=_RUNTIME_RESERVATION,
         deadline_seconds=RUNTIME_DEADLINE_SECONDS,
+        recorder=recorder,
     )
 
 
