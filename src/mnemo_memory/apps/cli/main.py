@@ -146,6 +146,10 @@ from mnemo_memory.packages.application.context_routing import (
     typed_route_decision,
 )
 from mnemo_memory.packages.application.services import LifecycleService
+from mnemo_memory.packages.application.settings import (
+    active_typed_decision_locks,
+    with_typed_decision_mode,
+)
 from mnemo_memory.packages.application.unified_context import (
     ContextCheckpointRecapQuery,
     ContextCheckpointSourceImpact,
@@ -173,6 +177,7 @@ from mnemo_memory.packages.domain import (
     EvidenceSourceType,
     KnowledgeDocumentSourceKind,
     MemoryScope,
+    ModelTaskType,
     OwnerId,
     ProjectId,
     ProjectSkill,
@@ -211,6 +216,7 @@ from mnemo_memory.packages.skills_registry import (
 )
 from mnemo_memory.packages.storage import (
     ApprovedEpisodicEventRecord,
+    LocalDailyModelBudget,
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
@@ -315,10 +321,19 @@ memory_route_diagnostics_app = typer.Typer(
     no_args_is_help=True,
     help="Control content-free route and checkpoint diagnostics.",
 )
+typed_decisions_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inspect and set Jev typed-decision modes; live stays locked to synthetic data.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
 app.add_typer(memory_app, name="memory", help="Set up automatic task memory for this project.")
+app.add_typer(
+    typed_decisions_app,
+    name="typed-decisions",
+    help="Inspect and set Jev typed-decision modes.",
+)
 memory_app.add_typer(memory_vault_app, name="vault", help="Manage an optional Obsidian vault.")
 memory_app.add_typer(
     memory_semantic_app,
@@ -3863,6 +3878,90 @@ def memory_route_diagnostics_status(
     except (AutomaticRouteTelemetryError, OSError, ValueError) as error:
         raise typer.BadParameter("MNEMO_ROUTE_DIAGNOSTICS_UNAVAILABLE") from error
     _show({"status": "available", **settings.to_dict(), "stores_prompts": False})
+
+
+def _typed_decision_settings_invalid(error: PersonalSettingsError) -> typer.Exit:
+    cause = error.__cause__
+    reason = str(cause) if isinstance(cause, PersonalSettingsError) else str(error)
+    _show({"status": "settings_invalid", "reason": reason})
+    return typer.Exit(1)
+
+
+@typed_decisions_app.command(
+    "status", help="Show switches, modes, active locks and today's typed-decision budget."
+)
+def typed_decisions_status(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    from mnemo_memory.apps.cli.typed_decision_hook import HOOK_KINDS
+
+    try:
+        config = resolve_local_config(data_dir)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_TYPED_DECISIONS_UNAVAILABLE") from error
+    try:
+        settings = PersonalSettingsStore(config.data_directory).load()
+    except PersonalSettingsError as error:
+        raise _typed_decision_settings_invalid(error) from error
+    reserved = LocalDailyModelBudget(
+        config.data_directory,
+        task_type=ModelTaskType.TYPED_DECISION,
+        daily_input_tokens=settings.typed_decision_daily_input_tokens,
+    ).reserved_today()
+    _show(
+        {
+            "status": "available",
+            "master_switch": settings.experimental_typed_decisions_enabled,
+            "data_route": settings.typed_decision_data_route,
+            "model_id": settings.typed_decision_model_id,
+            "modes": {kind.value: settings.typed_decision_mode(kind).value for kind in HOOK_KINDS},
+            "locks": [lock.value for lock in active_typed_decision_locks(settings)],
+            # Presence only: the key value is never read into output, logs or settings.
+            "credential_present": bool(os.environ.get("TYPESAFE_API_KEY", "").strip()),
+            "daily_input_tokens": {
+                "counter": "unavailable" if reserved is None else "available",
+                "limit": settings.typed_decision_daily_input_tokens,
+                "reserved_today": reserved,
+            },
+            "sends_real_prompts": False,
+        }
+    )
+
+
+@typed_decisions_app.command("set", help="Change one hook decision mode; the locks still apply.")
+def typed_decisions_set(
+    kind: str = typer.Argument(..., help="front_door, relevance, tier_hint or skill"),
+    mode: str = typer.Argument(..., help="off, shadow or live"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    from mnemo_memory.apps.cli.typed_decision_hook import HOOK_KINDS
+
+    kinds = {hook_kind.value: hook_kind for hook_kind in HOOK_KINDS}
+    if kind not in kinds:
+        raise typer.BadParameter(f"kind must be one of {', '.join(kinds)}")
+    try:
+        target = TypedDecisionMode(mode)
+    except ValueError as error:
+        options = ", ".join(option.value for option in TypedDecisionMode)
+        raise typer.BadParameter(f"mode must be one of {options}") from error
+    try:
+        config = resolve_local_config(data_dir)
+        store = PersonalSettingsStore(config.data_directory)
+        current = store.load()
+    except PersonalSettingsError as error:
+        raise _typed_decision_settings_invalid(error) from error
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_TYPED_DECISIONS_UNAVAILABLE") from error
+    try:
+        updated = with_typed_decision_mode(current, kinds[kind], target)
+    except PersonalSettingsError as error:
+        _show({"status": "refused", "kind": kind, "mode": target.value, "reason": str(error)})
+        raise typer.Exit(1) from error
+    try:
+        store.save(updated)
+    except PersonalSettingsError as error:
+        raise typer.BadParameter("MNEMO_SETTINGS_WRITE_FAILED") from error
+    _show({"status": "updated", "kind": kind, "mode": target.value})
 
 
 def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
