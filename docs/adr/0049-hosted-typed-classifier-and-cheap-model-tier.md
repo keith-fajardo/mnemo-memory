@@ -121,6 +121,47 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   `FILLER_CHECK_BUDGET_SECONDS` (0.8 s); the current runtime guard's 0.6 s front-door deadline
   would otherwise cut every check off at 0.6 s.
 
+- Phase 2, part 1: hook wiring (spec `docs/superpowers/specs/2026-10-02-jev-hook-wiring-design.md`).
+  The prompt hook carries four typed decisions, each `off`, `shadow` or `live`: memory need
+  (`front_door`), the per-note filler check (`relevance`), the task-size hint (`tier_hint`) and
+  skill pick (`skill`). Shadow records content-free `typed_v1` route telemetry and changes nothing.
+  Live is locked three ways: no mode may be `live` while the data route is `synthetic_only`;
+  `front_door: live` needs `experimental_semantic_memory_enabled`; any mode other than `off` needs
+  the master switch. Today's output is unchanged when everything is `off`, and `shadow` output is
+  byte-identical to `off`. "Unchanged" means packets and hook output, not the tool schema: the
+  `get_context` tool schema always advertises `item_ids` (spec section 5.3).
+- The runtime guard's per-request deadline is now 0.8 s (`FILLER_CHECK_BUDGET_SECONDS`). The
+  front-door request plus up to 16 filler requests go out together under one 0.8 s `ask_each` cap,
+  in one `asyncio.run` per prompt.
+  *Dated note (2026-10-02):* the spec says the cap is "0.8 s total" on the requests. The cap now
+  counts from the start of the typed step, at the mode read. Jev gets 0.8 s minus the local time
+  already spent, never less than 0.1 s. The Jev connector builds its TLS opener lazily, inside the
+  cap, and the skill listing is read in one pass with local inputs reused, to keep local overhead
+  small. Measured on synthetic seeding with a fresh process per prompt: with an instant fake Jev
+  the added hook time is about 32 / 65 / 74 ms (p50 / p95 / max); with a fake that always hits the
+  cap it is about 807 / 812 / 815 ms, with rare one-off stalls on a loaded machine. Known
+  follow-up: the per-request budget lock and fsync run on the event-loop thread, inside the cap.
+- `DenyAllModelBudget` is replaced by a file-locked local daily counter
+  (`typed_decision_daily_input_tokens`, default 10,000,000 input tokens, about $0.42 a day at
+  $0.042 per million). It resets each UTC day and denies whenever it is unsure, for example on a
+  corrupt or unsafe file.
+- Each dropped filler note stays reachable. It leaves one standard omission line with the existing
+  `lower_rank` reason and the note's own item ID; the detail text is "judged filler; fetch with
+  get_context item_ids". There is no packet schema change. Only notes the agent actually saw, with
+  fetchable IDs, can be dropped. The re-render is pinned to the shown notes minus the drops
+  (`only_item_ids`), so freed space is never refilled, and a note whose omission line does not fit
+  the attachment budget is kept. `get_context` takes `item_ids` (1 to 16 IDs) and returns exact
+  items under the same scope and sensitivity checks as any fetch; unavailable items come back as
+  omissions.
+- Telemetry is a content-free `typed_v1` group on each route event. A typed telemetry failure
+  never costs the rendered context, and a hint-only typed attachment is labelled `NO_ATTACHMENT`.
+- A synthetic fresh-process replay (`scripts/run_typed_decision_replay.py`) scores the gates per
+  decision; a decision that fails stays at most in shadow. A live run needs the explicit
+  `--live-calls-authorized` flag and a present `TYPESAFE_API_KEY`, and runs only in a seeded
+  directory. Memory gates count only prompts Jev was asked; hard-rule prompts are reported
+  separately. Real-traffic promotion still needs a ZDR route, then shadow on real traffic, then
+  live.
+
 ## Security and privacy implications
 
 - Assets: prompts, stored memory snippets and event summaries.

@@ -857,6 +857,41 @@ shadow action. `mnemo memory router disable` keeps the verified files but disabl
 evaluation. A Potion proposal cannot select scope, authority, retention, mutation, token ceilings,
 dbt lineage, live attachment, or a no-memory suppression.
 
+#### Optional: Jev typed decisions (shadow only for now)
+
+Mnemo can ask TypeSafe's Jev four small questions about each prompt: whether earlier memory is
+needed, whether a pre-fetched note is filler, whether the task is light and reading-heavy (then a
+one-line hint suggests a Haiku subagent), and which project skill fits. Each question has its own
+mode: `off` (today's behaviour), `shadow` (Jev answers are recorded beside the rules and nothing
+changes) or `live` (Jev's answers change what is attached).
+
+Live is locked. While the data route is `synthetic_only`, the only route today, Mnemo refuses
+`live` for every decision and blocks every real prompt before any network call, so shadow mode
+only proves the wiring is harmless. Check and change the modes with:
+
+```bash
+mnemo-memory typed-decisions status
+mnemo-memory typed-decisions set skill shadow
+```
+
+`status` shows the master switch (`experimental_typed_decisions_enabled`), the route, each mode,
+the locks that are active, whether `TYPESAFE_API_KEY` is present (yes or no only, never the
+value), and today's reserved input tokens against `typed_decision_daily_input_tokens` (default
+10,000,000 per UTC day). `set` refuses a locked change with a plain reason: any mode needs the
+master switch, `front_door: live` needs `experimental_semantic_memory_enabled`, and no mode may be
+`live` on `synthetic_only`. If the budget counter file (`typed_decision-budget.json` in the data
+directory) is ever damaged, every request is denied and `status` shows the counter as
+`unavailable`; delete the file to reset it.
+
+When the filler check is live and drops a note, the attached context keeps one standard
+`MNEMO_OMISSION` line for that note: its `item_id` is the note's own ID, the reason is
+`lower_rank` and the detail is `judged filler; fetch with get_context item_ids`. If that line would
+not fit the attachment budget, the note is kept instead. An agent can fetch dropped notes again
+with `get_context` and `item_ids` (1 to 16 IDs, on both the full and compact MCP profiles). The
+fetch rechecks scope, currentness and sensitivity: a note that changed comes back as `superseded`,
+a deleted or retracted one as `expired`, one outside this project as `unauthorized_scope`.
+Explicit `get_context` calls are never filtered.
+
 ### Optional: add one Obsidian vault
 
 If your personal notes are in an Obsidian vault outside the repository, make that a separate,

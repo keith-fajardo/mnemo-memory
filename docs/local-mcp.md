@@ -163,6 +163,14 @@ call `get_context` with `"include_approved_events": true`; the option is off by 
 ordinary handoffs compact. They are historical evidence, never a claim that the current repository
 structure is still true.
 
+To fetch exact notes by ID, for example notes the automatic hook dropped as filler (each dropped
+note leaves a `lower_rank` omission line naming its own item ID), call `get_context` with
+`"item_ids": ["<item-id>", "..."]`. It takes 1 to 16 IDs and cannot be combined with any other
+retrieval field. Each ID gets the same scope, currentness and sensitivity checks as any fetch;
+an item that is unavailable comes back as an omission (`superseded`, `expired` or
+`unauthorized_scope`), not an error. The tool schema always lists `item_ids`, whether or not the
+hook's typed decisions are on.
+
 ## Record a correction without resending the handoff
 
 When an agent discovers a specific reasoning mistake after it has already saved a checkpoint, it

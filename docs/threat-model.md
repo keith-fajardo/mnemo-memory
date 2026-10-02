@@ -1744,6 +1744,36 @@ provenance may be sent, and live evaluation needs `--live-calls-authorized`. Add
 requires signed zero-data-retention terms, name and identifier redaction, and an ADR 0049
 amendment.
 
+### Hook-path typed-decision traffic
+
+**Scenario:** With a typed-decision mode on, the automatic-memory prompt hook runs a typed step
+on every prompt. A real prompt, a stored note or a skill name could reach TypeSafe. A hand-edited
+setting could turn on live behaviour. The replay's synthetic-source helper could be reused on
+real prompts. A slow or failing step could delay the hook or blank its output.
+
+**Required controls:** `automatic-memory-hook` builds its guard only through
+`build_runtime_typed_decision_classifier`, bound to the `runtime` source, and never passes replay
+overrides; under `synthetic_only` every runtime request returns `data_route_blocked` before
+credential, budget or network work. Settings refuse `live` while the route is `synthetic_only`,
+refuse `front_door: live` without the semantic-memory gate, and refuse any mode without the master
+switch, on load and on every change. Only the composition module defines the synthetic-source
+builder, and only the replay scripts and tests call it. The replay refuses typed runs without
+`--live-calls-authorized` and a present key, runs only in a seeded directory, and its child re-reads
+the prompt from a provenance-checked fixture by case ID. Pinned, mandatory, conflict-participating,
+non-`normal` and secret-flagged notes are never sent. The step runs in one `asyncio.run` under a
+0.8 s cap counted from the start of the step, and is wrapped as a whole: any exception keeps
+today's output and records `typed_step_error`. `typed_v1` telemetry holds closed values, bounded
+counts and booleans only: no prompt, note or skill name. A typed telemetry failure never costs the
+rendered context. The local daily input-token counter is file-locked and fails closed on a corrupt
+or unsafe file. An explicit `get_context` call is never filtered, and `item_ids` lookups recheck
+scope, currentness and sensitivity.
+
+**Verification:** `tests/security/test_typed_hook_network_boundary.py` (zero transport calls in
+every mode, runtime source, synthetic builder confined, no `replay_overrides` in production
+calls), `tests/contract/test_typed_hook_contract.py` (off and shadow byte-identical),
+`tests/unit/test_typed_hook_integration.py` (content-free telemetry, step-error fallback),
+`tests/unit/test_local_model_budget.py`, `tests/unit/test_context_item_lookup.py`.
+
 ## Security gates and ownership
 
 Changes affecting a threat above must update its required controls and verification. Security tests

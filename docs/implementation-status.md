@@ -6876,3 +6876,24 @@ connector; (5) a pinned `jev-X.Y.Z` model must be reported back exactly, or the 
 "none", so that gate cannot pass on an empty set; (7) the key is stored masked, and adapter
 errors carry no chained exception, so the key stays out of crash reports. Phase 2 still requires
 signed zero-data-retention terms and new runtime wiring.
+
+Phase-2 hook wiring (2026-10-02, spec `docs/superpowers/specs/2026-10-02-jev-hook-wiring-design.md`,
+plan `docs/superpowers/plans/2026-10-02-jev-hook-wiring.md`): the prompt hook can run memory need
+(`front_door`), the filler check (`relevance`), the task-size hint (`tier_hint`) and skill pick
+(`skill`) in `off`, `shadow` or `live` mode (`mnemo-memory typed-decisions status|set`). Three locks
+apply: `live` is refused while the route is `synthetic_only`, `front_door: live` needs
+`experimental_semantic_memory_enabled`, and any mode needs the master switch. Real data still never
+leaves the machine: the route stays `synthetic_only`, every runtime request is `data_route_blocked`,
+and settings refuse `live`. Shadow output is byte-identical to off over the 100 routing and holdout
+prompts. Also new: a file-locked local daily typed-decision budget (default 10,000,000 input
+tokens, resets each UTC day, denies when unsure); per-note `lower_rank` omissions for dropped
+filler notes (no packet schema change) with `get_context item_ids` (1 to 16 IDs) to fetch them
+again; content-free `typed_v1` route telemetry; a skill-pick axis with two synthetic skill
+fixtures; and a fresh-process synthetic replay with per-decision gates. The latency cap now counts
+from the start of the typed step (0.8 s minus local time already spent, never below 0.1 s). On
+synthetic seeding the added hook time is about 32 / 65 / 74 ms (p50 / p95 / max) with an instant
+fake Jev and about 807 / 812 / 815 ms with a fake that always hits the cap. The filler guard
+deadline (phase-2 open item 2) is closed: the runtime guard now uses 0.8 s. No live replay has
+run; it needs the maintainer's go-ahead, and the latency gate should run on a quiet machine. Still
+open: the worker-thread cap for the long-lived MCP server, and the per-request budget lock and
+fsync, which run on the event-loop thread inside the cap.
