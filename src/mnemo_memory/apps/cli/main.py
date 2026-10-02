@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -16,7 +18,7 @@ from importlib import import_module
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 from time import monotonic
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID, uuid4, uuid5
 
 import typer
@@ -136,10 +138,12 @@ from mnemo_memory.packages.application.context_routing import (
     AutomaticContextShadowAction,
     AutomaticContextShadowPlan,
     CompactMemoryRoute,
+    LearnedRoutePhrase,
     bounded_automatic_context_prompt,
     choose_automatic_context_route,
     gate_automatic_context_injection,
     plan_automatic_context_needs,
+    typed_route_decision,
 )
 from mnemo_memory.packages.application.services import LifecycleService
 from mnemo_memory.packages.application.unified_context import (
@@ -171,13 +175,16 @@ from mnemo_memory.packages.domain import (
     MemoryScope,
     OwnerId,
     ProjectId,
+    ProjectSkill,
     ScopeLevel,
     SourceFileRename,
     SourceId,
     SourceTrustClass,
+    TypedDecisionMode,
     VerificationStatus,
     Visibility,
     WorkspaceId,
+    normalize_agent_client,
     normalize_knowledge_query,
 )
 from mnemo_memory.packages.knowledge import (
@@ -197,6 +204,7 @@ from mnemo_memory.packages.project_index import (
     SourceStructureParseRequest,
 )
 from mnemo_memory.packages.skills_registry import (
+    CurrentSkillListing,
     KnowledgeDocumentProcedureRegistry,
     KnowledgeDocumentSkillRegistry,
     SkillDiscoveryCandidate,
@@ -223,6 +231,18 @@ from mnemo_memory.packages.telemetry import (
     LocalTakeoverRouteTelemetryStore,
     TakeoverRouteTelemetryError,
 )
+
+if TYPE_CHECKING:
+    from mnemo_memory.apps.cli.typed_decision_hook import (
+        TypedHookModes,
+        TypedHookOverrides,
+        TypedPromptDecisions,
+        TypedStepInput,
+    )
+    from mnemo_memory.packages.model_gateway.typed_decisions import (
+        GuardedTypedDecisionClassifier,
+        TypedDecisionRecorder,
+    )
 
 # Rough frontier tokens one escalated extraction would spend; the local-vs-frontier split is
 # exact, this multiplier is a labelled estimate until per-call token measurement lands.
@@ -352,6 +372,9 @@ class _AutomaticPromptContextResult:
     skill_candidates: tuple[SkillDiscoveryCandidate, ...]
     duration_ms: int
     failed: bool = False
+    # Keyword discovery output even when the route did not attach it, so the typed step reuses
+    # it instead of running discovery again. Nothing renders or records it.
+    discovered_skills: tuple[SkillDiscoveryCandidate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,68 +564,136 @@ def _automatic_prompt_context_result(
             decision = choose_automatic_context_route(prompt, skill_candidate_count=len(candidates))
             if decision.route is AutomaticContextRoute.SKILL_DISCOVERY:
                 return _AutomaticPromptContextResult(
-                    decision, None, candidates, _elapsed_milliseconds(started)
+                    decision,
+                    None,
+                    candidates,
+                    _elapsed_milliseconds(started),
+                    discovered_skills=candidates,
                 )
 
-            prompt_budget = _automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET)
-            if decision.route is AutomaticContextRoute.PRIOR_MEMORY:
-                prompt_budget = ContextBudget(
-                    active_task_checkpoint=prompt_budget.active_task_checkpoint,
-                    episodic_memories=1_000,
-                    knowledge=0,
-                    structural=0,
-                    skills_and_procedures=0,
-                    provenance_and_conflicts=0,
-                    total_limit=prompt_budget.total_limit,
-                )
-            elif decision.route is AutomaticContextRoute.STRUCTURE:
-                prompt_budget = ContextBudget(
-                    active_task_checkpoint=0,
-                    episodic_memories=0,
-                    knowledge=0,
-                    structural=1_000,
-                    skills_and_procedures=0,
-                    provenance_and_conflicts=300,
-                    total_limit=prompt_budget.total_limit,
-                )
-
-            query_prompt = _automatic_route_query(prompt, decision)
-            semantic = None
-            if decision.route is AutomaticContextRoute.KNOWLEDGE and not (
-                contains_high_confidence_secret(prompt, query_prompt)
-            ):
-                semantic = LocalSemanticKnowledgeRetriever(
-                    runtime.knowledge_document_repository,
-                    FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
-                )
-            service = _automatic_prompt_context_service(
+            packet = _fetch_route_packet(
                 runtime,
-                semantic,
-                include_semantic_memory=experimental_semantic_memory_enabled,
+                data_directory,
+                scope,
+                prompt,
+                decision,
+                experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
             )
-            request = _automatic_prompt_context_request(
+    except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
+        return _AutomaticPromptContextResult(
+            decision,
+            None,
+            (),
+            _elapsed_milliseconds(started),
+            failed=True,
+            discovered_skills=candidates,
+        )
+    if not _packet_has_automatic_context(packet):
+        return _AutomaticPromptContextResult(
+            decision, None, (), _elapsed_milliseconds(started), discovered_skills=candidates
+        )
+    return _AutomaticPromptContextResult(
+        decision, packet, (), _elapsed_milliseconds(started), discovered_skills=candidates
+    )
+
+
+def _fetch_route_packet(
+    runtime: CheckpointRuntime,
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    decision: AutomaticContextRouteDecision,
+    *,
+    experimental_semantic_memory_enabled: bool,
+) -> ContextPacket:
+    """Fetch one already-selected retrieval route inside an open runtime (rules retrieval)."""
+
+    assert runtime.knowledge_document_repository is not None
+    prompt_budget = _automatic_budget(data_directory, _AUTOMATIC_PROMPT_CONTEXT_BUDGET)
+    if decision.route is AutomaticContextRoute.PRIOR_MEMORY:
+        prompt_budget = ContextBudget(
+            active_task_checkpoint=prompt_budget.active_task_checkpoint,
+            episodic_memories=1_000,
+            knowledge=0,
+            structural=0,
+            skills_and_procedures=0,
+            provenance_and_conflicts=0,
+            total_limit=prompt_budget.total_limit,
+        )
+    elif decision.route is AutomaticContextRoute.STRUCTURE:
+        prompt_budget = ContextBudget(
+            active_task_checkpoint=0,
+            episodic_memories=0,
+            knowledge=0,
+            structural=1_000,
+            skills_and_procedures=0,
+            provenance_and_conflicts=300,
+            total_limit=prompt_budget.total_limit,
+        )
+
+    query_prompt = _automatic_route_query(prompt, decision)
+    semantic = None
+    if decision.route is AutomaticContextRoute.KNOWLEDGE and not (
+        contains_high_confidence_secret(prompt, query_prompt)
+    ):
+        semantic = LocalSemanticKnowledgeRetriever(
+            runtime.knowledge_document_repository,
+            FastEmbedLocalProvider(data_directory / "semantic-model-cache"),
+        )
+    service = _automatic_prompt_context_service(
+        runtime,
+        semantic,
+        include_semantic_memory=experimental_semantic_memory_enabled,
+    )
+    request = _automatic_prompt_context_request(
+        scope,
+        query_prompt,
+        prompt_budget,
+        decision,
+        include_semantic=semantic is not None,
+    )
+    try:
+        return service.get_context(request)
+    except LocalEmbeddingError:
+        return _automatic_prompt_context_service(
+            runtime,
+            None,
+            include_semantic_memory=experimental_semantic_memory_enabled,
+        ).get_context(
+            _automatic_prompt_context_request(
                 scope,
                 query_prompt,
                 prompt_budget,
                 decision,
-                include_semantic=semantic is not None,
+                include_semantic=False,
             )
-            try:
-                packet = service.get_context(request)
-            except LocalEmbeddingError:
-                packet = _automatic_prompt_context_service(
-                    runtime,
-                    None,
-                    include_semantic_memory=experimental_semantic_memory_enabled,
-                ).get_context(
-                    _automatic_prompt_context_request(
-                        scope,
-                        query_prompt,
-                        prompt_budget,
-                        decision,
-                        include_semantic=False,
-                    )
-                )
+        )
+
+
+def _automatic_prompt_context_for_route(
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    decision: AutomaticContextRouteDecision,
+    *,
+    experimental_semantic_memory_enabled: bool = False,
+) -> _AutomaticPromptContextResult:
+    """Fetch one route chosen after a typed answer: unfiltered, under the same ceilings."""
+
+    started = monotonic()
+    prompt = bounded_automatic_context_prompt(prompt)
+    try:
+        with build_checkpoint_runtime(
+            resolve_local_config(data_directory), dbt_parser=DbtManifestParser()
+        ) as runtime:
+            packet = _fetch_route_packet(
+                runtime,
+                data_directory,
+                scope,
+                prompt,
+                decision,
+                experimental_semantic_memory_enabled=experimental_semantic_memory_enabled,
+            )
     except (CheckpointApplicationError, OSError, ValueError, RuntimeError):
         return _AutomaticPromptContextResult(
             decision, None, (), _elapsed_milliseconds(started), failed=True
@@ -768,12 +859,9 @@ def _render_automatic_context_attachment(
         return None
 
 
-def _automatic_shadow_trace(
-    data_directory: Path, scope: MemoryScope, prompt: str
-) -> _AutomaticShadowTrace:
-    """Evaluate the deterministic shadow planner without loading a model in the hook path."""
-
-    started = monotonic()
+def _learned_route_phrases(
+    data_directory: Path, scope: MemoryScope
+) -> tuple[LearnedRoutePhrase, ...]:
     project_scope = MemoryScope(
         scope.owner_id,
         ScopeLevel.PROJECT,
@@ -782,12 +870,21 @@ def _automatic_shadow_trace(
         scope.project_id,
     )
     try:
-        learned = tuple(
+        return tuple(
             record.routing_phrase()
             for record in LocalLearnedRouteStore(data_directory).records(project_scope)
         )
     except (LearnedRouteStoreError, OSError, TypeError, ValueError):
-        learned = ()
+        return ()
+
+
+def _automatic_shadow_trace(
+    data_directory: Path, scope: MemoryScope, prompt: str
+) -> _AutomaticShadowTrace:
+    """Evaluate the deterministic shadow planner without loading a model in the hook path."""
+
+    started = monotonic()
+    learned = _learned_route_phrases(data_directory, scope)
     try:
         plan = plan_automatic_context_needs(prompt, learned_phrases=learned)
     except (OSError, RuntimeError, TypeError, ValueError):
@@ -800,54 +897,37 @@ def _automatic_prompt_context_for_hook(
     scope: MemoryScope,
     prompt: str,
     client: ClientName,
+    *,
+    replay_overrides: TypedHookOverrides | None = None,
 ) -> PromptContextAttachment:
-    """Render one selected route and persist only content-free cost metadata."""
+    """Render one selected route and persist only content-free cost metadata.
+
+    ``replay_overrides`` exists for the synthetic replay only. The ``automatic-memory-hook``
+    command never passes it, so the real hook always uses the runtime guard and the locked
+    settings (spec 2026-10-02 §3).
+    """
 
     try:
-        experimental_live_gate = (
-            PersonalSettingsStore(data_directory).load().experimental_semantic_memory_enabled
-        )
+        settings = PersonalSettingsStore(data_directory).load()
     except (OSError, TypeError, ValueError):
-        experimental_live_gate = False
+        settings = PersonalSettings()
+    experimental_live_gate = settings.experimental_semantic_memory_enabled
 
     trace = (
         _automatic_shadow_trace(data_directory, scope, prompt) if experimental_live_gate else None
     )
-    live_attachment: AutomaticContextLiveAttachment | None
-    if trace is not None and trace.plan.action in {
-        AutomaticContextShadowAction.NONE,
-        AutomaticContextShadowAction.LAZY_PULL,
-    }:
-        started = monotonic()
-        decision = choose_automatic_context_route(bounded_automatic_context_prompt(prompt))
-        result = _AutomaticPromptContextResult(
-            decision,
-            None,
-            (),
-            _elapsed_milliseconds(started),
+    render = _rules_prompt_render(
+        data_directory, scope, prompt, client, trace, experimental_live_gate=experimental_live_gate
+    )
+    modes = _typed_modes(settings, replay_overrides)
+    if modes is not None:
+        render, trace = _typed_prompt_render(
+            data_directory, scope, prompt, client, settings, modes, trace, render, replay_overrides
         )
-        live_attachment = gate_automatic_context_injection(trace.plan, lambda: None)
-        rendered = live_attachment.context
-        canonical_tokens = 0
-    else:
-        result = _automatic_prompt_context_result(
-            data_directory,
-            scope,
-            prompt,
-            client,
-            experimental_semantic_memory_enabled=experimental_live_gate,
-        )
-        maximum_tokens = result.decision.maximum_attachment_tokens
-        if trace is not None:
-            maximum_tokens = min(maximum_tokens, trace.plan.estimated_attachment_tokens)
-        rendered, canonical_tokens = _render_automatic_prompt_result(result, client, maximum_tokens)
-        live_attachment = (
-            None
-            if trace is None
-            else gate_automatic_context_injection(trace.plan, lambda: rendered)
-        )
-        if live_attachment is not None:
-            rendered = live_attachment.context
+    result = render.result
+    rendered = render.rendered
+    canonical_tokens = render.canonical_tokens
+    live_attachment = render.live_attachment
 
     delivery_keys = _automatic_prompt_delivery_keys(
         result,
@@ -929,6 +1009,456 @@ def _automatic_prompt_context_for_hook(
     except (AutomaticRouteTelemetryError, OSError, ValueError):
         return PromptContextAttachment(rendered, delivery_keys=delivery_keys)
     return PromptContextAttachment(rendered, event_id, delivery_keys)
+
+
+_SUPPRESSED_ACTIONS = frozenset(
+    {AutomaticContextShadowAction.NONE, AutomaticContextShadowAction.LAZY_PULL}
+)
+_PUSH_ACTIONS = frozenset(
+    {
+        AutomaticContextShadowAction.PUSH_STRUCTURE,
+        AutomaticContextShadowAction.PUSH_LONG_TERM,
+        AutomaticContextShadowAction.PUSH_BOTH,
+    }
+)
+_NO_RETRIEVAL_ROUTES = frozenset(
+    {
+        AutomaticContextRoute.NONE,
+        AutomaticContextRoute.DIRECT_LOOKUP,
+        AutomaticContextRoute.LOCAL_DIAGNOSTICS,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PromptRender:
+    result: _AutomaticPromptContextResult
+    rendered: str | None
+    canonical_tokens: int
+    live_attachment: AutomaticContextLiveAttachment | None
+
+
+def _rules_prompt_render(
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    client: ClientName,
+    trace: _AutomaticShadowTrace | None,
+    *,
+    experimental_live_gate: bool,
+) -> _PromptRender:
+    """Today's route selection and render, with the ADR 0046 live gate when traced."""
+
+    if trace is not None and trace.plan.action in _SUPPRESSED_ACTIONS:
+        return _suppressed_render(prompt, trace)
+    result = _automatic_prompt_context_result(
+        data_directory,
+        scope,
+        prompt,
+        client,
+        experimental_semantic_memory_enabled=experimental_live_gate,
+    )
+    return _render_selected_result(result, client, trace)
+
+
+def _suppressed_render(prompt: str, trace: _AutomaticShadowTrace) -> _PromptRender:
+    started = monotonic()
+    decision = choose_automatic_context_route(bounded_automatic_context_prompt(prompt))
+    result = _AutomaticPromptContextResult(decision, None, (), _elapsed_milliseconds(started))
+    live_attachment = gate_automatic_context_injection(trace.plan, lambda: None)
+    return _PromptRender(result, live_attachment.context, 0, live_attachment)
+
+
+def _render_selected_result(
+    result: _AutomaticPromptContextResult,
+    client: ClientName,
+    trace: _AutomaticShadowTrace | None,
+) -> _PromptRender:
+    maximum_tokens = result.decision.maximum_attachment_tokens
+    if trace is not None:
+        maximum_tokens = min(maximum_tokens, trace.plan.estimated_attachment_tokens)
+    rendered, canonical_tokens = _render_automatic_prompt_result(result, client, maximum_tokens)
+    live_attachment = (
+        None if trace is None else gate_automatic_context_injection(trace.plan, lambda: rendered)
+    )
+    if live_attachment is not None:
+        rendered = live_attachment.context
+    return _PromptRender(result, rendered, canonical_tokens, live_attachment)
+
+
+def _typed_modes(
+    settings: PersonalSettings, overrides: TypedHookOverrides | None
+) -> TypedHookModes | None:
+    """Active hook modes, or ``None`` for today's path; a failure here is ``None`` too (§7).
+
+    With the master switch off and no overrides, nothing typed is imported, so a hook process
+    never pays for ``asyncio``.
+    """
+
+    try:
+        if overrides is None and not settings.experimental_typed_decisions_enabled:
+            return None
+        from mnemo_memory.apps.cli.typed_decision_hook import typed_hook_modes
+
+        modes = typed_hook_modes(settings) if overrides is None else overrides.modes
+        return modes if modes.any_on else None
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class _TypedLocalInputs:
+    skills: tuple[ProjectSkill, ...]
+    skills_over_limit: bool
+    pinned_item_ids: frozenset[str]
+
+
+def _typed_local_inputs(
+    data_directory: Path,
+    scope: MemoryScope,
+    client: ClientName,
+    packet: ContextPacket | None,
+    *,
+    list_skills: bool,
+) -> _TypedLocalInputs:
+    """Local preparation for the typed step (spec §3 step 2): metadata only, nothing sent.
+
+    The skills are listed only when skill pick is on, and pin state is read only for a
+    pre-fetched packet whose notes may be checked. Keyword discovery is never repeated: the
+    rules path already ran it wherever today's hook does.
+    """
+
+    if not list_skills and packet is None:
+        return _TypedLocalInputs((), False, frozenset())
+    project_scope = MemoryScope(
+        scope.owner_id,
+        ScopeLevel.PROJECT,
+        scope.visibility,
+        scope.workspace_id,
+        scope.project_id,
+    )
+    with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+        listing = CurrentSkillListing((), False)
+        if list_skills:
+            if runtime.knowledge_document_repository is None:
+                raise RuntimeError("knowledge repository is unavailable")
+            listing = KnowledgeDocumentSkillRegistry(
+                runtime.knowledge_document_repository
+            ).current_skill_listing(project_scope, client)
+        pinned = frozenset() if packet is None else _pinned_approved_item_ids(runtime, packet)
+    return _TypedLocalInputs(listing.skills, listing.more_than_limit, pinned)
+
+
+def _pinned_approved_item_ids(runtime: CheckpointRuntime, packet: ContextPacket) -> frozenset[str]:
+    """Pinned approved events in ``packet``; an unreadable pin state counts as pinned."""
+
+    pinned: set[str] = set()
+    for item in packet.episodic_memories:
+        if not item.item_id.startswith("approved-episodic:"):
+            continue
+        try:
+            record = runtime.repository.get_approved_event_record(
+                item.source_scope,
+                EventId.from_string(item.item_id.removeprefix("approved-episodic:")),
+            )
+        except Exception:
+            pinned.add(item.item_id)  # keep is the safe side
+            continue
+        if record.pinned:
+            pinned.add(item.item_id)
+    return frozenset(pinned)
+
+
+def _runtime_guard_factory(
+    settings: PersonalSettings, data_directory: Path
+) -> Callable[[TypedDecisionRecorder], GuardedTypedDecisionClassifier | None]:
+    from mnemo_memory.apps.cli.typed_decision_composition import (
+        build_runtime_typed_decision_classifier,
+    )
+
+    def build(recorder: TypedDecisionRecorder) -> GuardedTypedDecisionClassifier | None:
+        return build_runtime_typed_decision_classifier(
+            settings, data_directory=data_directory, recorder=recorder
+        )
+
+    return build
+
+
+def _rendered_item_ids(rendered: str | None) -> frozenset[str]:
+    """IDs on the ``MNEMO_ITEM`` lines of one automatic render: the notes the agent sees."""
+
+    if rendered is None:
+        return frozenset()
+    item_ids: set[str] = set()
+    for line in rendered.split("\n"):
+        if not line.startswith("MNEMO_ITEM "):
+            continue
+        value = json.loads(line.removeprefix("MNEMO_ITEM "))
+        item_id = value.get("item_id") if isinstance(value, dict) else None
+        if isinstance(item_id, str):
+            item_ids.add(item_id)
+    return frozenset(item_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _TypedApplication:
+    render: _PromptRender
+    trace: _AutomaticShadowTrace | None
+    notes_dropped: int
+
+
+def _typed_prompt_render(
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    client: ClientName,
+    settings: PersonalSettings,
+    modes: TypedHookModes,
+    trace: _AutomaticShadowTrace | None,
+    rules: _PromptRender,
+    overrides: TypedHookOverrides | None,
+) -> tuple[_PromptRender, _AutomaticShadowTrace | None]:
+    """Run the typed step on top of today's result; any exception keeps today's result.
+
+    The whole step is wrapped (spec §7): the module import, the local preparation, the Jev
+    requests, the combine and the live application. The hook's own outer catch would attach
+    no context at all.
+    """
+
+    started = monotonic()
+    try:
+        from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+        bounded = bounded_automatic_context_prompt(prompt)
+        learned = _learned_route_phrases(data_directory, scope)
+        rules_plan = (
+            trace.plan
+            if trace is not None
+            else plan_automatic_context_needs(bounded, learned_phrases=learned)
+        )
+        # Filler checks run only on the notes a push action pre-fetched (spec §4.2).
+        checked = (
+            rules.result.packet
+            if modes.relevance is not TypedDecisionMode.OFF and rules_plan.action in _PUSH_ACTIONS
+            else None
+        )
+        local = _typed_local_inputs(
+            data_directory,
+            scope,
+            client,
+            checked,
+            list_skills=modes.skill is not TypedDecisionMode.OFF,
+        )
+        step = typed.TypedStepInput(
+            prompt=bounded,
+            modes=modes,
+            hard_rule=rules_plan.hard_rule,
+            rules_plan=rules_plan,
+            rules_route=rules.result.decision.route,
+            learned_phrases=learned,
+            skill_names=tuple(skill.name for skill in local.skills),
+            skills_over_limit=local.skills_over_limit,
+            keyword_skill_names=tuple(
+                candidate.skill.name for candidate in rules.result.discovered_skills
+            ),
+            filler_candidates=(
+                ()
+                if checked is None
+                else typed.filler_candidates(
+                    checked,
+                    pinned_item_ids=local.pinned_item_ids,
+                    rendered_item_ids=_rendered_item_ids(rules.rendered),
+                )
+            ),
+        )
+        guard_factory = (
+            overrides.guard_factory
+            if overrides is not None
+            else _runtime_guard_factory(settings, data_directory)
+        )
+        decisions = typed.decide_typed_prompt(guard_factory, step, started=started)
+        if overrides is not None and overrides.observer is not None:
+            with suppress(Exception):
+                overrides.observer(step, decisions)
+        applied = _apply_typed_decisions(
+            data_directory, scope, prompt, client, trace, rules, decisions, local, step
+        )
+    except Exception:
+        return rules, trace
+    return applied.render, applied.trace
+
+
+def _apply_typed_decisions(
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    client: ClientName,
+    trace: _AutomaticShadowTrace | None,
+    rules: _PromptRender,
+    decisions: TypedPromptDecisions,
+    local: _TypedLocalInputs,
+    step: TypedStepInput,
+) -> _TypedApplication:
+    """Apply live answers on top of today's result (spec §4); shadow answers change nothing."""
+
+    from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+    gate_trace = trace
+    memory_route: AutomaticContextRoute | None = None
+    # Spec §6 lock 2: a live memory need applies only behind the semantic-memory gate (a
+    # trace). Without it, which only replay overrides allow, the answer is recorded, not applied.
+    if decisions.typed_needs is not None and trace is not None:
+        typed_plan = plan_automatic_context_needs(
+            step.prompt, learned_phrases=step.learned_phrases, typed_needs=decisions.typed_needs
+        )
+        gate_trace = _AutomaticShadowTrace(typed_plan, trace.shadow_duration_ms)
+        memory_route = decisions.memory_route
+    render = rules
+    if gate_trace is not None and gate_trace.plan.action in _SUPPRESSED_ACTIONS:
+        if gate_trace is not trace:
+            render = _suppressed_render(prompt, gate_trace)
+    elif gate_trace is not trace or decisions.skill is not None:
+        render = _typed_selected_render(
+            data_directory,
+            scope,
+            prompt,
+            client,
+            gate_trace,
+            rules,
+            _effective_skill_candidates(
+                rules.result.discovered_skills, local.skills, decisions.skill, client
+            ),
+            memory_route,
+        )
+    dropped = 0
+    # Drops apply only to the pre-fetched rules packet; a changed route stays unfiltered.
+    if decisions.drop_item_ids and render.result is rules.result:
+        render, dropped = _with_filler_drops(render, client, gate_trace, decisions.drop_item_ids)
+    if decisions.show_hint:
+        render = _with_rendered(render, typed.with_task_size_hint(render.rendered))
+    return _TypedApplication(render, gate_trace, dropped)
+
+
+def _typed_selected_render(
+    data_directory: Path,
+    scope: MemoryScope,
+    prompt: str,
+    client: ClientName,
+    trace: _AutomaticShadowTrace | None,
+    rules: _PromptRender,
+    candidates: tuple[SkillDiscoveryCandidate, ...],
+    memory_route: AutomaticContextRoute | None,
+) -> _PromptRender:
+    """Re-select the route after live answers when ``trace`` pushes (spec §4.1, §4.4).
+
+    A hard route is never changed. Skill discovery holds when the effective candidates still
+    trigger it; otherwise the live memory route, else today's retrieval route, decides. The
+    same route reuses today's pre-fetched packet; any other route is fetched now, after the
+    answer, unfiltered.
+    """
+
+    if rules.result.decision.route in _NO_RETRIEVAL_ROUTES:
+        return rules  # Jev never overrides a hard route
+    bounded = bounded_automatic_context_prompt(prompt)
+    decision = choose_automatic_context_route(bounded, skill_candidate_count=len(candidates))
+    if decision.route is AutomaticContextRoute.SKILL_DISCOVERY:
+        return _render_selected_result(
+            _AutomaticPromptContextResult(decision, None, candidates, 0), client, trace
+        )
+    if memory_route is not None:
+        decision = typed_route_decision(memory_route)
+    if decision.route is rules.result.decision.route and rules.result.packet is not None:
+        return _render_selected_result(rules.result, client, trace)
+    result = _automatic_prompt_context_for_route(
+        data_directory,
+        scope,
+        prompt,
+        decision,
+        experimental_semantic_memory_enabled=trace is not None,
+    )
+    return _render_selected_result(result, client, trace)
+
+
+def _effective_skill_candidates(
+    keyword: tuple[SkillDiscoveryCandidate, ...],
+    listed: tuple[ProjectSkill, ...],
+    accepted: str | None,
+    client: ClientName,
+) -> tuple[SkillDiscoveryCandidate, ...]:
+    """Live skill pick: one named skill, none, or (unsure) today's keyword candidates."""
+
+    from mnemo_memory.packages.model_gateway.decision_axes import SKILL_PICK_NONE
+
+    if accepted is None:
+        return keyword
+    if accepted == SKILL_PICK_NONE:
+        return ()
+    selected = next((skill for skill in listed if skill.name == accepted), None)
+    if selected is None:
+        return keyword  # not a listed skill: keep keyword matching
+    return (SkillDiscoveryCandidate(selected, normalize_agent_client(client), 0),)
+
+
+def _with_filler_drops(
+    render: _PromptRender,
+    client: ClientName,
+    trace: _AutomaticShadowTrace | None,
+    drop_item_ids: tuple[str, ...],
+) -> tuple[_PromptRender, int]:
+    """Drop judged filler, one ``lower_rank`` omission per note, never refilling (§4.2, §5).
+
+    Only notes ``render`` shows can be dropped. A re-render is accepted only when it shows
+    exactly ``render``'s items minus the drops, plus every drop's omission line:
+    - freed space must not admit a note ``render`` did not show. Only drops ahead of that
+      note can make room for it (render order follows packet order for notes), so the drop
+      nearest ahead of it is cancelled and the rest are tried again; with no drop ahead of
+      it, every drop is cancelled;
+    - a note whose omission line does not fit is kept: its drop is cancelled (spec §5.2).
+    The drop set shrinks every round, so this ends after at most 16 re-renders.
+    """
+
+    from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+    packet = render.result.packet
+    if packet is None:
+        return render, 0
+    shown = _rendered_item_ids(render.rendered)
+    order = {item.item_id: index for index, item in enumerate(packet.items)}
+    drops = tuple(item_id for item_id in drop_item_ids if item_id in shown)
+    while drops:
+        reduced, notices = typed.without_filler_notes(packet, drops)
+        if not notices:
+            break
+        applied = tuple(notice.item_id for notice in notices)
+        candidate = _render_selected_result(replace(render.result, packet=reduced), client, trace)
+        visible = _rendered_item_ids(candidate.rendered)
+        admitted = visible - shown
+        if admitted:
+            first = min(order[item_id] for item_id in admitted)
+            ahead = [item_id for item_id in applied if order[item_id] < first]
+            if not ahead:
+                break
+            nearest = max(ahead, key=order.__getitem__)
+            drops = tuple(item_id for item_id in applied if item_id != nearest)
+            continue
+        lines = set((candidate.rendered or "").split("\n"))
+        unfit = {notice.item_id for notice in notices if typed.omission_line(notice) not in lines}
+        if unfit:
+            drops = tuple(item_id for item_id in applied if item_id not in unfit)
+            continue
+        if visible != shown - set(applied):
+            break
+        return candidate, len(notices)
+    return render, 0
+
+
+def _with_rendered(render: _PromptRender, rendered: str) -> _PromptRender:
+    attachment = render.live_attachment
+    if attachment is not None:
+        attachment = replace(
+            attachment, context=rendered, injected_context_tokens=(len(rendered) + 3) // 4
+        )
+    return replace(render, rendered=rendered, live_attachment=attachment)
 
 
 def _automatic_prompt_delivery_keys(
