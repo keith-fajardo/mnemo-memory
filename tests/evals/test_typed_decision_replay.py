@@ -4,22 +4,37 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import scripts.run_typed_decision_replay as replay_cli
+from mnemo_memory.apps.cli import main as cli
+from mnemo_memory.packages.application import (
+    LocalConfig,
+    RecordApprovedEpisodicEvent,
+    build_checkpoint_runtime,
+)
+from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
+from mnemo_memory.packages.domain import ApprovedEventKind
 from scripts.typed_decision_evaluation import relevance_notes
 from scripts.typed_decision_replay import (
+    NOTE_BATCH,
+    SEED_MARKER,
     ReplayCase,
     ReplayChildError,
+    ReplayRefusedError,
     ReplayRequest,
     ReplayResult,
     ReplaySeed,
+    evidence,
     find_case,
     replay_cases,
     replay_notes,
+    replay_request,
     run_case_in_fresh_process,
     run_replay,
     run_replay_case,
@@ -38,6 +53,7 @@ MEMORY_LABEL = {
     "structure": "code_structure",
     "none": "nothing",
 }
+FAKE_ENVIRON = {"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY}
 
 
 class ReplayOracle:
@@ -97,7 +113,8 @@ def test_replay_cases_come_only_from_fixtures_and_are_unique() -> None:
     assert counts[("dev", "memory")] == 60 and counts[("holdout", "memory")] == 40
     assert counts[("dev", "skill")] == 40 and counts[("holdout", "skill")] == 24
     assert counts[("dev", "tier")] == 40
-    assert counts[("dev", "notes")] == 14 and counts[("holdout", "notes")] == 5
+    assert NOTE_BATCH == 3
+    assert counts[("dev", "notes")] == 23 and counts[("holdout", "notes")] == 8
     keys = [(case.set_name, case.group, case.case_id) for case in cases]
     assert len(keys) == len(set(keys))
     with pytest.raises(ValueError, match="synthetic fixture"):
@@ -111,7 +128,7 @@ def test_dev_replay_notes_are_the_phase_one_relevance_notes() -> None:
     assert len({note_id for note_id, _, _ in replayed}) == len(replayed) == 69
 
 
-def test_seed_maps_every_note_and_event_to_its_category(tmp_path: Path) -> None:
+def test_seed_keeps_events_apart_from_notes_and_maps_every_category(tmp_path: Path) -> None:
     seed = seed_replay_set(tmp_path, "holdout")
     knowledge = [key for key in seed.categories if key.startswith("knowledge:")]
     events = [key for key in seed.categories if key.startswith("approved-episodic:")]
@@ -119,25 +136,57 @@ def test_seed_maps_every_note_and_event_to_its_category(tmp_path: Path) -> None:
     assert len(events) == 4
     assert set(seed.categories.values()) == {"relevant", "noise"}
     assert (seed.data_directory / "settings.json").exists()
+    assert (seed.data_directory / SEED_MARKER).exists()
+    assert seed.project_directory != seed.notes_project_directory
+    assert not (seed.notes_project_directory / "skills").exists()
+    assert not (seed.project_directory / "notes").exists()
+    probe = find_case("holdout", "notes", "notes-holdout-b00")
+    assert replay_request(seed, probe, "typed").project_directory == str(
+        seed.notes_project_directory
+    )
+    memory = find_case("holdout", "memory", "h-prior-01")
+    assert replay_request(seed, memory, "rules").project_directory == str(seed.project_directory)
 
 
-def _in_process(oracle: ReplayOracle) -> Callable[[ReplayRequest], ReplayResult]:
+def _in_process(
+    transport: Callable[[str, bytes, Mapping[str, str], float], bytes],
+) -> Callable[[ReplayRequest], ReplayResult]:
     def run(request: ReplayRequest) -> ReplayResult:
-        return run_replay_case(
-            request, environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY}, jev_transport=oracle
-        )
+        return run_replay_case(request, environ=FAKE_ENVIRON, jev_transport=transport)
 
     return run
+
+
+@pytest.mark.parametrize("set_name", ["holdout", "dev"])
+def test_every_seeded_note_is_checked_under_a_fake_that_answers_everything(
+    tmp_path: Path, set_name: str
+) -> None:
+    seed = seed_replay_set(tmp_path, set_name)
+    probes = [case for case in replay_cases() if (case.set_name, case.group) == (set_name, "notes")]
+    run = _in_process(ReplayOracle())
+    results = [run(replay_request(seed, probe, "typed")) for probe in probes]
+    notes = {key for key in seed.categories if key.startswith("knowledge:")}
+    checked = {
+        key
+        for result in results
+        for item_id in result.checked_item_ids
+        for key in notes
+        if item_id.startswith(key)
+    }
+    assert {result.front_door_outcome for result in results} == {"answered"}
+    assert checked == notes
 
 
 def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> None:
     seed = seed_replay_set(tmp_path, "holdout")
     all_cases = [case for case in replay_cases() if case.set_name == "holdout"]
-    subset = (
-        [case for case in all_cases if case.group == "memory"][:4]
-        + [case for case in all_cases if case.group == "skill"][:3]
-        + [case for case in all_cases if case.group == "notes"][:1]
-    )
+    hard_rule = find_case("holdout", "memory", "h-structure-04")
+    subset = [
+        *[case for case in all_cases if case.group == "memory"][:4],
+        hard_rule,
+        *[case for case in all_cases if case.group == "skill"][:3],
+        *[case for case in all_cases if case.group == "notes"][:1],
+    ]
     oracle = ReplayOracle()
     results = run_replay({"holdout": seed}, subset, _in_process(oracle))
     assert len(results) == 2 * len(subset)
@@ -146,6 +195,9 @@ def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> Non
     for case in subset:
         rules = by_key[(case.case_id, "rules")]
         assert rules.checked_item_ids == () and rules.cap_hit is False
+        assert rules.front_door_outcome is None and rules.hard_rule is None
+        assert by_key[(case.case_id, "typed")].front_door_outcome == "answered"
+    assert by_key[(hard_rule.case_id, "typed")].hard_rule is True
     for case in (case for case in subset if case.group == "skill"):
         assert by_key[(case.case_id, "typed")].skill_pick == case.expected_skill
     notes = by_key[(subset[-1].case_id, "typed")]
@@ -155,14 +207,18 @@ def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> Non
             (value for prefix, value in seed.categories.items() if item_id.startswith(prefix)),
             None,
         )
-        if category is None:
-            continue  # a skill document matched the probe; it is not a scored note
+        assert category is not None  # the notes project holds only seeded notes
         assert (item_id in notes.dropped_item_ids) == (category == "noise")
     assert set(notes.applied_drop_item_ids) <= set(notes.dropped_item_ids)
 
     report = score_replay(subset, results, {"holdout": seed})
+    holdout = report["sets"]["holdout"]
     assert set(report["sets"]) == {"holdout"}
-    assert report["sets"]["holdout"]["filler"]["relevant_dropped"] == 0
+    assert holdout["filler"]["relevant_dropped"] == 0
+    assert holdout["front_door_outcomes"] == {"answered": len(subset)}
+    assert holdout["memory_hard_rule"]["prompts"] == 1
+    assert holdout["memory_typed"]["cases"] == 4
+    assert report["gates"]["steps"] is True
     assert isinstance(report["complete"], bool)
     assert oracle.calls > 0
 
@@ -174,18 +230,43 @@ def test_skill_pick_scores_direct_keyword_discovery_when_jev_is_unsure(tmp_path:
     seed = seed_replay_set(tmp_path, "dev")
     unsure = ScriptedJevTransport()  # every answer sits below the 0.6 bar
     keyword = {"skill-01": "release-notes", "skill-08": "api-endpoint"}
-
-    def run(request: ReplayRequest) -> ReplayResult:
-        return run_replay_case(
-            request, environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY}, jev_transport=unsure
-        )
-
     cases = [find_case("dev", "skill", case_id) for case_id in keyword]
-    results = run_replay({"dev": seed}, cases, run)
+    results = run_replay({"dev": seed}, cases, _in_process(unsure))
     assert unsure.calls > 0
     assert {(result.case_id, result.arm): result.skill_pick for result in results} == {
         (case_id, arm): pick for case_id, pick in keyword.items() for arm in ("rules", "typed")
     }
+
+
+def test_a_typed_step_error_is_reported_and_not_scored_as_jev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hook falls back to the rules after the observer saw Jev's answers: nothing counts."""
+
+    seed = seed_replay_set(tmp_path, "dev")
+    oracle = ReplayOracle()
+    skill = find_case("dev", "skill", "skill-02")  # Jev says release-notes; keywords say none
+    probe = find_case("dev", "notes", "notes-dev-b00")
+    rules = [_in_process(oracle)(replay_request(seed, case, "rules")) for case in (skill, probe)]
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("apply failed")
+
+    monkeypatch.setattr(cli, "_apply_typed_decisions", fail)
+    typed = [_in_process(oracle)(replay_request(seed, case, "typed")) for case in (skill, probe)]
+    assert oracle.calls > 0
+    for result in typed:
+        assert result.front_door_outcome == "typed_step_error"
+        assert (result.checked_item_ids, result.dropped_item_ids) == ((), ())
+    assert typed[0].skill_pick == "none"
+
+    report = score_replay([skill, probe], [*rules, *typed], {"dev": seed})
+    dev = report["sets"]["dev"]
+    assert dev["front_door_outcomes"] == {"typed_step_error": 2}
+    assert dev["skill"]["step_error_prompts"] == 1 and dev["skill"]["skill_prompts"] == 0
+    assert dev["filler"]["notes_checked"] == 0
+    assert report["steps"]["step_errors"] == 2
+    assert report["gates"]["steps"] is False
 
 
 def _result(
@@ -195,11 +276,16 @@ def _result(
     tokens: int = 100,
     hook_ms: int = 100,
     cap_hit: bool = False,
+    structural: str = "no",
+    long_term: str = "yes",
     skill_pick: str = "none",
     checked: tuple[str, ...] = (),
     dropped: tuple[str, ...] = (),
     applied: tuple[str, ...] = (),
+    outcome: str | None = "answered",
+    hard_rule: bool | None = False,
 ) -> ReplayResult:
+    typed = arm == "typed"
     return ReplayResult(
         case.set_name,
         case.group,
@@ -209,23 +295,27 @@ def _result(
         hook_ms,
         None,
         cap_hit,
-        "no",
-        "yes",
+        structural,
+        long_term,
         "heavy",
         skill_pick,
         checked,
         dropped,
         applied,
+        outcome if typed else None,
+        hard_rule if typed else None,
     )
+
+
+def _seed(categories: Mapping[str, str]) -> ReplaySeed:
+    return ReplaySeed("dev", Path("."), Path("."), Path("."), categories)
 
 
 def test_score_replay_applies_the_section_8_3_gates() -> None:
     skill = ReplayCase("dev", "skill", "s1", "p1", expected_skill="test-plan")
     none = ReplayCase("dev", "skill", "s2", "p2", expected_skill="none")
     notes = ReplayCase("dev", "notes", "n1", "p3")
-    seed = ReplaySeed(
-        "dev", Path("."), Path("."), {"knowledge:good:": "relevant", "knowledge:noise:": "noise"}
-    )
+    seed = _seed({"knowledge:good:": "relevant", "knowledge:noise:": "noise"})
     cases = [skill, none, notes]
     passing = [
         _result(skill, "rules", tokens=200, skill_pick="none"),
@@ -247,6 +337,7 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
     assert report["gates"] == {
         "filler_dev": True,
         "skill_dev": True,
+        "steps": True,
         "latency": True,
         "tokens": True,
     }
@@ -286,16 +377,13 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
     """A drop rate over a few checked notes says nothing about the notes never checked."""
 
     notes = ReplayCase("dev", "notes", "n1", "p3")
-    seed = ReplaySeed(
-        "dev",
-        Path("."),
-        Path("."),
+    seed = _seed(
         {
             "knowledge:good:": "relevant",
             "knowledge:noise:": "noise",
             "knowledge:unseen:": "noise",
             "approved-episodic:event": "relevant",
-        },
+        }
     )
     results = [
         _result(notes, "rules", tokens=200),
@@ -310,6 +398,7 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
     report = score_replay([notes], results, {"dev": seed})
     filler = report["sets"]["dev"]["filler"]
     assert (filler["notes_seeded"], filler["notes_checked"]) == (3, 2)
+    assert (filler["events_seeded"], filler["events_checked"]) == (1, 0)
     assert filler["gates"] == {
         "relevant_dropped": True,
         "filler_removed": True,
@@ -318,9 +407,146 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
     assert report["gates"]["filler_dev"] is False
 
 
+def test_memory_gates_count_only_prompts_jev_was_asked() -> None:
+    """A hard-rule prompt is a rules finding (spec §4.1), never a Jev miss."""
+
+    asked = ReplayCase("dev", "memory", "asked", "p1", expected_route="prior_memory")
+    preempted = ReplayCase("dev", "memory", "preempted", "p2", expected_route="structure")
+    results = [
+        _result(asked, "rules", structural="no", long_term="unknown"),
+        _result(asked, "typed", structural="no", long_term="yes"),
+        _result(preempted, "rules", structural="no", long_term="no"),
+        _result(preempted, "typed", structural="no", long_term="no", hard_rule=True),
+    ]
+    dev = score_replay([asked, preempted], results, {"dev": _seed({})})["sets"]["dev"]
+    assert dev["memory_typed"]["cases"] == dev["memory_rules"]["cases"] == 1
+    assert dev["memory_typed"]["missed_case_ids"] == []
+    assert dev["memory_hard_rule"] == {"prompts": 1, "mismatched_case_ids": ["preempted"]}
+
+
+def test_score_replay_counts_outcomes_and_fails_on_missing_or_failed_steps() -> None:
+    timed_out = ReplayCase("dev", "memory", "m1", "p1", expected_route="prior_memory")
+    answered = ReplayCase("dev", "memory", "m2", "p2", expected_route="prior_memory")
+    results = [
+        _result(timed_out, "rules"),
+        _result(timed_out, "typed", outcome="timeout"),
+        _result(answered, "rules"),
+        _result(answered, "typed"),
+    ]
+    report = score_replay([timed_out, answered], results, {"dev": _seed({})})
+    dev = report["sets"]["dev"]
+    assert dev["front_door_outcomes"] == {"answered": 1, "timeout": 1}
+    assert dev["memory_typed"]["unavailable"] == 1 and dev["memory_rules"]["unavailable"] == 0
+    assert report["gates"]["steps"] is True
+
+    missing = [*results[:-1], replace_result(results[-1], front_door_outcome=None)]
+    report = score_replay([timed_out, answered], missing, {"dev": _seed({})})
+    assert report["sets"]["dev"]["front_door_outcomes"] == {"missing": 1, "timeout": 1}
+    assert report["steps"]["missing_outcomes"] == 1 and report["gates"]["steps"] is False
+
+
 def replace_result(result: ReplayResult, **changes: object) -> ReplayResult:
     values = {**json.loads(result.to_json()), **changes}
     return ReplayResult.from_json(json.dumps(values))
+
+
+def _no_marker(seed: ReplaySeed) -> None:
+    (seed.data_directory / SEED_MARKER).unlink()
+
+
+def _other_digest(seed: ReplaySeed) -> None:
+    path = seed.data_directory / SEED_MARKER
+    marker = json.loads(path.read_text("utf-8"))
+    path.write_text(json.dumps(marker | {"digest": "sha256:" + "0" * 64}), "utf-8")
+
+
+def _other_set(seed: ReplaySeed) -> None:
+    path = seed.data_directory / SEED_MARKER
+    marker = json.loads(path.read_text("utf-8"))
+    path.write_text(json.dumps(marker | {"set_name": "dev"}), "utf-8")
+
+
+def _refresh_notes(seed: ReplaySeed) -> None:
+    binding = LocalMemoryProjectBindingStore(seed.data_directory).get(seed.notes_project_directory)
+    assert binding is not None
+    cli._refresh_project_knowledge(seed.data_directory, binding)
+
+
+def _extra_document(seed: ReplaySeed) -> None:
+    (seed.notes_project_directory / "notes" / "extra.md").write_text(
+        "# Personal\nNot a fixture note.\n", "utf-8"
+    )
+    _refresh_notes(seed)
+
+
+def _changed_document(seed: ReplaySeed) -> None:
+    note = next((seed.notes_project_directory / "notes" / "b00").glob("*.md"))
+    note.write_text("# Replay batch b00 note\nNot the fixture text.\n", "utf-8")
+    _refresh_notes(seed)
+
+
+def _extra_event(seed: ReplaySeed) -> None:
+    binding = LocalMemoryProjectBindingStore(seed.data_directory).get(seed.project_directory)
+    assert binding is not None
+    with build_checkpoint_runtime(LocalConfig.defaults(seed.data_directory)) as runtime:
+        runtime.checkpoint_service.record_approved_event(
+            RecordApprovedEpisodicEvent(
+                binding.checkpoint_scope,
+                ApprovedEventKind.DECISION,
+                "Not a fixture note.",
+                "replay:extra",
+                (evidence("extra"),),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("alter", "case_id", "message"),
+    [
+        (_no_marker, "notes-holdout-b00", "no seed marker"),
+        (_other_digest, "notes-holdout-b00", "does not match the fixtures"),
+        (_other_set, "notes-holdout-b00", "does not match the request"),
+        (_extra_document, "notes-holdout-b00", "document that was not seeded"),
+        (_changed_document, "notes-holdout-b00", "document that was not seeded"),
+        (_extra_event, "h-prior-01", "event that was not seeded"),
+    ],
+)
+def test_typed_run_refuses_a_directory_that_is_not_exactly_the_seed(
+    tmp_path: Path, alter: Callable[[ReplaySeed], None], case_id: str, message: str
+) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    alter(seed)
+    case = next(case for case in replay_cases() if case.case_id == case_id)
+    transport = ScriptedJevTransport()
+    with pytest.raises(ReplayRefusedError, match=message):
+        run_replay_case(
+            replay_request(seed, case, "typed"), environ=FAKE_ENVIRON, jev_transport=transport
+        )
+    assert transport.calls == 0
+
+
+def test_typed_run_refuses_a_project_the_marker_does_not_name(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    case = find_case("holdout", "memory", "h-prior-01")
+    request = replay_request(seed, case, "typed")
+    stray = ReplayRequest(
+        request.set_name,
+        request.group,
+        request.case_id,
+        request.arm,
+        request.data_directory,
+        str(tmp_path),
+    )
+    transport = ScriptedJevTransport()
+    with pytest.raises(ReplayRefusedError, match="not a seeded project"):
+        run_replay_case(stray, environ=FAKE_ENVIRON, jev_transport=transport)
+    assert transport.calls == 0
+
+
+def test_typed_run_without_a_test_transport_needs_authorization(tmp_path: Path) -> None:
+    request = ReplayRequest("dev", "memory", "prior-01", "typed", str(tmp_path), str(tmp_path))
+    with pytest.raises(ReplayRefusedError, match="needs authorization"):
+        run_replay_case(request, environ=FAKE_ENVIRON)
 
 
 def test_cli_refuses_without_authorization_or_key(tmp_path: Path) -> None:
@@ -331,69 +557,84 @@ def test_cli_refuses_without_authorization_or_key(tmp_path: Path) -> None:
         raise AssertionError("no case may run without authorization")
 
     args = ["--run-id", "test-run", "--results-root", str(tmp_path)]
-    assert (
-        replay_cli.main(args, environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY}, runner=runner) == 2
-    )
+    assert replay_cli.main(args, environ=FAKE_ENVIRON, runner=runner) == 2
     assert replay_cli.main([*args, "--live-calls-authorized"], environ={}, runner=runner) == 2
     assert replay_cli.main(["--run-id", "bad id", "--live-calls-authorized"], environ={}) == 2
     assert calls == [] and not (tmp_path / "test-run").exists()
+
+
+def _child(
+    request: ReplayRequest | dict[str, str],
+    *flags: str,
+    environ: Mapping[str, str] | None = None,
+    typed_import_ms: int = 0,
+) -> tuple[int, str]:
+    value = request if isinstance(request, dict) else _as_dict(request)
+    stdout = io.StringIO()
+    code = replay_cli.main(
+        ["--child", *flags],
+        environ={} if environ is None else environ,
+        stdin=io.StringIO(json.dumps(value)),
+        stdout=stdout,
+        typed_import_ms=typed_import_ms,
+    )
+    return code, stdout.getvalue()
 
 
 def test_child_refuses_unknown_cases_and_unauthorized_typed_runs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     request = ReplayRequest("dev", "memory", "prior-01", "typed", str(tmp_path), str(tmp_path))
-    unauthorized = replay_cli.main(
-        ["--child"],
-        environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY},
-        stdin=io.StringIO(json.dumps(_as_dict(request))),
-        stdout=io.StringIO(),
-    )
-    assert unauthorized == 2
-    no_key = replay_cli.main(
-        ["--child", "--live-calls-authorized"],
-        environ={},
-        stdin=io.StringIO(json.dumps(_as_dict(request))),
-        stdout=io.StringIO(),
-    )
-    assert no_key == 2
+    assert _child(request, environ=FAKE_ENVIRON) == (2, "")
+    assert _child(request, "--live-calls-authorized") == (2, "")
     unknown = _as_dict(request) | {"case_id": "not-a-fixture-case", "arm": "rules"}
-    assert (
-        replay_cli.main(
-            ["--child"],
-            environ={},
-            stdin=io.StringIO(json.dumps(unknown)),
-            stdout=io.StringIO(),
-        )
-        == 2
-    )
+    assert _child(unknown) == (2, "")
     assert "replay case is not in a synthetic fixture" in capsys.readouterr().err
     with_prompt = _as_dict(request) | {"arm": "rules", "prompt": "Pick up the release work."}
-    assert (
-        replay_cli.main(
-            ["--child"],
-            environ={},
-            stdin=io.StringIO(json.dumps(with_prompt)),
-            stdout=io.StringIO(),
-        )
-        == 2
-    )
+    assert _child(with_prompt) == (2, "")
     assert "replay child request is invalid" in capsys.readouterr().err
 
 
-def test_child_reports_other_failures_generically_without_prompt_text(
+def test_child_refuses_an_unseeded_directory_with_a_fixed_message(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    unbound = ReplayRequest("dev", "memory", "prior-01", "rules", str(tmp_path), str(tmp_path))
-    stdout = io.StringIO()
-    code = replay_cli.main(
-        ["--child"], environ={}, stdin=io.StringIO(json.dumps(_as_dict(unbound))), stdout=stdout
-    )
+    unseeded = ReplayRequest("dev", "memory", "prior-01", "rules", str(tmp_path), str(tmp_path))
+    assert _child(unseeded) == (2, "")
+    assert "refusing: replay data directory has no seed marker" in capsys.readouterr().err
+
+
+def test_child_reports_other_failures_by_type_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompt = find_case("dev", "memory", "prior-01").prompt
+
+    def fail(request: ReplayRequest, **kwargs: object) -> ReplayResult:
+        raise RuntimeError(prompt)
+
+    monkeypatch.setattr(replay_cli, "run_replay_case", fail)
+    request = ReplayRequest("dev", "memory", "prior-01", "rules", str(tmp_path), str(tmp_path))
+    assert _child(request) == (2, "")
     error = capsys.readouterr().err
-    assert code == 2 and stdout.getvalue() == ""
-    assert "replay case failed" in error
-    assert "synthetic fixture" not in error
-    assert find_case("dev", "memory", "prior-01").prompt not in error
+    assert "replay case failed (RuntimeError)" in error
+    assert "synthetic fixture" not in error and prompt not in error
+
+
+def test_child_adds_the_typed_import_time_to_typed_cases_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake(request: ReplayRequest, **kwargs: object) -> ReplayResult:
+        return _result(find_case(request.set_name, request.group, request.case_id), request.arm)
+
+    monkeypatch.setattr(replay_cli, "run_replay_case", fake)
+    hook_ms = {}
+    for arm in ("rules", "typed"):
+        request = ReplayRequest("dev", "memory", "prior-01", arm, str(tmp_path), str(tmp_path))
+        code, output = _child(
+            request, "--live-calls-authorized", environ=FAKE_ENVIRON, typed_import_ms=40
+        )
+        assert code == 0
+        hook_ms[arm] = ReplayResult.from_json(output).hook_ms
+    assert hook_ms == {"rules": 100, "typed": 140}
 
 
 def _as_dict(request: ReplayRequest) -> dict[str, str]:
@@ -411,15 +652,7 @@ def test_fresh_process_runner_runs_a_rules_case(tmp_path: Path) -> None:
     seed = seed_replay_set(tmp_path, "holdout")
     case = next(case for case in replay_cases() if case.set_name == "holdout")
     result = run_case_in_fresh_process(
-        ReplayRequest(
-            "holdout",
-            case.group,
-            case.case_id,
-            "rules",
-            str(seed.data_directory),
-            str(seed.project_directory),
-        ),
-        live_calls_authorized=False,
+        replay_request(seed, case, "rules"), live_calls_authorized=False
     )
     assert (result.case_id, result.arm) == (case.case_id, "rules")
     assert result.hook_ms >= 0 and result.checked_item_ids == ()
@@ -434,6 +667,44 @@ def test_fresh_process_runner_raises_without_echoing_a_failed_child(tmp_path: Pa
     assert "refusing" not in str(raised.value)
 
 
+def test_children_get_exactly_the_environment_they_are_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = find_case("dev", "memory", "prior-01")
+    request = ReplayRequest("dev", "memory", "prior-01", "rules", str(tmp_path), str(tmp_path))
+    seen: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs, command=command)
+        return subprocess.CompletedProcess(command, 0, _result(case, "rules").to_json(), "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_case_in_fresh_process(request, live_calls_authorized=True, environ={"ONLY": "this"})
+    assert seen["env"] == {"ONLY": "this"}
+    assert seen["command"][1:] == [
+        "-m",
+        "scripts.typed_decision_replay_child",
+        "--live-calls-authorized",
+    ]
+    monkeypatch.undo()
+
+    forwarded: list[Mapping[str, str] | None] = []
+    oracle = ReplayOracle()
+
+    def fresh(request: ReplayRequest, **kwargs: Any) -> ReplayResult:
+        forwarded.append(kwargs["environ"])
+        assert kwargs["live_calls_authorized"] is True
+        return run_replay_case(request, environ=FAKE_ENVIRON, jev_transport=oracle)
+
+    small = (find_case("holdout", "memory", "h-prior-01"),)
+    monkeypatch.setattr(replay_cli, "replay_cases", lambda: small)
+    monkeypatch.setattr(replay_cli, "run_case_in_fresh_process", fresh)
+    environ = FAKE_ENVIRON | {"MARK": "1"}
+    args = ["--run-id", "env-run", "--results-root", str(tmp_path), "--live-calls-authorized"]
+    assert replay_cli.main(args, environ=environ) in {0, 1}
+    assert forwarded == [environ, environ]
+
+
 def test_cli_writes_a_report_with_an_in_process_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -443,13 +714,12 @@ def test_cli_writes_a_report_with_an_in_process_runner(
         if case.case_id in {"prior-01", "skill-01", "notes-dev-b00", "h-prior-01", "light-01"}
     )
     monkeypatch.setattr(replay_cli, "replay_cases", lambda: small)
-    oracle = ReplayOracle()
     code = replay_cli.main(
         ["--run-id", "test-run", "--results-root", str(tmp_path), "--live-calls-authorized"],
-        environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY},
-        runner=_in_process(oracle),
+        environ=FAKE_ENVIRON,
+        runner=_in_process(ReplayOracle()),
     )
     report = json.loads((tmp_path / "test-run" / "report.json").read_text("utf-8"))
     assert code in {0, 1}
     assert report["run"] == {"run_id": "test-run", "prompts": 5, "requests": 10}
-    assert set(report["gates"]) >= {"latency", "tokens", "tier"}
+    assert set(report["gates"]) >= {"latency", "tokens", "tier", "steps"}

@@ -16,6 +16,7 @@ import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TextIO
@@ -24,6 +25,7 @@ from scripts.typed_decision_evaluation import REPOSITORY_ROOT
 from scripts.typed_decision_replay import (
     ARMS,
     SETS,
+    ReplayRefusedError,
     ReplayRequest,
     ReplayResult,
     Runner,
@@ -47,7 +49,14 @@ def main(
     runner: Runner | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
+    typed_import_ms: int = 0,
 ) -> int:
+    """Run the replay, or with ``--child`` one case.
+
+    ``typed_import_ms`` is set only by ``scripts.typed_decision_replay_child``: the cold import
+    of the typed hook module that the real hook pays inside the hook call.
+    """
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id")
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
@@ -57,7 +66,11 @@ def main(
     variables = os.environ if environ is None else environ
     if args.child:
         return _child(
-            args.live_calls_authorized, variables, stdin or sys.stdin, stdout or sys.stdout
+            args.live_calls_authorized,
+            variables,
+            stdin or sys.stdin,
+            stdout or sys.stdout,
+            typed_import_ms,
         )
     if args.run_id is None or not _RUN_ID.fullmatch(args.run_id):
         return _refuse("--run-id must be 1-64 letters, digits, '.', '_' or '-'")
@@ -70,7 +83,7 @@ def main(
         return _refuse(f"{output} already exists")
 
     def fresh(request: ReplayRequest) -> ReplayResult:
-        return run_case_in_fresh_process(request, live_calls_authorized=True)
+        return run_case_in_fresh_process(request, live_calls_authorized=True, environ=variables)
 
     run: Runner = runner or fresh
     cases = replay_cases()
@@ -87,12 +100,17 @@ def main(
 
 
 def _child(
-    live_calls_authorized: bool, environ: Mapping[str, str], stdin: TextIO, stdout: TextIO
+    live_calls_authorized: bool,
+    environ: Mapping[str, str],
+    stdin: TextIO,
+    stdout: TextIO,
+    typed_import_ms: int,
 ) -> int:
     """One replay case in this fresh process; the prompt is re-read from the fixtures.
 
-    The request carries a case ID, never prompt text. No refusal echoes prompt text, and only
-    an unknown case is reported as such; every other failure is reported generically.
+    The request carries a case ID, never prompt text. No refusal echoes prompt text or note
+    content: an unknown case and a refused seed have their own fixed messages, and every other
+    failure is reported by its exception type only.
     """
 
     try:
@@ -113,9 +131,15 @@ def _child(
     except ValueError:
         return _refuse("replay case is not in a synthetic fixture")
     try:
-        result = run_replay_case(request, environ=environ)
-    except Exception:
-        return _refuse("replay case failed")
+        result = run_replay_case(
+            request, environ=environ, live_calls_authorized=live_calls_authorized
+        )
+    except ReplayRefusedError as error:
+        return _refuse(str(error))
+    except Exception as error:
+        return _refuse(f"replay case failed ({type(error).__name__})")
+    if request.arm == "typed":
+        result = replace(result, hook_ms=result.hook_ms + typed_import_ms)
     stdout.write(result.to_json() + "\n")
     return 0
 

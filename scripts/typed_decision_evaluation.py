@@ -174,13 +174,13 @@ def score_front_door(rows: Sequence[FrontDoorRow]) -> dict[str, Any]:
     missed = sorted(
         row.case_id for row in rows if derived[row.case_id] != _EXPECTED_NEED[row.expected_route]
     )
-    accuracy = _share(len(rows) - len(missed), len(rows))
-    prior_recall = _share(sum(row.long_term is NeedAnswer.YES for row in prior), len(prior))
-    structure_recall = _share(
+    accuracy = share(len(rows) - len(missed), len(rows))
+    prior_recall = share(sum(row.long_term is NeedAnswer.YES for row in prior), len(prior))
+    structure_recall = share(
         sum(row.structure is NeedAnswer.YES for row in structure), len(structure)
     )
     # No "none" predictions leaves precision undefined; 0.0 keeps that from passing the gate.
-    none_precision = _share(
+    none_precision = share(
         sum(row.expected_route == "none" for row in predicted_none), len(predicted_none)
     )
     return {
@@ -203,13 +203,13 @@ def score_front_door(rows: Sequence[FrontDoorRow]) -> dict[str, Any]:
 
 def score_latency(durations_ms: Sequence[int]) -> dict[str, Any]:
     ordered = sorted(durations_ms)
-    share_over = _share(
+    share_over = share(
         sum(value > LATENCY_DEADLINE_MS for value in ordered), len(ordered), empty=1.0
     )
     return {
         "samples": len(ordered),
-        "p50_ms": _nearest_rank(ordered, 0.50),
-        "p95_ms": _nearest_rank(ordered, 0.95),
+        "p50_ms": nearest_rank(ordered, 0.50),
+        "p95_ms": nearest_rank(ordered, 0.95),
         "max_ms": ordered[-1] if ordered else None,
         "deadline_ms": LATENCY_DEADLINE_MS,
         "share_over_deadline": share_over,
@@ -228,7 +228,7 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
     all_dropped = sum(row.dropped for row in rows)
     durations = sorted(row.duration_ms for row in rows)
     budget_ms = FILLER_CHECK_BUDGET_SECONDS * 1_000
-    over_budget_share = _share(sum(value > budget_ms for value in durations), len(durations))
+    over_budget_share = share(sum(value > budget_ms for value in durations), len(durations))
     return {
         "candidates": len(rows),
         "relevant_dropped": dropped,
@@ -239,8 +239,8 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
         ),
         # One request per note; informational, not gated.
         "requests": len(rows),
-        "request_p50_ms": _nearest_rank(durations, 0.50),
-        "request_p95_ms": _nearest_rank(durations, 0.95),
+        "request_p50_ms": nearest_rank(durations, 0.50),
+        "request_p95_ms": nearest_rank(durations, 0.95),
         # Share of checks slower than the 0.8 s total budget for one prompt's filler checks.
         "over_budget_share": over_budget_share,
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
@@ -263,10 +263,10 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
         kinded = [row for row in arm_rows if row.expected_kind is not None]
         arms[arm] = {
             "events": len(arm_rows),
-            "worth_accuracy": _share(
+            "worth_accuracy": share(
                 sum(row.predicted_worth == row.expected_worth for row in arm_rows), len(arm_rows)
             ),
-            "kind_accuracy": _share(
+            "kind_accuracy": share(
                 sum(row.predicted_kind == row.expected_kind for row in kinded), len(kinded)
             ),
             "unanswered": sum(not row.answered for row in arm_rows),
@@ -291,13 +291,13 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
 def score_tier(rows: Sequence[TierRow]) -> dict[str, Any]:
     heavy = [row for row in rows if row.expected_tier == "heavy"]
     light = [row for row in rows if row.expected_tier == "light"]
-    heavy_recall = _share(sum(row.route == "heavy" for row in heavy), len(heavy))
+    heavy_recall = share(sum(row.route == "heavy" for row in heavy), len(heavy))
     unavailable = sum(row.reason.startswith("unavailable:") for row in rows)
     return {
         "cases": len(rows),
         "heavy_recall": heavy_recall,
-        "light_recall": _share(sum(row.route == "light" for row in light), len(light)),
-        "tool_need_accuracy": _share(
+        "light_recall": share(sum(row.route == "light" for row in light), len(light)),
+        "tool_need_accuracy": share(
             sum(row.tool_need == row.expected_tool_need for row in rows), len(rows)
         ),
         "hint_eligible": sum(row.hint for row in rows),
@@ -559,16 +559,20 @@ def _excluded_fixtures() -> dict[str, str]:
     return {}
 
 
-def _share(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
+def share(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
+    """``numerator / denominator``, or ``empty`` when there is nothing to divide by."""
+
     return numerator / denominator if denominator else empty
 
 
 def _drop_rate(rows: Sequence[RelevanceRow], category: str) -> float:
     selected = [row for row in rows if row.category == category]
-    return _share(sum(row.dropped for row in selected), len(selected))
+    return share(sum(row.dropped for row in selected), len(selected))
 
 
-def _nearest_rank(ordered: Sequence[int], quantile: float) -> int | None:
+def nearest_rank(ordered: Sequence[int], quantile: float) -> int | None:
+    """The nearest-rank percentile of already sorted values, or ``None`` for none."""
+
     if not ordered:
         return None
     return ordered[max(0, math.ceil(quantile * len(ordered)) - 1)]
