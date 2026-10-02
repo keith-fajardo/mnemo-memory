@@ -226,6 +226,41 @@ def test_drops_never_apply_to_a_route_fetched_after_the_answer(
     assert _filler_omission_ids(context) == []
 
 
+def test_a_failed_post_answer_fetch_keeps_todays_render_and_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    off = run_hook(fixture, KNOWLEDGE_PROMPT)
+    rules_event = _latest_event(fixture)
+
+    def failed(
+        data_directory: Path,
+        scope: MemoryScope,
+        prompt: str,
+        decision: AutomaticContextRouteDecision,
+        *,
+        experimental_semantic_memory_enabled: bool = False,
+    ) -> cli._AutomaticPromptContextResult:
+        return cli._AutomaticPromptContextResult(decision, None, (), 0, failed=True)
+
+    monkeypatch.setattr(cli, "_automatic_prompt_context_for_route", failed)
+    live = synthetic_overrides(
+        fixture,
+        ScriptedJevTransport({"memory_need": ("past_sessions", 0.95)}),
+        TypedHookModes(front_door=LIVE, relevance=LIVE),
+    )
+    seen = run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert off.context is not None
+    assert (seen.context, seen.delivery_keys) == (off.context, off.delivery_keys)
+    event = _latest_event(fixture)
+    assert (event.route, event.outcome, event.shadow_reason, event.shadow_action) == (
+        rules_event.route,
+        rules_event.outcome,
+        rules_event.shadow_reason,
+        rules_event.shadow_action,
+    )
+
+
 def test_front_door_live_without_the_semantic_gate_is_not_applied(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     live = synthetic_overrides(
@@ -371,17 +406,20 @@ def test_modes_off_never_import_the_typed_step(tmp_path: Path) -> None:
 
 
 def _seed_overflowing_project(root: Path) -> HookFixture:
-    """The standard project plus two long filler notes the 1,300-token render cuts.
+    """The standard project plus short notes a 1,300-token automatic render cannot all show.
 
-    Each long note renders larger than the space one dropped event frees, but smaller than the
-    space an event and a short note free together.
+    Every note renders at a similar size, so any drop frees room for a note the render cut.
     """
 
     fixture = seed_hook_fixture(root, semantic_gate=False)
-    padding = " ".join(f"w{index}" for index in range(110))
-    for name in ("extra-filler-a.md", "extra-filler-b.md"):
-        (fixture.project / "notes" / name).write_text(
-            f"# Invoice export note\n{FILLER_MARKER}: invoice export chatter {padding}\n", "utf-8"
+    for index in range(6):
+        text = (
+            f"{FILLER_MARKER}: invoice export chatter number {index} about the weather."
+            if index % 2
+            else f"The invoice export ledger rule number {index} stays fixed."
+        )
+        (fixture.project / "notes" / f"extra-{index}.md").write_text(
+            f"# Invoice export note {index}\n{text}\n", "utf-8"
         )
     cli._refresh_project_knowledge(fixture.data, fixture.binding)
     return fixture
@@ -389,11 +427,13 @@ def _seed_overflowing_project(root: Path) -> HookFixture:
 
 def test_filler_work_covers_only_rendered_notes_and_never_refills(tmp_path: Path) -> None:
     fixture = _seed_overflowing_project(tmp_path)
-    packet = cli._automatic_prompt_context_result(
+    today = cli._automatic_prompt_context_result(
         fixture.data, fixture.binding.checkpoint_scope, KNOWLEDGE_PROMPT, "codex"
-    ).packet
+    )
+    packet = today.packet
     assert packet is not None
     off = run_hook(fixture, KNOWLEDGE_PROMPT).context
+    assert off is not None
     shown = _item_ids(off)
     assert any(
         item.item_id not in shown and FILLER_MARKER in item.content for item in packet.items
@@ -407,19 +447,27 @@ def test_filler_work_covers_only_rendered_notes_and_never_refills(tmp_path: Path
         lambda step, decisions: observed.append((step, decisions)),
     )
     context = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert context is not None
     [(step, decisions)] = observed
     omitted = set(_filler_omission_ids(context))
 
+    # Without pinning, the freed space would admit a note the rules render cut.
+    reduced, _ = typed_decision_hook.without_filler_notes(packet, decisions.drop_item_ids)
+    unpinned, _ = cli._render_automatic_prompt_result(
+        replace(today, packet=reduced), "codex", today.decision.maximum_attachment_tokens
+    )
+    assert not _item_ids(unpinned) <= shown
     # Only rendered notes are filler candidates.
     checked = {candidate.item_id for candidate in step.filler_candidates}
     assert checked and checked <= shown
-    # After the drops no previously unrendered note appears: exactly the dropped notes leave.
-    assert omitted
+    # Every judged drop applies, and no previously unrendered note appears.
+    assert omitted and omitted == set(decisions.drop_item_ids)
     assert _item_ids(context) == shown - omitted
-    # The omission lines name only previously rendered IDs.
+    # The omission lines name only previously rendered IDs; the cut notes stay in the
+    # aggregate token-budget omission, and the attachment is smaller than today's.
     assert omitted <= shown
-    # A judged-filler note whose freed space would let a cut note in is kept (no refill).
-    assert omitted < set(decisions.drop_item_ids)
+    assert '"item_id":"automatic-render"' in off and '"item_id":"automatic-render"' in context
+    assert (len(context) + 3) // 4 < (len(off) + 3) // 4
 
 
 def test_skill_none_lets_live_memory_need_decide_retrieval(tmp_path: Path) -> None:

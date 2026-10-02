@@ -89,8 +89,15 @@ def render_automatic_context_packet(
     packet: ContextPacket,
     client: ContextClient,
     maximum_tokens: int,
+    *,
+    only_item_ids: frozenset[str] | None = None,
 ) -> str:
-    """Return a compact automatic-only projection within one delivery ceiling."""
+    """Return a compact automatic-only projection within one delivery ceiling.
+
+    With ``only_item_ids``, an item outside the set is treated exactly like one that did not
+    fit: it is skipped and counted in the aggregate ``token_budget`` omission. A re-render
+    pinned to the items an earlier render showed can therefore never admit a new item.
+    """
 
     if client not in _CLIENT_GUIDANCE:
         raise ValueError("unsupported context client")
@@ -98,6 +105,11 @@ def render_automatic_context_packet(
         raise TypeError("maximum_tokens must be an integer")
     if maximum_tokens <= 0:
         raise ValueError("maximum_tokens must be positive")
+    if only_item_ids is not None and (
+        not isinstance(only_item_ids, frozenset)
+        or any(not isinstance(item_id, str) for item_id in only_item_ids)
+    ):
+        raise TypeError("only_item_ids must be a frozenset of item IDs")
 
     provenance = {notice.item_id: notice for notice in packet.provenance}
     lines = _automatic_header(packet, client)
@@ -108,6 +120,9 @@ def render_automatic_context_packet(
     omitted = False
     selected_ids: set[str] = set()
     for item in _automatic_item_order(packet):
+        if only_item_ids is not None and item.item_id not in only_item_ids:
+            omitted = True
+            continue
         candidate = "MNEMO_ITEM " + _json(_automatic_rendered_item(item, provenance[item.item_id]))
         if _fits_automatic_budget(
             [*lines, candidate, _AUTOMATIC_BUDGET_OMISSION, end], maximum_tokens

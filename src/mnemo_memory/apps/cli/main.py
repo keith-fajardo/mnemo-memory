@@ -1073,11 +1073,15 @@ def _render_selected_result(
     result: _AutomaticPromptContextResult,
     client: ClientName,
     trace: _AutomaticShadowTrace | None,
+    *,
+    only_item_ids: frozenset[str] | None = None,
 ) -> _PromptRender:
     maximum_tokens = result.decision.maximum_attachment_tokens
     if trace is not None:
         maximum_tokens = min(maximum_tokens, trace.plan.estimated_attachment_tokens)
-    rendered, canonical_tokens = _render_automatic_prompt_result(result, client, maximum_tokens)
+    rendered, canonical_tokens = _render_automatic_prompt_result(
+        result, client, maximum_tokens, only_item_ids=only_item_ids
+    )
     live_attachment = (
         None if trace is None else gate_automatic_context_injection(trace.plan, lambda: rendered)
     )
@@ -1354,7 +1358,7 @@ def _typed_selected_render(
     A hard route is never changed. Skill discovery holds when the effective candidates still
     trigger it; otherwise the live memory route, else today's retrieval route, decides. The
     same route reuses today's pre-fetched packet; any other route is fetched now, after the
-    answer, unfiltered.
+    answer, unfiltered. A failed fetch raises, so the step falls back to today's render.
     """
 
     if rules.result.decision.route in _NO_RETRIEVAL_ROUTES:
@@ -1376,6 +1380,9 @@ def _typed_selected_render(
         decision,
         experimental_semantic_memory_enabled=trace is not None,
     )
+    if result.failed:
+        # Today's render already succeeded: the step-wide fallback keeps it with its own trace.
+        raise RuntimeError("the post-answer route fetch failed")
     return _render_selected_result(result, client, trace)
 
 
@@ -1407,14 +1414,11 @@ def _with_filler_drops(
 ) -> tuple[_PromptRender, int]:
     """Drop judged filler, one ``lower_rank`` omission per note, never refilling (§4.2, §5).
 
-    Only notes ``render`` shows can be dropped. A re-render is accepted only when it shows
-    exactly ``render``'s items minus the drops, plus every drop's omission line:
-    - freed space must not admit a note ``render`` did not show. Only drops ahead of that
-      note can make room for it (render order follows packet order for notes), so the drop
-      nearest ahead of it is cancelled and the rest are tried again; with no drop ahead of
-      it, every drop is cancelled;
-    - a note whose omission line does not fit is kept: its drop is cancelled (spec §5.2).
-    The drop set shrinks every round, so this ends after at most 16 re-renders.
+    Only notes ``render`` shows can be dropped. The reduced packet is re-rendered pinned to
+    the items ``render`` showed minus the drops, so freed space never admits an item the agent
+    did not see; such items stay in the aggregate ``token_budget`` omission as before. A note
+    whose omission line does not fit is kept: its drop is cancelled (spec §5.2). The drop set
+    shrinks every round, so this ends after at most 16 re-renders.
     """
 
     from mnemo_memory.apps.cli import typed_decision_hook as typed
@@ -1423,31 +1427,22 @@ def _with_filler_drops(
     if packet is None:
         return render, 0
     shown = _rendered_item_ids(render.rendered)
-    order = {item.item_id: index for index, item in enumerate(packet.items)}
     drops = tuple(item_id for item_id in drop_item_ids if item_id in shown)
     while drops:
         reduced, notices = typed.without_filler_notes(packet, drops)
         if not notices:
             break
-        applied = tuple(notice.item_id for notice in notices)
-        candidate = _render_selected_result(replace(render.result, packet=reduced), client, trace)
-        visible = _rendered_item_ids(candidate.rendered)
-        admitted = visible - shown
-        if admitted:
-            first = min(order[item_id] for item_id in admitted)
-            ahead = [item_id for item_id in applied if order[item_id] < first]
-            if not ahead:
-                break
-            nearest = max(ahead, key=order.__getitem__)
-            drops = tuple(item_id for item_id in applied if item_id != nearest)
-            continue
+        kept = shown - {notice.item_id for notice in notices}
+        candidate = _render_selected_result(
+            replace(render.result, packet=reduced), client, trace, only_item_ids=kept
+        )
         lines = set((candidate.rendered or "").split("\n"))
         unfit = {notice.item_id for notice in notices if typed.omission_line(notice) not in lines}
         if unfit:
-            drops = tuple(item_id for item_id in applied if item_id not in unfit)
+            drops = tuple(notice.item_id for notice in notices if notice.item_id not in unfit)
             continue
-        if visible != shown - set(applied):
-            break
+        if _rendered_item_ids(candidate.rendered) != kept:
+            break  # safety net: the pinned render must show exactly the kept items
         return candidate, len(notices)
     return render, 0
 
@@ -1500,12 +1495,16 @@ def _render_automatic_prompt_result(
     result: _AutomaticPromptContextResult,
     client: ClientName,
     maximum_tokens: int,
+    *,
+    only_item_ids: frozenset[str] | None = None,
 ) -> tuple[str | None, int]:
     """Render one already-selected slice without re-reading transient prompt data."""
 
     if result.packet is not None:
         return (
-            render_automatic_context_packet(result.packet, client, maximum_tokens),
+            render_automatic_context_packet(
+                result.packet, client, maximum_tokens, only_item_ids=only_item_ids
+            ),
             result.packet.declared_total_tokens,
         )
     if result.skill_candidates:

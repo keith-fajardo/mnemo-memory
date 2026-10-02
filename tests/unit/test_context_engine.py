@@ -811,3 +811,70 @@ def test_automatic_rendering_compacts_envelopes_prioritizes_procedures_and_fits_
     assert f'"source_trust":"{procedure.source_trust.value}"' in rendered
     assert "immutable_source_ref" not in rendered
     assert packet.to_json() == canonical
+
+
+def test_automatic_rendering_pinned_to_item_ids_skips_others_as_over_budget() -> None:
+    scope = _scope()
+    memory = _memory(
+        scope,
+        18,
+        "Pinned automatic renderer fixture.",
+        kind=EpisodicMemoryKind.DECISION,
+        confidence=0.9,
+        activated_at=NOW,
+    )
+    packet = UnifiedContextEngine(
+        EmptyAssembler(), ScopedMemoryRepository(scope, (memory,))
+    ).get_context(GetUnifiedContext(scope))
+    episodic = packet.episodic_memories[0]
+    procedure = replace(
+        episodic,
+        item_id="procedure:required-check",
+        item_type=ContextItemType.MANDATORY_PROCEDURE,
+        content="Run the required checked-in verification.",
+        token_estimate=10,
+    )
+    packet = replace(
+        packet,
+        declared_total_tokens=episodic.token_estimate + procedure.token_estimate,
+        skills_and_procedures=(procedure,),
+        provenance=(
+            packet.provenance[0],
+            replace(
+                packet.provenance[0],
+                provenance_id="provenance:procedure:required-check",
+                item_id=procedure.item_id,
+                source_reference="mnemo:procedure/required-check",
+            ),
+        ),
+    )
+    today = render_automatic_context_packet(packet, "codex", 1_300)
+    assert '"item_id":"automatic-render"' not in today
+
+    # No pin, or a pin naming every item, renders byte for byte as today.
+    assert render_automatic_context_packet(packet, "codex", 1_300, only_item_ids=None) == today
+    every = frozenset(item.item_id for item in packet.items)
+    assert render_automatic_context_packet(packet, "codex", 1_300, only_item_ids=every) == today
+
+    # An unpinned item is skipped exactly like one over budget: one aggregate omission line.
+    pinned = render_automatic_context_packet(
+        packet, "codex", 1_300, only_item_ids=frozenset({procedure.item_id})
+    )
+    lines = pinned.split("\n")
+    budget = lines[-2]
+    assert '"item_id":"automatic-render"' in budget and '"reason":"token_budget"' in budget
+    episodic_line = next(
+        line
+        for line in today.split("\n")
+        if line.startswith("MNEMO_ITEM ") and f'"item_id":"{episodic.item_id}"' in line
+    )
+    expected = [line for line in today.split("\n") if line != episodic_line]
+    assert lines == [*expected[:-1], budget, expected[-1]]
+
+    with pytest.raises(TypeError, match="only_item_ids"):
+        render_automatic_context_packet(
+            packet,
+            "codex",
+            1_300,
+            only_item_ids=cast(frozenset[str], [procedure.item_id]),
+        )
