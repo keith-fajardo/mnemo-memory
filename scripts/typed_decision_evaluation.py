@@ -75,7 +75,7 @@ _EXPECTED_NEED = {
     "none": "none",
 }
 _EPISODIC_KIND_BY_PREFIX = {"decision": "decision", "failure": "failure", "result": "outcome"}
-_NOISE_SUMMARY = (
+NOISE_SUMMARY = (
     "Background conversation {index:04d} for synthetic workflow {template}; it is unrelated "
     "and must not displace active task state."
 )
@@ -375,27 +375,39 @@ async def evaluate_front_door_holdout(guard: GuardedTypedDecisionClassifier) -> 
     )
 
 
-async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
-    rows: list[RelevanceRow] = []
+def relevance_notes() -> dict[str, list[tuple[str, str, str]]]:
+    """The dev filler-check notes per viability template, as ``(note ID, summary, category)``.
+
+    Each template's events are ``relevant`` or ``superseded``; two generated ``noise`` notes
+    follow. Note IDs are unique across templates.
+    """
+
+    notes: dict[str, list[tuple[str, str, str]]] = {}
     for template in load_synthetic_fixture(VIABILITY_FIXTURE)["templates"]:
+        template_id = template["template_id"]
         relevant = set(template["ground_truth"]["relevant_evidence"])
-        candidates = [
+        notes[template_id] = [
             (
                 event["event_key"],
                 event["summary"],
                 "relevant" if event["event_key"] in relevant else "superseded",
             )
             for event in template["events"]
-        ]
-        candidates += [
+        ] + [
             (
-                f"noise-{index}",
-                _NOISE_SUMMARY.format(index=index, template=template["template_id"]),
+                f"noise-{template_id}-{index}",
+                NOISE_SUMMARY.format(index=index, template=template_id),
                 "noise",
             )
             for index in (1, 2)
         ]
-        rows += await _note_rows(guard, candidates, template["template_id"])
+    return notes
+
+
+async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
+    rows: list[RelevanceRow] = []
+    for template_id, candidates in relevance_notes().items():
+        rows += await _note_rows(guard, candidates, template_id)
     return rows
 
 

@@ -10,7 +10,6 @@ import json
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from mnemo_memory.apps.cli import main as cli
@@ -39,13 +38,8 @@ from mnemo_memory.packages.application.checkpoints import CreateCheckpoint
 from mnemo_memory.packages.domain import (
     ApprovedEventKind,
     CheckpointContent,
-    EvidenceId,
-    EvidenceLocation,
-    EvidenceReference,
     EvidenceSourceType,
-    SourceId,
     SourceTrustClass,
-    VerificationStatus,
 )
 from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
@@ -57,6 +51,7 @@ from mnemo_memory.packages.telemetry import (
     AutomaticRouteDiagnosticsSettings,
     LocalAutomaticRouteDiagnosticsSettingsStore,
 )
+from scripts.typed_decision_replay import evidence, skill_markdown
 
 FAKE_TYPESAFE_KEY = "test-key-not-real-0000"
 FILLER_MARKER = "FILLER"
@@ -140,45 +135,18 @@ class HookFixture:
     filler_event_id: str
 
 
-def _skill(name: str, tags: str, when: str) -> str:
-    return (
-        f"---\nmnemo_kind: skill\nmnemo_name: {name}\nmnemo_version: 1.0.0\n"
-        f"mnemo_tags: {tags}\nmnemo_clients: codex, claude-code\nmnemo_trust: checked_in\n"
-        f"mnemo_when: {when}\n---\n# {name}\nSynthetic skill body.\n"
-    )
-
-
 _SKILLS = {
-    "release-notes": _skill(
+    "release-notes": skill_markdown(
         "release-notes",
-        "release, changelog",
+        ("release", "changelog"),
         "Use when drafting release notes or a changelog entry for a new version",
     ),
-    "test-plan": _skill(
+    "test-plan": skill_markdown(
         "test-plan",
-        "testing, coverage",
+        ("testing", "coverage"),
         "Use when designing a test plan or deciding which tests a change needs",
     ),
 }
-
-
-def _evidence(
-    seed: str,
-    *,
-    source: EvidenceSourceType = EvidenceSourceType.TOOL_RESULT,
-    trust: SourceTrustClass = SourceTrustClass.VERIFIED_TOOL_RESULT,
-) -> EvidenceReference:
-    return EvidenceReference(
-        EvidenceId.new(),
-        SourceId.new(),
-        source,
-        trust,
-        f"fixture://typed-hook/{seed}",
-        "sha256:" + "a" * 64,
-        EvidenceLocation(f"fixture://typed-hook/{seed}"),
-        datetime(2026, 10, 2, tzinfo=UTC),
-        VerificationStatus.VERIFIED,
-    )
 
 
 def _handoff() -> CheckpointContent:
@@ -229,7 +197,7 @@ def seed_hook_fixture(
                     binding.checkpoint_scope,
                     _handoff(),
                     (
-                        _evidence(
+                        evidence(
                             "handoff",
                             source=EvidenceSourceType.CHECKPOINT,
                             trust=SourceTrustClass.USER_AUTHORED,
@@ -243,7 +211,7 @@ def seed_hook_fixture(
                 ApprovedEventKind.DECISION,
                 PINNED_EVENT,
                 "typed-hook:pinned",
-                (_evidence("pinned"),),
+                (evidence("pinned"),),
             )
         ).event
         filler = service.record_approved_event(
@@ -252,7 +220,7 @@ def seed_hook_fixture(
                 ApprovedEventKind.TOOL_OUTCOME,
                 FILLER_EVENT,
                 "typed-hook:filler",
-                (_evidence("filler"),),
+                (evidence("filler"),),
             )
         ).event
         service.set_approved_event_pin(
@@ -262,7 +230,7 @@ def seed_hook_fixture(
                 True,
                 "typed-hook:pin",
                 (
-                    _evidence(
+                    evidence(
                         "pin",
                         source=EvidenceSourceType.USER_CORRECTION,
                         trust=SourceTrustClass.USER_CORRECTION,
