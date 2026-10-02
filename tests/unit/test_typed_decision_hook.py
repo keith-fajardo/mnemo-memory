@@ -803,7 +803,7 @@ def test_requests_still_running_at_the_cap_count_as_timeouts() -> None:
     adapter = ScriptedAdapter(SCRIPT, delay=1.5)
     started = time.monotonic()
     decisions = _decide(_factory(adapter))
-    assert time.monotonic() - started < 1.455
+    assert time.monotonic() - started < 1.45
     telemetry = decisions.telemetry
     assert telemetry.front_door_outcome == "timeout"
     assert telemetry.notes_unanswered == 4 and telemetry.notes_dropped == 0
