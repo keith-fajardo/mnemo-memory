@@ -54,6 +54,18 @@ class SkillDiscoveryCandidate:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentSkillListing:
+    """Current compatible skills (sorted, at most the limit) and whether more exist."""
+
+    skills: tuple[ProjectSkill, ...]
+    more_than_limit: bool
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(skill.name for skill in self.skills)
+
+
 _TRUST = "mnemo_trust"
 
 
@@ -79,6 +91,23 @@ class KnowledgeDocumentSkillRegistry:
             if compatible_client in skill.compatible_clients
         )
         return _unique_skills(skills)[:maximum_skills]
+
+    def current_skill_listing(
+        self, scope: MemoryScope, client: str, maximum_skills: int = 32
+    ) -> CurrentSkillListing:
+        """List current compatible skills once, and say whether the limit cut some off."""
+
+        project_scope = _require_project_scope(scope)
+        compatible_client = _require_supported_client(client)
+        _require_limit(maximum_skills)
+        skills = _unique_skills(
+            tuple(
+                skill
+                for skill in self._iter_current_skills(project_scope)
+                if compatible_client in skill.compatible_clients
+            )
+        )
+        return CurrentSkillListing(skills[:maximum_skills], len(skills) > maximum_skills)
 
     def get_current_skill(self, scope: MemoryScope, name: str, client: str) -> ProjectSkill | None:
         expected_name = normalize_registry_name(name)

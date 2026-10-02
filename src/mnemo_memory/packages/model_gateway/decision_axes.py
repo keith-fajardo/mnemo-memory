@@ -11,6 +11,8 @@ task information at all.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from enum import StrEnum
 
 from mnemo_memory.packages.domain import EpisodicMemoryKind
@@ -19,6 +21,7 @@ from .cascade_router import (
     YES_NO_LABELS,
     AxisKind,
     CascadeCommittee,
+    CascadeRouterError,
     ClassifierAxis,
     ClassifierResult,
 )
@@ -173,3 +176,40 @@ def hint_eligible(route: str, tool_need: ClassifierResult | None) -> bool:
     """Hint only light, reading-heavy tasks; delegating tiny or hard tasks wastes tokens."""
 
     return route == "light" and accepted_choice(tool_need) == "read_heavy"
+
+
+SKILL_PICK_NAME = "skill_pick"
+SKILL_PICK_NONE = "none"
+SKILL_PICK_MAXIMUM_SKILLS = 32
+_SKILL_LABEL = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+
+
+def skill_pick_axis(skill_names: Sequence[str]) -> ClassifierAxis | None:
+    """Build the skill-pick choice: the current skill names plus ``none`` (spec 2026-10-02 §4.4).
+
+    Returns ``None`` — keyword matching stays in charge — for no skills, more than 32, a name
+    that is not a registry name, a duplicate, or a skill literally named ``none``.
+    """
+
+    names = tuple(skill_names)
+    if not 1 <= len(names) <= SKILL_PICK_MAXIMUM_SKILLS:
+        return None
+    if any(not isinstance(name, str) or _SKILL_LABEL.fullmatch(name) is None for name in names):
+        return None
+    try:
+        return ClassifierAxis(
+            SKILL_PICK_NAME,
+            "Which listed project skill, if any, fits this request",
+            (*names, SKILL_PICK_NONE),
+            0.0,
+        )
+    except CascadeRouterError:
+        return None
+
+
+def accepted_skill(result: ClassifierResult | None) -> str | None:
+    """Return the accepted skill label (a skill name or ``none``), or ``None`` when unsure."""
+
+    if result is None or result.axis_name != SKILL_PICK_NAME:
+        return None
+    return accepted_choice(result)

@@ -29,6 +29,7 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 from mnemo_memory.packages.skills_registry import (
+    CurrentSkillListing,
     KnowledgeDocumentProcedureRegistry,
     KnowledgeDocumentSkillRegistry,
 )
@@ -451,3 +452,43 @@ def test_skill_discovery_uses_bounded_trigger_metadata_without_loading_body() ->
     assert "sections" not in metadata
     assert private_body not in str(metadata)
     assert registry.discover_current_skills(_scope(), "Where is Foo defined?", "codex") == ()
+
+
+def _skill_revision(name: str, clients: str = "codex, claude-code") -> KnowledgeDocumentRevision:
+    return _revision(
+        _scope(),
+        f"skills/{name}.md",
+        f"---\nmnemo_kind: skill\nmnemo_name: {name}\nmnemo_version: 1.0.0\n"
+        f"mnemo_tags: replay\nmnemo_clients: {clients}\nmnemo_trust: checked_in\n---\n"
+        f"# {name}\nSynthetic skill body.",
+    )
+
+
+def test_current_skill_listing_is_sorted_compatible_and_bounded() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    repository.apply_sync(
+        _scope(),
+        (
+            _skill_revision("test-plan"),
+            _skill_revision("release-notes"),
+            _skill_revision("claude-only", clients="claude-code"),
+        ),
+        (),
+    )
+    listing = KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex")
+    assert isinstance(listing, CurrentSkillListing)
+    assert listing.names == ("release-notes", "test-plan")
+    assert listing.more_than_limit is False
+
+
+def test_current_skill_listing_reports_more_than_thirty_two() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    repository.apply_sync(
+        _scope(), tuple(_skill_revision(f"skill-{index:02d}") for index in range(33)), ()
+    )
+    listing = KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex")
+    assert len(listing.names) == 32
+    assert listing.names[0] == "skill-00" and listing.names[-1] == "skill-31"
+    assert listing.more_than_limit is True
+    with pytest.raises(ValueError, match="limit"):
+        KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex", 33)
