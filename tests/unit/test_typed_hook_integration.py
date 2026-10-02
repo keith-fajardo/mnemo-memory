@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     FILLER_OMISSION_DETAIL,
     HOOK_KINDS,
     TypedHookModes,
+    TypedHookOverrides,
     TypedPromptDecisions,
     TypedStepInput,
 )
@@ -721,6 +723,36 @@ def test_the_typed_step_reuses_the_traced_learned_phrases(
     run_hook(fixture, KNOWLEDGE_PROMPT, live)
     assert len(reads) == 1  # the shadow trace's read; the typed step does not read again
     assert [step.learned_phrases for step in steps] == [learned]
+
+
+def test_the_step_clock_starts_at_the_mode_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow mode read (where a cold hook imports the typed module) counts against the cap."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    read = cli._typed_modes
+
+    def slow_read(
+        settings: PersonalSettings, overrides: TypedHookOverrides | None
+    ) -> TypedHookModes | None:
+        time.sleep(0.3)
+        return read(settings, overrides)
+
+    deadlines: list[float] = []
+    deadline = typed_decision_hook.step_deadline_seconds
+
+    def recorded(started: float, clock: Callable[[], float] = time.monotonic) -> float:
+        deadlines.append(deadline(started, clock))
+        return deadlines[-1]
+
+    monkeypatch.setattr(cli, "_typed_modes", slow_read)
+    monkeypatch.setattr(typed_decision_hook, "step_deadline_seconds", recorded)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    assert len(deadlines) == 1 and deadlines[0] <= 0.5
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.step_ms >= 300
 
 
 @pytest.mark.parametrize("failure", ["import", "mode_read"])

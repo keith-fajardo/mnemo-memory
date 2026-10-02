@@ -967,10 +967,22 @@ def _automatic_prompt_context_for_hook(
         data_directory, scope, prompt, client, trace, experimental_live_gate=experimental_live_gate
     )
     typed_telemetry: AutomaticRouteTypedDecisions | None = None
+    # The typed step's clock starts at the mode read, before a cold hook imports the typed
+    # module, so that import counts against the step's 0.8 s cap too.
+    typed_started = monotonic()
     modes = _typed_modes(settings, replay_overrides)
     if modes is not None:
         render, trace, typed_telemetry = _typed_prompt_render(
-            data_directory, scope, prompt, client, settings, modes, trace, render, replay_overrides
+            data_directory,
+            scope,
+            prompt,
+            client,
+            settings,
+            modes,
+            trace,
+            render,
+            replay_overrides,
+            started=typed_started,
         )
     result = render.result
     rendered = render.rendered
@@ -1314,15 +1326,17 @@ def _typed_prompt_render(
     trace: _AutomaticShadowTrace | None,
     rules: _PromptRender,
     overrides: TypedHookOverrides | None,
+    *,
+    started: float,
 ) -> tuple[_PromptRender, _AutomaticShadowTrace | None, AutomaticRouteTypedDecisions | None]:
     """Run the typed step on top of today's result; any exception keeps today's result.
 
     The whole step is wrapped (spec §7): the module import, the local preparation, the Jev
     requests, the combine and the live application. The hook's own outer catch would attach
-    no context at all.
+    no context at all. ``started`` is the step's clock, taken before the mode read: the Jev
+    requests get what is left of the 0.8 s cap, and ``step_ms`` counts from it.
     """
 
-    started = monotonic()
     try:
         from mnemo_memory.apps.cli import typed_decision_hook as typed
 
