@@ -161,6 +161,35 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   directory. Memory gates count only prompts Jev was asked; hard-rule prompts are reported
   separately. Real-traffic promotion still needs a ZDR route, then shadow on real traffic, then
   live.
+- A degraded replay cannot pass. Each decision's gates include an `answered_share` sub-gate: at
+  least 95% of the prompts (or checked notes) where Jev was asked that decision must get an
+  answer. A prompt Jev did not answer for any reason other than the 0.8 s cap (no credential, an
+  HTTP error, a denied budget, an invalid answer) is scored as no answer, so the rules' fallback
+  can never pass Jev's memory or tier gates. A case whose child fails is recorded by case ID and
+  error type, the run goes on and the report is still written, and the `no_case_failures`
+  sub-gate fails.
+- The master switch has its own commands: `mnemo-memory typed-decisions enable` turns it on, and
+  `mnemo-memory typed-decisions disable` turns it off and sets every mode back to `off` in the
+  same save, so the "any mode needs the master switch" lock never refuses it. Both save through
+  the same settings checks as `set`. These go beyond spec section 6, which named only `status`
+  and `set`: without them, shadow mode could not be turned on without hand-editing
+  `settings.json`.
+- Before promotion to live, four known gaps must be closed:
+  1. **Skill pick behind the gate.** With the ADR 0046 gate on, `none` and `lazy_pull` plans keep
+     the rules render, so an accepted live skill pick is rarely attached: 21 of the 30 dev-set
+     prompts that need a skill plan `lazy_pull` or `none`. Even with the gate off, the pick goes
+     back through the route rules. The section 8.3 skill gate scores Jev's pick, not what was
+     attached. Before promoting skill to live, report the attached-skill rate, or decide whether
+     a skill pick may bypass a `lazy_pull` suppression.
+  2. **Post-answer fetch outside the cap.** The fetch after a Jev-changed route runs outside the
+     0.8 s cap, and with section embeddings it can load the local embedding model in a cold
+     process. Before promotion, run that fetch without semantic retrieval or bound it, and seed
+     embeddings in one replay set.
+  3. **Shadow results have no CLI view.** `typed_v1` is readable only from the raw telemetry
+     file. Add a view before relying on shadow evidence.
+  4. **Budget work on the event-loop thread.** The per-request budget lock and fsync run on the
+     event-loop thread inside the cap, up to 17 times per prompt. Reserve once per prompt before
+     a ZDR route exists.
 
 ## Security and privacy implications
 

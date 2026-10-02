@@ -867,30 +867,53 @@ changes) or `live` (Jev's answers change what is attached).
 
 Live is locked. While the data route is `synthetic_only`, the only route today, Mnemo refuses
 `live` for every decision and blocks every real prompt before any network call, so shadow mode
-only proves the wiring is harmless. Check and change the modes with:
+only proves the wiring is harmless.
+
+Everything starts switched off. Turn the master switch (`experimental_typed_decisions_enabled`)
+on first; until you do, `set` refuses every mode other than `off`. Then check and change the modes:
 
 ```bash
-mnemo-memory typed-decisions status
+mnemo-memory typed-decisions enable
 mnemo-memory typed-decisions set skill shadow
+mnemo-memory typed-decisions status
 ```
 
-`status` shows the master switch (`experimental_typed_decisions_enabled`), the route, each mode,
-the locks that are active, whether `TYPESAFE_API_KEY` is present (yes or no only, never the
-value), and today's reserved input tokens against `typed_decision_daily_input_tokens` (default
-10,000,000 per UTC day). `set` refuses a locked change with a plain reason: any mode needs the
-master switch, `front_door: live` needs `experimental_semantic_memory_enabled`, and no mode may be
-`live` on `synthetic_only`. If the budget counter file (`typed_decision-budget.json` in the data
-directory) is ever damaged, every request is denied and `status` shows the counter as
-`unavailable`; delete the file to reset it.
+`mnemo-memory typed-decisions disable` turns the master switch off and sets every mode back to
+`off` in the same save. Each command prints one JSON object.
+
+`status` shows the master switch, the route, each mode, the locks that are active, whether
+`TYPESAFE_API_KEY` is present (yes or no only, never the value), and today's reserved input tokens
+against `typed_decision_daily_input_tokens` (default 10,000,000 per UTC day). `set` refuses a
+locked change with a plain reason: any mode needs the master switch, `front_door: live` needs
+`experimental_semantic_memory_enabled`, and no mode may be `live` on `synthetic_only`. If the
+budget counter file (`typed_decision-budget.json` in the data directory) is ever damaged, every
+request is denied and `status` shows the counter as `unavailable`; delete the file to reset it.
+
+Upgrade note: the locks are also checked when `settings.json` is loaded. A file where a mode was
+hand-edited to `live` no longer loads, and the hook then runs on default settings (all of them,
+not just Jev's) until it is fixed. `typed-decisions status` prints `settings_invalid` with the
+lock's message; change that mode back to `shadow` or `off` in `settings.json`.
 
 When the filler check is live and drops a note, the attached context keeps one standard
 `MNEMO_OMISSION` line for that note: its `item_id` is the note's own ID, the reason is
 `lower_rank` and the detail is `judged filler; fetch with get_context item_ids`. If that line would
 not fit the attachment budget, the note is kept instead. An agent can fetch dropped notes again
-with `get_context` and `item_ids` (1 to 16 IDs, on both the full and compact MCP profiles). The
-fetch rechecks scope, currentness and sensitivity: a note that changed comes back as `superseded`,
-a deleted or retracted one as `expired`, one outside this project as `unauthorized_scope`.
-Explicit `get_context` calls are never filtered.
+with `get_context` and `item_ids` (1 to 16 IDs, on both the full and compact MCP profiles).
+Explicit `get_context` calls are never filtered. The fetch rechecks each item, and an item it
+cannot return comes back as an omission with one of these reasons:
+
+- `expired`: a knowledge note that is gone or is not in this project, or an approved event that
+  was retracted.
+- `superseded`: a knowledge note that has changed since its ID was given out, or an approved
+  event that was corrected.
+- `unauthorized_scope`: a section number past the end of the note, or an approved event this
+  scope cannot see (for example one from another project).
+- `prohibited_sensitivity`: an item whose sensitivity is not `normal`.
+- `token_budget`: an item that does not fit the packet budget.
+
+An empty list, more than 16 IDs, a malformed ID, a repeated ID, or `item_ids` mixed with any other
+retrieval field is not an omission: the whole request is refused as a request error
+(`MNEMO_INVALID_INPUT`).
 
 ### Optional: add one Obsidian vault
 

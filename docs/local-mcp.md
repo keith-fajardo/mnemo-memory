@@ -165,11 +165,23 @@ structure is still true.
 
 To fetch exact notes by ID, for example notes the automatic hook dropped as filler (each dropped
 note leaves a `lower_rank` omission line naming its own item ID), call `get_context` with
-`"item_ids": ["<item-id>", "..."]`. It takes 1 to 16 IDs and cannot be combined with any other
-retrieval field. Each ID gets the same scope, currentness and sensitivity checks as any fetch;
-an item that is unavailable comes back as an omission (`superseded`, `expired` or
-`unauthorized_scope`), not an error. The tool schema always lists `item_ids`, whether or not the
-hook's typed decisions are on.
+`"item_ids": ["<item-id>", "..."]`. It takes 1 to 16 unique IDs, each in one of two shapes:
+`knowledge:<doc>:revision:<rev>:section:<n>` for a knowledge note section, or
+`approved-episodic:<uuid>` for an approved event. Each ID gets the same scope, currentness and
+sensitivity checks as any fetch, and an item that is unavailable comes back as an omission, not an
+error:
+
+- `expired`: a knowledge note that is gone or is not in this project, or a retracted event.
+- `superseded`: a knowledge note that has changed since its ID was given out, or a corrected
+  event.
+- `unauthorized_scope`: a section number past the end of the note, or an approved event this
+  scope cannot see (for example one from another project).
+- `prohibited_sensitivity`: an item whose sensitivity is not `normal`.
+- `token_budget`: an item that does not fit the packet budget.
+
+A bad ID (any other shape), a repeated ID, an empty list, more than 16 IDs, or `item_ids` mixed with
+any other retrieval field is a request error (`MNEMO_INVALID_INPUT`), and nothing is returned. The
+tool schema always lists `item_ids`, whether or not the hook's typed decisions are on.
 
 ## Record a correction without resending the handoff
 
