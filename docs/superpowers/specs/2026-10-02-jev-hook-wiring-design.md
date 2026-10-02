@@ -191,7 +191,7 @@ Complexity and tool need ride in the front-door request, so they add no calls.
      "detail":"judged filler; fetch with get_context item_ids"}
    ```
    - The IDs are the ones the agent already sees on attached items. There is no new identifier scheme and no new store.
-   - Each line costs about 35 tokens, against the 150 or more of a typical dropped note.
+   - Each line costs 41 tokens for an approved event and 53 for a knowledge section (long IDs), against the 150 or more of a typical dropped note.
    - **If a note's omission line does not fit the automatic attachment budget, that note's drop is cancelled and the note is kept.** A note is never dropped without a way back to it.
 3. **`get_context` gains an optional `item_ids` parameter** (1–16 IDs). It returns exactly those items.
    - It runs the same scope, authorization and sensitivity checks as any fetch, and never involves Jev.
