@@ -463,6 +463,15 @@ _ITEM_LOOKUP_DETAILS: dict[OmissionReason, str] = {
 }
 
 
+def is_requestable_item_id(value: object) -> bool:
+    """Whether ``get_context item_ids`` accepts this ID: a knowledge section or approved event."""
+
+    return isinstance(value, str) and (
+        _KNOWLEDGE_ITEM_ID.fullmatch(value) is not None
+        or _APPROVED_ITEM_ID.fullmatch(value) is not None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
@@ -547,14 +556,7 @@ class GetUnifiedContext:
             if (
                 len(item_ids) > MAXIMUM_REQUESTED_ITEM_IDS
                 or len(set(item_ids)) != len(item_ids)
-                or any(
-                    not isinstance(value, str)
-                    or (
-                        _KNOWLEDGE_ITEM_ID.fullmatch(value) is None
-                        and _APPROVED_ITEM_ID.fullmatch(value) is None
-                    )
-                    for value in item_ids
-                )
+                or any(not is_requestable_item_id(value) for value in item_ids)
             ):
                 raise ValueError(
                     "item_ids must be 1-16 unique knowledge or approved-event item ids"
