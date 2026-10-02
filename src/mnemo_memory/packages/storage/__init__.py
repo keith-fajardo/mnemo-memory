@@ -123,6 +123,7 @@ from .contracts import (
     TeamKnowledgeGovernanceRepository,
     TeamKnowledgeSourceApprovalResult,
 )
+from .local_model_budget import LocalDailyModelBudget
 from .postgres import (
     POSTGRES_TEAM_SCHEMA_VERSION,
     PostgreSQLConnection,
@@ -275,6 +276,7 @@ __all__ = [
     "KnowledgeDocumentSecretRejected",
     "KnowledgeDocumentStorageFailure",
     "KnowledgeDocumentSyncStoreResult",
+    "LocalDailyModelBudget",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
     "ModelBudgetStorageFailure",
