@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+import threading
+import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 
+from mnemo_memory.apps.cli import typed_decision_hook
 from mnemo_memory.apps.cli.typed_decision_hook import (
     APPROVED_EVENT_ITEM_PREFIX,
     FILLER_OMISSION_DETAIL,
     MAXIMUM_FILLER_CHECKS,
     FillerCandidate,
+    GuardFactory,
+    RuntimeTypedDecisionRecorder,
     SkillComparison,
     TypedAnswers,
     TypedHookModes,
+    TypedPromptDecisions,
     TypedStepInput,
     combine_typed_decisions,
     confidence_bucket,
+    decide_typed_prompt,
     effective_skill_names,
     filler_candidates,
     filler_omission,
@@ -28,6 +36,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     memory_need_outcome,
     notes_to_drop,
     omission_line,
+    pinned_model_version,
     skill_comparison,
     typed_hook_modes,
     typed_step_error_decisions,
@@ -53,6 +62,8 @@ from mnemo_memory.packages.domain import (
     EvidenceReference,
     EvidenceSourceType,
     MemoryScope,
+    ModelBudgetReservation,
+    ModelTaskType,
     OmissionReason,
     OwnerId,
     PacketSchemaVersion,
@@ -63,16 +74,25 @@ from mnemo_memory.packages.domain import (
     Sensitivity,
     SourceId,
     SourceTrustClass,
+    TypedDecisionDataRoute,
     TypedDecisionMode,
+    TypedDecisionSource,
     TypedDecisionUnavailableReason,
     ValidityState,
     VerificationStatus,
     Visibility,
     WorkspaceId,
 )
-from mnemo_memory.packages.model_gateway.cascade_router import ClassifierResult
-from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT
-from mnemo_memory.packages.model_gateway.typed_decisions import TierDecision, TypedDecisionOutcome
+from mnemo_memory.packages.model_gateway.cascade_router import ClassifierAxis, ClassifierResult
+from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT, NOTE_SUBSTANCE
+from mnemo_memory.packages.model_gateway.typed_decisions import (
+    AdapterAnswer,
+    GuardedTypedDecisionClassifier,
+    TierDecision,
+    TypedDecisionOutcome,
+    TypedDecisionRecord,
+    TypedDecisionRecorder,
+)
 
 OFF, SHADOW, LIVE = TypedDecisionMode.OFF, TypedDecisionMode.SHADOW, TypedDecisionMode.LIVE
 YES, NO = AutomaticContextNeed.YES, AutomaticContextNeed.NO
@@ -649,3 +669,235 @@ def test_telemetry_values_never_carry_prompt_note_or_skill_text() -> None:
     encoded = json.dumps(asdict(decisions.telemetry))
     for marker in ("private-prompt-7f3a", "private-skill-9b1d", "private-note-21c9", "test-plan"):
         assert marker not in encoded
+
+
+class ScriptedAdapter:
+    """Answer each axis from a script; notes containing FILLER are filler. Thread-safe."""
+
+    provider_id = "fake"
+    model_id = "jev-1.13.0"
+
+    def __init__(
+        self,
+        answers: dict[str, tuple[str, float]] | None = None,
+        *,
+        delay: float = 0.0,
+        version: str = "jev-1.13.0",
+    ) -> None:
+        self.answers = answers or {}
+        self.delay = delay
+        self.version = version
+        self.requests: list[tuple[tuple[str, ...], str]] = []
+        self._lock = threading.Lock()
+
+    def answer(
+        self, axes: tuple[ClassifierAxis, ...], text: str, *, timeout_seconds: float
+    ) -> AdapterAnswer:
+        with self._lock:
+            self.requests.append((tuple(axis.name for axis in axes), text))
+        if self.delay:
+            time.sleep(self.delay)
+        results: list[ClassifierResult] = []
+        for axis in axes:
+            if axis.name == NOTE_SUBSTANCE.name:
+                label, confidence = (
+                    ("filler", 0.95) if "FILLER" in text else ("task_information", 0.95)
+                )
+            else:
+                label, confidence = self.answers.get(axis.name, (axis.allowed_labels[0], 0.55))
+            rest = (1.0 - confidence) / (len(axis.allowed_labels) - 1)
+            probabilities = {
+                name: confidence if name == label else rest for name in axis.allowed_labels
+            }
+            results.append(
+                ClassifierResult(
+                    axis.name,
+                    label,
+                    math.log(confidence),
+                    axis.escalation_score_for(probabilities),
+                    confidence=confidence,
+                )
+            )
+        return AdapterAnswer(tuple(results), self.version, 10)
+
+
+class AllowBudget:
+    def reserve(
+        self,
+        workspace_id: WorkspaceId,
+        task_type: ModelTaskType,
+        reservation: ModelBudgetReservation,
+    ) -> None:
+        return None
+
+
+def _factory(
+    adapter: ScriptedAdapter | None,
+    *,
+    source: TypedDecisionSource = TypedDecisionSource.SYNTHETIC_FIXTURE,
+) -> GuardFactory:
+    def build(recorder: TypedDecisionRecorder) -> GuardedTypedDecisionClassifier:
+        return GuardedTypedDecisionClassifier(
+            adapter,
+            data_route=TypedDecisionDataRoute.SYNTHETIC_ONLY,
+            source=source,
+            budget=AllowBudget(),
+            workspace_id=WorkspaceId(UUID(int=0)),
+            reservation=ModelBudgetReservation(
+                input_tokens=1_000, output_tokens=1, cost_microusd=0
+            ),
+            deadline_seconds=0.8,
+            recorder=recorder,
+        )
+
+    return build
+
+
+SCRIPT = {
+    "memory_need": ("project_docs", 0.9),
+    "complexity": ("light", 0.95),
+    "tool_need": ("read_heavy", 0.95),
+    "skill_pick": ("test-plan", 0.9),
+}
+STEP = replace(
+    BASE_STEP,
+    prompt="Summarize the invoice export notes for me.",
+    filler_candidates=tuple(
+        FillerCandidate(
+            f"knowledge:{index}", f"note {index} FILLER" if index % 2 else f"note {index}"
+        )
+        for index in range(4)
+    ),
+)
+
+
+def _decide(factory: GuardFactory, step: TypedStepInput = STEP) -> TypedPromptDecisions:
+    return decide_typed_prompt(factory, step, started=time.monotonic())
+
+
+def test_one_front_door_request_and_one_request_per_note_run_concurrently() -> None:
+    adapter = ScriptedAdapter(SCRIPT, delay=0.3)
+    started = time.monotonic()
+    decisions = _decide(_factory(adapter))
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.3  # five 0.3 s requests in series would take 1.5 s
+    assert sorted(adapter.requests) == sorted(
+        [
+            (("memory_need", "complexity", "tool_need", "skill_pick"), STEP.prompt),
+            *((("note_substance",), candidate.text) for candidate in STEP.filler_candidates),
+        ]
+    )
+    telemetry = decisions.telemetry
+    assert telemetry.front_door_outcome == "answered"
+    assert (telemetry.notes_checked, telemetry.notes_dropped, telemetry.notes_unanswered) == (
+        4,
+        2,
+        0,
+    )
+    assert telemetry.memory_label == "project_docs"
+    assert telemetry.tier == "light" and telemetry.hint == "would_show"
+    assert telemetry.model_version == "jev-1.13.0"
+
+
+def test_requests_still_running_at_the_cap_count_as_timeouts() -> None:
+    adapter = ScriptedAdapter(SCRIPT, delay=1.5)
+    started = time.monotonic()
+    decisions = _decide(_factory(adapter))
+    assert time.monotonic() - started < 1.455
+    telemetry = decisions.telemetry
+    assert telemetry.front_door_outcome == "timeout"
+    assert telemetry.notes_unanswered == 4 and telemetry.notes_dropped == 0
+    assert telemetry.tier == "heavy" and telemetry.hint == "none"
+    assert telemetry.model_version is None
+
+
+def test_model_version_is_folded_from_the_records() -> None:
+    records = [
+        TypedDecisionRecord("synthetic_fixture", 1, "timeout", 800, None, 0),
+        TypedDecisionRecord("synthetic_fixture", 1, "answered", 300, "jev-1.13.0", 10),
+    ]
+    assert pinned_model_version(records) == "jev-1.13.0"
+    assert (
+        pinned_model_version(
+            [TypedDecisionRecord("synthetic_fixture", 1, "answered", 300, "fake-1", 10)]
+        )
+        is None
+    )
+    recorder = RuntimeTypedDecisionRecorder()
+    recorder.record(records[1])
+    assert recorder.records == [records[1]]
+    assert (
+        _decide(_factory(ScriptedAdapter(SCRIPT, version="fake-1"))).telemetry.model_version is None
+    )
+
+
+def test_runtime_source_is_blocked_and_a_missing_guard_is_disabled() -> None:
+    adapter = ScriptedAdapter(SCRIPT)
+    blocked = _decide(_factory(adapter, source=TypedDecisionSource.RUNTIME))
+    assert blocked.telemetry.front_door_outcome == "data_route_blocked"
+    assert blocked.telemetry.notes_unanswered == 4
+    assert adapter.requests == []
+    disabled = _decide(lambda recorder: None)
+    assert disabled.telemetry.front_door_outcome == "disabled"
+    assert disabled.telemetry.tier == "heavy"
+
+
+def test_exactly_one_asyncio_run_per_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = asyncio.run
+    calls: list[int] = []
+
+    def counting(main: object, **kwargs: object) -> object:
+        calls.append(1)
+        return original(main, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asyncio, "run", counting)
+    _decide(_factory(ScriptedAdapter(SCRIPT)))
+    assert calls == [1]
+
+
+def test_an_exception_inside_the_step_is_a_step_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(recorder: TypedDecisionRecorder) -> GuardedTypedDecisionClassifier:
+        raise RuntimeError("synthetic failure")
+
+    assert _decide(broken).telemetry.front_door_outcome == "typed_step_error"
+
+    def explode(*args: object, **kwargs: object) -> TypedPromptDecisions:
+        raise ValueError("synthetic combine failure")
+
+    monkeypatch.setattr(typed_decision_hook, "combine_typed_decisions", explode)
+    decisions = _decide(_factory(ScriptedAdapter(SCRIPT)))
+    assert decisions.telemetry.front_door_outcome == "typed_step_error"
+    assert decisions.drop_item_ids == () and decisions.typed_needs is None
+
+
+def test_running_event_loop_falls_back_to_a_step_error() -> None:
+    async def inside() -> TypedPromptDecisions:
+        return _decide(_factory(ScriptedAdapter(SCRIPT)))
+
+    decisions = asyncio.run(inside())
+    assert decisions.telemetry.front_door_outcome == "typed_step_error"
+
+
+def test_long_prompt_reaches_the_adapter_only_as_the_bounded_view() -> None:
+    adapter = ScriptedAdapter(SCRIPT)
+    prompt = "Summarize the notes. " + ("padding " * 80) + "PRIVATE-MIDDLE-c41e" + (" tail" * 120)
+    _decide(_factory(adapter), replace(STEP, prompt=prompt, filler_candidates=()))
+    assert len(adapter.requests) == 1
+    sent = adapter.requests[0][1]
+    assert len(sent) <= 512
+    assert "PRIVATE-MIDDLE-c41e" not in sent
+
+
+def test_hard_rule_sends_only_the_skill_question() -> None:
+    adapter = ScriptedAdapter(SCRIPT)
+    decisions = _decide(_factory(adapter), replace(STEP, hard_rule=True, filler_candidates=()))
+    assert adapter.requests == [(("skill_pick",), STEP.prompt)]
+    assert decisions.telemetry.tier is None and decisions.telemetry.memory_label is None
+
+
+def test_risk_terms_veto_the_hint() -> None:
+    adapter = ScriptedAdapter(SCRIPT)
+    risky = replace(STEP, prompt="Deploy the export fix to production.", filler_candidates=())
+    decisions = _decide(_factory(adapter), risky)
+    assert decisions.telemetry.tier == "heavy"
+    assert decisions.telemetry.hint == "none"

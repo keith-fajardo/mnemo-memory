@@ -8,7 +8,10 @@ today's rules result. Prompt text, note text and skill names never enter
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -33,10 +36,17 @@ from mnemo_memory.packages.domain import (
     Sensitivity,
     TypedDecisionKind,
     TypedDecisionMode,
+    TypedDecisionUnavailableReason,
 )
-from mnemo_memory.packages.model_gateway.cascade_router import ClassifierAxis, ClassifierResult
+from mnemo_memory.packages.model_gateway.cascade_router import (
+    AxisRoutedClassifier,
+    ClassifierAxis,
+    ClassifierResult,
+    PrecomputedClassifier,
+)
 from mnemo_memory.packages.model_gateway.decision_axes import (
     COMPLEXITY,
+    FILLER_CHECK_BUDGET_SECONDS,
     HINT_TEXT,
     MEMORY_NEED,
     NOTE_SUBSTANCE,
@@ -49,12 +59,16 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     note_text,
     should_drop_note,
     skill_pick_axis,
+    tier_committee,
 )
+from mnemo_memory.packages.model_gateway.rule_axes import RISK_AXIS, RiskTermClassifier
 from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
     TierDecision,
     TypedDecisionOutcome,
+    TypedDecisionRecord,
     TypedDecisionRecorder,
+    decide_tier,
 )
 from mnemo_memory.packages.policy.content_safety import contains_high_confidence_secret
 
@@ -73,6 +87,7 @@ APPROVED_EVENT_ITEM_PREFIX = "approved-episodic:"
 UNSURE = "unsure"
 _YES = AutomaticContextNeed.YES
 _NO = AutomaticContextNeed.NO
+_PINNED_MODEL_VERSION = re.compile(r"jev-[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
 _RETRIEVAL_ROUTES = frozenset(
     {
         AutomaticContextRoute.PRIOR_MEMORY,
@@ -575,3 +590,111 @@ def typed_step_error_decisions(modes: TypedHookModes, step_ms: int) -> TypedProm
             ),
         ),
     )
+
+
+class RuntimeTypedDecisionRecorder:
+    """Collect one prompt's per-request guard records in memory (content-free)."""
+
+    def __init__(self) -> None:
+        self.records: list[TypedDecisionRecord] = []
+
+    def record(self, record: TypedDecisionRecord) -> None:
+        self.records.append(record)
+
+
+def pinned_model_version(records: Sequence[TypedDecisionRecord]) -> str | None:
+    """Fold per-request records into the one model version telemetry may hold."""
+
+    for record in records:
+        version = record.model_version
+        if (
+            record.outcome == "answered"
+            and version is not None
+            and _PINNED_MODEL_VERSION.fullmatch(version) is not None
+        ):
+            return version
+    return None
+
+
+async def ask_typed_questions(
+    guard: GuardedTypedDecisionClassifier, step: TypedStepInput
+) -> TypedAnswers:
+    """Send the front-door request and every note request at once under one 0.8 s cap."""
+
+    axes = front_door_axes(step)
+    requests: list[tuple[Sequence[ClassifierAxis], str]] = []
+    if axes:
+        requests.append((axes, step.prompt))
+    requests.extend(((NOTE_SUBSTANCE,), candidate.text) for candidate in step.filler_candidates)
+    outcomes: tuple[TypedDecisionOutcome, ...] = ()
+    if requests:
+        outcomes = await guard.ask_each(
+            requests, total_deadline_seconds=FILLER_CHECK_BUDGET_SECONDS
+        )
+    front = outcomes[0] if axes else None
+    fillers = outcomes[1:] if axes else outcomes
+    tier: TierDecision | None = None
+    if front is not None and step.modes.tier_hint is not OFF and not step.hard_rule:
+        tier = await _tier(front, step.prompt)
+    return TypedAnswers(front, tuple(fillers), tier)
+
+
+async def _tier(front: TypedDecisionOutcome, prompt: str) -> TierDecision:
+    """The phase-1 committee over answers already in hand; unavailable resolves to heavy."""
+
+    if front.unavailable_reason is not None:
+        return TierDecision("heavy", f"unavailable:{front.unavailable_reason.value}", None)
+    answered = PrecomputedClassifier(front.results)
+    classifier = AxisRoutedClassifier(
+        {
+            COMPLEXITY.name: answered,
+            TOOL_NEED.name: answered,
+            RISK_AXIS.name: RiskTermClassifier(),
+        }
+    )
+    return await decide_tier(tier_committee(), classifier, prompt)
+
+
+def decide_typed_prompt(
+    guard_factory: GuardFactory,
+    step: TypedStepInput,
+    *,
+    started: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> TypedPromptDecisions:
+    """Run the step with exactly one ``asyncio.run``; any exception is ``typed_step_error``."""
+
+    try:
+        recorder = RuntimeTypedDecisionRecorder()
+        guard = guard_factory(recorder)
+        if guard is None:
+            answers = _unavailable_answers(step, TypedDecisionUnavailableReason.DISABLED)
+        else:
+            coroutine = ask_typed_questions(guard, step)
+            try:
+                answers = asyncio.run(coroutine)
+            finally:
+                coroutine.close()  # no "never awaited" warning when a loop is already running
+        return combine_typed_decisions(
+            step,
+            answers,
+            step_ms=_elapsed_ms(started, clock),
+            model_version=pinned_model_version(recorder.records),
+        )
+    except Exception:
+        return typed_step_error_decisions(step.modes, _elapsed_ms(started, clock))
+
+
+def _unavailable_answers(
+    step: TypedStepInput, reason: TypedDecisionUnavailableReason
+) -> TypedAnswers:
+    unavailable = TypedDecisionOutcome((), reason, 0, None)
+    front = unavailable if front_door_axes(step) else None
+    tier: TierDecision | None = None
+    if front is not None and step.modes.tier_hint is not OFF and not step.hard_rule:
+        tier = TierDecision("heavy", f"unavailable:{reason.value}", None)
+    return TypedAnswers(front, tuple(unavailable for _ in step.filler_candidates), tier)
+
+
+def _elapsed_ms(started: float, clock: Callable[[], float]) -> int:
+    return max(0, min(10_000_000, round((clock() - started) * 1_000)))
