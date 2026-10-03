@@ -542,6 +542,42 @@ class DurableMcpContextPort:
                     require_current=bool(source_overview.get("require_current", False)),
                 )
             )
+            item_ids = request.get("item_ids")
+            if item_ids is not None:
+                if (
+                    not isinstance(item_ids, list)
+                    or not item_ids
+                    or any(not isinstance(value, str) for value in item_ids)
+                ):
+                    raise ValueError("item_ids must be a non-empty array of strings")
+                if any(
+                    value is not None
+                    for value in (lineage, test_coverage, dbt_selector, dbt_freshness, dbt_changes)
+                ):
+                    raise ValueError("item_ids cannot be combined with other retrieval fields")
+                if self._context_service is None:
+                    raise CheckpointApplicationStorageFailure("context service is unavailable")
+                return self._context_service.get_context(
+                    GetUnifiedContext(
+                        scope=scope,
+                        checkpoint_id=checkpoint,
+                        query=query,
+                        memory_handle=memory_handle,
+                        checkpoint_recap=checkpoint_recap,
+                        source_query=source_query,
+                        budget=budget,
+                        source_impact=impact,
+                        source_changes=changes,
+                        source_overview=overview,
+                        knowledge_query=knowledge_query,
+                        semantic_knowledge_query=semantic_knowledge_query,
+                        procedure_tags=tuple(cast(list[str], procedure_tags)),
+                        skill_tags=tuple(cast(list[str], skill_tags)),
+                        skill_client=skill_client,
+                        skill_agent_name=skill_agent_name,
+                        item_ids=tuple(cast(list[str], item_ids)),
+                    )
+                ).to_dict()
             if (
                 lineage is not None
                 or test_coverage is not None

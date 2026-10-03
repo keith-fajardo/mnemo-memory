@@ -7,11 +7,8 @@ source is ``synthetic_fixture``, and only fixtures that declare synthetic proven
 from __future__ import annotations
 
 import asyncio
-import json
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from mnemo_memory.packages.domain import (
@@ -46,28 +43,24 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
     decide_tier,
 )
-
-REPOSITORY_ROOT = Path(__file__).parents[1]
-_FIXTURES = REPOSITORY_ROOT / "tests/fixtures/evals"
-ROUTING_FIXTURE = _FIXTURES / "automatic-context-routing-v1.json"
-VIABILITY_FIXTURE = _FIXTURES / "viability-corpus-v1.json"
-TYPED_DECISION_FIXTURE = _FIXTURES / "typed-decision-v1.json"
-HOLDOUT_FIXTURE = _FIXTURES / "typed-decision-holdout-v1.json"
-TELEHEALTH_FIXTURE = _FIXTURES / "telehealth-long-horizon-phase2-qwen25coder7b.json"
+from scripts.typed_decision_fixtures import HOLDOUT_FIXTURE as HOLDOUT_FIXTURE
+from scripts.typed_decision_fixtures import NOISE_SUMMARY as NOISE_SUMMARY
+from scripts.typed_decision_fixtures import REPOSITORY_ROOT as REPOSITORY_ROOT
+from scripts.typed_decision_fixtures import ROUTING_FIXTURE as ROUTING_FIXTURE
+from scripts.typed_decision_fixtures import TELEHEALTH_FIXTURE as TELEHEALTH_FIXTURE
+from scripts.typed_decision_fixtures import TYPED_DECISION_FIXTURE as TYPED_DECISION_FIXTURE
+from scripts.typed_decision_fixtures import VIABILITY_FIXTURE as VIABILITY_FIXTURE
+from scripts.typed_decision_fixtures import FixtureProvenanceError as FixtureProvenanceError
+from scripts.typed_decision_fixtures import load_synthetic_fixture as load_synthetic_fixture
+from scripts.typed_decision_fixtures import nearest_rank as nearest_rank
+from scripts.typed_decision_fixtures import relevance_notes as relevance_notes
+from scripts.typed_decision_fixtures import share as share
 
 LATENCY_DEADLINE_MS = 600
 LATENCY_MINIMUM_SAMPLES = 50
 LATENCY_MAXIMUM_SHARE_OVER = 0.05
 FILLER_CHECK_MAXIMUM_SHARE_OVER = 0.05
 NOTE_CHECK_CHUNK = 16  # concurrent filler checks per batch, matching one prompt's note window
-_SYNTHETIC_PROVENANCE: tuple[object, ...] = (
-    {
-        "origin": "Mnemo-owned original synthetic prompts",
-        "competing_product_artifacts_used": False,
-    },
-    "Original synthetic Mnemo evaluation data; no production, personal, secret, or competitor "
-    "content.",
-)
 _EXPECTED_NEED = {
     "prior_memory": "long_term",
     "knowledge": "long_term",
@@ -75,10 +68,6 @@ _EXPECTED_NEED = {
     "none": "none",
 }
 _EPISODIC_KIND_BY_PREFIX = {"decision": "decision", "failure": "failure", "result": "outcome"}
-_NOISE_SUMMARY = (
-    "Background conversation {index:04d} for synthetic workflow {template}; it is unrelated "
-    "and must not displace active task state."
-)
 _MEASURED_OUTCOMES = (None, TypedDecisionUnavailableReason.TIMEOUT.value)
 _SECTIONS = (
     "front_door",
@@ -89,10 +78,6 @@ _SECTIONS = (
     "extraction",
     "tier",
 )
-
-
-class FixtureProvenanceError(ValueError):
-    """A fixture does not declare synthetic provenance, so it may not be sent to Jev."""
 
 
 class EpisodicProvider(Protocol):
@@ -149,13 +134,6 @@ class _OllamaRequest:
     max_candidates: int = 4
 
 
-def load_synthetic_fixture(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("provenance") not in _SYNTHETIC_PROVENANCE:
-        raise FixtureProvenanceError(path.name)
-    return value
-
-
 def derived_route(structure: NeedAnswer, long_term: NeedAnswer) -> str:
     if structure is NeedAnswer.YES:
         return "structure"
@@ -174,13 +152,13 @@ def score_front_door(rows: Sequence[FrontDoorRow]) -> dict[str, Any]:
     missed = sorted(
         row.case_id for row in rows if derived[row.case_id] != _EXPECTED_NEED[row.expected_route]
     )
-    accuracy = _share(len(rows) - len(missed), len(rows))
-    prior_recall = _share(sum(row.long_term is NeedAnswer.YES for row in prior), len(prior))
-    structure_recall = _share(
+    accuracy = share(len(rows) - len(missed), len(rows))
+    prior_recall = share(sum(row.long_term is NeedAnswer.YES for row in prior), len(prior))
+    structure_recall = share(
         sum(row.structure is NeedAnswer.YES for row in structure), len(structure)
     )
     # No "none" predictions leaves precision undefined; 0.0 keeps that from passing the gate.
-    none_precision = _share(
+    none_precision = share(
         sum(row.expected_route == "none" for row in predicted_none), len(predicted_none)
     )
     return {
@@ -203,13 +181,13 @@ def score_front_door(rows: Sequence[FrontDoorRow]) -> dict[str, Any]:
 
 def score_latency(durations_ms: Sequence[int]) -> dict[str, Any]:
     ordered = sorted(durations_ms)
-    share_over = _share(
+    share_over = share(
         sum(value > LATENCY_DEADLINE_MS for value in ordered), len(ordered), empty=1.0
     )
     return {
         "samples": len(ordered),
-        "p50_ms": _nearest_rank(ordered, 0.50),
-        "p95_ms": _nearest_rank(ordered, 0.95),
+        "p50_ms": nearest_rank(ordered, 0.50),
+        "p95_ms": nearest_rank(ordered, 0.95),
         "max_ms": ordered[-1] if ordered else None,
         "deadline_ms": LATENCY_DEADLINE_MS,
         "share_over_deadline": share_over,
@@ -228,7 +206,7 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
     all_dropped = sum(row.dropped for row in rows)
     durations = sorted(row.duration_ms for row in rows)
     budget_ms = FILLER_CHECK_BUDGET_SECONDS * 1_000
-    over_budget_share = _share(sum(value > budget_ms for value in durations), len(durations))
+    over_budget_share = share(sum(value > budget_ms for value in durations), len(durations))
     return {
         "candidates": len(rows),
         "relevant_dropped": dropped,
@@ -239,8 +217,8 @@ def score_relevance(rows: Sequence[RelevanceRow]) -> dict[str, Any]:
         ),
         # One request per note; informational, not gated.
         "requests": len(rows),
-        "request_p50_ms": _nearest_rank(durations, 0.50),
-        "request_p95_ms": _nearest_rank(durations, 0.95),
+        "request_p50_ms": nearest_rank(durations, 0.50),
+        "request_p95_ms": nearest_rank(durations, 0.95),
         # Share of checks slower than the 0.8 s total budget for one prompt's filler checks.
         "over_budget_share": over_budget_share,
         "superseded_drop_rate": _drop_rate(rows, "superseded"),
@@ -263,10 +241,10 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
         kinded = [row for row in arm_rows if row.expected_kind is not None]
         arms[arm] = {
             "events": len(arm_rows),
-            "worth_accuracy": _share(
+            "worth_accuracy": share(
                 sum(row.predicted_worth == row.expected_worth for row in arm_rows), len(arm_rows)
             ),
-            "kind_accuracy": _share(
+            "kind_accuracy": share(
                 sum(row.predicted_kind == row.expected_kind for row in kinded), len(kinded)
             ),
             "unanswered": sum(not row.answered for row in arm_rows),
@@ -291,13 +269,13 @@ def score_extraction(rows: Sequence[ExtractionRow]) -> dict[str, Any]:
 def score_tier(rows: Sequence[TierRow]) -> dict[str, Any]:
     heavy = [row for row in rows if row.expected_tier == "heavy"]
     light = [row for row in rows if row.expected_tier == "light"]
-    heavy_recall = _share(sum(row.route == "heavy" for row in heavy), len(heavy))
+    heavy_recall = share(sum(row.route == "heavy" for row in heavy), len(heavy))
     unavailable = sum(row.reason.startswith("unavailable:") for row in rows)
     return {
         "cases": len(rows),
         "heavy_recall": heavy_recall,
-        "light_recall": _share(sum(row.route == "light" for row in light), len(light)),
-        "tool_need_accuracy": _share(
+        "light_recall": share(sum(row.route == "light" for row in light), len(light)),
+        "tool_need_accuracy": share(
             sum(row.tool_need == row.expected_tool_need for row in rows), len(rows)
         ),
         "hint_eligible": sum(row.hint for row in rows),
@@ -377,25 +355,8 @@ async def evaluate_front_door_holdout(guard: GuardedTypedDecisionClassifier) -> 
 
 async def evaluate_relevance(guard: GuardedTypedDecisionClassifier) -> list[RelevanceRow]:
     rows: list[RelevanceRow] = []
-    for template in load_synthetic_fixture(VIABILITY_FIXTURE)["templates"]:
-        relevant = set(template["ground_truth"]["relevant_evidence"])
-        candidates = [
-            (
-                event["event_key"],
-                event["summary"],
-                "relevant" if event["event_key"] in relevant else "superseded",
-            )
-            for event in template["events"]
-        ]
-        candidates += [
-            (
-                f"noise-{index}",
-                _NOISE_SUMMARY.format(index=index, template=template["template_id"]),
-                "noise",
-            )
-            for index in (1, 2)
-        ]
-        rows += await _note_rows(guard, candidates, template["template_id"])
+    for template_id, candidates in relevance_notes().items():
+        rows += await _note_rows(guard, candidates, template_id)
     return rows
 
 
@@ -547,16 +508,6 @@ def _excluded_fixtures() -> dict[str, str]:
     return {}
 
 
-def _share(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
-    return numerator / denominator if denominator else empty
-
-
 def _drop_rate(rows: Sequence[RelevanceRow], category: str) -> float:
     selected = [row for row in rows if row.category == category]
-    return _share(sum(row.dropped for row in selected), len(selected))
-
-
-def _nearest_rank(ordered: Sequence[int], quantile: float) -> int | None:
-    if not ordered:
-        return None
-    return ordered[max(0, math.ceil(quantile * len(ordered)) - 1)]
+    return share(sum(row.dropped for row in selected), len(selected))

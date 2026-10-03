@@ -1458,6 +1458,10 @@ def test_postgres_knowledge_is_atomic_scoped_current_only_and_uses_pgvector(
     assert governed.current_author_authenticated
     assert governed.approved
     assert repository.get_current_revision(scope, third.document.document_id) == third
+    assert repository.list_current_revisions(scope) == tuple(
+        repository.get_current_revision(scope, known.document_id)
+        for known in repository.list_active_documents(scope)
+    )
     contributor_source = _knowledge_revision(
         scope,
         "docs/contributor.md",

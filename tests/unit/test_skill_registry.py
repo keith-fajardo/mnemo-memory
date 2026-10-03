@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -29,13 +31,18 @@ from mnemo_memory.packages.domain import (
 )
 from mnemo_memory.packages.knowledge import KnowledgeDocumentParser, KnowledgeDocumentParseRequest
 from mnemo_memory.packages.skills_registry import (
+    CurrentSkillListing,
     KnowledgeDocumentProcedureRegistry,
     KnowledgeDocumentSkillRegistry,
 )
 from mnemo_memory.packages.storage import (
     ReferenceCheckpointRepository,
     ReferenceKnowledgeDocumentRepository,
+    SQLiteCheckpointRepository,
+    SQLiteKnowledgeDocumentRepository,
 )
+from scripts.typed_decision_evaluation import load_synthetic_fixture
+from scripts.typed_decision_replay import SKILLS_FIXTURE, skill_markdown
 
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "procedural"
@@ -451,3 +458,109 @@ def test_skill_discovery_uses_bounded_trigger_metadata_without_loading_body() ->
     assert "sections" not in metadata
     assert private_body not in str(metadata)
     assert registry.discover_current_skills(_scope(), "Where is Foo defined?", "codex") == ()
+
+
+def _skill_revision(name: str, clients: str = "codex, claude-code") -> KnowledgeDocumentRevision:
+    return _revision(
+        _scope(),
+        f"skills/{name}.md",
+        f"---\nmnemo_kind: skill\nmnemo_name: {name}\nmnemo_version: 1.0.0\n"
+        f"mnemo_tags: replay\nmnemo_clients: {clients}\nmnemo_trust: checked_in\n---\n"
+        f"# {name}\nSynthetic skill body.",
+    )
+
+
+def test_current_skill_listing_is_sorted_compatible_and_bounded() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    repository.apply_sync(
+        _scope(),
+        (
+            _skill_revision("test-plan"),
+            _skill_revision("release-notes"),
+            _skill_revision("claude-only", clients="claude-code"),
+        ),
+        (),
+    )
+    listing = KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex")
+    assert isinstance(listing, CurrentSkillListing)
+    assert listing.names == ("release-notes", "test-plan")
+    assert listing.more_than_limit is False
+
+
+def test_current_skill_listing_reports_more_than_thirty_two() -> None:
+    repository = ReferenceKnowledgeDocumentRepository()
+    repository.apply_sync(
+        _scope(), tuple(_skill_revision(f"skill-{index:02d}") for index in range(33)), ()
+    )
+    listing = KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex")
+    assert len(listing.names) == 32
+    assert listing.names[0] == "skill-00" and listing.names[-1] == "skill-31"
+    assert listing.more_than_limit is True
+    with pytest.raises(ValueError, match="limit"):
+        KnowledgeDocumentSkillRegistry(repository).current_skill_listing(_scope(), "codex", 33)
+
+
+def _replay_skills_and_notes() -> tuple[KnowledgeDocumentRevision, ...]:
+    """The replay's twelve synthetic skills plus twenty plain project notes."""
+
+    skills = tuple(
+        _revision(
+            _scope(),
+            f"skills/{skill['name']}.md",
+            skill_markdown(skill["name"], skill["tags"], skill["when"]),
+        )
+        for skill in load_synthetic_fixture(SKILLS_FIXTURE)["skills"]
+    )
+    notes = tuple(
+        _revision(_scope(), f"notes/note-{index:02d}.md", f"# Note {index:02d}\nPlain note.")
+        for index in range(20)
+    )
+    return (*skills, *notes)
+
+
+def test_skill_listing_reads_all_documents_in_one_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each registry read opens one SQLite connection, not one per document, and returns
+    exactly what the in-memory reference returns for the same documents."""
+
+    revisions = _replay_skills_and_notes()
+    assert len(revisions) == 32
+    stored = SQLiteKnowledgeDocumentRepository(tmp_path / "skills.sqlite3", base_directory=tmp_path)
+    stored.migrate()
+    stored.apply_sync(_scope(), revisions, ())
+    reference = ReferenceKnowledgeDocumentRepository()
+    reference.apply_sync(_scope(), revisions, ())
+    connections = 0
+    connect = SQLiteCheckpointRepository._connect
+
+    def counted(backend: SQLiteCheckpointRepository) -> sqlite3.Connection:
+        nonlocal connections
+        connections += 1
+        return connect(backend)
+
+    monkeypatch.setattr(SQLiteCheckpointRepository, "_connect", counted)
+    prompt = "Write the changelog entry and release notes for version 2.4"
+    reads: dict[str, Callable[[KnowledgeDocumentSkillRegistry], object]] = {
+        "listing": lambda registry: registry.current_skill_listing(_scope(), "claude-code"),
+        "list": lambda registry: registry.list_current_skills(_scope(), "claude-code"),
+        "discover": lambda registry: registry.discover_current_skills(
+            _scope(), prompt, "claude-code"
+        ),
+        "listing_and_discovery": lambda registry: registry.current_skill_discovery(
+            _scope(), prompt, "claude-code"
+        ),
+        "agent": lambda registry: registry.get_current_agent(_scope(), "reviewer", "codex"),
+    }
+    for name, read in reads.items():
+        connections = 0
+        got = read(KnowledgeDocumentSkillRegistry(stored))
+        assert connections == 1, name
+        assert got == read(KnowledgeDocumentSkillRegistry(reference)), name
+    listing, candidates = KnowledgeDocumentSkillRegistry(stored).current_skill_discovery(
+        _scope(), prompt, "claude-code"
+    )
+    assert len(listing.skills) == 12 and listing.more_than_limit is False
+    assert candidates and candidates == KnowledgeDocumentSkillRegistry(
+        stored
+    ).discover_current_skills(_scope(), prompt, "claude-code")

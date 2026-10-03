@@ -144,26 +144,20 @@ class PostgreSQLKnowledgeDocumentRepository:
         if not isinstance(document_id, KnowledgeDocumentId):
             raise TypeError("document_id must be a KnowledgeDocumentId")
         with self._transaction(TeamOperation.READ) as cursor:
-            cursor.execute(
-                "SELECT "
-                + _REVISION_COLUMNS
-                + " FROM mnemo_team.knowledge_document_sources AS source "
-                "JOIN mnemo_team.knowledge_document_revisions AS revision "
-                "ON revision.workspace_id = source.workspace_id "
-                "AND revision.revision_id = source.current_revision_id "
-                "WHERE source.workspace_id = CAST(%s AS uuid) "
-                "AND source.project_id = CAST(%s AS uuid) "
-                "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
-                "AND source.document_id = CAST(%s AS uuid) AND NOT source.is_deleted "
-                "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
-                "WHERE approval.workspace_id = source.workspace_id "
-                "AND approval.document_id = source.document_id)",
-                (*self._scope_values(scope), str(document_id)),
+            return self._current_revision(cursor, scope, document_id)
+
+    def list_current_revisions(self, scope: MemoryScope) -> tuple[KnowledgeDocumentRevision, ...]:
+        """The listed documents' current revisions, read as ``get_current_revision`` reads each
+        one (an unapproved document still raises), inside one transaction."""
+        self._require_scope(scope)
+        with self._transaction(TeamOperation.READ) as cursor:
+            document_ids = tuple(
+                KnowledgeDocumentId.from_string(str(row[0]))
+                for row in self._active_document_rows(cursor, scope)
             )
-            row = cursor.fetchone()
-            if row is None:
-                raise KnowledgeDocumentNotFound("knowledge document was not found")
-            return self._revision_from_row(cursor, row, scope)
+            return tuple(
+                self._current_revision(cursor, scope, document_id) for document_id in document_ids
+            )
 
     def get_current_revision_by_path(
         self, scope: MemoryScope, relative_path: str
@@ -804,6 +798,28 @@ class PostgreSQLKnowledgeDocumentRepository:
             self._scope_values(scope),
         )
         return cursor.fetchall()
+
+    def _current_revision(
+        self, cursor: PostgreSQLCursor, scope: MemoryScope, document_id: KnowledgeDocumentId
+    ) -> KnowledgeDocumentRevision:
+        cursor.execute(
+            "SELECT " + _REVISION_COLUMNS + " FROM mnemo_team.knowledge_document_sources AS source "
+            "JOIN mnemo_team.knowledge_document_revisions AS revision "
+            "ON revision.workspace_id = source.workspace_id "
+            "AND revision.revision_id = source.current_revision_id "
+            "WHERE source.workspace_id = CAST(%s AS uuid) "
+            "AND source.project_id = CAST(%s AS uuid) "
+            "AND source.owner_id = CAST(%s AS uuid) AND source.visibility = %s "
+            "AND source.document_id = CAST(%s AS uuid) AND NOT source.is_deleted "
+            "AND EXISTS (SELECT 1 FROM mnemo_team.knowledge_source_approvals AS approval "
+            "WHERE approval.workspace_id = source.workspace_id "
+            "AND approval.document_id = source.document_id)",
+            (*self._scope_values(scope), str(document_id)),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KnowledgeDocumentNotFound("knowledge document was not found")
+        return self._revision_from_row(cursor, row, scope)
 
     def _current_revisions(
         self, cursor: PostgreSQLCursor, scope: MemoryScope, maximum_documents: int

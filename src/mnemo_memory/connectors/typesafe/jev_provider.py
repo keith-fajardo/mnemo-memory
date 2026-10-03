@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
@@ -54,7 +55,23 @@ class _NoRedirect(_request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = _request.build_opener(_NoRedirect())
+_OPENER: _request.OpenerDirector | None = None
+_OPENER_LOCK = threading.Lock()
+
+
+def _opener() -> _request.OpenerDirector:
+    """The shared no-redirect opener, built on first use rather than at import.
+
+    Building it creates the default TLS context (about 17 ms). The first transport call builds
+    it on the guard's worker thread, so the cost falls inside the request cap instead of before
+    the cap starts. The lock keeps concurrent first calls to one build.
+    """
+
+    global _OPENER
+    with _OPENER_LOCK:
+        if _OPENER is None:
+            _OPENER = _request.build_opener(_NoRedirect())
+        return _OPENER
 
 
 def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
@@ -69,7 +86,7 @@ def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout
     request = _request.Request(url, data=body, headers=dict(headers), method="POST")
     chunks: list[bytes] = []
     size = 0
-    with _OPENER.open(request, timeout=timeout) as response:
+    with _opener().open(request, timeout=timeout) as response:
         while True:
             if time.monotonic() >= deadline:
                 raise TimeoutError

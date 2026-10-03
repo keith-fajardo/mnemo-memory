@@ -54,6 +54,18 @@ class SkillDiscoveryCandidate:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentSkillListing:
+    """Current compatible skills (sorted, at most the limit) and whether more exist."""
+
+    skills: tuple[ProjectSkill, ...]
+    more_than_limit: bool
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(skill.name for skill in self.skills)
+
+
 _TRUST = "mnemo_trust"
 
 
@@ -62,6 +74,7 @@ class KnowledgeDocumentSkillRegistry:
 
     There is deliberately no registry cache. A synchronized new document revision is visible on
     the next call, while the existing knowledge repository retains its predecessor revision.
+    Each call reads the current revisions in one repository pass, not one read per document.
     """
 
     def __init__(self, documents: KnowledgeDocumentRepository) -> None:
@@ -70,15 +83,26 @@ class KnowledgeDocumentSkillRegistry:
     def list_current_skills(
         self, scope: MemoryScope, client: str, maximum_skills: int = 32
     ) -> tuple[ProjectSkill, ...]:
+        """The listed skills, by the one rule the skills Jev can pick are listed with too."""
+
+        return self.current_skill_listing(scope, client, maximum_skills).skills
+
+    def current_skill_listing(
+        self, scope: MemoryScope, client: str, maximum_skills: int = 32
+    ) -> CurrentSkillListing:
+        """List current compatible skills once, and say whether the limit cut some off."""
+
         project_scope = _require_project_scope(scope)
         compatible_client = _require_supported_client(client)
         _require_limit(maximum_skills)
-        skills = tuple(
-            skill
-            for skill in self._iter_current_skills(project_scope)
-            if compatible_client in skill.compatible_clients
+        skills = _unique_skills(
+            tuple(
+                skill
+                for skill in self._iter_current_skills(project_scope)
+                if compatible_client in skill.compatible_clients
+            )
         )
-        return _unique_skills(skills)[:maximum_skills]
+        return CurrentSkillListing(skills[:maximum_skills], len(skills) > maximum_skills)
 
     def get_current_skill(self, scope: MemoryScope, name: str, client: str) -> ProjectSkill | None:
         expected_name = normalize_registry_name(name)
@@ -112,15 +136,31 @@ class KnowledgeDocumentSkillRegistry:
     ) -> tuple[SkillDiscoveryCandidate, ...]:
         """Return metadata-only candidates using transient deterministic term overlap."""
 
+        return self.current_skill_discovery(scope, prompt, client, maximum_skills)[1]
+
+    def current_skill_discovery(
+        self,
+        scope: MemoryScope,
+        prompt: str,
+        client: str,
+        maximum_skills: int = 3,
+    ) -> tuple[CurrentSkillListing, tuple[SkillDiscoveryCandidate, ...]]:
+        """List current skills once and run keyword discovery on that same listing.
+
+        The candidates equal ``discover_current_skills`` and the listing equals
+        ``current_skill_listing``; the request is validated before anything is read.
+        """
+
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 512:
             raise ValueError("skill discovery prompt is invalid")
         _require_limit(maximum_skills)
         if maximum_skills > 3:
             raise ValueError("automatic skill discovery is limited to three candidates")
         compatible_client = _require_supported_client(client)
+        listing = self.current_skill_listing(scope, compatible_client)
         prompt_terms = _discovery_terms(prompt)
         candidates: list[SkillDiscoveryCandidate] = []
-        for skill in self.list_current_skills(scope, compatible_client, 32):
+        for skill in listing.skills:
             description_terms = _discovery_terms(skill.when_to_use)
             tag_hits = len(prompt_terms.intersection(skill.applicability_tags))
             description_hits = len(prompt_terms.intersection(description_terms))
@@ -133,7 +173,7 @@ class KnowledgeDocumentSkillRegistry:
                     tag_hits * 4 + description_hits,
                 )
             )
-        return tuple(
+        return listing, tuple(
             sorted(candidates, key=lambda candidate: (-candidate.score, candidate.skill.name))[
                 :maximum_skills
             ]
@@ -155,8 +195,7 @@ class KnowledgeDocumentSkillRegistry:
 
     def _iter_current_skills(self, scope: MemoryScope) -> tuple[ProjectSkill, ...]:
         result: list[ProjectSkill] = []
-        for known in self._documents.list_active_documents(scope):
-            revision = self._documents.get_current_revision(scope, known.document_id)
+        for revision in self._documents.list_current_revisions(scope):
             document = revision.document
             if document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
                 continue
@@ -181,8 +220,7 @@ class KnowledgeDocumentSkillRegistry:
 
     def _iter_current_agents(self, scope: MemoryScope) -> tuple[ProjectAgent, ...]:
         result: list[ProjectAgent] = []
-        for known in self._documents.list_active_documents(scope):
-            revision = self._documents.get_current_revision(scope, known.document_id)
+        for revision in self._documents.list_current_revisions(scope):
             document = revision.document
             if document.source_kind is not KnowledgeDocumentSourceKind.MARKDOWN:
                 continue

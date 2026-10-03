@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Protocol, cast
@@ -52,10 +53,13 @@ from mnemo_memory.packages.domain import (
     DbtManifestSnapshot,
     DbtNodeId,
     DbtSnapshotId,
+    EventId,
     EvidenceId,
     EvidenceLocation,
     EvidenceReference,
     EvidenceSourceType,
+    KnowledgeDocumentId,
+    KnowledgeDocumentRevisionId,
     KnowledgeDocumentSectionMatch,
     MemoryScope,
     OmissionNotice,
@@ -445,6 +449,29 @@ class ContextCheckpointRecapQuery:
             raise ValueError("recap checkpoint limit must be between 1 and 16")
 
 
+MAXIMUM_REQUESTED_ITEM_IDS = 16
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_KNOWLEDGE_ITEM_ID = re.compile(
+    rf"knowledge:({_UUID}):revision:({_UUID}):section:(0|[1-9][0-9]{{0,3}})"
+)
+_APPROVED_ITEM_ID = re.compile(rf"approved-episodic:({_UUID})")
+_ITEM_LOOKUP_DETAILS: dict[OmissionReason, str] = {
+    OmissionReason.EXPIRED: "requested item no longer exists",
+    OmissionReason.SUPERSEDED: "requested item has changed since it was attached",
+    OmissionReason.UNAUTHORIZED_SCOPE: "requested item is not available in this scope",
+    OmissionReason.PROHIBITED_SENSITIVITY: "requested item is not normal sensitivity",
+}
+
+
+def is_requestable_item_id(value: object) -> bool:
+    """Whether ``get_context item_ids`` accepts this ID: a knowledge section or approved event."""
+
+    return isinstance(value, str) and (
+        _KNOWLEDGE_ITEM_ID.fullmatch(value) is not None
+        or _APPROVED_ITEM_ID.fullmatch(value) is not None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GetUnifiedContext:
     scope: MemoryScope
@@ -473,6 +500,7 @@ class GetUnifiedContext:
     dbt_changes: ContextDbtChangesQuery | None = None
     query: str | None = None
     memory_handle: str | None = None
+    item_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.query is not None:
@@ -522,6 +550,45 @@ class GetUnifiedContext:
             raise ValueError("skill discovery requires a concrete client")
         if self.skill_tags and self.skill_agent_name is not None:
             raise ValueError("request skill tags or one agent, not both")
+        item_ids = tuple(self.item_ids)
+        object.__setattr__(self, "item_ids", item_ids)
+        if item_ids:
+            if (
+                len(item_ids) > MAXIMUM_REQUESTED_ITEM_IDS
+                or len(set(item_ids)) != len(item_ids)
+                or any(not is_requestable_item_id(value) for value in item_ids)
+            ):
+                raise ValueError(
+                    "item_ids must be 1-16 unique knowledge or approved-event item ids"
+                )
+            if _requests_other_retrieval(self):
+                raise ValueError("item_ids cannot be combined with other retrieval fields")
+
+
+def _requests_other_retrieval(request: GetUnifiedContext) -> bool:
+    return (
+        request.checkpoint_id is not None
+        or request.lineage is not None
+        or request.source_query is not None
+        or request.source_impact is not None
+        or request.source_changes is not None
+        or request.source_overview is not None
+        or request.checkpoint_source_impact is not None
+        or request.checkpoint_recap is not None
+        or request.knowledge_query is not None
+        or request.semantic_knowledge_query is not None
+        or request.include_checkpoint_file_knowledge
+        or bool(request.procedure_tags)
+        or request.procedure_profile is not None
+        or bool(request.skill_tags)
+        or request.skill_agent_name is not None
+        or request.dbt_test_coverage is not None
+        or request.dbt_selector is not None
+        or request.dbt_freshness is not None
+        or request.dbt_changes is not None
+        or request.query is not None
+        or request.memory_handle is not None
+    )
 
 
 class UnifiedContextService:
@@ -552,6 +619,8 @@ class UnifiedContextService:
         self._semantic_memory = semantic_memory
 
     def get_context(self, request: GetUnifiedContext) -> ContextPacket:
+        if request.item_ids:
+            return self._requested_items(request)
         packet = self._checkpoints.get_context(
             GetCheckpointContext(
                 request.scope,
@@ -597,6 +666,66 @@ class UnifiedContextService:
         if request.dbt_changes is not None:
             return self._with_dbt_changes(packet, request)
         return self._with_requested_source_facts(packet, request)
+
+    def _requested_items(self, request: GetUnifiedContext) -> ContextPacket:
+        """Return exactly the requested items, rechecked for scope, currentness and sensitivity.
+
+        An explicit fetch is never filtered by a typed decision (spec 2026-10-02 §5).
+        """
+
+        base = self._checkpoints.get_context(
+            GetCheckpointContext(request.scope, None, request.budget)
+        )
+        packet = replace(
+            base,
+            declared_total_tokens=0,
+            active_task_checkpoint=None,
+            episodic_memories=(),
+            knowledge_items=(),
+            structural_items=(),
+            skills_and_procedures=(),
+            provenance=(),
+            conflicts=(),
+            omissions=(),
+        )
+        for rank, item_id in enumerate(request.item_ids, start=1):
+            found = self._item_by_id(packet, request.scope, item_id, rank)
+            if isinstance(found, OmissionReason):
+                packet = _with_omission(packet, item_id, found, _ITEM_LOOKUP_DETAILS[found])
+                continue
+            item, notice = found
+            if item.sensitivity is not Sensitivity.NORMAL:
+                reason = OmissionReason.PROHIBITED_SENSITIVITY
+                packet = _with_omission(packet, item_id, reason, _ITEM_LOOKUP_DETAILS[reason])
+                continue
+            packet = _with_requested_item(packet, item, notice)
+        return packet
+
+    def _item_by_id(
+        self, packet: ContextPacket, scope: MemoryScope, item_id: str, rank: int
+    ) -> tuple[ContextItem, ProvenanceNotice] | OmissionReason:
+        approved = _APPROVED_ITEM_ID.fullmatch(item_id)
+        if approved is not None:
+            return self._checkpoints.approved_event_context_item(
+                scope, EventId.from_string(approved.group(1))
+            )
+        knowledge = _KNOWLEDGE_ITEM_ID.fullmatch(item_id)
+        if knowledge is None or self._knowledge is None:
+            return OmissionReason.EXPIRED
+        try:
+            current = self._knowledge.get_current_revision(
+                _project_scope(scope), KnowledgeDocumentId.from_string(knowledge.group(1))
+            )
+        except KnowledgeDocumentNotFound:
+            return OmissionReason.EXPIRED
+        if current.revision_id != KnowledgeDocumentRevisionId.from_string(knowledge.group(2)):
+            return OmissionReason.SUPERSEDED
+        section_index = int(knowledge.group(3))
+        sections = current.document.sections
+        if section_index >= len(sections):
+            return OmissionReason.UNAUTHORIZED_SCOPE
+        match = KnowledgeDocumentSectionMatch(current, section_index, sections[section_index], 1)
+        return _knowledge_context_item(packet, scope, match, rank, 1.0, "exact-item-id")
 
     def _with_semantic_checkpoint(
         self, packet: ContextPacket, request: GetUnifiedContext
@@ -2721,6 +2850,34 @@ def _with_omission(
         provenance=packet.provenance,
         omissions=(*packet.omissions, OmissionNotice(item_id, reason, detail)),
         conflicts=packet.conflicts,
+    )
+
+
+def _with_requested_item(
+    packet: ContextPacket, item: ContextItem, notice: ProvenanceNotice
+) -> ContextPacket:
+    knowledge = item.item_type is ContextItemType.KNOWLEDGE
+    section = packet.knowledge_items if knowledge else packet.episodic_memories
+    section_limit = packet.budget.knowledge if knowledge else packet.budget.episodic_memories
+    cost = item.token_estimate + notice.token_estimate
+    if (
+        item.token_estimate > section_limit - sum(entry.token_estimate for entry in section)
+        or cost > packet.budget.total_limit - packet.declared_total_tokens
+    ):
+        return _with_omission(
+            packet,
+            item.item_id,
+            OmissionReason.TOKEN_BUDGET,
+            "requested item exceeds the remaining context budget",
+        )
+    return replace(
+        packet,
+        declared_total_tokens=packet.declared_total_tokens + cost,
+        knowledge_items=(*packet.knowledge_items, item) if knowledge else packet.knowledge_items,
+        episodic_memories=(
+            packet.episodic_memories if knowledge else (*packet.episodic_memories, item)
+        ),
+        provenance=(*packet.provenance, notice),
     )
 
 

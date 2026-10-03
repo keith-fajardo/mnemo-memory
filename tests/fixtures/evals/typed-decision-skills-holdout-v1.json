@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "synthetic-typed-decision-skills-holdout",
+  "provenance": {
+    "origin": "Mnemo-owned original synthetic prompts",
+    "competing_product_artifacts_used": false
+  },
+  "skills_fixture": "typed-decision-skills-v1.json",
+  "cases": [
+    {"id": "h-skill-01", "expected_skill": "release-notes", "prompt": "Put together the notes users will see for the 1.8 update."},
+    {"id": "h-skill-02", "expected_skill": "release-notes", "prompt": "List the user-facing changes in this sprint's version bump for the changelog."},
+    {"id": "h-skill-03", "expected_skill": "dbt-model-review", "prompt": "Before merging, look over my change to the fct_sessions model for duplicate rows."},
+    {"id": "h-skill-04", "expected_skill": "incident-postmortem", "prompt": "The queue backed up for an hour last night; write up the timeline and root cause."},
+    {"id": "h-skill-05", "expected_skill": "api-endpoint", "prompt": "Add a route that lets clients delete a saved search."},
+    {"id": "h-skill-06", "expected_skill": "schema-migration", "prompt": "Change the type of the amount column from float to decimal without downtime."},
+    {"id": "h-skill-07", "expected_skill": "test-plan", "prompt": "Work out what we need to test before turning on the new billing calculator."},
+    {"id": "h-skill-08", "expected_skill": "dependency-upgrade", "prompt": "Move the project from Django 4.2 to 5.1."},
+    {"id": "h-skill-09", "expected_skill": "performance-profiling", "prompt": "The dashboard query takes nine seconds; figure out where the time goes."},
+    {"id": "h-skill-10", "expected_skill": "security-review", "prompt": "Look over this webhook handler for ways an attacker could abuse it."},
+    {"id": "h-skill-11", "expected_skill": "contributor-guide", "prompt": "Write the doc a new teammate reads on day one to set up their machine."},
+    {"id": "h-skill-12", "expected_skill": "flag-rollout", "prompt": "Ship the redesigned checkout to internal users first, then everyone, with an off switch."},
+    {"id": "h-skill-13", "expected_skill": "data-backfill", "prompt": "Fill in the missing region values for all historical shipments."},
+    {"id": "h-skill-14", "expected_skill": "security-review", "prompt": "Make sure the new admin export cannot be reached by regular users."},
+    {"id": "h-skill-15", "expected_skill": "dependency-upgrade", "prompt": "Update numpy and fix anything the new version deprecates."},
+    {"id": "h-skill-16", "expected_skill": "schema-migration", "prompt": "Add a non-null tenant_id column to every table with a safe way back."},
+    {"id": "h-skill-17", "expected_skill": "performance-profiling", "prompt": "Memory use doubles during the nightly report; find out why."},
+    {"id": "h-skill-18", "expected_skill": "api-endpoint", "prompt": "Version the public orders API so v1 clients keep working."},
+    {"id": "h-no-skill-01", "expected_skill": "none", "prompt": "What does the walrus operator do in Python?"},
+    {"id": "h-no-skill-02", "expected_skill": "none", "prompt": "Sort these names alphabetically."},
+    {"id": "h-no-skill-03", "expected_skill": "none", "prompt": "Write a haiku about debugging."},
+    {"id": "h-no-skill-04", "expected_skill": "none", "prompt": "Convert 72 degrees Fahrenheit to Celsius."},
+    {"id": "h-no-skill-05", "expected_skill": "none", "prompt": "Is a hash map lookup always constant time?"},
+    {"id": "h-no-skill-06", "expected_skill": "none", "prompt": "Shorten this commit message to one line."}
+  ]
+}

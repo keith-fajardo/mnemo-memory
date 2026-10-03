@@ -16,13 +16,17 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     MEMORY_NEED,
     NOTE_SUBSTANCE,
     NOTE_TEXT_CHARACTERS,
+    SKILL_PICK_NAME,
+    SKILL_PICK_NONE,
     TIER_AXES,
     NeedAnswer,
     accepted_choice,
+    accepted_skill,
     hint_eligible,
     needs_from_memory_choice,
     note_text,
     should_drop_note,
+    skill_pick_axis,
     tier_committee,
     worth_extracting,
 )
@@ -136,3 +140,39 @@ def test_episodic_kind_labels_match_the_domain() -> None:
 
 def test_filler_check_has_a_total_time_budget() -> None:
     assert FILLER_CHECK_BUDGET_SECONDS == 0.8
+
+
+def test_skill_pick_axis_lists_skills_then_none() -> None:
+    axis = skill_pick_axis(("release-notes", "test-plan"))
+    assert axis is not None
+    assert axis.name == SKILL_PICK_NAME == "skill_pick"
+    assert axis.allowed_labels == ("release-notes", "test-plan", SKILL_PICK_NONE)
+    assert axis.criteria == ()
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        (),
+        tuple(f"skill-{index:02d}" for index in range(33)),
+        ("release-notes", "release-notes"),
+        ("none",),
+        ("Release Notes",),
+        ("x" * 65,),
+    ],
+)
+def test_skill_pick_axis_refuses_unusable_skill_lists(names: tuple[str, ...]) -> None:
+    assert skill_pick_axis(names) is None
+
+
+def test_thirty_two_skills_is_the_largest_axis() -> None:
+    axis = skill_pick_axis(tuple(f"skill-{index:02d}" for index in range(32)))
+    assert axis is not None and len(axis.allowed_labels) == 33
+
+
+def test_accepted_skill_needs_the_bar_and_the_skill_axis() -> None:
+    assert accepted_skill(_result("skill_pick", "test-plan", 0.0, 0.6)) == "test-plan"
+    assert accepted_skill(_result("skill_pick", "none", 0.0, 0.9)) == "none"
+    assert accepted_skill(_result("skill_pick", "test-plan", 0.0, 0.59)) is None
+    assert accepted_skill(_result("memory_need", "nothing", 0.0, 0.9)) is None
+    assert accepted_skill(None) is None

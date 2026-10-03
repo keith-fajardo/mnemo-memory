@@ -283,3 +283,40 @@ def test_schema_contract_matches_model_and_fixture_shape() -> None:
 def test_deterministic_test_estimator_has_no_provider_dependency() -> None:
     assert CharacterEstimator().estimate("four") == 4
     assert TaskId.from_string(str(TaskId.new())) != TaskId.from_string(str(TaskId.new()))
+
+
+FILLER_DETAIL = "judged filler; fetch with get_context item_ids"
+
+
+def test_per_note_filler_omissions_fit_the_unchanged_v1_schema() -> None:
+    schema = json.loads(
+        resources.files("mnemo_memory")
+        .joinpath("resources/schemas/context-packet-v1.json")
+        .read_text()
+    )
+    definition = schema["$defs"]["omission"]
+    notices = (
+        OmissionNotice(
+            "approved-episodic:00000000-0000-4000-8000-000000000001",
+            OmissionReason.LOWER_RANK,
+            FILLER_DETAIL,
+        ),
+        OmissionNotice(
+            "knowledge:00000000-0000-4000-8000-000000000002:revision:"
+            "00000000-0000-4000-8000-000000000003:section:0",
+            OmissionReason.LOWER_RANK,
+            FILLER_DETAIL,
+        ),
+    )
+    result = packet(omissions=notices)
+    serialized = result.to_dict()
+    assert ContextPacket.from_dict(serialized) == result
+    omissions = serialized["omissions"]
+    assert isinstance(omissions, list) and len(omissions) == 2
+    assert definition["additionalProperties"] is False
+    for omission in omissions:
+        assert set(omission) == set(definition["required"]) == set(definition["properties"])
+        assert omission["reason"] == "lower_rank"
+        assert omission["reason"] in definition["properties"]["reason"]["enum"]
+        assert omission["detail"] == FILLER_DETAIL
+    assert definition["properties"]["reason"]["enum"] == [reason.value for reason in OmissionReason]

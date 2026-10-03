@@ -32,6 +32,8 @@ class TypedDecisionKind(StrEnum):
     DEDUPE = "dedupe"
     SEMANTIC_KIND = "semantic_kind"
     VERIFY = "verify"
+    TIER_HINT = "tier_hint"
+    SKILL = "skill"
 
 
 class TypedDecisionUnavailableReason(StrEnum):

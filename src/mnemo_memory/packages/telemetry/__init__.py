@@ -1,6 +1,8 @@
 """Content-free Mnemo telemetry contracts and local personal adapters."""
 
 from .automatic_routes import (
+    AUTOMATIC_ROUTE_TYPED_V1_FIELDS,
+    TYPED_MODEL_VERSION,
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
     AutomaticRouteEvent,
@@ -10,6 +12,7 @@ from .automatic_routes import (
     AutomaticRouteSummary,
     AutomaticRouteTelemetryError,
     AutomaticRouteToolCategory,
+    AutomaticRouteTypedDecisions,
     LocalAutomaticRouteDiagnosticsSettingsStore,
     LocalAutomaticRouteTelemetryStore,
 )
@@ -26,6 +29,8 @@ from .takeover_routes import (
 )
 
 __all__ = [
+    "AUTOMATIC_ROUTE_TYPED_V1_FIELDS",
+    "TYPED_MODEL_VERSION",
     "AutomaticRouteDiagnosticsMode",
     "AutomaticRouteDiagnosticsSettings",
     "AutomaticRouteEvent",
@@ -35,6 +40,7 @@ __all__ = [
     "AutomaticRouteSummary",
     "AutomaticRouteTelemetryError",
     "AutomaticRouteToolCategory",
+    "AutomaticRouteTypedDecisions",
     "CheckpointSaveDiagnosticEvent",
     "CheckpointSaveOutcome",
     "CheckpointSaveTelemetryError",

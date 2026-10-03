@@ -74,9 +74,9 @@ def test_init_is_idempotent_and_creates_restrictive_local_state(tmp_path: Path) 
 
 def test_cli_help_explains_the_user_facing_workflow() -> None:
     runner = CliRunner()
-    root = runner.invoke(app, ["--help"])
-    memory = runner.invoke(app, ["memory", "--help"])
-    dbt = runner.invoke(app, ["dbt", "--help"])
+    root = runner.invoke(app, ["--help"], env={"COLUMNS": "200"})
+    memory = runner.invoke(app, ["memory", "--help"], env={"COLUMNS": "200"})
+    dbt = runner.invoke(app, ["dbt", "--help"], env={"COLUMNS": "200"})
 
     assert root.exit_code == memory.exit_code == dbt.exit_code == 0
     assert "Local-first durable task checkpoints and dbt lineage context." in root.output
@@ -326,7 +326,7 @@ def test_cli_init_and_status_use_isolated_data_directory(tmp_path: Path) -> None
 
 
 def test_cli_help_explains_top_level_commands() -> None:
-    result = CliRunner().invoke(app, ["--help"])
+    result = CliRunner().invoke(app, ["--help"], env={"COLUMNS": "200"})
 
     assert result.exit_code == 0
     assert "Initialize Mnemo's local data directory and SQLite database." in result.output

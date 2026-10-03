@@ -241,6 +241,7 @@ def test_server_lists_exact_tools_with_safety_annotations(tmp_path: Path) -> Non
     assert "dbt_changes" in tools[0].inputSchema["properties"]
     assert "include_lifecycle_events" in tools[0].inputSchema["properties"]
     assert "include_approved_events" in tools[0].inputSchema["properties"]
+    assert "item_ids" in tools[0].inputSchema["properties"]
     assert "skill_tags" in tools[0].inputSchema["properties"]
     assert "skill_client" in tools[0].inputSchema["properties"]
     assert "skill_agent_name" in tools[0].inputSchema["properties"]
@@ -392,6 +393,7 @@ def test_compact_profile_reduces_schema_and_keeps_only_bound_project_operations(
         "query",
         "recap_days",
         "total_tokens",
+        "item_ids",
     }
     assert set(compact[1].inputSchema["properties"]) == {
         "operation",
