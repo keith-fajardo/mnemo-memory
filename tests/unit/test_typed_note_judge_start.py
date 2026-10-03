@@ -25,6 +25,7 @@ from mnemo_memory.packages.application.settings import with_typed_decision_mode
 from mnemo_memory.packages.domain import TypedDecisionKind, TypedDecisionMode, TypedDecisionSource
 from mnemo_memory.packages.model_gateway.typed_decisions import GuardedTypedDecisionClassifier
 from mnemo_memory.packages.storage import LocalNoteJudgeQueue, LocalNoteVerdictCache
+from mnemo_memory.packages.telemetry import LocalAutomaticRouteTelemetryStore
 from scripts.typed_decision_replay import approved_event_item_ids, knowledge_note_item_ids
 from scripts.typed_decision_test_support import (
     FAKE_TYPESAFE_KEY,
@@ -157,6 +158,10 @@ def test_the_hook_never_waits_on_a_busy_queue_lock_and_reports_nothing_queued(
     assert (seen.context, seen.delivery_keys) == (off.context, off.delivery_keys)
     assert started == []  # nothing was queued, so no judge starts
     assert not LocalNoteJudgeQueue(fixture.data).path.exists()
+    event = LocalAutomaticRouteTelemetryStore(fixture.data).events(
+        cli._automatic_route_scope(fixture.binding.checkpoint_scope), limit=1
+    )[0]
+    assert event.typed is not None and event.typed.notes_queued == 0
     run_hook(fixture, KNOWLEDGE_PROMPT)  # a later prompt queues the notes
     assert LocalNoteJudgeQueue(fixture.data).length() == 3
 
@@ -347,7 +352,7 @@ def test_the_judge_command_builds_a_five_second_runtime_guard_and_sends_nothing(
 
 
 def test_the_judge_entry_point_loads_neither_typer_nor_the_cli_main_module() -> None:
-    """The spawned judge pays for what it needs only (about 0.4 s of CPU saved per start)."""
+    """The spawned judge pays for what it needs only (about 0.08 s saved per start)."""
 
     code = (
         "import mnemo_memory.apps.cli.judge_entry, sys; "

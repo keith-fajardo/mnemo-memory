@@ -211,7 +211,9 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     - A missing, stale or unreadable verdict keeps the note, which is today's behaviour.
   - **The background judge.** Notes without a verdict are queued by item ID
     (`typed-decision-judge-queue.json`, at most 256) and judged after the prompt by a detached
-    `typed-decisions judge-notes` process. It runs one at a time, uses a `RUNTIME` guard with a
+    `python -P -m mnemo_memory.apps.cli.judge_entry` process (the hidden `typed-decisions
+    judge-notes` command runs the same code). Nothing is queued for an unpinned model id or
+    while the queue lock is busy. It runs one at a time, uses a `RUNTIME` guard with a
     5 s deadline and sends at most 4 requests per batch (timed-out threads from an earlier
     batch may still be open). It asks about at most 32 notes per run (it may take up to 256
     queue entries), and stops retrying a note after 3 failed attempts on the same text. It

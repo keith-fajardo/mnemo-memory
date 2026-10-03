@@ -269,7 +269,8 @@ if TYPE_CHECKING:
 _ESTIMATED_TOKENS_PER_LOCAL_EXTRACTION = 297
 
 # The note reader lives in ``typed_note_reader`` so the judge process need not load this module;
-# these names stay here for the hook and for tests that patch them.
+# these names stay here for the hook and for tests that patch them. Patching an alias here does
+# NOT reach the reader or the judge: patch ``typed_note_reader`` itself for those paths.
 _automatic_prompt_context_service = automatic_prompt_context_service
 _note_candidates_by_id = note_candidates_by_id
 _pinned_approved_item_ids = pinned_approved_item_ids
@@ -1341,9 +1342,10 @@ def _start_note_judge(data_directory: Path) -> None:
 
     The command line names only the data directory, as one argument and without a shell. Note
     text and the API key never appear on it; the child inherits the hook's environment. It runs
-    the light ``judge_entry`` module, which loads neither typer nor this CLI module (that costs
-    about 0.4 s of CPU per start). ``-P`` keeps the working directory off ``sys.path``, so a
-    ``mnemo_memory/`` folder in the project cannot shadow the installed package.
+    the light ``judge_entry`` module, which loads neither typer nor this CLI module (that saves
+    about 0.08 s per start, about a fifth). ``-P`` keeps the working directory off
+    ``sys.path``, so a ``mnemo_memory/`` folder in the project cannot shadow the installed
+    package.
     """
 
     # The handle is dropped on purpose; without this Python warns that the child still runs.
