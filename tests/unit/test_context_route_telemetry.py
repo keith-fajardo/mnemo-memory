@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from mnemo_memory.apps.cli.main import app
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.telemetry import (
+    AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS,
     AUTOMATIC_ROUTE_TYPED_V1_FIELDS,
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
@@ -434,6 +435,9 @@ def test_typed_v1_keys_must_arrive_together() -> None:
         ("agrees_with_rules", "yes"),
         ("notes_checked", 17),
         ("notes_dropped", 4),
+        ("notes_cached", 17),
+        ("notes_queued", -1),
+        ("notes_queued", True),
         ("tier", "medium"),
         ("hint", "Mnemo: try a subagent"),
         ("skill", "release-notes"),
@@ -442,3 +446,38 @@ def test_typed_v1_keys_must_arrive_together() -> None:
 def test_typed_v1_accepts_only_closed_values(field: str, value: object) -> None:
     with pytest.raises(ValueError):
         AutomaticRouteTypedDecisions.from_dict({**TYPED.to_dict(), f"typed_{field}": value})
+
+
+CACHED = replace(TYPED, notes_unanswered=0, notes_cached=2, notes_queued=1)
+
+
+def test_typed_cache_counts_round_trip_and_older_records_still_load() -> None:
+    event = replace(_lazy_shadow(4), typed=CACHED)
+    encoded = event.to_dict()
+    assert set(AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS) == {"typed_notes_cached", "typed_notes_queued"}
+    assert (encoded["typed_notes_cached"], encoded["typed_notes_queued"]) == (2, 1)
+    assert AutomaticRouteEvent.from_dict(encoded) == event
+    older = dict(encoded)
+    for key in AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS:
+        del older[key]
+    loaded = AutomaticRouteEvent.from_dict(older).typed
+    assert loaded is not None and (loaded.notes_cached, loaded.notes_queued) == (0, 0)
+
+
+def test_typed_cache_counts_arrive_together_and_only_with_typed_v1() -> None:
+    encoded = replace(_event(1), typed=CACHED).to_dict()
+    half = dict(encoded)
+    del half["typed_notes_queued"]
+    with pytest.raises(ValueError, match="automatic route event is invalid"):
+        AutomaticRouteEvent.from_dict(half)
+    alone = {
+        key: value for key, value in encoded.items() if key not in AUTOMATIC_ROUTE_TYPED_V1_FIELDS
+    }
+    with pytest.raises(ValueError, match="automatic route event is invalid"):
+        AutomaticRouteEvent.from_dict(alone)
+
+
+def test_cached_and_queued_notes_never_exceed_the_checked_notes() -> None:
+    with pytest.raises(ValueError, match="note counts"):
+        replace(TYPED, notes_unanswered=0, notes_cached=2, notes_queued=2)
+    assert replace(TYPED, notes_unanswered=0, notes_cached=3, notes_queued=0).notes_cached == 3

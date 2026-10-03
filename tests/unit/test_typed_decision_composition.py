@@ -14,7 +14,11 @@ from mnemo_memory.apps.cli.typed_decision_composition import (
 )
 from mnemo_memory.connectors.typesafe import JevClassifier
 from mnemo_memory.packages.application import PersonalSettings
-from mnemo_memory.packages.domain import ModelTaskType, TypedDecisionUnavailableReason
+from mnemo_memory.packages.domain import (
+    ModelTaskType,
+    TypedDecisionSource,
+    TypedDecisionUnavailableReason,
+)
 from mnemo_memory.packages.model_gateway.decision_axes import (
     FILLER_CHECK_BUDGET_SECONDS,
     FRONT_DOOR_AXES,
@@ -183,3 +187,21 @@ def test_adapter_from_environment_needs_a_well_formed_key() -> None:
     adapter = _adapter_from_environment(settings, {"TYPESAFE_API_KEY": KEY}, transport)
     assert isinstance(adapter, JevClassifier)
     assert adapter.model_id == settings.typed_decision_model_id
+
+
+def test_builders_take_a_per_request_deadline_and_keep_the_hook_default(tmp_path: Path) -> None:
+    settings = PersonalSettings(experimental_typed_decisions_enabled=True)
+    hook = build_runtime_typed_decision_classifier(settings, data_directory=tmp_path, environ={})
+    judge = build_runtime_typed_decision_classifier(
+        settings, data_directory=tmp_path, environ={}, deadline_seconds=5.0
+    )
+    primer = build_synthetic_typed_decision_classifier(
+        settings, data_directory=tmp_path, environ={}, deadline_seconds=5.0
+    )
+    assert hook is not None and judge is not None
+    assert (hook._deadline, judge._deadline, primer._deadline) == (0.8, 5.0, 5.0)
+    assert judge._source is TypedDecisionSource.RUNTIME
+    with pytest.raises(ValueError, match="deadline"):
+        build_runtime_typed_decision_classifier(
+            settings, data_directory=tmp_path, environ={}, deadline_seconds=31.0
+        )

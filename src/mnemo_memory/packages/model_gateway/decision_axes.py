@@ -27,8 +27,13 @@ from .cascade_router import (
 )
 from .rule_axes import RISK_AXIS
 
-FILLER_DROP_AT = 0.7
-FILLER_CHECK_BUDGET_SECONDS = 0.8  # total wall time for one prompt's concurrent filler checks
+# Lowered from 0.7 on 2026-10-03: stored notes are judged with their heading, and headed filler
+# scored 0.54-0.76 while relevant notes scored about 0.00-0.01.
+FILLER_DROP_AT = 0.5
+# Bump when NOTE_SUBSTANCE's wording, labels or scores change: verdicts cached for the old
+# question then stop counting (spec 2026-10-03 §5).
+FILLER_QUESTION_VERSION = 1
+FILLER_CHECK_BUDGET_SECONDS = 0.8  # the prompt hook's cap for its one front-door request
 NOTE_TEXT_CHARACTERS = 300
 WORTH_SKIP_AT = 0.3
 CHOICE_CONFIDENCE_BAR = 0.6
@@ -152,10 +157,16 @@ def note_text(snippet: str) -> str:
     return text
 
 
+def should_drop_filler(p_filler: float | None) -> bool:
+    """Drop only confident filler: a p(filler) at or above the bar; no verdict means keep."""
+
+    return p_filler is not None and p_filler >= FILLER_DROP_AT
+
+
 def should_drop_note(result: ClassifierResult | None) -> bool:
     """Drop only confident filler; keep is the safe side."""
 
-    return result is not None and result.escalation_score >= FILLER_DROP_AT
+    return result is not None and should_drop_filler(result.escalation_score)
 
 
 def worth_extracting(result: ClassifierResult | None) -> bool:

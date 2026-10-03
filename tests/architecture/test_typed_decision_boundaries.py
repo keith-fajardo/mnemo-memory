@@ -8,6 +8,9 @@ POLICY_MODULES = (
     pathlib.Path("src/mnemo_memory/packages/model_gateway/rule_axes.py"),
     pathlib.Path("src/mnemo_memory/packages/model_gateway/decision_axes.py"),
     pathlib.Path("src/mnemo_memory/packages/model_gateway/typed_decisions.py"),
+    pathlib.Path("src/mnemo_memory/apps/cli/typed_note_judge.py"),
+    pathlib.Path("src/mnemo_memory/packages/storage/local_note_verdicts.py"),
+    pathlib.Path("src/mnemo_memory/packages/storage/local_note_judge_queue.py"),
 )
 TYPESAFE_CONNECTOR = pathlib.Path("src/mnemo_memory/connectors/typesafe")
 RUNTIME_COMPOSITION = pathlib.Path("src/mnemo_memory/apps/cli/typed_decision_composition.py")

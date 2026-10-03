@@ -12,6 +12,10 @@ synthetic-source guard, and only after its data directory is verified to hold ex
 fixture content: the prompt is re-read from a provenance-checked fixture by case ID, and every
 note, event and skill the hook could send must match the seed.
 
+Before any prompt, ``prime_replay_seed`` warms the seed's note-verdict cache by judging every
+seeded note through the synthetic-source guard (spec 2026-10-03 §7), so the prompt path sends
+only the front-door request and filler is scored from cached verdicts.
+
 Importing this module loads nothing of the typed step (``typed_decision_hook``, the model
 gateway, ``asyncio``): those are imported inside the functions that run after the hook call. A
 fresh-process child therefore pays the cold typed import inside the timed hook call, in the
@@ -175,10 +179,11 @@ class ReplayResult:
     """One prompt, one arm. ``front_door_outcome`` and ``hard_rule`` describe the typed step.
 
     When the hook fell back to the rules (``typed_step_error``), nothing Jev decided was applied,
-    so no checks, drops or Jev skill pick are recorded for that prompt. ``notes_unanswered``
-    counts checked notes Jev gave no answer for, and ``skill_comparison`` is the telemetry's
-    closed skill value (``skipped`` or ``not_asked`` when no skill question was sent). A case
-    that could not run carries only its identity and a content-free ``error_type``.
+    so no checks, drops or Jev skill pick are recorded for that prompt. ``notes_unanswered`` is
+    always 0 on the prompt path now (it never asks about a note); filler coverage comes from
+    ``notes_cached``, the checked notes that had a usable cached verdict. ``skill_comparison`` is
+    the telemetry's closed skill value (``skipped`` or ``not_asked`` when no skill question was
+    sent). A case that could not run carries only its identity and a content-free ``error_type``.
     """
 
     set_name: str
@@ -201,6 +206,7 @@ class ReplayResult:
     notes_unanswered: int
     skill_comparison: str | None
     error_type: str | None = None
+    notes_cached: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -466,6 +472,167 @@ def _seed_approved_events(
     return categories
 
 
+def knowledge_note_item_ids(data: Path, binding: MemoryProjectBinding) -> tuple[str, ...]:
+    """Every current knowledge section in the project, named as ``get_context`` names it."""
+
+    with build_checkpoint_runtime(resolve_local_config(data)) as runtime:
+        repository = runtime.knowledge_document_repository
+        if repository is None:
+            return ()
+        return tuple(
+            f"{_KNOWLEDGE_ITEM_PREFIX}{revision.document.document_id}:revision:"
+            f"{revision.revision_id}:section:{index}"
+            for revision in repository.list_current_revisions(binding.scope)
+            for index in range(len(revision.document.sections))
+        )
+
+
+def approved_event_item_ids(data: Path, binding: MemoryProjectBinding) -> tuple[str, ...]:
+    """Every approved event in the project's task scope, pinned ones included."""
+
+    item_ids: list[str] = []
+    with build_checkpoint_runtime(resolve_local_config(data)) as runtime:
+        offset: int | None = 0
+        while offset is not None:
+            page = runtime.repository.list_approved_events(
+                binding.checkpoint_scope, offset=offset, limit=50
+            )
+            item_ids.extend(f"{_EVENT_ITEM_PREFIX}{event.event_id}" for event in page.items)
+            offset = page.next_offset
+    return tuple(item_ids)
+
+
+def _pinned_event_item_ids(data: Path, binding: MemoryProjectBinding) -> frozenset[str]:
+    """The approved events in the project's task scope that are pinned (never judged)."""
+
+    pinned: set[str] = set()
+    with build_checkpoint_runtime(resolve_local_config(data)) as runtime:
+        offset: int | None = 0
+        while offset is not None:
+            page = runtime.repository.list_approved_event_records(
+                binding.checkpoint_scope, offset=offset, limit=50
+            )
+            pinned.update(
+                f"{_EVENT_ITEM_PREFIX}{record.event_id}" for record in page.items if record.pinned
+            )
+            offset = page.next_offset
+    return frozenset(pinned)
+
+
+@dataclass(frozen=True, slots=True)
+class PrimingResult:
+    """One set's priming pass: seeded notes read, and how many got a cached verdict.
+
+    ``error_type`` is only the exception class name of a pass that could not run, never its text.
+    """
+
+    set_name: str
+    notes: int
+    answered: int
+    blocked: bool
+    error_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "notes": self.notes,
+            "answered": self.answered,
+            "share": share(self.answered, self.notes),
+            "blocked": self.blocked,
+            "error_type": self.error_type,
+        }
+
+    @classmethod
+    def failed(cls, set_name: str, error_type: str | None = None) -> PrimingResult:
+        """A priming pass that could not run: nothing judged, so its gate fails."""
+
+        return cls(set_name, 0, 0, True, error_type)
+
+
+Primer = Callable[[ReplaySeed], PrimingResult]
+
+
+def prime_replay_seed(
+    seed: ReplaySeed,
+    *,
+    environ: Mapping[str, str],
+    jev_transport: JevTransport | None = None,
+    live_calls_authorized: bool = False,
+) -> PrimingResult:
+    """Warm the seed's verdict cache by judging every seeded note (spec 2026-10-03 §7).
+
+    A note a pass leaves unanswered is judged again, up to ``MAXIMUM_NOTE_VERDICT_ATTEMPTS``
+    passes in all; the loop stops early when none is left or a policy block stops a pass.
+
+    The notes are the notes project's Markdown sections and the main project's approved events;
+    the pinned event is never sent and skills are not notes. Both projects are first verified to
+    hold exactly the seeded content. Text is read with the background judge's scoped reader, and
+    Jev is reached only through the synthetic-source guard with the judge's 5 s deadline, four
+    requests in flight. ``notes`` counts the seeded notes (pinned events aside), so a note the
+    reader skips still counts against the share. Without a test ``jev_transport`` this calls
+    Jev, so it needs ``live_calls_authorized=True``.
+    """
+
+    if jev_transport is None and not live_calls_authorized:
+        raise ReplayRefusedError(
+            "a replay priming pass without a test transport needs authorization"
+        )
+    from mnemo_memory.apps.cli.typed_decision_composition import (
+        build_synthetic_typed_decision_classifier,
+    )
+    from mnemo_memory.apps.cli.typed_decision_hook import filler_verdict_key
+    from mnemo_memory.apps.cli.typed_note_judge import JUDGE_DEADLINE_SECONDS, judge_candidates
+    from mnemo_memory.packages.storage import MAXIMUM_NOTE_VERDICT_ATTEMPTS, LocalNoteVerdictCache
+
+    data = seed.data_directory
+    notes = _verified_binding(_priming_request(seed, seed.notes_project_directory, "notes"))
+    events = _verified_binding(_priming_request(seed, seed.project_directory, "memory"))
+    note_ids = knowledge_note_item_ids(data, notes)
+    pinned = _pinned_event_item_ids(data, events)
+    event_ids = tuple(
+        item_id for item_id in approved_event_item_ids(data, events) if item_id not in pinned
+    )
+    candidates = (
+        *cli._note_candidates_by_id(data, notes.checkpoint_scope, note_ids),
+        *cli._note_candidates_by_id(data, events.checkpoint_scope, event_ids),
+    )
+    settings = PersonalSettingsStore(data).load()
+    guard = build_synthetic_typed_decision_classifier(
+        settings,
+        data_directory=data,
+        environ=environ,
+        jev_transport=jev_transport,
+        deadline_seconds=JUDGE_DEADLINE_SECONDS,
+    )
+    cache = LocalNoteVerdictCache(data)
+    model_version = settings.typed_decision_model_id
+    answered = 0
+    blocked = False
+    pending = candidates
+    for _ in range(MAXIMUM_NOTE_VERDICT_ATTEMPTS):
+        if not pending:
+            break
+        tally = judge_candidates(guard, pending, cache=cache, model_version=model_version)
+        answered += tally.answered
+        if tally.blocked:
+            blocked = True
+            break
+        keys = tuple(filler_verdict_key(candidate, model_version) for candidate in pending)
+        pending = tuple(
+            candidate
+            for candidate, state in zip(pending, cache.states(keys), strict=True)
+            if state.needs_judging
+        )
+    return PrimingResult(seed.set_name, len(note_ids) + len(event_ids), answered, blocked)
+
+
+def _priming_request(seed: ReplaySeed, project: Path, group: str) -> ReplayRequest:
+    """A request that only names a seeded project, so ``_verified_binding`` can check it."""
+
+    return ReplayRequest(
+        seed.set_name, group, "priming", "typed", str(seed.data_directory), str(project)
+    )
+
+
 def _verified_binding(request: ReplayRequest) -> MemoryProjectBinding:
     """The request's project, only if its data directory holds exactly the seeded content.
 
@@ -612,6 +779,7 @@ def run_replay_case(
         hard_rule=hard_rule,
         notes_unanswered=0 if typed is None or step is None else typed.notes_unanswered,
         skill_comparison=None if typed is None else typed.skill,
+        notes_cached=0 if typed is None or step is None else typed.notes_cached,
     )
 
 
@@ -738,6 +906,7 @@ def score_replay(
     cases: Sequence[ReplayCase],
     results: Sequence[ReplayResult],
     seeds: Mapping[str, ReplaySeed],
+    priming: Mapping[str, PrimingResult] | None = None,
 ) -> dict[str, Any]:
     """Score the spec §8.3 gates per decision; only sets and groups present are scored.
 
@@ -746,6 +915,8 @@ def score_replay(
     ``steps`` and is left out of the filler and skill scores. Each decision's gates include an
     ``answered_share`` sub-gate over the prompts (or notes) where Jev was asked it. A case that
     failed in either arm is left out of every score and fails ``steps`` (``no_case_failures``).
+    Each filler section also scores that set's priming pass (``priming``); a set never primed
+    fails its ``priming_answered_share`` sub-gate.
     """
 
     failures = [item for item in results if item.error_type is not None]
@@ -770,7 +941,9 @@ def score_replay(
             item.checked_item_ids for item in typed_results
         ):
             section["filler"] = _score_filler(
-                [item for item in typed_results if not _step_error(item)], seeds[set_name]
+                [item for item in typed_results if not _step_error(item)],
+                seeds[set_name],
+                (priming or {}).get(set_name),
             )
             gates[f"filler_{set_name}"] = all(section["filler"]["gates"].values())
         skill = [case for case in set_cases if case.group == "skill"]
@@ -915,12 +1088,16 @@ def _seed_key(seed: ReplaySeed, item_id: str) -> str | None:
     return next((key for key in seed.categories if item_id.startswith(key)), None)
 
 
-def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str, Any]:
+def _score_filler(
+    results: Sequence[ReplayResult], seed: ReplaySeed, priming: PrimingResult | None
+) -> dict[str, Any]:
     """Jev's would-drop decisions by seeded category, per check, plus note coverage.
 
     Every seeded Markdown note must be checked at least once: a drop rate over the few notes
     a probe happened to render says nothing about the notes no probe ever showed. Approved
-    events are reported, not gated; the pinned one is never sent.
+    events are reported, not gated; the pinned one is never sent. Verdicts come from the cache
+    the priming pass warmed (spec 2026-10-03 §7): ``answered`` is the share of checked notes
+    that had a cached verdict, and ``priming`` the share of seeded notes priming judged.
     """
 
     rows: list[tuple[str, bool]] = []
@@ -944,7 +1121,12 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
     judged = sum(len(result.dropped_item_ids) for result in results)
     applied = sum(len(result.applied_drop_item_ids) for result in results)
     sent = sum(len(result.checked_item_ids) for result in results)
-    answered = _answered_share(sent, sent - sum(result.notes_unanswered for result in results))
+    answered = _answered_share(sent, sum(result.notes_cached for result in results))
+    primed = (
+        _answered_share(0, 0)
+        if priming is None
+        else _answered_share(priming.notes, priming.answered) | {"blocked": priming.blocked}
+    )
     return {
         "checks": len(rows),
         "drops_judged": judged,
@@ -963,11 +1145,13 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
             dropped for category, dropped in rows if category == "superseded"
         ),
         "answered": answered,
+        "priming": primed,
         "gates": {
             "relevant_dropped": bool(relevant) and sum(relevant) == 0,
             "filler_removed": bool(noise) and noise_rate >= 0.9,
             "all_notes_checked": bool(notes) and notes_checked == len(notes),
             "answered_share": _answered_gate(answered),
+            "priming_answered_share": _answered_gate(primed),
         },
     }
 

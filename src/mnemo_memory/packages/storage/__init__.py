@@ -124,6 +124,13 @@ from .contracts import (
     TeamKnowledgeSourceApprovalResult,
 )
 from .local_model_budget import LocalDailyModelBudget
+from .local_note_judge_queue import MAXIMUM_QUEUED_NOTES, LocalNoteJudgeQueue, QueuedNote
+from .local_note_verdicts import (
+    MAXIMUM_NOTE_VERDICT_ATTEMPTS,
+    LocalNoteVerdictCache,
+    NoteVerdictState,
+    note_verdict_key,
+)
 from .postgres import (
     POSTGRES_TEAM_SCHEMA_VERSION,
     PostgreSQLConnection,
@@ -184,6 +191,8 @@ from .team import (
 )
 
 __all__ = [
+    "MAXIMUM_NOTE_VERDICT_ATTEMPTS",
+    "MAXIMUM_QUEUED_NOTES",
     "POSTGRES_TEAM_SCHEMA_VERSION",
     "ActiveEpisodicMemoryNotFound",
     "ActiveEpisodicMemoryPage",
@@ -277,9 +286,12 @@ __all__ = [
     "KnowledgeDocumentStorageFailure",
     "KnowledgeDocumentSyncStoreResult",
     "LocalDailyModelBudget",
+    "LocalNoteJudgeQueue",
+    "LocalNoteVerdictCache",
     "ManifestNodeNotFound",
     "ManifestSnapshotNotFound",
     "ModelBudgetStorageFailure",
+    "NoteVerdictState",
     "PostgreSQLApprovedEpisodicEventRepository",
     "PostgreSQLCheckpointRepository",
     "PostgreSQLConnection",
@@ -300,6 +312,7 @@ __all__ = [
     "ProjectIndexRepository",
     "ProjectProcedureRegistry",
     "ProjectSkillRegistry",
+    "QueuedNote",
     "ReferenceApprovedEpisodicEventRepository",
     "ReferenceCheckpointLifecycleEventRepository",
     "ReferenceCheckpointRepository",
@@ -353,4 +366,5 @@ __all__ = [
     "TeamOperationsSnapshot",
     "TeamOperationsStorageFailure",
     "TeamOperationsThresholds",
+    "note_verdict_key",
 ]

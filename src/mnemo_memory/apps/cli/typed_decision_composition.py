@@ -41,13 +41,24 @@ def build_runtime_typed_decision_classifier(
     environ: Mapping[str, str] | None = None,
     jev_transport: JevTransport | None = None,
     recorder: TypedDecisionRecorder | None = None,
+    deadline_seconds: float = RUNTIME_DEADLINE_SECONDS,
 ) -> GuardedTypedDecisionClassifier | None:
-    """Return ``None`` when disabled; otherwise a guard bound to the runtime source."""
+    """Return ``None`` when disabled; otherwise a guard bound to the runtime source.
+
+    ``deadline_seconds`` is the per-request deadline: the prompt hook keeps the 0.8 s default,
+    and the background note judge passes 5 s (spec 2026-10-03 §4).
+    """
 
     if not settings.experimental_typed_decisions_enabled:
         return None
     return _guard(
-        settings, TypedDecisionSource.RUNTIME, data_directory, environ, jev_transport, recorder
+        settings,
+        TypedDecisionSource.RUNTIME,
+        data_directory,
+        environ,
+        jev_transport,
+        recorder,
+        deadline_seconds,
     )
 
 
@@ -58,11 +69,13 @@ def build_synthetic_typed_decision_classifier(
     environ: Mapping[str, str] | None = None,
     jev_transport: JevTransport | None = None,
     recorder: TypedDecisionRecorder | None = None,
+    deadline_seconds: float = RUNTIME_DEADLINE_SECONDS,
 ) -> GuardedTypedDecisionClassifier:
     """Return a synthetic-fixture guard for the replay (spec §8.2); the hook never calls it.
 
     Its source lets fixture text through the ``synthetic_only`` route, so callers must pass only
-    text read from fixtures that declare synthetic provenance.
+    text read from fixtures that declare synthetic provenance. The replay's priming pass uses
+    the judge's 5 s ``deadline_seconds``.
     """
 
     return _guard(
@@ -72,6 +85,7 @@ def build_synthetic_typed_decision_classifier(
         environ,
         jev_transport,
         recorder,
+        deadline_seconds,
     )
 
 
@@ -82,6 +96,7 @@ def _guard(
     environ: Mapping[str, str] | None,
     transport: JevTransport | None,
     recorder: TypedDecisionRecorder | None,
+    deadline_seconds: float,
 ) -> GuardedTypedDecisionClassifier:
     variables = os.environ if environ is None else environ
     return GuardedTypedDecisionClassifier(
@@ -95,7 +110,7 @@ def _guard(
         ),
         workspace_id=_LOCAL_WORKSPACE,
         reservation=_RUNTIME_RESERVATION,
-        deadline_seconds=RUNTIME_DEADLINE_SECONDS,
+        deadline_seconds=deadline_seconds,
         recorder=recorder,
     )
 

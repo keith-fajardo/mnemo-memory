@@ -14,17 +14,27 @@ import pytest
 
 import scripts.run_typed_decision_replay as replay_cli
 from mnemo_memory.apps.cli import main as cli
+from mnemo_memory.connectors.typesafe import jev_provider
 from mnemo_memory.packages.application import (
     LocalConfig,
+    PersonalSettings,
+    PersonalSettingsStore,
     RecordApprovedEpisodicEvent,
     build_checkpoint_runtime,
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.domain import ApprovedEventKind
+from mnemo_memory.packages.storage import (
+    MAXIMUM_NOTE_VERDICT_ATTEMPTS,
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+)
 from scripts.typed_decision_evaluation import relevance_notes
 from scripts.typed_decision_replay import (
     NOTE_BATCH,
     SEED_MARKER,
+    Primer,
+    PrimingResult,
     ReplayCase,
     ReplayChildError,
     ReplayRefusedError,
@@ -33,6 +43,7 @@ from scripts.typed_decision_replay import (
     ReplaySeed,
     evidence,
     find_case,
+    prime_replay_seed,
     replay_cases,
     replay_notes,
     replay_request,
@@ -55,6 +66,17 @@ MEMORY_LABEL = {
     "none": "nothing",
 }
 FAKE_ENVIRON = {"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY}
+PRIMED = {"dev": PrimingResult("dev", 2, 2, False)}
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defense in depth: no replay test may reach the real Jev transport."""
+
+    def refuse(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        raise AssertionError("a replay test reached the network transport")
+
+    monkeypatch.setattr(jev_provider, "_urllib_transport", refuse)
 
 
 class ReplayOracle:
@@ -137,6 +159,9 @@ def test_seed_keeps_events_apart_from_notes_and_maps_every_category(tmp_path: Pa
     assert len(events) == 4
     assert set(seed.categories.values()) == {"relevant", "noise"}
     assert (seed.data_directory / "settings.json").exists()
+    settings = PersonalSettingsStore(seed.data_directory).load()
+    # The seed never turns the typed step on, so nothing in the replay can start the judge.
+    assert settings.experimental_typed_decisions_enabled is False
     assert (seed.data_directory / SEED_MARKER).exists()
     assert seed.project_directory != seed.notes_project_directory
     assert not (seed.notes_project_directory / "skills").exists()
@@ -158,24 +183,49 @@ def _in_process(
     return run
 
 
+def _primer(transport: Callable[[str, bytes, Mapping[str, str], float], bytes]) -> Primer:
+    def prime(seed: ReplaySeed) -> PrimingResult:
+        return prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=transport)
+
+    return prime
+
+
 @pytest.mark.parametrize("set_name", ["holdout", "dev"])
 def test_every_seeded_note_is_checked_under_a_fake_that_answers_everything(
     tmp_path: Path, set_name: str
 ) -> None:
+    """Spec 2026-10-03 §8: once primed, the fake-transport run passes every filler gate."""
+
     seed = seed_replay_set(tmp_path, set_name)
     probes = [case for case in replay_cases() if (case.set_name, case.group) == (set_name, "notes")]
-    run = _in_process(ReplayOracle())
-    results = [run(replay_request(seed, probe, "typed")) for probe in probes]
+    oracle = ReplayOracle()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=oracle)
+    results = run_replay({set_name: seed}, probes, _in_process(oracle))
+    typed = [result for result in results if result.arm == "typed"]
     notes = {key for key in seed.categories if key.startswith("knowledge:")}
     checked = {
         key
-        for result in results
+        for result in typed
         for item_id in result.checked_item_ids
         for key in notes
         if item_id.startswith(key)
     }
-    assert {result.front_door_outcome for result in results} == {"answered"}
+    assert {result.front_door_outcome for result in typed} == {"answered"}
     assert checked == notes
+    filler = score_replay(probes, results, {set_name: seed}, priming={set_name: priming})["sets"][
+        set_name
+    ]["filler"]
+    assert filler["noise_checks"] > 0 and filler["drops_applied"] > 0
+    assert filler["gates"] == dict.fromkeys(
+        (
+            "relevant_dropped",
+            "filler_removed",
+            "all_notes_checked",
+            "answered_share",
+            "priming_answered_share",
+        ),
+        True,
+    )
 
 
 def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> None:
@@ -186,9 +236,10 @@ def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> Non
         *[case for case in all_cases if case.group == "memory"][:4],
         hard_rule,
         *[case for case in all_cases if case.group == "skill"][:3],
-        *[case for case in all_cases if case.group == "notes"][:1],
+        find_case("holdout", "notes", "notes-holdout-b05"),  # one relevant note, two noise
     ]
     oracle = ReplayOracle()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=oracle)
     results = run_replay({"holdout": seed}, subset, _in_process(oracle))
     assert len(results) == 2 * len(subset)
     by_key = {(result.case_id, result.arm): result for result in results}
@@ -210,12 +261,15 @@ def test_in_process_replay_runs_both_arms_and_scores_them(tmp_path: Path) -> Non
         )
         assert category is not None  # the notes project holds only seeded notes
         assert (item_id in notes.dropped_item_ids) == (category == "noise")
+    assert notes.dropped_item_ids  # the cached noise verdicts really drop notes
     assert set(notes.applied_drop_item_ids) <= set(notes.dropped_item_ids)
+    assert notes.notes_cached == len(notes.checked_item_ids)
 
-    report = score_replay(subset, results, {"holdout": seed})
+    report = score_replay(subset, results, {"holdout": seed}, priming={"holdout": priming})
     holdout = report["sets"]["holdout"]
     assert set(report["sets"]) == {"holdout"}
     assert holdout["filler"]["relevant_dropped"] == 0
+    assert holdout["filler"]["gates"]["priming_answered_share"] is True
     assert holdout["front_door_outcomes"] == {"answered": len(subset)}
     assert holdout["memory_hard_rule"]["prompts"] == 1
     assert holdout["memory_typed"]["cases"] == 4
@@ -287,6 +341,7 @@ def _result(
     hard_rule: bool | None = False,
     unanswered: int = 0,
     skill: str = "agreed",
+    cached: int = 0,
 ) -> ReplayResult:
     typed = arm == "typed"
     return ReplayResult(
@@ -309,6 +364,7 @@ def _result(
         hard_rule if typed else None,
         unanswered if typed else 0,
         skill if typed else None,
+        notes_cached=cached if typed else 0,
     )
 
 
@@ -320,7 +376,7 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
     skill = ReplayCase("dev", "skill", "s1", "p1", expected_skill="test-plan")
     none = ReplayCase("dev", "skill", "s2", "p2", expected_skill="none")
     notes = ReplayCase("dev", "notes", "n1", "p3")
-    seed = _seed({"knowledge:good:": "relevant", "knowledge:noise:": "noise"})
+    seeds = {"dev": _seed({"knowledge:good:": "relevant", "knowledge:noise:": "noise"})}
     cases = [skill, none, notes]
     passing = [
         _result(skill, "rules", tokens=200, skill_pick="none"),
@@ -336,9 +392,10 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
             checked=("knowledge:good:r:section:0", "knowledge:noise:r:section:0"),
             dropped=("knowledge:noise:r:section:0",),
             applied=("knowledge:noise:r:section:0",),
+            cached=2,
         ),
     ]
-    report = score_replay(cases, passing, {"dev": seed})
+    report = score_replay(cases, passing, seeds, priming=PRIMED)
     assert report["gates"] == {
         "filler_dev": True,
         "skill_dev": True,
@@ -353,9 +410,10 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
         1,
         0,
     )
+    assert filler["priming"] == {"asked": 2, "answered": 2, "share": 1.0, "blocked": False}
 
     slow = [*passing[:-1], replace_result(passing[-1], hook_ms=1_200, cap_hit=True)]
-    failing = score_replay(cases, slow, {"dev": seed})
+    failing = score_replay(cases, slow, seeds, priming=PRIMED)
     assert failing["gates"]["latency"] is False
     assert failing["latency"]["added_hook_ms"]["max"] == 1_100
 
@@ -363,32 +421,42 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
         *passing[:-1],
         replace_result(passing[-1], dropped_item_ids=("knowledge:good:r:section:0",)),
     ]
-    assert score_replay(cases, leaky, {"dev": seed})["gates"]["filler_dev"] is False
+    assert score_replay(cases, leaky, seeds, priming=PRIMED)["gates"]["filler_dev"] is False
 
     costly = [
         replace_result(result, attached_tokens=300) if result.arm == "typed" else result
         for result in passing
     ]
-    assert score_replay(cases, costly, {"dev": seed})["gates"]["tokens"] is False
+    assert score_replay(cases, costly, seeds, priming=PRIMED)["gates"]["tokens"] is False
 
     unchecked = [
         *passing[:-1],
-        replace_result(passing[-1], checked_item_ids=(), dropped_item_ids=()),
+        replace_result(passing[-1], checked_item_ids=(), dropped_item_ids=(), notes_cached=0),
     ]
-    assert score_replay(cases, unchecked, {"dev": seed})["gates"]["filler_dev"] is False
+    assert score_replay(cases, unchecked, seeds, priming=PRIMED)["gates"]["filler_dev"] is False
 
-    unanswered = [*passing[:-1], replace_result(passing[-1], notes_unanswered=1)]
-    filler = score_replay(cases, unanswered, {"dev": seed})["sets"]["dev"]["filler"]
+    uncached = [*passing[:-1], replace_result(passing[-1], notes_cached=1)]
+    filler = score_replay(cases, uncached, seeds, priming=PRIMED)["sets"]["dev"]["filler"]
     assert filler["answered"] == {"asked": 2, "answered": 1, "share": 0.5}
     assert filler["gates"]["answered_share"] is False
+
+    unprimed = score_replay(cases, passing, seeds)
+    assert unprimed["sets"]["dev"]["filler"]["priming"] == {
+        "asked": 0,
+        "answered": 0,
+        "share": 0.0,
+    }
+    assert unprimed["gates"]["filler_dev"] is False  # never primed is never evidence
+    weak = score_replay(cases, passing, seeds, priming={"dev": PrimingResult("dev", 20, 18, False)})
+    assert weak["sets"]["dev"]["filler"]["gates"]["priming_answered_share"] is False
 
     skipped = [
         replace_result(result, skill_comparison="skipped") if result.arm == "typed" else result
         for result in passing
     ]
-    skill = score_replay(cases, skipped, {"dev": seed})["sets"]["dev"]["skill"]
-    assert skill["answered"] == {"asked": 0, "answered": 0, "share": 0.0}
-    assert skill["gates"]["answered_share"] is False  # never asked is never evidence
+    skill_section = score_replay(cases, skipped, seeds, priming=PRIMED)["sets"]["dev"]["skill"]
+    assert skill_section["answered"] == {"asked": 0, "answered": 0, "share": 0.0}
+    assert skill_section["gates"]["answered_share"] is False  # never asked is never evidence
 
 
 def test_filler_gate_needs_every_seeded_note_checked() -> None:
@@ -411,9 +479,10 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
             tokens=100,
             checked=("knowledge:good:r:section:0", "knowledge:noise:r:section:0"),
             dropped=("knowledge:noise:r:section:0",),
+            cached=2,
         ),
     ]
-    report = score_replay([notes], results, {"dev": seed})
+    report = score_replay([notes], results, {"dev": seed}, priming=PRIMED)
     filler = report["sets"]["dev"]["filler"]
     assert (filler["notes_seeded"], filler["notes_checked"]) == (3, 2)
     assert (filler["events_seeded"], filler["events_checked"]) == (1, 0)
@@ -422,6 +491,7 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
         "filler_removed": True,
         "all_notes_checked": False,
         "answered_share": True,
+        "priming_answered_share": True,
     }
     assert report["gates"]["filler_dev"] is False
 
@@ -870,7 +940,7 @@ def test_children_get_exactly_the_environment_they_are_given(
     monkeypatch.setattr(replay_cli, "run_case_in_fresh_process", fresh)
     environ = FAKE_ENVIRON | {"MARK": "1"}
     args = ["--run-id", "env-run", "--results-root", str(tmp_path), "--live-calls-authorized"]
-    assert replay_cli.main(args, environ=environ) in {0, 1}
+    assert replay_cli.main(args, environ=environ, primer=_primer(oracle)) in {0, 1}
     assert forwarded == [environ, environ]
 
 
@@ -887,11 +957,14 @@ def test_cli_writes_a_report_with_an_in_process_runner(
         ["--run-id", "test-run", "--results-root", str(tmp_path), "--live-calls-authorized"],
         environ=FAKE_ENVIRON,
         runner=_in_process(ReplayOracle()),
+        primer=_primer(ReplayOracle()),
     )
     report = json.loads((tmp_path / "test-run" / "report.json").read_text("utf-8"))
     assert code in {0, 1}
     assert report["run"] == {"run_id": "test-run", "prompts": 5, "requests": 10}
     assert set(report["gates"]) >= {"latency", "tokens", "tier", "steps"}
+    assert set(report["priming"]) == {"dev", "holdout"}
+    assert report["priming"]["holdout"]["share"] == 1.0
 
 
 def test_a_failing_child_is_recorded_and_the_report_is_still_written(
@@ -911,6 +984,7 @@ def test_a_failing_child_is_recorded_and_the_report_is_still_written(
         ["--run-id", "failed-run", "--results-root", str(tmp_path), "--live-calls-authorized"],
         environ=FAKE_ENVIRON,
         runner=runner,
+        primer=_primer(ReplayOracle()),
     )
     output = tmp_path / "failed-run" / "report.json"
     report = json.loads(output.read_text("utf-8"))
@@ -951,3 +1025,174 @@ def test_run_replay_records_a_real_child_failure_and_keeps_going(tmp_path: Path)
     steps = score_replay([case], [rules, typed], {"holdout": seed})["steps"]
     assert steps["gates"]["no_case_failures"] is False
     assert [failure["case_id"] for failure in steps["case_failures"]] == [case.case_id]
+
+
+def test_priming_judges_every_seeded_note_and_never_the_pinned_one(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    oracle = ReplayOracle()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=oracle)
+    # 24 Markdown notes plus 3 of the 4 events: the pinned one is never sent; skills are not notes.
+    assert (priming.notes, priming.answered, priming.blocked) == (27, 27, False)
+    assert oracle.calls == 27
+    assert LocalNoteVerdictCache(seed.data_directory).entry_count() == 27
+    assert priming.to_dict() == {
+        "notes": 27,
+        "answered": 27,
+        "share": 1.0,
+        "blocked": False,
+        "error_type": None,
+    }
+
+
+class _FailsEachNoteOnce:
+    """Fail the first request about each distinct note at the transport, then answer."""
+
+    def __init__(self, inner: ReplayOracle) -> None:
+        self.inner = inner
+        self.calls = 0
+        self.seen: set[bytes] = set()
+
+    def __call__(self, url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        self.calls += 1
+        if body not in self.seen:
+            self.seen.add(body)
+            raise OSError("synthetic transport failure")
+        return self.inner(url, body, headers, timeout)
+
+
+def test_priming_retries_the_notes_a_pass_left_unanswered(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    flaky = _FailsEachNoteOnce(ReplayOracle())
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=flaky)
+    assert (priming.notes, priming.answered, priming.blocked) == (27, 27, False)
+    assert flaky.calls == 54  # one failed request and one retry per note
+    assert LocalNoteVerdictCache(seed.data_directory).entry_count() == 27
+
+
+def test_priming_stops_retrying_after_the_attempt_cap(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    failing = _HttpErrors()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=failing)
+    assert (priming.notes, priming.answered) == (27, 0)
+    assert failing.calls == 27 * MAXIMUM_NOTE_VERDICT_ATTEMPTS
+
+
+def test_a_seeded_note_the_reader_skips_still_counts_against_priming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The share is over the seeded notes, not over the notes the reader happened to return."""
+
+    seed = seed_replay_set(tmp_path, "holdout")
+    read = cli._note_candidates_by_id
+
+    def drops_one(data: Path, scope: Any, item_ids: Any) -> Any:
+        return read(data, scope, item_ids)[1:]
+
+    monkeypatch.setattr(cli, "_note_candidates_by_id", drops_one)
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=ReplayOracle())
+    assert (priming.notes, priming.answered) == (27, 25)  # one skipped per project read
+
+
+@pytest.mark.parametrize(
+    ("alter", "message"),
+    [
+        (_no_marker, "no seed marker"),
+        (_extra_document, "document that was not seeded"),
+        (_extra_event, "event that was not seeded"),
+    ],
+)
+def test_priming_refuses_a_directory_that_is_not_exactly_the_seed(
+    tmp_path: Path, alter: Callable[[ReplaySeed], None], message: str
+) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    alter(seed)
+    transport = ScriptedJevTransport()
+    with pytest.raises(ReplayRefusedError, match=message):
+        prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=transport)
+    assert transport.calls == 0
+
+
+def test_priming_without_a_test_transport_needs_authorization(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    with pytest.raises(ReplayRefusedError, match="needs authorization"):
+        prime_replay_seed(seed, environ=FAKE_ENVIRON)
+
+
+def test_a_jev_that_never_answers_fails_the_priming_gate(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    failing = _HttpErrors()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=failing)
+    assert failing.calls > 0 and (priming.notes, priming.answered) == (27, 0)
+    probe = find_case("holdout", "notes", "notes-holdout-b00")
+    results = run_replay({"holdout": seed}, [probe], _in_process(ReplayOracle()))
+    report = score_replay([probe], results, {"holdout": seed}, priming={"holdout": priming})
+    filler = report["sets"]["holdout"]["filler"]
+    assert filler["priming"]["share"] == 0.0
+    assert filler["gates"]["priming_answered_share"] is False
+
+
+def test_the_prompt_path_sends_one_request_once_the_cache_is_warm(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    oracle = ReplayOracle()
+    prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=oracle)
+    probe = find_case("holdout", "notes", "notes-holdout-b05")  # one relevant note, two noise
+    before = oracle.calls
+    result = _in_process(oracle)(replay_request(seed, probe, "typed"))
+    assert oracle.calls - before == 1
+    assert result.checked_item_ids
+    assert result.notes_cached == len(result.checked_item_ids)
+    assert result.notes_unanswered == 0
+    assert result.dropped_item_ids  # a cached noise verdict drops a note on the prompt path
+    assert set(result.dropped_item_ids) == {
+        item_id
+        for item_id in result.checked_item_ids
+        for prefix, category in seed.categories.items()
+        if item_id.startswith(prefix) and category == "noise"
+    }
+
+
+def test_the_replay_never_starts_the_background_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    PersonalSettingsStore(seed.data_directory).save(
+        PersonalSettings(
+            experimental_semantic_memory_enabled=True, experimental_typed_decisions_enabled=True
+        )
+    )
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "_judge_route_open", lambda settings: True)
+    monkeypatch.setattr(cli, "_start_note_judge", started.append)
+    probe = find_case("holdout", "notes", "notes-holdout-b00")
+    result = _in_process(ReplayOracle())(replay_request(seed, probe, "typed"))  # cold cache
+    assert result.checked_item_ids and result.notes_cached == 0
+    assert LocalNoteJudgeQueue(seed.data_directory).length() == len(result.checked_item_ids)
+    assert started == []
+
+
+def test_a_priming_failure_is_recorded_and_the_run_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small = (find_case("holdout", "notes", "notes-holdout-b00"),)
+    monkeypatch.setattr(replay_cli, "replay_cases", lambda: small)
+
+    def broken(seed: ReplaySeed) -> PrimingResult:
+        raise RuntimeError("synthetic priming failure")
+
+    code = replay_cli.main(
+        ["--run-id", "unprimed", "--results-root", str(tmp_path), "--live-calls-authorized"],
+        environ=FAKE_ENVIRON,
+        runner=_in_process(ReplayOracle()),
+        primer=broken,
+    )
+    report = json.loads((tmp_path / "unprimed" / "report.json").read_text("utf-8"))
+    assert code == 1
+    assert report["priming"]["holdout"] == {
+        "notes": 0,
+        "answered": 0,
+        "share": 0.0,
+        "blocked": True,
+        "error_type": "RuntimeError",  # the class name only, never the message
+    }
+    assert "synthetic priming failure" not in json.dumps(report)
+    assert report["sets"]["holdout"]["filler"]["gates"]["priming_answered_share"] is False

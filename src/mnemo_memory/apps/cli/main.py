@@ -9,7 +9,8 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -157,6 +158,7 @@ from mnemo_memory.packages.application.unified_context import (
     ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
+    is_requestable_item_id,
 )
 from mnemo_memory.packages.context_engine import (
     UnifiedContextEngine,
@@ -185,12 +187,15 @@ from mnemo_memory.packages.domain import (
     SourceFileRename,
     SourceId,
     SourceTrustClass,
+    TypedDecisionDataRoute,
     TypedDecisionMode,
+    TypedDecisionSource,
     VerificationStatus,
     Visibility,
     WorkspaceId,
     normalize_agent_client,
     normalize_knowledge_query,
+    typed_decision_source_permitted,
 )
 from mnemo_memory.packages.knowledge import (
     LocalEmbeddingError,
@@ -217,6 +222,9 @@ from mnemo_memory.packages.skills_registry import (
 from mnemo_memory.packages.storage import (
     ApprovedEpisodicEventRecord,
     LocalDailyModelBudget,
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+    NoteVerdictState,
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
@@ -241,6 +249,7 @@ from mnemo_memory.packages.telemetry import (
 
 if TYPE_CHECKING:
     from mnemo_memory.apps.cli.typed_decision_hook import (
+        FillerCandidate,
         TypedHookModes,
         TypedHookOverrides,
         TypedPromptDecisions,
@@ -1278,6 +1287,46 @@ def _pin_state(runtime: CheckpointRuntime, scope: MemoryScope, event_id: EventId
         return True  # keep is the safe side
 
 
+_NOTE_READ_BATCH = 4
+
+
+def _note_candidates_by_id(
+    data_directory: Path, scope: MemoryScope, item_ids: Sequence[str]
+) -> tuple[FillerCandidate, ...]:
+    """Re-read notes by ID through the scoped ``get_context item_ids`` lookup (spec §4).
+
+    The lookup rechecks scope, currentness and sensitivity. The hook's own
+    ``filler_candidates`` then applies every exemption it can see in its own small packet (pinned
+    events, conflicts among the packet's notes, non-normal sensitivity, the secret scan,
+    unreadable text) and builds the 300-character judged text, so the judge keys verdicts on
+    exactly the text the hook looks up. Conflicts with notes outside that packet are only applied
+    by the hook. An ID the lookup cannot
+    serve (gone, changed, foreign, malformed) is skipped. Nothing is sent anywhere.
+    """
+
+    from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+    requested = tuple(
+        dict.fromkeys(item_id for item_id in item_ids if is_requestable_item_id(item_id))
+    )
+    if not requested:
+        return ()
+    candidates: list[FillerCandidate] = []
+    with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+        service = _automatic_prompt_context_service(runtime, None)
+        for start in range(0, len(requested), _NOTE_READ_BATCH):
+            chunk = requested[start : start + _NOTE_READ_BATCH]
+            packet = service.get_context(GetUnifiedContext(scope, item_ids=chunk))
+            candidates.extend(
+                typed.filler_candidates(
+                    packet,
+                    pinned_item_ids=_pinned_approved_item_ids(runtime, packet),
+                    rendered_item_ids=frozenset(chunk),
+                )
+            )
+    return tuple(candidates)
+
+
 def _runtime_guard_factory(
     settings: PersonalSettings, data_directory: Path
 ) -> Callable[[TypedDecisionRecorder], GuardedTypedDecisionClassifier | None]:
@@ -1309,6 +1358,123 @@ def _rendered_item_ids(rendered: str | None) -> frozenset[str]:
     return frozenset(item_ids)
 
 
+def _note_verdict_states(
+    data_directory: Path, settings: PersonalSettings, candidates: Sequence[FillerCandidate]
+) -> tuple[NoteVerdictState, ...]:
+    """Each candidate's cached verdict state; any failure reads as no verdict (keep)."""
+
+    if not candidates:
+        return ()
+    try:
+        from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+        keys = tuple(
+            typed.filler_verdict_key(candidate, settings.typed_decision_model_id)
+            for candidate in candidates
+        )
+        return LocalNoteVerdictCache(data_directory).states(keys)
+    except Exception:
+        return tuple(NoteVerdictState(None, 0) for _ in candidates)
+
+
+def _queue_unjudged_notes(
+    data_directory: Path,
+    scope: MemoryScope,
+    candidates: Sequence[FillerCandidate],
+    states: Sequence[NoteVerdictState],
+) -> int:
+    """Queue the IDs (never text) of candidates that still need a verdict; return how many.
+
+    A note with a usable verdict, or with three failed attempts on this exact text, is not
+    queued. A failed write queues nothing and changes nothing else (spec 2026-10-03 §3).
+    """
+
+    unjudged = tuple(
+        candidate.item_id
+        for candidate, state in zip(candidates, states, strict=True)
+        if state.needs_judging
+    )
+    if not unjudged:
+        return 0
+    try:
+        LocalNoteJudgeQueue(data_directory).append(scope, unjudged)
+    except Exception:
+        return 0
+    return len(unjudged)
+
+
+def _judge_route_open(settings: PersonalSettings) -> bool:
+    """Whether the data route lets runtime note text leave the machine (never on synthetic_only).
+
+    Starting a judge that could only be ``data_route_blocked`` would cost a Python process per
+    prompt and judge nothing, so the hook does not start one (plan decision, maintainer-approved;
+    spec §3 queues regardless).
+    """
+
+    return typed_decision_source_permitted(
+        TypedDecisionDataRoute(settings.typed_decision_data_route), TypedDecisionSource.RUNTIME
+    )
+
+
+def _start_note_judge(data_directory: Path) -> None:
+    """Start ``typed-decisions judge-notes`` detached: a new session, no pipes, no waiting.
+
+    The command line names only the data directory, as one argument and without a shell. Note
+    text and the API key never appear on it; the child inherits the hook's environment. It runs
+    the console-entry module, which imports ``main`` once and keeps the child's stderr clean.
+    ``-P`` keeps the working directory off ``sys.path``, so a ``mnemo_memory/`` folder in the
+    project cannot shadow the installed package.
+    """
+
+    # The handle is dropped on purpose; without this Python warns that the child still runs.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-P",
+                "-m",
+                "mnemo_memory.cli",
+                "typed-decisions",
+                "judge-notes",
+                "--data-dir",
+                str(data_directory),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+
+def _maybe_start_note_judge(
+    data_directory: Path,
+    settings: PersonalSettings,
+    modes: TypedHookModes,
+    overrides: TypedHookOverrides | None,
+    queued: int,
+) -> None:
+    """Start the background judge after the hook's output is built (spec 2026-10-03 §3).
+
+    Only the real hook starts it (never under replay overrides), and only when this prompt
+    queued a note, relevance is on, the master switch is on and the route is open. Nothing
+    waits on it, and a failure to start is ignored.
+    """
+
+    try:
+        if (
+            overrides is None
+            and queued > 0
+            and modes.relevance is not TypedDecisionMode.OFF
+            and settings.experimental_typed_decisions_enabled
+            and _judge_route_open(settings)
+        ):
+            _start_note_judge(data_directory)
+    except Exception:
+        return
+
+
 @dataclass(frozen=True, slots=True)
 class _TypedApplication:
     render: _PromptRender
@@ -1331,10 +1497,12 @@ def _typed_prompt_render(
 ) -> tuple[_PromptRender, _AutomaticShadowTrace | None, AutomaticRouteTypedDecisions | None]:
     """Run the typed step on top of today's result; any exception keeps today's result.
 
-    The whole step is wrapped (spec §7): the module import, the local preparation, the Jev
-    requests, the combine and the live application. The hook's own outer catch would attach
-    no context at all. ``started`` is the step's clock, taken before the mode read: the Jev
-    requests get what is left of the 0.8 s cap, and ``step_ms`` counts from it.
+    The whole step is wrapped (spec 2026-10-02 §7): the module import, the local preparation,
+    the verdict-cache read, the one Jev request, the combine, the live application and the
+    judge-queue write. The hook's own outer catch would attach no context at all. ``started``
+    is the step's clock, taken before the mode read: the Jev request gets what is left of the
+    0.8 s cap, and ``step_ms`` counts from it. Filler verdicts come from the local cache (spec
+    2026-10-03 §3); notes without one are kept and their IDs queued for the background judge.
     """
 
     try:
@@ -1351,9 +1519,9 @@ def _typed_prompt_render(
             if trace is not None
             else plan_automatic_context_needs(bounded, learned_phrases=learned)
         )
-        # Filler checks run only on the notes a push action pre-fetched (spec §4.2). Without
-        # the semantic gate (no trace) nothing gates on the plan, so a retrieved packet is the
-        # push. Skill discovery and hard routes retrieve none.
+        # Filler verdicts apply only to the notes a push action pre-fetched (spec §4.2).
+        # Without the semantic gate (no trace) nothing gates on the plan, so a retrieved packet
+        # is the push. Skill discovery and hard routes retrieve none.
         checked = (
             rules.result.packet
             if modes.relevance is not TypedDecisionMode.OFF
@@ -1368,6 +1536,16 @@ def _typed_prompt_render(
             list_skills=modes.skill is not TypedDecisionMode.OFF,
             listing=rules.result.skill_listing,
         )
+        candidates = (
+            ()
+            if checked is None
+            else typed.filler_candidates(
+                checked,
+                pinned_item_ids=local.pinned_item_ids,
+                rendered_item_ids=_rendered_item_ids(rules.rendered),
+            )
+        )
+        verdicts = _note_verdict_states(data_directory, settings, candidates)
         step = typed.TypedStepInput(
             prompt=bounded,
             modes=modes,
@@ -1380,15 +1558,8 @@ def _typed_prompt_render(
             keyword_skill_names=tuple(
                 candidate.skill.name for candidate in rules.result.discovered_skills
             ),
-            filler_candidates=(
-                ()
-                if checked is None
-                else typed.filler_candidates(
-                    checked,
-                    pinned_item_ids=local.pinned_item_ids,
-                    rendered_item_ids=_rendered_item_ids(rules.rendered),
-                )
-            ),
+            filler_candidates=candidates,
+            filler_verdicts=tuple(state.p_filler for state in verdicts),
         )
         guard_factory = (
             overrides.guard_factory
@@ -1402,10 +1573,17 @@ def _typed_prompt_render(
         applied = _apply_typed_decisions(
             data_directory, scope, prompt, client, trace, rules, decisions, local, step
         )
+        queued = _queue_unjudged_notes(data_directory, scope, candidates, verdicts)
     except Exception:
         return rules, trace, _typed_step_error_telemetry(modes, started)
     try:
         values = decisions.telemetry
+        # A step error reports no checked notes, so the queued count is clamped to keep the
+        # record valid (cached + queued <= checked); the notes themselves are still queued.
+        values = replace(
+            values,
+            notes_queued=min(queued, max(0, values.notes_checked - values.notes_cached)),
+        )
         if modes.relevance is TypedDecisionMode.LIVE:
             values = replace(values, notes_dropped=applied.notes_dropped)
         telemetry: AutomaticRouteTypedDecisions | None = typed.route_telemetry(
@@ -1415,6 +1593,7 @@ def _typed_prompt_render(
             telemetry = None
     except Exception:
         telemetry = None  # losing the record is acceptable; losing the applied context is not
+    _maybe_start_note_judge(data_directory, settings, modes, overrides, queued)
     return applied.render, applied.trace, telemetry
 
 
@@ -3968,7 +4147,8 @@ def _typed_decision_settings_invalid(error: PersonalSettingsError) -> typer.Exit
 
 
 @typed_decisions_app.command(
-    "status", help="Show switches, modes, active locks and today's typed-decision budget."
+    "status",
+    help="Show switches, modes, locks, today's budget, the note-verdict cache and the judge.",
 )
 def typed_decisions_status(
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -3988,6 +4168,8 @@ def typed_decisions_status(
         task_type=ModelTaskType.TYPED_DECISION,
         daily_input_tokens=settings.typed_decision_daily_input_tokens,
     ).reserved_today()
+    cache_entries = LocalNoteVerdictCache(config.data_directory).entry_count()
+    note_queue = LocalNoteJudgeQueue(config.data_directory)
     _show(
         {
             "status": "available",
@@ -4002,6 +4184,14 @@ def typed_decisions_status(
                 "counter": "unavailable" if reserved is None else "available",
                 "limit": settings.typed_decision_daily_input_tokens,
                 "reserved_today": reserved,
+            },
+            "note_verdicts": {
+                "cache": "unavailable" if cache_entries is None else "available",
+                "entries": cache_entries,
+            },
+            "note_judge": {
+                "queued": note_queue.length(),
+                "running": note_queue.judge_running(),
             },
             "sends_real_prompts": False,
         }
@@ -4093,6 +4283,44 @@ def typed_decisions_disable(
             "master_switch": settings.experimental_typed_decisions_enabled,
             "modes": {kind.value: settings.typed_decision_mode(kind).value for kind in HOOK_KINDS},
         }
+    )
+
+
+@typed_decisions_app.command("judge-notes", hidden=True)
+def typed_decisions_judge_notes(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Judge queued notes in the background; the prompt hook starts it (spec 2026-10-03 §4).
+
+    It prints nothing and exits 0 whatever happens, so a broken judge never reaches a session.
+    """
+
+    with suppress(Exception):
+        _judge_queued_notes(data_dir)
+
+
+def _judge_queued_notes(data_dir: Path | None) -> None:
+    from mnemo_memory.apps.cli.typed_decision_composition import (
+        build_runtime_typed_decision_classifier,
+    )
+    from mnemo_memory.apps.cli.typed_note_judge import JUDGE_DEADLINE_SECONDS, run_note_judge
+
+    data_directory = resolve_local_config(data_dir).data_directory
+    settings = PersonalSettingsStore(data_directory).load()
+
+    def read(scope: MemoryScope, item_ids: tuple[str, ...]) -> tuple[FillerCandidate, ...]:
+        return _note_candidates_by_id(data_directory, scope, item_ids)
+
+    def guard() -> GuardedTypedDecisionClassifier | None:
+        return build_runtime_typed_decision_classifier(
+            settings, data_directory=data_directory, deadline_seconds=JUDGE_DEADLINE_SECONDS
+        )
+
+    run_note_judge(
+        data_directory,
+        model_version=settings.typed_decision_model_id,
+        read_notes=read,
+        build_guard=guard,
     )
 
 

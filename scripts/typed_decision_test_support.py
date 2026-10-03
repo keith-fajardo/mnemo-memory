@@ -21,6 +21,11 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     TypedHookModes,
     TypedHookOverrides,
 )
+from mnemo_memory.apps.cli.typed_note_judge import (
+    JUDGE_DEADLINE_SECONDS,
+    JudgeTally,
+    judge_candidates,
+)
 from mnemo_memory.connectors.automatic_memory.hook import PromptContextAttachment
 from mnemo_memory.packages.application import (
     LocalConfig,
@@ -45,13 +50,18 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
     TypedDecisionRecorder,
 )
-from mnemo_memory.packages.storage import SQLiteKnowledgeDocumentRepository
+from mnemo_memory.packages.storage import LocalNoteVerdictCache, SQLiteKnowledgeDocumentRepository
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
     LocalAutomaticRouteDiagnosticsSettingsStore,
 )
-from scripts.typed_decision_replay import evidence, skill_markdown
+from scripts.typed_decision_replay import (
+    approved_event_item_ids,
+    evidence,
+    knowledge_note_item_ids,
+    skill_markdown,
+)
 
 FAKE_TYPESAFE_KEY = "test-key-not-real-0000"
 FILLER_MARKER = "FILLER"
@@ -284,4 +294,34 @@ def run_hook(
         prompt,
         "codex",
         replay_overrides=overrides,
+    )
+
+
+def prime_note_verdicts(fixture: HookFixture, transport: ScriptedJevTransport) -> JudgeTally:
+    """Warm the fixture's verdict cache: judge every note and event through ``transport`` only.
+
+    It uses the background judge's own reader (the scoped ``get_context item_ids`` lookup, so
+    the pinned event is never sent) and ``judge_candidates`` with the synthetic-source guard.
+    """
+
+    item_ids = (
+        *knowledge_note_item_ids(fixture.data, fixture.binding),
+        *approved_event_item_ids(fixture.data, fixture.binding),
+    )
+    candidates = cli._note_candidates_by_id(
+        fixture.data, fixture.binding.checkpoint_scope, item_ids
+    )
+    settings = PersonalSettings()
+    guard = build_synthetic_typed_decision_classifier(
+        settings,
+        data_directory=fixture.data,
+        environ={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY},
+        jev_transport=transport,
+        deadline_seconds=JUDGE_DEADLINE_SECONDS,
+    )
+    return judge_candidates(
+        guard,
+        candidates,
+        cache=LocalNoteVerdictCache(fixture.data),
+        model_version=settings.typed_decision_model_id,
     )

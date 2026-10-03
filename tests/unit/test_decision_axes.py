@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 
 import pytest
 
@@ -11,6 +13,8 @@ from mnemo_memory.packages.model_gateway.cascade_router import (
 from mnemo_memory.packages.model_gateway.decision_axes import (
     EPISODIC_KIND,
     FILLER_CHECK_BUDGET_SECONDS,
+    FILLER_DROP_AT,
+    FILLER_QUESTION_VERSION,
     FRONT_DOOR_AXES,
     HINT_TEXT,
     MEMORY_NEED,
@@ -25,6 +29,7 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     hint_eligible,
     needs_from_memory_choice,
     note_text,
+    should_drop_filler,
     should_drop_note,
     skill_pick_axis,
     tier_committee,
@@ -95,8 +100,9 @@ def test_note_substance_scores_filler_as_the_escalation_side() -> None:
 
 def test_filler_is_dropped_only_at_a_confident_score() -> None:
     assert should_drop_note(None) is False
-    assert should_drop_note(_result("note_substance", "filler", 0.69)) is False
-    assert should_drop_note(_result("note_substance", "filler", 0.7)) is True
+    assert should_drop_note(_result("note_substance", "filler", 0.49)) is False
+    assert should_drop_note(_result("note_substance", "filler", 0.5)) is True
+    assert should_drop_note(_result("note_substance", "filler", 0.01)) is False
 
 
 def test_worth_extracting_skips_only_a_confident_no() -> None:
@@ -176,3 +182,35 @@ def test_accepted_skill_needs_the_bar_and_the_skill_axis() -> None:
     assert accepted_skill(_result("skill_pick", "test-plan", 0.0, 0.59)) is None
     assert accepted_skill(_result("memory_need", "nothing", 0.0, 0.9)) is None
     assert accepted_skill(None) is None
+
+
+# sha256 of the NOTE_SUBSTANCE wording below; bump FILLER_QUESTION_VERSION with it.
+NOTE_SUBSTANCE_WORDING_SHA256 = "90a368ed40b38da5197a673f1740058cced0f4b13f1f838356a0b9a3b475724b"
+
+
+def test_the_filler_question_version_pins_its_wording() -> None:
+    """Changing NOTE_SUBSTANCE must bump FILLER_QUESTION_VERSION, so cached verdicts lapse."""
+
+    axis = NOTE_SUBSTANCE
+    wording = json.dumps(
+        [
+            axis.name,
+            axis.instructions,
+            list(axis.allowed_labels),
+            [list(pair) for pair in axis.criteria],
+            list(axis.label_scores) if axis.label_scores else None,
+        ],
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(wording.encode()).hexdigest()
+    assert (FILLER_QUESTION_VERSION, digest) == (1, NOTE_SUBSTANCE_WORDING_SHA256)
+
+
+def test_a_cached_filler_probability_drops_only_at_the_bar() -> None:
+    assert should_drop_filler(None) is False
+    assert FILLER_DROP_AT == 0.5
+    assert should_drop_filler(0.49) is False
+    assert should_drop_filler(0.5) is True
+    assert should_drop_filler(0.54) is True  # headed synthetic filler scored 0.54-0.76
+    assert should_drop_filler(0.01) is False  # relevant notes scored about 0.00-0.01
+    assert should_drop_note(_result("note_substance", "filler", 0.5)) is True
