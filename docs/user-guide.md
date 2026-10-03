@@ -211,8 +211,9 @@ Use `mnemo scan` for a simple register-or-refresh workflow, or the narrower
 client lifecycle hook. With
 automatic memory enabled, the hook (at session start, after a checkpoint save, on a prompt in a
 changed unsaved session, and at stop or compact) only compares file metadata with the saved map
-and starts a background rebuild when the map is stale. Only MCP start-up (and its structural
-requests), `memory refresh` and `mnemo scan` rebuild in the foreground. A rebuild produces a
+and starts a background rebuild when the map is stale. Only the MCP server's first structural
+request (it defers the refresh until then),
+`memory refresh` and `mnemo scan` rebuild in the foreground. A rebuild produces a
 bounded structural snapshot from current local syntax and preserves the previous snapshot for
 comparison.
 
@@ -231,11 +232,13 @@ mnemo memory changes --path models/orders.sql --history-limit 4
 The path is relative to the enabled repository. Mnemo rejects absolute paths and parent traversal,
 and it returns no other project’s history.
 
-With automatic task memory, Mnemo also keeps each proved structural transition. The session-start
-instruction tells the connected agent to ask for `source_changes` to learn recent changes; the hook
-does not attach a change list itself. Through that tool, or `mnemo memory changes`, the agent gets
-a short list of added/removed/renamed/modified **relative files**, declarations, and resolved
-relationships, tied to the source snapshot that proves them. That includes a body-only edit even
+With automatic task memory, Mnemo also keeps each proved structural transition. The attached
+session-start packet includes the latest recorded transition when one exists (it may be one
+background refresh behind the working tree, and it is not marked current while a refresh is
+pending). The agent can ask for `source_changes`, or you can run `mnemo memory changes`, for more
+history. The result is a short list of added/removed/renamed/modified **relative files**,
+declarations, and resolved relationships, tied to the source snapshot that proves them.
+That includes a body-only edit even
 when a file kept the same functions. Mnemo stores a SHA-256 fingerprint for this purpose—not
 source bodies. When exactly one removed and one added path share that fingerprint, it reports a
 rename; copied or ambiguous content remains add/remove rather than a guessed move. For an enabled
@@ -314,7 +317,7 @@ busy database cannot be rebuilt (`MNEMO_COMPACT_UNAVAILABLE`).
 
 To turn the background refresh off, set `MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH=1` in the
 environment of your coding client. The hook then never starts the refresh, so the map is refreshed
-only when the MCP server starts or serves a structural request, or by `memory refresh` or
+only when the MCP server serves its first structural request, or by `memory refresh` or
 `mnemo scan`.
 
 ### Finding a structural starting point
@@ -1066,7 +1069,7 @@ by Codex or Claude Code.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),
-and a hint to request `source_changes`
+and, when a prior transition exists, the latest bounded source-change summary
 automatically. This automatic attachment has a 1,750-token total budget and happens only when a
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when
