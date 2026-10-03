@@ -34,6 +34,8 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     effective_skill_names,
     filler_candidates,
     filler_omission,
+    filler_probability,
+    filler_verdict_key,
     front_door_axes,
     memory_need_outcome,
     notes_to_drop,
@@ -990,3 +992,19 @@ def test_risk_terms_veto_the_hint() -> None:
     decisions = _decide(_factory(adapter), risky)
     assert decisions.telemetry.tier == "heavy"
     assert decisions.telemetry.hint == "none"
+
+
+def test_filler_probability_reads_only_an_answered_note_question() -> None:
+    assert filler_probability(FILLER) == pytest.approx(0.95)
+    assert filler_probability(KEEP) == pytest.approx(0.05)
+    assert filler_probability(_blocked(TypedDecisionUnavailableReason.TIMEOUT)) is None
+    assert filler_probability(FRONT) is None  # no note question in it
+
+
+def test_the_verdict_key_follows_the_judged_text_and_the_model() -> None:
+    candidate = FillerCandidate(USEFUL_NOTE, "Invoice export keeps ledger order.")
+    key = filler_verdict_key(candidate, "jev-1.13.0")
+    assert len(key) == 64
+    assert key == filler_verdict_key(FillerCandidate(USEFUL_NOTE, candidate.text), "jev-1.13.0")
+    assert key != filler_verdict_key(replace(candidate, text=candidate.text + "!"), "jev-1.13.0")
+    assert key != filler_verdict_key(candidate, "jev-1.14.0")

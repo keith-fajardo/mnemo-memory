@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -157,6 +157,7 @@ from mnemo_memory.packages.application.unified_context import (
     ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
+    is_requestable_item_id,
 )
 from mnemo_memory.packages.context_engine import (
     UnifiedContextEngine,
@@ -241,6 +242,7 @@ from mnemo_memory.packages.telemetry import (
 
 if TYPE_CHECKING:
     from mnemo_memory.apps.cli.typed_decision_hook import (
+        FillerCandidate,
         TypedHookModes,
         TypedHookOverrides,
         TypedPromptDecisions,
@@ -1276,6 +1278,44 @@ def _pin_state(runtime: CheckpointRuntime, scope: MemoryScope, event_id: EventId
         return runtime.repository.get_approved_event_record(scope, event_id).pinned
     except Exception:
         return True  # keep is the safe side
+
+
+_NOTE_READ_BATCH = 4
+
+
+def _note_candidates_by_id(
+    data_directory: Path, scope: MemoryScope, item_ids: Sequence[str]
+) -> tuple[FillerCandidate, ...]:
+    """Re-read notes by ID through the scoped ``get_context item_ids`` lookup (spec §4).
+
+    The lookup rechecks scope, currentness and sensitivity. The hook's own
+    ``filler_candidates`` then applies every exemption (pinned events, conflicts, non-normal
+    sensitivity, the secret scan, unreadable text) and builds the 300-character judged text, so
+    the judge keys verdicts on exactly the text the hook looks up. An ID the lookup cannot
+    serve (gone, changed, foreign, malformed) is skipped. Nothing is sent anywhere.
+    """
+
+    from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+    requested = tuple(
+        dict.fromkeys(item_id for item_id in item_ids if is_requestable_item_id(item_id))
+    )
+    if not requested:
+        return ()
+    candidates: list[FillerCandidate] = []
+    with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
+        service = _automatic_prompt_context_service(runtime, None)
+        for start in range(0, len(requested), _NOTE_READ_BATCH):
+            chunk = requested[start : start + _NOTE_READ_BATCH]
+            packet = service.get_context(GetUnifiedContext(scope, item_ids=chunk))
+            candidates.extend(
+                typed.filler_candidates(
+                    packet,
+                    pinned_item_ids=_pinned_approved_item_ids(runtime, packet),
+                    rendered_item_ids=frozenset(chunk),
+                )
+            )
+    return tuple(candidates)
 
 
 def _runtime_guard_factory(

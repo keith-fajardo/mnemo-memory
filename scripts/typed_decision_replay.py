@@ -466,6 +466,36 @@ def _seed_approved_events(
     return categories
 
 
+def knowledge_note_item_ids(data: Path, binding: MemoryProjectBinding) -> tuple[str, ...]:
+    """Every current knowledge section in the project, named as ``get_context`` names it."""
+
+    with build_checkpoint_runtime(resolve_local_config(data)) as runtime:
+        repository = runtime.knowledge_document_repository
+        if repository is None:
+            return ()
+        return tuple(
+            f"{_KNOWLEDGE_ITEM_PREFIX}{revision.document.document_id}:revision:"
+            f"{revision.revision_id}:section:{index}"
+            for revision in repository.list_current_revisions(binding.scope)
+            for index in range(len(revision.document.sections))
+        )
+
+
+def approved_event_item_ids(data: Path, binding: MemoryProjectBinding) -> tuple[str, ...]:
+    """Every approved event in the project's task scope, pinned ones included."""
+
+    item_ids: list[str] = []
+    with build_checkpoint_runtime(resolve_local_config(data)) as runtime:
+        offset: int | None = 0
+        while offset is not None:
+            page = runtime.repository.list_approved_events(
+                binding.checkpoint_scope, offset=offset, limit=50
+            )
+            item_ids.extend(f"{_EVENT_ITEM_PREFIX}{event.event_id}" for event in page.items)
+            offset = page.next_offset
+    return tuple(item_ids)
+
+
 def _verified_binding(request: ReplayRequest) -> MemoryProjectBinding:
     """The request's project, only if its data directory holds exactly the seeded content.
 

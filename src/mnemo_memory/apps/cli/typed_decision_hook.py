@@ -49,6 +49,7 @@ from mnemo_memory.packages.model_gateway.cascade_router import (
 from mnemo_memory.packages.model_gateway.decision_axes import (
     COMPLEXITY,
     FILLER_CHECK_BUDGET_SECONDS,
+    FILLER_QUESTION_VERSION,
     HINT_TEXT,
     MEMORY_NEED,
     NOTE_SUBSTANCE,
@@ -73,6 +74,7 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     decide_tier,
 )
 from mnemo_memory.packages.policy.content_safety import contains_high_confidence_secret
+from mnemo_memory.packages.storage import note_verdict_key
 from mnemo_memory.packages.telemetry import TYPED_MODEL_VERSION, AutomaticRouteTypedDecisions
 
 OFF = TypedDecisionMode.OFF
@@ -354,6 +356,33 @@ def notes_to_drop(
         if should_drop_note(result):
             drops.append(candidate.item_id)
     return tuple(drops)
+
+
+def filler_probability(outcome: TypedDecisionOutcome) -> float | None:
+    """p(filler) from one answered note request; ``None`` when Jev gave no usable answer."""
+
+    if outcome.unavailable_reason is not None:
+        return None
+    result = next(
+        (value for value in outcome.results if value.axis_name == NOTE_SUBSTANCE.name), None
+    )
+    if result is None:
+        return None
+    score = result.escalation_score
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        return None
+    return float(score)
+
+
+def filler_verdict_key(candidate: FillerCandidate, model_version: str) -> str:
+    """The verdict-cache key for one candidate's exact judged text (spec 2026-10-03 §5)."""
+
+    return note_verdict_key(
+        candidate.item_id,
+        candidate.text,
+        model_version=model_version,
+        question_version=FILLER_QUESTION_VERSION,
+    )
 
 
 def filler_omission(item_id: str) -> OmissionNotice:
