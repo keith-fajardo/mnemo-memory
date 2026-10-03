@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+from stat import S_ISREG
 
 # Reuse the parser's own noise-directory skip set (rather than duplicating it) so the
 # fingerprint never drifts from what the expensive parse actually walks.
@@ -24,15 +26,20 @@ def working_tree_fingerprint(root: Path) -> str:
     re-parses rather than missed ones.
     """
     root = root.resolve()
+    entries: list[tuple[tuple[str, ...], int, int]] = []
+    # Prune skipped directories in place so the walk never enters them (a ``.venv`` or ``.git``
+    # can hold most of a tree's entries). Like ``Path.rglob`` here, it never follows symlinks.
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in _SKIP_DIRECTORIES]
+        base = Path(directory).relative_to(root).parts
+        for name in files:
+            if name in _SKIP_DIRECTORIES:
+                continue  # the parser skips any path with such a component, a file name too
+            stat = os.lstat(os.path.join(directory, name))
+            if S_ISREG(stat.st_mode):  # a symlink or a special file is never fingerprinted
+                entries.append(((*base, name), stat.st_size, stat.st_mtime_ns))
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink():
-            continue
-        rel = path.relative_to(root)
-        if any(part in _SKIP_DIRECTORIES for part in rel.parts):
-            continue
-        if not path.is_file():
-            continue
-        stat = path.stat()
-        digest.update(f"{rel.as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode())
+    # Component-wise order, exactly as sorting the ``Path`` objects did, keeps the digest stable.
+    for parts, size, mtime_ns in sorted(entries):
+        digest.update(f"{'/'.join(parts)}\0{size}\0{mtime_ns}\n".encode())
     return f"sha256:{digest.hexdigest()}"
