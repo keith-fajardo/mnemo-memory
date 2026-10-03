@@ -4138,7 +4138,8 @@ def _typed_decision_settings_invalid(error: PersonalSettingsError) -> typer.Exit
 
 
 @typed_decisions_app.command(
-    "status", help="Show switches, modes, active locks and today's typed-decision budget."
+    "status",
+    help="Show switches, modes, locks, today's budget, the note-verdict cache and the judge.",
 )
 def typed_decisions_status(
     data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
@@ -4158,6 +4159,8 @@ def typed_decisions_status(
         task_type=ModelTaskType.TYPED_DECISION,
         daily_input_tokens=settings.typed_decision_daily_input_tokens,
     ).reserved_today()
+    cache_entries = LocalNoteVerdictCache(config.data_directory).entry_count()
+    note_queue = LocalNoteJudgeQueue(config.data_directory)
     _show(
         {
             "status": "available",
@@ -4172,6 +4175,14 @@ def typed_decisions_status(
                 "counter": "unavailable" if reserved is None else "available",
                 "limit": settings.typed_decision_daily_input_tokens,
                 "reserved_today": reserved,
+            },
+            "note_verdicts": {
+                "cache": "unavailable" if cache_entries is None else "available",
+                "entries": cache_entries,
+            },
+            "note_judge": {
+                "queued": note_queue.length(),
+                "running": note_queue.judge_running(),
             },
             "sends_real_prompts": False,
         }

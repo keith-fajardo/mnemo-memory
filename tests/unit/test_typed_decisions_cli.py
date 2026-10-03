@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner, Result
@@ -14,7 +15,21 @@ from mnemo_memory.packages.application.settings import (
     TYPED_DECISION_LOCK_MESSAGES,
     TypedDecisionLock,
 )
-from mnemo_memory.packages.domain import TypedDecisionKind, TypedDecisionMode
+from mnemo_memory.packages.domain import (
+    MemoryScope,
+    OwnerId,
+    ProjectId,
+    ScopeLevel,
+    TypedDecisionKind,
+    TypedDecisionMode,
+    Visibility,
+    WorkspaceId,
+)
+from mnemo_memory.packages.storage import (
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+    note_verdict_key,
+)
 
 FAKE_KEY = "test-key-not-real-0000"
 runner = CliRunner()
@@ -44,11 +59,40 @@ def test_status_reports_switches_locks_budget_and_key_presence_only(tmp_path: Pa
             "limit": 10_000_000,
             "reserved_today": 0,
         },
+        "note_verdicts": {"cache": "available", "entries": 0},
+        "note_judge": {"queued": 0, "running": False},
         "sends_real_prompts": False,
     }
     with_key = _invoke(tmp_path, "status", key=FAKE_KEY)
     assert json.loads(with_key.output)["credential_present"] is True
     assert FAKE_KEY not in with_key.output
+    assert not (tmp_path / ".typed-decision-judge.lock").exists()  # status never creates it
+
+
+def test_status_shows_the_verdict_cache_the_queue_and_a_running_judge(tmp_path: Path) -> None:
+    scope = MemoryScope(
+        OwnerId.from_string("00000000-0000-4000-8000-000000000001"),
+        ScopeLevel.PROJECT,
+        Visibility.PROJECT,
+        WorkspaceId.from_string("00000000-0000-4000-8001-000000000001"),
+        ProjectId.from_string("00000000-0000-4000-8002-000000000001"),
+    )
+    first, second = (f"approved-episodic:{UUID(int=index)}" for index in (1, 2))
+    key = note_verdict_key(first, "a note", model_version="jev-1.13.0", question_version=1)
+    LocalNoteVerdictCache(tmp_path).record([(key, 0.9)])
+    queue = LocalNoteJudgeQueue(tmp_path)
+    queue.append(scope, (first, second))
+    with queue.run_lock() as held:
+        assert held is True
+        shown = json.loads(_invoke(tmp_path, "status").output)
+    assert shown["note_verdicts"] == {"cache": "available", "entries": 1}
+    assert shown["note_judge"] == {"queued": 2, "running": True}
+
+    LocalNoteVerdictCache(tmp_path).path.write_text("{", "utf-8")
+    queue.path.write_text("{", "utf-8")
+    broken = json.loads(_invoke(tmp_path, "status").output)
+    assert broken["note_verdicts"] == {"cache": "unavailable", "entries": None}
+    assert broken["note_judge"] == {"queued": None, "running": False}
 
 
 def test_set_changes_one_mode_and_applies_the_locks(tmp_path: Path) -> None:
