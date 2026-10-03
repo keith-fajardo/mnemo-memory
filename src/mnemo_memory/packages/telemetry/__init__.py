@@ -1,6 +1,7 @@
 """Content-free Mnemo telemetry contracts and local personal adapters."""
 
 from .automatic_routes import (
+    AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS,
     AUTOMATIC_ROUTE_TYPED_V1_FIELDS,
     TYPED_MODEL_VERSION,
     AutomaticRouteDiagnosticsMode,
@@ -29,6 +30,7 @@ from .takeover_routes import (
 )
 
 __all__ = [
+    "AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS",
     "AUTOMATIC_ROUTE_TYPED_V1_FIELDS",
     "TYPED_MODEL_VERSION",
     "AutomaticRouteDiagnosticsMode",

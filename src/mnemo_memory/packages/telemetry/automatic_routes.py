@@ -80,6 +80,12 @@ AUTOMATIC_ROUTE_TYPED_V1_FIELDS: tuple[str, ...] = (
     "typed_hint",
     "typed_skill",
 )
+# Added by the note-verdict cache (spec 2026-10-03 §6). Older ``typed_v1`` records lack them
+# and load with zeros; a record carrying them carries both.
+AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS: tuple[str, ...] = (
+    "typed_notes_cached",
+    "typed_notes_queued",
+)
 
 
 class AutomaticRouteTelemetryError(RuntimeError):
@@ -211,6 +217,8 @@ class AutomaticRouteTypedDecisions:
     tier: str | None
     hint: str
     skill: str
+    notes_cached: int = 0
+    notes_queued: int = 0
 
     def __post_init__(self) -> None:
         modes = (self.front_door_mode, self.relevance_mode, self.tier_hint_mode, self.skill_mode)
@@ -236,10 +244,17 @@ class AutomaticRouteTypedDecisions:
             raise ValueError("automatic route typed action is invalid")
         if self.agrees_with_rules is not None and not isinstance(self.agrees_with_rules, bool):
             raise ValueError("automatic route typed agreement is invalid")
-        counts = (self.notes_checked, self.notes_dropped, self.notes_unanswered)
+        counts = (
+            self.notes_checked,
+            self.notes_dropped,
+            self.notes_unanswered,
+            self.notes_cached,
+            self.notes_queued,
+        )
         if (
             not all(_bounded_integer(value, _MAXIMUM_TYPED_NOTES) for value in counts)
             or self.notes_dropped + self.notes_unanswered > self.notes_checked
+            or self.notes_cached + self.notes_queued > self.notes_checked
         ):
             raise ValueError("automatic route typed note counts are invalid")
         if self.tier is not None and self.tier not in _TYPED_TIERS:
@@ -268,6 +283,8 @@ class AutomaticRouteTypedDecisions:
             "typed_tier": self.tier,
             "typed_hint": self.hint,
             "typed_skill": self.skill,
+            "typed_notes_cached": self.notes_cached,
+            "typed_notes_queued": self.notes_queued,
         }
 
     @classmethod
@@ -290,6 +307,8 @@ class AutomaticRouteTypedDecisions:
             tier=_optional_string(value["typed_tier"]),
             hint=_string(value["typed_hint"]),
             skill=_string(value["typed_skill"]),
+            notes_cached=_integer(value.get("typed_notes_cached", 0)),
+            notes_queued=_integer(value.get("typed_notes_queued", 0)),
         )
 
 
@@ -609,11 +628,13 @@ class AutomaticRouteEvent:
         }
         live_gate = {"live_gate_applied", "injected_context_tokens"}
         typed_v1 = frozenset(AUTOMATIC_ROUTE_TYPED_V1_FIELDS)
+        typed_all = typed_v1 | frozenset(AUTOMATIC_ROUTE_TYPED_CACHE_FIELDS)
         if not isinstance(value, dict):
             raise ValueError("automatic route event is invalid")
         keys = frozenset(value)
-        has_typed = bool(keys & typed_v1)
-        if (has_typed and not typed_v1 <= keys) or keys - typed_v1 not in {
+        typed_keys = keys & typed_all
+        has_typed = bool(typed_keys)
+        if (has_typed and typed_keys not in {typed_v1, typed_all}) or keys - typed_all not in {
             frozenset(required),
             frozenset(required | shadow),
             frozenset(required | shadow_v2),
