@@ -47,6 +47,7 @@ from mnemo_memory.connectors.automatic_memory.learned_routes import (
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     source_snapshot_is_fresh,
 )
+from mnemo_memory.connectors.automatic_memory.source_refresh import SourceRefreshLock
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
 from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
@@ -236,6 +237,7 @@ from mnemo_memory.packages.storage import (
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
+from mnemo_memory.packages.storage.contracts import ProjectIndexRepositoryError
 from mnemo_memory.packages.telemetry import (
     AutomaticRouteDiagnosticsMode,
     AutomaticRouteDiagnosticsSettings,
@@ -349,6 +351,10 @@ typed_decisions_app = typer.Typer(
     no_args_is_help=True,
     help="Inspect and set Jev typed-decision modes; live stays locked to synthetic data.",
 )
+maintenance_app = typer.Typer(
+    no_args_is_help=True,
+    help="Tidy and shrink the local Mnemo database.",
+)
 app.add_typer(connect_app, name="connect", help="Register Mnemo with an AI coding client.")
 app.add_typer(disconnect_app, name="disconnect", help="Remove a client registration.")
 app.add_typer(dbt_app, name="dbt", help="Enable personal dbt lineage memory and wrap dbt.")
@@ -358,6 +364,7 @@ app.add_typer(
     name="typed-decisions",
     help="Inspect and set Jev typed-decision modes.",
 )
+app.add_typer(maintenance_app, name="maintenance", help="Tidy and shrink the local database.")
 memory_app.add_typer(memory_vault_app, name="vault", help="Manage an optional Obsidian vault.")
 memory_app.add_typer(
     memory_semantic_app,
@@ -4560,6 +4567,96 @@ def memory_route_diagnostics_purge(
             "recoverable": False,
         }
     )
+
+
+def _free_disk_bytes(directory: Path) -> int:
+    """Free bytes on the volume that holds ``directory`` (a seam the tests replace)."""
+    return shutil.disk_usage(directory).free
+
+
+def _database_file_bytes(database_path: Path) -> int:
+    """The database's size on disk, counting its write-ahead log when one exists."""
+    total = 0
+    for path in (database_path, database_path.with_name(database_path.name + "-wal")):
+        with suppress(FileNotFoundError):
+            total += path.stat().st_size
+    return total
+
+
+@maintenance_app.command(
+    "prune-source",
+    help="Delete old code-map snapshots that memory no longer needs; optionally compact.",
+)
+def maintenance_prune_source(
+    project_root: Path | None = typer.Option(None, "--project-root"),  # noqa: B008
+    all_projects: bool = typer.Option(False, "--all-projects"),
+    compact: bool = typer.Option(False, "--compact", help="Run VACUUM after pruning."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print counts only; change nothing."),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Prune with no per-run limit under the retention rules (spec 2026-10-03 §4-§5).
+
+    Never run from a hook. It holds the refresh worker's lock for its whole run, so it refuses
+    while a worker runs and no worker can start meanwhile. ``--compact`` first checks that free
+    disk space is at least the database size, so a refusal changes nothing.
+    """
+    if all_projects and project_root is not None:
+        raise typer.BadParameter("MNEMO_PRUNE_SOURCE_ARGUMENTS_INVALID")
+    try:
+        config = resolve_local_config(data_dir)
+        database_path = config.database_path
+        if not database_path.exists():
+            raise typer.BadParameter("MNEMO_DATABASE_NOT_FOUND")
+        repository = SQLiteSourceStructureRepository(
+            database_path, base_directory=config.data_directory
+        )
+        with SourceRefreshLock(config.data_directory).hold() as held:
+            if not held:
+                raise typer.BadParameter("MNEMO_SOURCE_REFRESH_RUNNING")
+            scopes = (
+                repository.list_source_scopes()
+                if all_projects
+                else (
+                    _enabled_memory_binding(config.data_directory, project_root or Path(".")).scope,
+                )
+            )
+            before = _database_file_bytes(database_path)
+            if dry_run:
+                plans = [repository.plan_source_snapshot_prune(scope) for scope in scopes]
+                _show(
+                    {
+                        "dry_run": True,
+                        "projects": len(scopes),
+                        "full_snapshots": sum(plan.full_snapshots for plan in plans),
+                        "header_only_snapshots": sum(plan.header_only_snapshots for plan in plans),
+                        "symbols": sum(plan.symbols for plan in plans),
+                        "edges": sum(plan.edges for plan in plans),
+                        "database_bytes": before,
+                    }
+                )
+                return
+            if compact and _free_disk_bytes(config.data_directory) < before:
+                raise typer.BadParameter("MNEMO_COMPACT_INSUFFICIENT_DISK_SPACE")
+            pruned = sum(
+                repository.prune_source_snapshots(scope, max_snapshots=None) for scope in scopes
+            )
+            if compact:
+                try:
+                    repository.vacuum()
+                except ProjectIndexRepositoryError as error:
+                    raise typer.BadParameter("MNEMO_COMPACT_UNAVAILABLE") from error
+            _show(
+                {
+                    "dry_run": False,
+                    "projects": len(scopes),
+                    "pruned_snapshots": pruned,
+                    "compacted": compact,
+                    "database_bytes_before": before,
+                    "database_bytes_after": _database_file_bytes(database_path),
+                }
+            )
+    except (AutomaticMemoryBindingError, ProjectIndexRepositoryError, OSError, ValueError) as error:
+        raise typer.BadParameter("MNEMO_PRUNE_SOURCE_UNAVAILABLE") from error
 
 
 def build_automatic_memory_hook(config: LocalConfig, client: ClientName) -> AutomaticMemoryHook:

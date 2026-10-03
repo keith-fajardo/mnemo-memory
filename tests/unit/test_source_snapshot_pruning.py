@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from mnemo_memory.apps.cli import main as cli
+from mnemo_memory.connectors.automatic_memory.source_refresh import SourceRefreshLock
 from mnemo_memory.packages.application.automatic_memory import (
     LocalMemoryProjectBindingStore,
     MemoryProjectBinding,
@@ -309,3 +313,184 @@ def test_prune_bounds_must_be_positive(tmp_path: Path) -> None:
         repository.prune_source_snapshots(binding.scope, keep_activations=0, max_snapshots=None)
     with pytest.raises(ValueError):
         repository.prune_source_snapshots(binding.scope, max_snapshots=0)
+
+
+runner = CliRunner()
+
+
+def _footprint(data: Path) -> int:
+    total = 0
+    for name in ("mnemo.sqlite3", "mnemo.sqlite3-wal"):
+        path = data / name
+        if path.exists():
+            total += path.stat().st_size
+    return total
+
+
+def _widen(project: Path) -> None:
+    """Enough stable symbols that pruning 13 snapshots frees many database pages."""
+    for module in range(12):
+        body = "\n\n".join(
+            f"def helper_{module}_{index}():\n    return {index}" for index in range(25)
+        )
+        (project / f"module_{module}.py").write_text(body + "\n", encoding="utf-8")
+
+
+def test_a_dry_run_prints_counts_and_changes_nothing(tmp_path: Path) -> None:
+    project, data, binding = _project(tmp_path)
+    repository = _repository(data)
+    ids = _seed(repository, binding, 20)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "maintenance",
+            "prune-source",
+            "--project-root",
+            str(project),
+            "--dry-run",
+            "--data-dir",
+            str(data),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    shown = json.loads(result.output)
+    assert shown == {
+        "dry_run": True,
+        "projects": 1,
+        "full_snapshots": 3,
+        "header_only_snapshots": 0,
+        "symbols": sum(_count(data, "source_structure_symbols", item) for item in ids[:3]),
+        "edges": sum(_count(data, "source_structure_edges", item) for item in ids[:3]),
+        "database_bytes": shown["database_bytes"],
+    }
+    assert shown["database_bytes"] > 0
+    for snapshot_id in ids:
+        assert repository.iter_symbols(binding.scope, snapshot_id)
+
+
+def test_the_command_refuses_while_a_refresh_worker_holds_the_lock(tmp_path: Path) -> None:
+    project, data, binding = _project(tmp_path)
+    repository = _repository(data)
+    ids = _seed(repository, binding, 20)
+
+    with SourceRefreshLock(data).hold() as held:
+        assert held
+        result = runner.invoke(
+            cli.app,
+            [
+                "maintenance",
+                "prune-source",
+                "--project-root",
+                str(project),
+                "--data-dir",
+                str(data),
+            ],
+        )
+
+    assert result.exit_code == 2
+    assert "MNEMO_SOURCE_REFRESH_RUNNING" in result.output
+    assert repository.iter_symbols(binding.scope, ids[0])
+
+
+def test_compact_refuses_when_free_space_is_below_the_database_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, data, binding = _project(tmp_path)
+    repository = _repository(data)
+    ids = _seed(repository, binding, 20)
+    monkeypatch.setattr(cli, "_free_disk_bytes", lambda directory: 0)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "maintenance",
+            "prune-source",
+            "--project-root",
+            str(project),
+            "--compact",
+            "--data-dir",
+            str(data),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "MNEMO_COMPACT_INSUFFICIENT_DISK_SPACE" in result.output
+    assert repository.iter_symbols(binding.scope, ids[0])  # refused before pruning anything
+
+
+def test_compact_shrinks_a_seeded_database_file(tmp_path: Path) -> None:
+    project, data, binding = _project(tmp_path)
+    _widen(project)
+    repository = _repository(data)
+    _seed(repository, binding, 30)
+    before = _footprint(data)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "maintenance",
+            "prune-source",
+            "--project-root",
+            str(project),
+            "--compact",
+            "--data-dir",
+            str(data),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    shown = json.loads(result.output)
+    assert shown["pruned_snapshots"] == 13
+    assert shown["compacted"] is True
+    assert shown["database_bytes_after"] < shown["database_bytes_before"]
+    assert _footprint(data) < before
+
+
+def test_all_projects_prunes_every_scope(tmp_path: Path) -> None:
+    _, data, first = _project(tmp_path, "first")
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    (second_root / "client.py").write_text(
+        "import service\n\n\ndef call():\n    return service.run()\n", encoding="utf-8"
+    )
+    second = LocalMemoryProjectBindingStore(data).enable(second_root)
+    repository = _repository(data)
+    _seed(repository, first, 19)
+    _seed(repository, second, 19)
+
+    result = runner.invoke(
+        cli.app, ["maintenance", "prune-source", "--all-projects", "--data-dir", str(data)]
+    )
+
+    assert result.exit_code == 0, result.output
+    shown = json.loads(result.output)
+    assert (shown["projects"], shown["pruned_snapshots"], shown["compacted"]) == (2, 4, False)
+
+
+def test_conflicting_or_unknown_projects_are_refused(tmp_path: Path) -> None:
+    project, data, binding = _project(tmp_path)
+    _seed(_repository(data), binding, 2)
+    unknown = tmp_path / "unknown"
+    unknown.mkdir()
+
+    both = runner.invoke(
+        cli.app,
+        [
+            "maintenance",
+            "prune-source",
+            "--project-root",
+            str(project),
+            "--all-projects",
+            "--data-dir",
+            str(data),
+        ],
+    )
+    missing = runner.invoke(
+        cli.app,
+        ["maintenance", "prune-source", "--project-root", str(unknown), "--data-dir", str(data)],
+    )
+
+    assert both.exit_code == 2 and "MNEMO_PRUNE_SOURCE_ARGUMENTS_INVALID" in both.output
+    assert missing.exit_code == 2 and "MNEMO_MEMORY_PROJECT_NOT_ENABLED" in missing.output
