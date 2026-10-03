@@ -130,6 +130,8 @@ def test_expired_verdicts_are_pruned_on_the_next_write(tmp_path: Path) -> None:
         json.dumps({"version": 1, "entries": {"a" * 64: [0.5, -1, 0]}}),
         json.dumps({"version": 1, "entries": {"a" * 64: [0.5, 1, True]}}),
         json.dumps({"version": 1, "entries": {"a" * 64: [0.5, 1]}}),
+        json.dumps({"version": 1, "entries": {"a" * 64: [0.5, 10**400, 0]}}),
+        json.dumps({"version": 1, "entries": {"a" * 64: [0.5, 4_102_444_801, 0]}}),
     ],
 )
 def test_a_corrupt_cache_reads_as_empty_and_the_next_write_rebuilds_it(
@@ -142,6 +144,16 @@ def test_a_corrupt_cache_reads_as_empty_and_the_next_write_rebuilds_it(
     cache.record([(_key(), 0.8)])
     assert cache.states([_key()]) == (NoteVerdictState(0.8, 0),)
     assert cache.entry_count() == 1
+
+
+def test_a_failed_attempt_never_erases_a_fresh_verdict(tmp_path: Path) -> None:
+    _cache(tmp_path).record([(_key(), 0.95)])
+    later = _cache(tmp_path, NOW + timedelta(days=1))
+    later.record([(_key(), None)])
+    assert later.states([_key()]) == (NoteVerdictState(0.95, 0),)
+    expired = _cache(tmp_path, NOW + timedelta(days=31))
+    expired.record([(_key(), None)])  # a stale verdict is not protected
+    assert expired.states([_key()]) == (NoteVerdictState(None, 1),)
 
 
 def test_an_oversized_cache_reads_as_empty(tmp_path: Path) -> None:

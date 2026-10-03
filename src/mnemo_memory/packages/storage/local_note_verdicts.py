@@ -35,6 +35,7 @@ _KEY_FORMAT = "mnemo.note-verdict-key.v1"
 _KEY = re.compile(r"[0-9a-f]{64}")
 _CLOCK_SKEW = timedelta(minutes=5)
 _MAXIMUM_STORED_ATTEMPTS = 1_000
+_MAXIMUM_STORED_STAMP = 4_102_444_800  # 2100-01-01 UTC; a larger stamp is corrupt
 _MAXIMUM_ITEM_ID_CHARACTERS = 256
 _MAXIMUM_MODEL_VERSION_CHARACTERS = 64
 
@@ -133,6 +134,9 @@ class LocalNoteVerdictCache:
             for key, p_filler in checked:
                 previous = entries.pop(key, None)
                 if p_filler is None:
+                    if previous is not None and _holds_fresh_verdict(previous, now):
+                        entries[key] = previous  # a failure never erases a good verdict
+                        continue
                     attempts = 0 if previous is None else previous[2]
                     entries[key] = (None, stamp, min(attempts + 1, _MAXIMUM_STORED_ATTEMPTS))
                 else:
@@ -207,6 +211,10 @@ def _state(entry: _Entry | None, now: datetime) -> NoteVerdictState:
     return NoteVerdictState(p_filler, 0) if _fresh(stamp, now) else _UNKNOWN
 
 
+def _holds_fresh_verdict(entry: _Entry, now: datetime) -> bool:
+    return entry[0] is not None and _fresh(entry[1], now)
+
+
 def _fresh(stamp: int, now: datetime) -> bool:
     """Judged under 30 days ago; a stamp more than 5 minutes in the future is not trusted."""
 
@@ -256,7 +264,12 @@ def _entries(value: object) -> dict[str, _Entry]:
         if _KEY.fullmatch(key) is None or not isinstance(item, list) or len(item) != 3:
             raise ValueError("note verdict cache entry is invalid")
         p_filler, stamp, attempts = item
-        if not _natural(stamp) or not _natural(attempts) or attempts > _MAXIMUM_STORED_ATTEMPTS:
+        if (
+            not _natural(stamp)
+            or not _natural(attempts)
+            or stamp > _MAXIMUM_STORED_STAMP
+            or attempts > _MAXIMUM_STORED_ATTEMPTS
+        ):
             raise ValueError("note verdict cache entry is invalid")
         entries[key] = (_checked_probability(p_filler), stamp, attempts)
     return entries
