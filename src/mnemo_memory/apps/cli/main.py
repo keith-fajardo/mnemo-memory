@@ -44,6 +44,9 @@ from mnemo_memory.connectors.automatic_memory.learned_routes import (
     LearnedRouteStoreError,
     LocalLearnedRouteStore,
 )
+from mnemo_memory.connectors.automatic_memory.source_observation import (
+    source_snapshot_is_fresh,
+)
 from mnemo_memory.connectors.claude_code.mcp_config import ClaudeMcpManager
 from mnemo_memory.connectors.codex.mcp_config import CodexMcpManager
 from mnemo_memory.connectors.command_wrapper.subprocess_adapter import (
@@ -171,6 +174,7 @@ from mnemo_memory.packages.context_engine import (
 from mnemo_memory.packages.domain import (
     CodeEdge,
     CodeFile,
+    CodeSnapshot,
     CodeSnapshotId,
     CodeSymbol,
     ContextBudget,
@@ -446,6 +450,29 @@ def _automatic_budget(data_directory: Path, ceiling: ContextBudget) -> ContextBu
     )
 
 
+def _current_source_digest(
+    data_directory: Path, project_scope: MemoryScope, active_snapshot: CodeSnapshot | None
+) -> str | None:
+    """The active snapshot's digest only while the working tree still matches it.
+
+    Lifecycle hooks no longer refresh the map before SessionStart (spec 2026-10-03 §2), so a
+    stale map must not be called current. The check is by file metadata only and never parses;
+    any failure to prove freshness yields ``None`` (currentness unknown).
+    """
+
+    if active_snapshot is None:
+        return None
+    try:
+        binding = LocalMemoryProjectBindingStore(data_directory).get_for_scope(project_scope)
+    except (AutomaticMemoryBindingError, OSError):
+        return None
+    if binding is None or not source_snapshot_is_fresh(
+        binding, active_snapshot.snapshot_id, cache_dir=data_directory / "scan-cache"
+    ):
+        return None
+    return active_snapshot.source_digest
+
+
 def _automatic_context_attachment(
     data_directory: Path, scope: MemoryScope, client: ClientName = "codex"
 ) -> str | None:
@@ -471,7 +498,9 @@ def _automatic_context_attachment(
                 active_snapshot = runtime.source_structure_repository.get_active_snapshot(
                     project_scope
                 )
-                source_digest = None if active_snapshot is None else active_snapshot.source_digest
+                source_digest = _current_source_digest(
+                    data_directory, project_scope, active_snapshot
+                )
             profile = None
             procedures = None
             if runtime.knowledge_document_repository is not None:
@@ -1337,6 +1366,27 @@ def _judge_route_open(settings: PersonalSettings) -> bool:
     )
 
 
+def _start_detached_module(module: str, *arguments: str) -> None:
+    """Run ``python -P -m <module> <arguments...>`` detached: a new session, no pipes, no waiting.
+
+    Each argument stays one argv element and no shell is used. ``-P`` keeps the working
+    directory off ``sys.path``, so a ``mnemo_memory/`` folder in the project cannot shadow the
+    installed package. The child inherits the hook's environment.
+    """
+
+    # The handle is dropped on purpose; without this Python warns that the child still runs.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        subprocess.Popen(
+            [sys.executable, "-P", "-m", module, *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+
 def _start_note_judge(data_directory: Path) -> None:
     """Start the background judge detached: a new session, no pipes, no waiting.
 
@@ -1348,24 +1398,7 @@ def _start_note_judge(data_directory: Path) -> None:
     package.
     """
 
-    # The handle is dropped on purpose; without this Python warns that the child still runs.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ResourceWarning)
-        subprocess.Popen(
-            [
-                sys.executable,
-                "-P",
-                "-m",
-                "mnemo_memory.apps.cli.judge_entry",
-                "--data-dir",
-                str(data_directory),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
+    _start_detached_module("mnemo_memory.apps.cli.judge_entry", "--data-dir", str(data_directory))
 
 
 def _maybe_start_note_judge(
@@ -1393,6 +1426,30 @@ def _maybe_start_note_judge(
             _start_note_judge(data_directory)
     except Exception:
         return
+
+
+_BACKGROUND_SOURCE_REFRESH_OFF = "MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH"
+
+
+def _start_source_refresh(data_directory: Path, project_root: Path) -> None:
+    """Start the background code-map refresh detached: a new session, no pipes, no waiting.
+
+    The command line names only the data directory and the enabled project root, each as one
+    argument and without a shell (spec 2026-10-03 §2). It runs the light
+    ``source_refresh_entry`` module, which loads neither typer nor this CLI module; ``-P`` keeps
+    the working directory off ``sys.path``. ``MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH=1`` turns
+    the start off (the test suite sets it so no test starts a real worker).
+    """
+
+    if os.environ.get(_BACKGROUND_SOURCE_REFRESH_OFF) == "1":
+        return
+    _start_detached_module(
+        "mnemo_memory.apps.cli.source_refresh_entry",
+        "--data-dir",
+        str(data_directory),
+        "--project-root",
+        str(project_root),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -4545,6 +4602,10 @@ def build_automatic_memory_hook(config: LocalConfig, client: ClientName) -> Auto
             config.data_directory, binding
         ),
         retention_sweeper=expire_due_checkpoints,
+        # Looked up at call time so tests can replace ``_start_source_refresh``.
+        source_refresh_starter=lambda data_directory, project_root: _start_source_refresh(
+            data_directory, project_root
+        ),
         tool_telemetry_observer=lambda event_id, tool_name: _record_automatic_route_tool(
             config.data_directory, event_id, tool_name
         ),

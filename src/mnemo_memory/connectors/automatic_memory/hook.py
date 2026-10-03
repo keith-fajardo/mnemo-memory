@@ -4,8 +4,10 @@ This module deliberately does not read a transcript's contents, environment valu
 bodies. It reads only the public save operation tag when supplied, so an explicit small historical
 fact cannot be mistaken for a complete task handoff. To pace checkpoint nudges by how much context
 has accumulated it may stat the client transcript for its byte size alone (file metadata, never the
-conversation text). On a trusted enabled project boundary it may refresh Mnemo's bounded static
-source-structure projection; it never stores source text.
+conversation text). On a trusted enabled project boundary it checks, by file metadata only,
+whether Mnemo's bounded static source-structure map is current. It never parses or stores source
+here; a stale map is refreshed by a detached background worker it starts after its output is
+built (spec 2026-10-03). It never stores source text.
 """
 
 from __future__ import annotations
@@ -25,10 +27,12 @@ from mnemo_memory.connectors.automatic_memory.git_observation import (
     GitObservationStore,
     GitSourceObservation,
     GitSourceObserver,
+    observe_and_store_git,
 )
 from mnemo_memory.connectors.automatic_memory.source_observation import (
-    refresh_registered_project_source,
+    source_snapshot_is_fresh,
 )
+from mnemo_memory.connectors.automatic_memory.source_refresh import SourceRefreshLock
 from mnemo_memory.packages.application.automatic_memory import (
     AutomaticMemoryBindingError,
     LocalMemoryProjectBindingStore,
@@ -48,6 +52,7 @@ from mnemo_memory.packages.application.dbt import (
 )
 from mnemo_memory.packages.domain import (
     CodeFile,
+    CodeSnapshot,
     CodeSnapshotId,
     CodeSymbol,
     DbtSnapshotId,
@@ -112,6 +117,12 @@ _KnowledgeStatusLoader = Callable[[MemoryProjectBinding], int]
 _RetentionSweeper = Callable[[MemoryProjectBinding], None]
 _ToolTelemetryObserver = Callable[[UUID, str], None]
 _DeliveryTelemetryObserver = Callable[[UUID, int, int, bool], None]
+_SourceRefreshStarter = Callable[[Path, Path], None]
+
+# Spec 2026-10-03 §2: the one fixed line a pending background refresh adds to a notice.
+SOURCE_REFRESH_PENDING_NOTICE = (
+    "Code map refresh running in background; use source_changes for structural change details."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,12 +139,25 @@ class AutomaticMemoryHook:
     git_observer: GitSourceObserver | None = None
     tool_telemetry_observer: _ToolTelemetryObserver | None = None
     delivery_telemetry_observer: _DeliveryTelemetryObserver | None = None
+    # Starts the detached code-map refresh worker with (data_directory, project_root). ``None``
+    # starts nothing; the CLI composition injects the real detached start.
+    source_refresh_starter: _SourceRefreshStarter | None = None
     episodic_extraction_enabled: bool = False
     # Byte growth of the client transcript since the last save before a Stop nudges another
     # checkpoint. 0 disables the gate (nudge on every dirty Stop, the historical behavior).
     context_save_growth_bytes: int = 200_000
 
     def handle(self, event: object) -> dict[str, object]:
+        refresh_requests: list[MemoryProjectBinding] = []
+        output = self._handle(event, refresh_requests)
+        if refresh_requests:
+            # Spec 2026-10-03 §2: start the worker only once the output exists; never wait.
+            self._start_source_refresh(refresh_requests[0])
+        return output
+
+    def _handle(
+        self, event: object, refresh_requests: list[MemoryProjectBinding]
+    ) -> dict[str, object]:
         if not isinstance(event, dict):
             return self._safe_output("MNEMO_MEMORY_HOOK_INPUT_INVALID")
         event_name = event.get("hook_event_name")
@@ -179,6 +203,7 @@ class AutomaticMemoryHook:
                 # tool bodies/output or source text into hook state.
                 self._refresh_project_knowledge(binding)
                 refreshed = self._refresh_source_structure(binding)
+                _note_pending_refresh(refreshed, binding, refresh_requests)
                 git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
                 state_store.save(
                     session_id,
@@ -232,6 +257,7 @@ class AutomaticMemoryHook:
             # snapshot is unchanged. Agents that need prior changes receive the bounded
             # ``source_changes`` retrieval hint below and can request that evidence explicitly.
             refreshed = self._refresh_source_structure(binding)
+            _note_pending_refresh(refreshed, binding, refresh_requests)
             git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
             state_store.save(
                 session_id,
@@ -266,6 +292,7 @@ class AutomaticMemoryHook:
                 # from before the mutation that caused this prompt-boundary hook.
                 self._refresh_project_knowledge(binding)
                 refreshed = self._refresh_source_structure(binding)
+                _note_pending_refresh(refreshed, binding, refresh_requests)
             prompt_attachment = self._attached_prompt_context(binding.checkpoint_scope, event)
             candidate_keys = _scoped_delivery_keys(
                 binding.checkpoint_scope,
@@ -346,6 +373,7 @@ class AutomaticMemoryHook:
             _ProjectHandoffStateStore(self.data_directory).mark_pending(binding.scope)
             self._refresh_project_knowledge(binding)
             refreshed = self._refresh_source_structure(binding)
+            _note_pending_refresh(refreshed, binding, refresh_requests)
             instruction = _checkpoint_instruction(binding.checkpoint_scope.to_dict(), refreshed)
             if self.episodic_extraction_enabled:
                 instruction += "\n\nMnemo: run extract_episodic on this session's recent events."
@@ -496,58 +524,98 @@ class AutomaticMemoryHook:
     def _refresh_source_structure(
         self, binding: MemoryProjectBinding, *, include_latest_transition: bool = False
     ) -> _SourceRefresh:
-        """Best-effort local refresh; failure never blocks a coding client session."""
+        """Read the stored map and check freshness by file metadata only; never parse here.
+
+        Fresh: as before; Git is observed for the active digest, and the latest stored transition
+        is diffed only when the caller asks. Stale or missing: ``refresh_pending`` is set, no
+        digest is claimed current and no Git baseline is offered, and ``handle`` starts the
+        background worker after its output is built (spec 2026-10-03 §2). Failure never blocks a
+        coding client session.
+        """
         try:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
             repository.migrate()
-            previous = repository.get_active_snapshot(binding.scope)
-            stored_snapshot = refresh_registered_project_source(
-                binding, repository, cache_dir=self.data_directory / "scan-cache"
+            active = repository.get_active_snapshot(binding.scope)
+            fresh = active is not None and source_snapshot_is_fresh(
+                binding, active.snapshot_id, cache_dir=self.data_directory / "scan-cache"
             )
-            if stored_snapshot is None:
-                return _SourceRefresh(None)
-            git_observation = self._observe_git(binding, stored_snapshot.source_digest)
-            if previous is None:
-                return _SourceRefresh(
-                    stored_snapshot.source_digest, git_observation=git_observation
-                )
-            if previous.snapshot_id == stored_snapshot.snapshot_id:
+            if active is None or not fresh:
                 if not include_latest_transition:
-                    return _SourceRefresh(
-                        stored_snapshot.source_digest, git_observation=git_observation
-                    )
-                transition = repository.latest_transition(binding.scope)
-                if transition is None:
-                    return _SourceRefresh(
-                        stored_snapshot.source_digest, git_observation=git_observation
-                    )
-                before, after = transition
-            else:
-                before, after = previous, stored_snapshot
-            diff = SourceImpactService(repository).diff(
-                binding.scope, before.snapshot_id, after.snapshot_id
-            )
-            changes = _SourceChangeSummary.from_diff(diff)
-            return _SourceRefresh(
-                stored_snapshot.source_digest,
-                changes,
-                _dependent_impact_cues(repository, binding.scope, diff, changes),
-                _dbt_downstream_cues(self.data_directory, binding.scope, changes),
-                git_observation,
-                GitObservationStore(self.data_directory).get(binding.scope, before.source_digest),
+                    return _SourceRefresh(None, refresh_pending=True)
+                stored = repository.latest_transition(binding.scope)
+                if stored is None:
+                    return _SourceRefresh(None, refresh_pending=True)
+                return self._transition_refresh(
+                    repository,
+                    binding,
+                    stored,
+                    digest=None,
+                    git_observation=None,
+                    refresh_pending=True,
+                )
+            git_observation = self._observe_git(binding, active.source_digest)
+            if not include_latest_transition:
+                return _SourceRefresh(active.source_digest, git_observation=git_observation)
+            transition = repository.latest_transition(binding.scope)
+            if transition is None:
+                return _SourceRefresh(active.source_digest, git_observation=git_observation)
+            return self._transition_refresh(
+                repository,
+                binding,
+                transition,
+                digest=active.source_digest,
+                git_observation=git_observation,
+                refresh_pending=False,
             )
         except (ProjectIndexRepositoryError, OSError, ValueError, RuntimeError):
             return _SourceRefresh(None)
 
+    def _transition_refresh(
+        self,
+        repository: SQLiteSourceStructureRepository,
+        binding: MemoryProjectBinding,
+        transition: tuple[CodeSnapshot, CodeSnapshot],
+        *,
+        digest: str | None,
+        git_observation: GitSourceObservation | None,
+        refresh_pending: bool,
+    ) -> _SourceRefresh:
+        before, after = transition
+        diff = SourceImpactService(repository).diff(
+            binding.scope, before.snapshot_id, after.snapshot_id
+        )
+        changes = _SourceChangeSummary.from_diff(diff)
+        return _SourceRefresh(
+            digest,
+            changes,
+            _dependent_impact_cues(repository, binding.scope, diff, changes),
+            _dbt_downstream_cues(self.data_directory, binding.scope, changes),
+            git_observation,
+            GitObservationStore(self.data_directory).get(binding.scope, before.source_digest),
+            refresh_pending,
+        )
+
     def _observe_git(
         self, binding: MemoryProjectBinding, source_digest: str
     ) -> GitSourceObservation | None:
-        observation = (self.git_observer or GitSourceObserver()).observe(
-            binding.project_root, source_digest
+        return observe_and_store_git(
+            self.data_directory,
+            binding.project_root,
+            binding.scope,
+            source_digest,
+            self.git_observer,
         )
-        if observation is not None:
-            GitObservationStore(self.data_directory).put(binding.scope, observation)
-        return observation
+
+    def _start_source_refresh(self, binding: MemoryProjectBinding) -> None:
+        """Start the detached worker unless one runs; ignore every failure (spec §2)."""
+        if self.source_refresh_starter is None:
+            return
+        try:
+            if SourceRefreshLock(self.data_directory).running():
+                return  # a status probe only; the worker's own lock is authoritative
+            self.source_refresh_starter(self.data_directory, binding.project_root)
+        except Exception:
+            return
 
     def _git_proves_no_mutation(self, binding: MemoryProjectBinding, state: _SessionState) -> bool:
         """Return true only when a shell call left a previously clean Git project unchanged."""
@@ -671,6 +739,7 @@ class _SourceRefresh:
     dbt_impact_cues: tuple[_DbtImpactCue, ...] = ()
     git_observation: GitSourceObservation | None = None
     previous_git_observation: GitSourceObservation | None = None
+    refresh_pending: bool = False
 
 
 def _summary_symbols(symbols: tuple[CodeSymbol, ...]) -> tuple[str, ...]:
@@ -1009,6 +1078,15 @@ def _clean_git_baseline(refreshed: _SourceRefresh) -> tuple[str | None, str | No
     return observation.source_digest, observation.commit_id
 
 
+def _note_pending_refresh(
+    refreshed: _SourceRefresh,
+    binding: MemoryProjectBinding,
+    refresh_requests: list[MemoryProjectBinding],
+) -> None:
+    if refreshed.refresh_pending:
+        refresh_requests.append(binding)
+
+
 def _valid_git_baseline(source_digest: object, commit_id: object) -> bool:
     return (
         isinstance(source_digest, str)
@@ -1131,6 +1209,8 @@ def _checkpoint_instruction(_scope: Mapping[str, object], refreshed: _SourceRefr
         instruction += _source_impact_instruction(refreshed.impact_cues)
     if refreshed.dbt_impact_cues:
         instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
+    if refreshed.refresh_pending:
+        instruction += "\n" + SOURCE_REFRESH_PENDING_NOTICE
     return instruction
 
 
@@ -1310,6 +1390,8 @@ def _dirty_session_instruction(refreshed: _SourceRefresh) -> str:
         instruction += _source_impact_instruction(refreshed.impact_cues)
     if refreshed.dbt_impact_cues:
         instruction += _dbt_impact_instruction(refreshed.dbt_impact_cues)
+    if refreshed.refresh_pending:
+        instruction += "\n" + SOURCE_REFRESH_PENDING_NOTICE
     return instruction
 
 

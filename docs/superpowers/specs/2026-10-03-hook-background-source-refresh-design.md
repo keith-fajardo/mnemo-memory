@@ -40,6 +40,7 @@ Claude Code reports `UserPromptSubmit hook … timed out after 30s — output di
 - **Notices.**
   - When `refresh_pending` is set, the dirty reminder and the Stop/PreCompact checkpoint instruction add one fixed line: `Code map refresh running in background; structural change details may lag one prompt.`
   - They contain no paths or file names beyond what they contain today.
+  - *Update 2026-10-03 (implementation):* the fixed line is now `Code map refresh running in background; use source_changes for structural change details.` The hook no longer carries change details at all on a stale map (it never parses, so it has nothing current to report), so "may lag one prompt" overpromised; the line instead points agents to `source_changes`, which reads the stored transitions once the worker has written them.
 - **Git baseline (PostToolUse after save).** When the map is stale, no new baseline is written. This fails closed, as today's refresh failure does.
 - **Spawn rules:**
   - The spawn happens after the hook has built its output, never waits, and ignores every failure.
