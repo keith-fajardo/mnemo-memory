@@ -1299,9 +1299,10 @@ def _queue_unjudged_notes(
     """Queue the IDs (never text) of candidates that still need a verdict; return how many.
 
     A note with a usable verdict, or with three failed attempts on this exact text, is not
-    queued. A failed write queues nothing and changes nothing else (spec 2026-10-03 §3). An
-    unpinned ``model_id`` (not ``jev-X.Y.Z``) queues nothing: no verdict could be recorded for
-    it, so the judge would only be started to do nothing.
+    queued. A failed write, or a busy queue lock (the hook never waits for it), queues nothing and
+    changes nothing else (spec 2026-10-03 §3). An unpinned ``model_id`` (not ``jev-X.Y.Z``)
+    queues nothing: no verdict could be recorded for it, so the judge would only be started to
+    do nothing.
     """
 
     from mnemo_memory.apps.cli import typed_decision_hook as typed
@@ -1316,10 +1317,10 @@ def _queue_unjudged_notes(
     if not unjudged:
         return 0
     try:
-        LocalNoteJudgeQueue(data_directory).append(scope, unjudged)
+        length = LocalNoteJudgeQueue(data_directory).append(scope, unjudged)
     except Exception:
         return 0
-    return len(unjudged)
+    return len(unjudged) if length > 0 else 0  # 0: the queue lock was busy, nothing queued
 
 
 def _judge_route_open(settings: PersonalSettings) -> bool:

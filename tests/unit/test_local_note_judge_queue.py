@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
@@ -142,7 +144,8 @@ def test_concurrent_appends_and_takes_lose_nothing_and_never_repeat(tmp_path: Pa
         try:
             queue = LocalNoteJudgeQueue(tmp_path)
             for number in range(25):
-                queue.append(SCOPE, (_id(index * 100 + number),))
+                while queue.append(SCOPE, (_id(index * 100 + number),)) == 0:
+                    time.sleep(0.001)  # append never waits: a busy lock queues nothing
         except BaseException as error:  # pragma: no cover - surfaced below
             errors.append(error)
 
@@ -203,3 +206,69 @@ def test_a_judge_that_died_never_blocks_the_next_one(tmp_path: Path) -> None:
     assert queue.judge_running() is False
     with queue.run_lock() as acquired:
         assert acquired is True
+
+
+def _queue_lock_path(directory: Path) -> Path:
+    return directory / f".{JUDGE_QUEUE_FILE}.lock"
+
+
+def test_append_returns_zero_at_once_and_changes_nothing_while_the_queue_lock_is_busy(
+    tmp_path: Path,
+) -> None:
+    queue = LocalNoteJudgeQueue(tmp_path)
+    assert queue.append(SCOPE, (_id(1),)) == 1
+    before = queue.path.read_bytes()
+    descriptor = os.open(_queue_lock_path(tmp_path), os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        started = time.monotonic()
+        assert queue.append(SCOPE, (_id(2), _id(3))) == 0
+        assert time.monotonic() - started < 0.5
+        assert queue.path.read_bytes() == before
+    finally:
+        os.close(descriptor)
+    assert queue.append(SCOPE, (_id(2),)) == 2  # the next prompt queues as usual
+    assert queue.take(10) == (QueuedNote(_id(1), SCOPE), QueuedNote(_id(2), SCOPE))
+
+
+def test_append_never_waits_on_a_lock_held_by_another_process(tmp_path: Path) -> None:
+    queue = LocalNoteJudgeQueue(tmp_path)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _HOLD_AND_DIE,
+            str(tmp_path.resolve() / _queue_lock_path(tmp_path).name),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdin is not None and holder.stdout is not None
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        started = time.monotonic()
+        assert queue.append(SCOPE, (_id(1),)) == 0
+        assert time.monotonic() - started < 0.5
+        assert not queue.path.exists()
+    finally:
+        holder.stdin.write("\n")
+        holder.stdin.flush()
+        assert holder.wait(timeout=30) == 9
+    assert queue.append(SCOPE, (_id(1),)) == 1
+
+
+def test_take_still_waits_for_the_queue_lock(tmp_path: Path) -> None:
+    queue = LocalNoteJudgeQueue(tmp_path)
+    queue.append(SCOPE, (_id(1),))
+    descriptor = os.open(_queue_lock_path(tmp_path), os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    taken: list[tuple[QueuedNote, ...]] = []
+    thread = threading.Thread(target=lambda: taken.append(queue.take(1)))
+    thread.start()
+    time.sleep(0.2)
+    assert taken == []  # still waiting
+    fcntl.flock(descriptor, fcntl.LOCK_UN)
+    os.close(descriptor)
+    thread.join(timeout=10)
+    assert taken == [(QueuedNote(_id(1), SCOPE),)]

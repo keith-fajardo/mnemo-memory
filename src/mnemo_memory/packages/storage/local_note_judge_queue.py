@@ -58,10 +58,17 @@ class LocalNoteJudgeQueue:
         self._run_lock_path = self._directory / JUDGE_RUN_LOCK_FILE
 
     def append(self, scope: MemoryScope, item_ids: Sequence[str]) -> int:
-        """Queue each note once, keep the newest 256, and return the queue length after."""
+        """Queue each note once, keep the newest 256, and return the queue length after.
+
+        It never waits: it tries the queue lock once, and if the judge (or another prompt) holds
+        it, nothing is queued and the result is 0. The hook treats queueing as best effort and
+        queues the same notes again on a later prompt.
+        """
 
         added = tuple(dict.fromkeys(QueuedNote(item_id, scope) for item_id in item_ids))
-        with self._lock():
+        with self._lock(wait=False) as held:
+            if not held:
+                return 0
             entries = self._read_or_empty()
             present = set(entries)
             merged = [*entries, *(note for note in added if note not in present)]
@@ -75,7 +82,7 @@ class LocalNoteJudgeQueue:
 
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("queue take limit must be a positive integer")
-        with self._lock():
+        with self._lock():  # the judge may wait; only the hook path must not
             entries = self._read_or_empty()
             taken = entries[:limit]
             if taken:
@@ -188,14 +195,20 @@ class LocalNoteJudgeQueue:
                 temporary.unlink(missing_ok=True)
 
     @contextmanager
-    def _lock(self) -> Iterator[None]:
+    def _lock(self, *, wait: bool = True) -> Iterator[bool]:
+        """Hold the queue lock; with ``wait=False`` yield ``False`` at once if it is busy."""
+
         self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.path.is_symlink():
             raise _QueueUnsafe("note judge queue is unsafe")
         descriptor = os.open(self._lock_path, _flags(create=True), 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            except BlockingIOError:
+                yield False
+                return
+            yield True
         finally:
             with suppress(OSError):
                 fcntl.flock(descriptor, fcntl.LOCK_UN)

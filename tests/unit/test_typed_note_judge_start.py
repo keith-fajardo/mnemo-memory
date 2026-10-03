@@ -3,7 +3,9 @@ judge command itself is silent and asks Jev only through a 5 s runtime guard (sp
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import subprocess
 import sys
 import warnings
@@ -134,6 +136,48 @@ def test_the_hook_queues_and_spawns_only_for_a_pinned_model_id(
     run_hook(fixture, KNOWLEDGE_PROMPT)
     assert LocalNoteJudgeQueue(fixture.data).length() == queued
     assert len(started) == (1 if queued else 0)
+
+
+def test_the_hook_never_waits_on_a_busy_queue_lock_and_reports_nothing_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    off = run_hook(fixture, KNOWLEDGE_PROMPT)
+    _relevance_shadow(fixture)
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "_judge_route_open", lambda settings: True)
+    monkeypatch.setattr(cli, "_start_note_judge", started.append)
+    lock = fixture.data / ".typed-decision-judge-queue.json.lock"
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        seen = run_hook(fixture, KNOWLEDGE_PROMPT)
+    finally:
+        os.close(descriptor)
+    assert (seen.context, seen.delivery_keys) == (off.context, off.delivery_keys)
+    assert started == []  # nothing was queued, so no judge starts
+    assert not LocalNoteJudgeQueue(fixture.data).path.exists()
+    run_hook(fixture, KNOWLEDGE_PROMPT)  # a later prompt queues the notes
+    assert LocalNoteJudgeQueue(fixture.data).length() == 3
+
+
+def test_queueing_reports_zero_when_the_queue_lock_is_busy(tmp_path: Path) -> None:
+    from mnemo_memory.apps.cli.typed_decision_hook import FillerCandidate
+    from mnemo_memory.packages.storage import NoteVerdictState
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    candidates = (FillerCandidate("note-1", "text"),)
+    states = (NoteVerdictState(None, 0),)
+    scope = fixture.binding.checkpoint_scope
+    descriptor = os.open(
+        fixture.data / ".typed-decision-judge-queue.json.lock", os.O_CREAT | os.O_RDWR
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        assert cli._queue_unjudged_notes(fixture.data, scope, candidates, states, "jev-1.13.0") == 0
+    finally:
+        os.close(descriptor)
+    assert cli._queue_unjudged_notes(fixture.data, scope, candidates, states, "jev-1.13.0") == 1
 
 
 def test_the_judge_command_asks_nothing_for_an_unpinned_model_id(
