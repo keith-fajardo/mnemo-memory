@@ -6,9 +6,14 @@ budget and deadline policy. This module never logs or returns request text or th
 
 from __future__ import annotations
 
+import errno
+import http.client
 import json
 import math
+import queue
 import re
+import socket
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -36,8 +41,129 @@ _READ_CHUNK_BYTES = 65_536
 # only needs a well-formed reported model name.
 _PINNED_MODEL = re.compile(r"jev-\d+\.\d+\.\d+", re.ASCII)
 _REPORTED_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+# A new TCP connect that has not finished by now has probably lost its first SYN and is waiting
+# out the OS's 1 s retransmit, so a second attempt starts.
+HEDGE_SECONDS = 0.2
 
 JevTransport = Callable[[str, bytes, Mapping[str, str], float], bytes]
+
+
+def _hedged_connection(
+    address: tuple[str, int],
+    *,
+    timeout: float,
+    hedge_seconds: float = HEDGE_SECONDS,
+    connect: Callable[..., socket.socket] = socket.create_connection,
+) -> socket.socket:
+    """Open one TCP connection, starting a second identical attempt if the first is slow.
+
+    The second attempt starts once the first has not connected within ``hedge_seconds`` (or has
+    already failed); the first attempt keeps running. The first socket to connect is returned
+    and any socket that connects later is closed. The whole call is bounded by ``timeout``:
+    past it, ``TimeoutError``. If both attempts fail, the last failure is raised. Attempts run on
+    daemon threads, so an abandoned one never blocks process exit.
+    """
+
+    deadline = time.monotonic() + timeout
+    outcomes: queue.SimpleQueue[socket.socket | Exception] = queue.SimpleQueue()
+    settled = threading.Event()  # set once the caller has a winner or has given up
+    settle_lock = threading.Lock()
+
+    def attempt() -> None:
+        try:
+            sock = connect(address, timeout=timeout)
+        except Exception as failure:
+            outcomes.put(failure)
+            return
+        with settle_lock:
+            if not settled.is_set():
+                outcomes.put(sock)
+                return
+        sock.close()  # a late loser: nobody will read it
+
+    def launch() -> None:
+        threading.Thread(target=attempt, name="jev-connect", daemon=True).start()
+
+    launch()
+    attempts, failures = 1, 0
+    hedge_at = time.monotonic() + hedge_seconds
+    last_failure: Exception | None = None
+    winner: socket.socket | None = None
+    try:
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            if attempts == 1 and now >= hedge_at:
+                launch()
+                attempts = 2
+            wake = deadline if attempts == 2 else min(hedge_at, deadline)
+            try:
+                outcome = outcomes.get(timeout=wake - now)
+            except queue.Empty:
+                continue
+            if isinstance(outcome, Exception):
+                failures += 1
+                last_failure = outcome
+                if attempts == 1:
+                    launch()
+                    attempts = 2
+                elif failures == attempts:
+                    break
+                continue
+            winner = outcome
+            break
+    finally:
+        # Close every socket that connected but was not returned. An attempt that finishes
+        # after this point sees ``settled`` and closes its own socket.
+        with settle_lock:
+            settled.set()
+        while True:
+            try:
+                leftover = outcomes.get_nowait()
+            except queue.Empty:
+                break
+            if not isinstance(leftover, Exception):
+                leftover.close()
+    if winner is not None:
+        return winner
+    if last_failure is not None and failures == attempts:
+        raise last_failure
+    raise TimeoutError
+
+
+class _HedgedHTTPSConnection(http.client.HTTPSConnection):
+    """``HTTPSConnection`` whose direct TCP connect is hedged; a proxy tunnel is left alone."""
+
+    def connect(self) -> None:
+        # ``_tunnel_host`` and ``_context`` are CPython private attributes that typeshed does not
+        # declare. A tunnel, a missing attribute or a non-numeric timeout takes the stock path,
+        # so a configured proxy is never bypassed (a missing ``_tunnel_host`` counts as a tunnel).
+        tunneled = bool(getattr(self, "_tunnel_host", True))
+        context = getattr(self, "_context", None)
+        timeout = self.timeout
+        if tunneled or context is None or not isinstance(timeout, int | float):
+            super().connect()
+            return
+        # CPython 3.12 ``HTTPConnection.connect`` then ``HTTPSConnection.connect``, with only
+        # ``socket.create_connection`` replaced by the hedged connect.
+        sys.audit("http.client.connect", self, self.host, self.port)
+        self.sock = _hedged_connection((self.host, self.port or 443), timeout=timeout)
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError as failure:
+            if failure.errno != errno.ENOPROTOOPT:
+                raise
+        self.sock = context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+class _HedgedHTTPSHandler(_request.HTTPSHandler):
+    """The stock HTTPS handler, opening its connections with ``_HedgedHTTPSConnection``."""
+
+    def https_open(self, req: _request.Request) -> http.client.HTTPResponse:
+        # ``_context`` is the handler's TLS context (CPython private, absent from typeshed). A
+        # ``None`` fallback makes the connection build the same default context.
+        return self.do_open(_HedgedHTTPSConnection, req, context=getattr(self, "_context", None))
 
 
 class _NoRedirect(_request.HTTPRedirectHandler):
@@ -60,7 +186,7 @@ _OPENER_LOCK = threading.Lock()
 
 
 def _opener() -> _request.OpenerDirector:
-    """The shared no-redirect opener, built on first use rather than at import.
+    """The shared no-redirect, hedged-connect opener, built on first use rather than at import.
 
     Building it creates the default TLS context (about 17 ms). The first transport call builds
     it on the guard's worker thread, so the cost falls inside the request cap instead of before
@@ -70,16 +196,16 @@ def _opener() -> _request.OpenerDirector:
     global _OPENER
     with _OPENER_LOCK:
         if _OPENER is None:
-            _OPENER = _request.build_opener(_NoRedirect())
+            _OPENER = _request.build_opener(_NoRedirect(), _HedgedHTTPSHandler())
         return _OPENER
 
 
 def _urllib_transport(url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
     """POST once; ``timeout`` is a total deadline for the body read only.
 
-    DNS, each connection attempt, the TLS handshake and each header read are limited only per
-    operation, by the same ``timeout``. Reading a trickling body stops at the deadline plus at
-    most one socket read.
+    DNS and the TCP connect are hedged and bounded together by the same ``timeout`` (see
+    ``_hedged_connection``); the TLS handshake and each header read are limited only per
+    operation. Reading a trickling body stops at the deadline plus at most one socket read.
     """
 
     deadline = time.monotonic() + timeout

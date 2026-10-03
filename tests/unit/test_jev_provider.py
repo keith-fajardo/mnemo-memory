@@ -1,12 +1,14 @@
 import http.client
 import json
 import pickle
+import socket
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from email.message import Message
-from typing import Any
+from typing import Any, NoReturn
 from urllib import error as urllib_error
 
 import pytest
@@ -225,6 +227,198 @@ def test_redirects_are_never_followed() -> None:
     opener: Any = jev_provider._opener()
     handlers = opener.handlers
     assert not any(type(h) is urllib_request.HTTPRedirectHandler for h in handlers)
+    assert any(type(h) is jev_provider._NoRedirect for h in handlers)
+    https = [h for h in handlers if isinstance(h, urllib_request.HTTPSHandler)]
+    assert [type(h) for h in https] == [jev_provider._HedgedHTTPSHandler]
+
+
+def test_the_hedged_handler_opens_https_with_the_hedged_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib import request as urllib_request
+
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    handler: Any = jev_provider._HedgedHTTPSHandler()
+    opened: list[tuple[object, object, dict[str, object]]] = []
+
+    def do_open(http_class: object, req: object, **kwargs: object) -> str:
+        opened.append((http_class, req, kwargs))
+        return "response"
+
+    monkeypatch.setattr(handler, "do_open", do_open)
+    req = urllib_request.Request(JEV_ENDPOINT, data=b"{}", method="POST")
+    assert handler.https_open(req) == "response"
+    assert opened == [(jev_provider._HedgedHTTPSConnection, req, {"context": handler._context})]
+
+
+ADDRESS = ("api.typesafe.invalid", 443)
+
+
+class FakeSocket:
+    """Stands in for a connected socket and records each ``close``."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.closes = 0
+        self.closed = threading.Event()
+        self.options: list[tuple[int, int, int]] = []
+
+    def close(self) -> None:
+        self.closes += 1
+        self.closed.set()
+
+    def setsockopt(self, level: int, option: int, value: int) -> None:
+        self.options.append((level, option, value))
+
+
+class FakeConnect:
+    """The ``connect`` seam: attempt N runs ``plan[N]``; calls are recorded in order."""
+
+    def __init__(self, *plan: Callable[[], FakeSocket]) -> None:
+        self._plan = plan
+        self._lock = threading.Lock()
+        self.calls: list[tuple[int, tuple[str, int], float]] = []
+
+    def __call__(self, address: tuple[str, int], *, timeout: float) -> FakeSocket:
+        with self._lock:
+            index = len(self.calls)
+            self.calls.append((index, address, timeout))
+        return self._plan[index]()
+
+
+def _connects_after(delay: float, sock: FakeSocket) -> Callable[[], FakeSocket]:
+    def attempt() -> FakeSocket:
+        time.sleep(delay)
+        return sock
+
+    return attempt
+
+
+def _fails_after(delay: float, message: str) -> Callable[[], FakeSocket]:
+    def attempt() -> FakeSocket:
+        time.sleep(delay)
+        raise OSError(message)
+
+    return attempt
+
+
+def _connects_when(release: threading.Event, sock: FakeSocket) -> Callable[[], FakeSocket]:
+    def attempt() -> FakeSocket:
+        release.wait(5.0)
+        return sock
+
+    return attempt
+
+
+def test_a_slow_first_connect_is_hedged_and_the_late_socket_is_closed() -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    slow, fast = FakeSocket("slow"), FakeSocket("fast")
+    connect: Any = FakeConnect(_connects_after(1.0, slow), _connects_after(0.0, fast))
+    started = time.monotonic()
+    result: Any = jev_provider._hedged_connection(ADDRESS, timeout=5.0, connect=connect)
+    elapsed = time.monotonic() - started
+    assert jev_provider.HEDGE_SECONDS == 0.2
+    assert result is fast
+    assert connect.calls == [(0, ADDRESS, 5.0), (1, ADDRESS, 5.0)]
+    assert elapsed < 0.9  # generous: the hedge fires at 0.2 s, the first connects at 1.0 s
+    assert slow.closed.wait(5.0)
+    assert (slow.closes, fast.closes) == (1, 0)
+
+
+def test_a_fast_first_connect_makes_only_one_attempt() -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    fast = FakeSocket("fast")
+    connect: Any = FakeConnect(_connects_after(0.0, fast))
+    result: Any = jev_provider._hedged_connection(
+        ADDRESS, timeout=5.0, hedge_seconds=0.05, connect=connect
+    )
+    time.sleep(0.15)  # well past the hedge point: no late second attempt starts
+    assert result is fast
+    assert connect.calls == [(0, ADDRESS, 5.0)]
+    assert fast.closes == 0
+
+
+@pytest.mark.parametrize("first_delay", [0.0, 0.1], ids=["fails_at_once", "fails_after_hedge"])
+def test_when_both_attempts_fail_the_connect_error_is_raised(first_delay: float) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    connect: Any = FakeConnect(
+        _fails_after(first_delay, "first refused"), _fails_after(0.0, "second refused")
+    )
+    started = time.monotonic()
+    with pytest.raises(OSError) as caught:
+        jev_provider._hedged_connection(ADDRESS, timeout=5.0, hedge_seconds=0.05, connect=connect)
+    assert time.monotonic() - started < 2.0  # raised when both failed, not at the deadline
+    assert type(caught.value) is OSError
+    assert str(caught.value) in {"first refused", "second refused"}
+    assert [index for index, _, _ in connect.calls] == [0, 1]
+
+
+def test_nothing_connecting_in_time_raises_timeout_and_closes_late_sockets() -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    release = threading.Event()
+    first, second = FakeSocket("first"), FakeSocket("second")
+    connect: Any = FakeConnect(_connects_when(release, first), _connects_when(release, second))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        jev_provider._hedged_connection(ADDRESS, timeout=0.3, hedge_seconds=0.05, connect=connect)
+    assert time.monotonic() - started < 0.8  # the timeout plus a margin
+    assert [index for index, _, _ in connect.calls] == [0, 1]
+    release.set()
+    assert first.closed.wait(5.0) and second.closed.wait(5.0)
+    assert (first.closes, second.closes) == (1, 1)
+
+
+def test_a_direct_connection_is_hedged_then_wrapped_with_tls_for_the_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    raw = FakeSocket("raw")
+    hedged: list[tuple[tuple[str, int], float]] = []
+
+    def fake_hedged(address: tuple[str, int], *, timeout: float) -> FakeSocket:
+        hedged.append((address, timeout))
+        return raw
+
+    class Context:
+        def __init__(self) -> None:
+            self.wrapped: list[tuple[FakeSocket, str]] = []
+
+        def wrap_socket(self, sock: FakeSocket, *, server_hostname: str) -> str:
+            self.wrapped.append((sock, server_hostname))
+            return "tls-socket"
+
+    monkeypatch.setattr(jev_provider, "_hedged_connection", fake_hedged)
+    context: Any = Context()
+    connection: Any = jev_provider._HedgedHTTPSConnection(
+        "api.typesafe.ai", timeout=0.8, context=context
+    )
+    connection.connect()
+    assert hedged == [(("api.typesafe.ai", 443), 0.8)]
+    assert raw.options == [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+    assert context.wrapped == [(raw, "api.typesafe.ai")]
+    assert connection.sock == "tls-socket"
+
+
+def test_a_proxy_tunnel_keeps_the_stock_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mnemo_memory.connectors.typesafe import jev_provider
+
+    stock: list[object] = []
+
+    def never(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("a proxied request was hedged")
+
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect", lambda self: stock.append(self))
+    monkeypatch.setattr(jev_provider, "_hedged_connection", never)
+    connection = jev_provider._HedgedHTTPSConnection("proxy.invalid", 3128, timeout=1.0)
+    connection.set_tunnel("api.typesafe.ai", 443)
+    connection.connect()
+    assert stock == [connection]
 
 
 class DripResponse:
@@ -303,7 +497,10 @@ def test_the_opener_is_built_once_across_transport_calls(monkeypatch: pytest.Mon
     assert jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0) == b"{}"
     assert jev_provider._urllib_transport(JEV_ENDPOINT, b"{}", {}, 5.0) == b"{}"
     assert len(built) == 1
-    assert [type(handler) for handler in built[0]] == [jev_provider._NoRedirect]
+    assert [type(handler) for handler in built[0]] == [
+        jev_provider._NoRedirect,
+        jev_provider._HedgedHTTPSHandler,
+    ]
 
 
 def test_transport_enforces_a_total_deadline_on_a_trickling_body(
