@@ -2795,7 +2795,7 @@ def mcp_serve(
 ) -> None:
     if not stdio:
         raise typer.BadParameter("Issue 7 supports only --stdio")
-    arguments = [sys.executable, "-m", "mnemo_memory.apps.mcp.server"]
+    arguments = [sys.executable, "-P", "-m", "mnemo_memory.apps.mcp.server"]
     if data_dir is not None:
         arguments.extend(["--data-dir", str(data_dir)])
     if profile is McpToolProfile.COMPACT:
