@@ -909,6 +909,17 @@ hand-edited to `live` no longer loads, and the hook then runs on default setting
 not just Jev's) until it is fixed. `typed-decisions status` prints `settings_invalid` with the
 lock's message; change that mode back to `shadow` or `off` in `settings.json`.
 
+Downgrade note: with route diagnostics on, a typed prompt now records `typed_notes_cached` and
+`typed_notes_queued` in `automatic-route-telemetry.json`. A build older than the note-verdict
+cache does not know those two keys, so it reads that whole file as corrupt: its diagnostics
+commands report the route state as unavailable. Your memory is not touched; only this route
+telemetry is affected. While the
+file is corrupt the older build ignores tool and delivery updates for it. The next route event
+it records starts a fresh file and replaces the old events (kept for 7 days by default), so the
+file heals itself. You can also delete `automatic-route-telemetry.json` yourself; it holds no
+note or prompt text. Going the other way is safe: a newer build reads older records and counts
+the missing cache fields as 0.
+
 When the filler check is live and drops a note, the attached context keeps one standard
 `MNEMO_OMISSION` line for that note: its `item_id` is the note's own ID, the reason is
 `lower_rank` and the detail is `judged filler; fetch with get_context item_ids`. If that line would

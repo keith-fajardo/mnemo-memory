@@ -224,6 +224,14 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   - **Telemetry and `status`.** Telemetry adds `typed_notes_cached` and `typed_notes_queued`.
     `typed-decisions status` shows the cache (`note_verdicts`) and the queue and whether a judge
     is running (`note_judge`).
+    **Compatibility.** `AutomaticRouteEvent.from_dict` accepts a `typed_v1` record with neither
+    cache key (older records) or with both (new records). A build older than the cache accepts
+    only the first form, so after a downgrade it treats the whole `automatic-route-telemetry.json`
+    as corrupt: its diagnostics commands report the route state as unavailable, and its tool and
+    delivery updates are skipped. Its next recorded route event replaces the file with a fresh
+    one holding only that event, so the earlier route events (7 days by default) are dropped.
+    No memory data is affected; only the route telemetry is. Upgrading is safe, since old records
+    read with both counts as 0.
   - **Replay priming.** Before the prompts, the replay warms each seed's cache by judging every
     seeded note except the pinned event through the synthetic guard (a note left unanswered is
     judged again, up to 3 passes in all), then gates on a priming answered-share of at least
