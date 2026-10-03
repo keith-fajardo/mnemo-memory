@@ -3,7 +3,9 @@
 Every prompt runs in a fresh process, twice (rules-only and typed-live). A run sends fixture
 text to Jev, so it needs --live-calls-authorized (the maintainer's go-ahead, each time) and
 TYPESAFE_API_KEY in the environment. A case whose child fails is recorded by case ID and error
-type, the run goes on, and the report is still written (and is not complete). Example:
+type, the run goes on, and the report is still written (and is not complete). Before the cases,
+each seed's note-verdict cache is warmed by a priming pass that judges every seeded note (spec
+2026-10-03 §7); a priming failure is recorded and the run goes on. Example:
 
     uv run python -m scripts.run_typed_decision_replay --run-id 2026-10-03-replay-a \
         --live-calls-authorized
@@ -25,11 +27,15 @@ from scripts.typed_decision_fixtures import REPOSITORY_ROOT
 from scripts.typed_decision_replay import (
     ARMS,
     SETS,
+    Primer,
+    PrimingResult,
     ReplayRefusedError,
     ReplayRequest,
     ReplayResult,
+    ReplaySeed,
     Runner,
     find_case,
+    prime_replay_seed,
     replay_cases,
     run_case_in_fresh_process,
     run_replay,
@@ -47,10 +53,15 @@ def main(
     *,
     environ: Mapping[str, str] | None = None,
     runner: Runner | None = None,
+    primer: Primer | None = None,
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
 ) -> int:
-    """Run the replay, or with ``--child`` one case."""
+    """Run the replay, or with ``--child`` one case.
+
+    A full run seeds both sets, warms each seed's verdict cache with ``primer`` (default: the
+    live priming pass), then runs every case. Tests pass both ``runner`` and ``primer``.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id")
@@ -79,12 +90,18 @@ def main(
     def fresh(request: ReplayRequest) -> ReplayResult:
         return run_case_in_fresh_process(request, live_calls_authorized=True, environ=variables)
 
+    def prime(seed: ReplaySeed) -> PrimingResult:
+        return prime_replay_seed(seed, environ=variables, live_calls_authorized=True)
+
     run: Runner = runner or fresh
+    warm: Primer = primer or prime
     cases = replay_cases()
     with TemporaryDirectory(prefix="mnemo-typed-replay-") as root:
         seeds = {name: seed_replay_set(Path(root), name) for name in SETS}
+        priming = {name: _primed(warm, seed) for name, seed in seeds.items()}
         results = run_replay(seeds, cases, run)
-        report = score_replay(cases, results, seeds)
+        report = score_replay(cases, results, seeds, priming=priming)
+    report["priming"] = {name: result.to_dict() for name, result in priming.items()}
     report["run"] = {"run_id": args.run_id, "prompts": len(cases), "requests": len(results)}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -136,6 +153,15 @@ def _child(
         return _refuse(f"replay case failed ({type(error).__name__})")
     stdout.write(result.to_json() + "\n")
     return 0
+
+
+def _primed(primer: Primer, seed: ReplaySeed) -> PrimingResult:
+    """One set's priming pass; a failure is recorded as a blocked, empty pass, never fatal."""
+
+    try:
+        return primer(seed)
+    except Exception:
+        return PrimingResult.failed(seed.set_name)
 
 
 def _refuse(message: str) -> int:
