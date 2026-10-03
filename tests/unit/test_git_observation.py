@@ -13,6 +13,7 @@ from mnemo_memory.connectors.automatic_memory.git_observation import (
     GitSourceObserver,
 )
 from mnemo_memory.connectors.automatic_memory.hook import AutomaticMemoryHook
+from mnemo_memory.connectors.automatic_memory.source_refresh import run_source_refresh
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 
 
@@ -24,6 +25,13 @@ def _runner(
         return values.get(arguments)
 
     return run
+
+
+def _prime_source_map(data: Path, project: Path) -> None:
+    """Build the map the way the background worker does, without consuming a test runner."""
+    assert run_source_refresh(
+        data, project, git_observer=GitSourceObserver(lambda arguments, root: None)
+    ).ran
 
 
 def test_git_observer_collects_only_commit_ids_parent_and_dirty_state(tmp_path: Path) -> None:
@@ -105,6 +113,7 @@ def test_automatic_hook_attaches_git_state_without_source_or_status_output(tmp_p
     (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     commit = "d" * 40
     hook = AutomaticMemoryHook(
         data,
@@ -140,6 +149,7 @@ def test_clean_git_observation_proves_read_only_shell_needs_no_checkpoint(
     (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     commit = "e" * 40
     hook = AutomaticMemoryHook(
         data,
@@ -181,6 +191,7 @@ def test_shell_with_changed_git_state_still_requires_checkpoint(tmp_path: Path) 
     (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     commit = "f" * 40
     status_calls = 0
 
@@ -234,6 +245,7 @@ def test_shell_without_a_clean_git_baseline_still_requires_checkpoint(
     (project / "service.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     commit = "1" * 40
     hook = AutomaticMemoryHook(
         data,

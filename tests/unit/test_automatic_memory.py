@@ -22,15 +22,21 @@ from mnemo_memory.connectors.automatic_memory.client_config import (
     disable_client_hooks,
     enable_client_hooks,
 )
+from mnemo_memory.connectors.automatic_memory.git_observation import GitSourceObserver
 from mnemo_memory.connectors.automatic_memory.hook import (
+    SOURCE_REFRESH_PENDING_NOTICE,
     AutomaticMemoryHook,
     PromptContextAttachment,
+    _checkpoint_instruction,
+    _dirty_session_instruction,
+    _resume_instruction,
 )
 from mnemo_memory.connectors.automatic_memory.learned_routes import LocalLearnedRouteStore
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     CheckpointSourceObserver,
     refresh_registered_project_source,
 )
+from mnemo_memory.connectors.automatic_memory.source_refresh import run_source_refresh
 from mnemo_memory.connectors.dbt.manifest import DbtManifestParser
 from mnemo_memory.connectors.dbt.project_binding import (
     DbtProjectBinding,
@@ -150,6 +156,19 @@ def _run_hook_process(data: Path, event: dict[str, object]) -> dict[str, object]
     value = json.loads(completed.stdout)
     assert isinstance(value, dict)
     return value
+
+
+_NO_GIT = GitSourceObserver(lambda arguments, root: None)
+
+
+def _prime_source_map(data: Path, project: Path) -> None:
+    """Build the code map the way the background worker does, so the next hook sees it fresh."""
+    assert run_source_refresh(data, project, git_observer=_NO_GIT).ran
+
+
+def _inline_source_refresh(data_directory: Path, project_root: Path) -> None:
+    """A fake spawner: run the worker in-process, right after the hook has built its output."""
+    run_source_refresh(data_directory, project_root, git_observer=_NO_GIT)
 
 
 def test_personal_binding_is_stable_and_never_derived_from_path(tmp_path: Path) -> None:
@@ -301,6 +320,7 @@ def test_hook_requests_bounded_checkpoint_only_after_work_and_tracks_save(tmp_pa
     project.mkdir()
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     swept: list[MemoryProjectBinding] = []
     hook = AutomaticMemoryHook(
         data,
@@ -2578,12 +2598,9 @@ def test_automatic_context_attachment_includes_the_latest_bounded_source_transit
     source = project / "service.py"
     source.write_text("def reconcile():\n    return 'before'\n", encoding="utf-8")
 
-    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
-    repository.migrate()
-    parser = SourceStructureParser()
-    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+    _prime_source_map(data, project)
     source.write_text("def reconcile():\n    return 'after'\n", encoding="utf-8")
-    repository.store_and_activate(parser.parse(SourceStructureParseRequest(binding.scope, project)))
+    _prime_source_map(data, project)
 
     attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
 
@@ -2609,11 +2626,7 @@ def test_automatic_context_attachment_includes_a_bounded_source_overview_without
     (project / "service.py").write_text("def reconcile():\n    return True\n", encoding="utf-8")
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
-    repository.migrate()
-    repository.store_and_activate(
-        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
-    )
+    _prime_source_map(data, project)
 
     attached = cli._automatic_context_attachment(data, binding.checkpoint_scope)
 
@@ -2644,11 +2657,7 @@ def test_automatic_context_attaches_checkpoint_relevant_static_impact(tmp_path: 
     )
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3", base_directory=data)
-    repository.migrate()
-    repository.store_and_activate(
-        SourceStructureParser().parse(SourceStructureParseRequest(binding.scope, project))
-    )
+    _prime_source_map(data, project)
     evidence = EvidenceReference(
         EvidenceId.new(),
         SourceId.new(),
@@ -2705,6 +2714,7 @@ def test_dirty_session_prompt_reminder_never_reads_or_persists_prompt_content(
     project.mkdir()
     data = tmp_path / "data"
     LocalMemoryProjectBindingStore(data).enable(project)
+    _prime_source_map(data, project)
     hook = AutomaticMemoryHook(data, client)  # type: ignore[arg-type]
     hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
     hook.handle(
@@ -2817,7 +2827,9 @@ def test_dirty_session_reminder_resets_after_a_verified_checkpoint(tmp_path: Pat
     assert "MNEMO_DIRTY_V1" in str(next_cycle)
 
 
-def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: Path) -> None:
+def test_dirty_prompt_boundary_defers_the_parse_and_keeps_the_exact_static_impact_on_record(
+    tmp_path: Path,
+) -> None:
     project = tmp_path / "repo"
     project.mkdir()
     core = project / "core.py"
@@ -2827,10 +2839,10 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
     )
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
     core.write_text("def calculate():\n    return 2\n", encoding="utf-8")
-    failed_save = hook.handle(
+    hook.handle(
         {
             "hook_event_name": "PostToolUse",
             "session_id": "s1",
@@ -2851,15 +2863,23 @@ def test_dirty_prompt_boundary_refreshes_and_cues_exact_static_impact(tmp_path: 
     output = result["hookSpecificOutput"]
     assert isinstance(output, dict)
     instruction = str(output["additionalContext"])
-    assert "Modified files: core.py." in instruction
-    assert "static dependent candidates" in instruction
-    assert "source snapshot " in instruction
-    assert "service.py:service" in instruction
-    assert "return 1" not in instruction
-    assert "return 2" not in instruction
+    assert instruction.startswith("MNEMO_DIRTY_V1")
+    assert instruction.splitlines()[-1] == SOURCE_REFRESH_PENDING_NOTICE
+    assert "Modified files" not in instruction
     assert "private user question must not be retained" not in instruction
     state = (data / "automatic-memory-session-state.json").read_text()
     assert "private user question" not in state
+
+    # The worker ran after that output; the stored transition keeps the bounded cue on request.
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    assert not lagged.refresh_pending
+    cue = _dirty_session_instruction(lagged)
+    assert "Modified files: core.py." in cue
+    assert "static dependent candidates" in cue
+    assert "source snapshot " in cue
+    assert "service.py:service" in cue
+    assert "return 1" not in cue
+    assert "return 2" not in cue
 
     failed_save = hook.handle(
         {
@@ -2926,7 +2946,7 @@ def test_session_start_refreshes_supported_static_source_structure(tmp_path: Pat
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
 
-    AutomaticMemoryHook(data, "codex").handle(
+    AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh).handle(
         {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
     )
 
@@ -2987,7 +3007,7 @@ def test_session_start_indexes_typescript_without_reading_source_text(tmp_path: 
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
 
-    AutomaticMemoryHook(data, "codex").handle(
+    AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh).handle(
         {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
     )
 
@@ -3017,7 +3037,7 @@ def test_automatic_memory_persists_a_mixed_language_map_for_later_context(tmp_pa
     data = tmp_path / "mnemo data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
 
-    AutomaticMemoryHook(data, "codex").handle(
+    AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh).handle(
         {"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)}
     )
 
@@ -3055,7 +3075,7 @@ def test_automatic_memory_persists_a_mixed_language_map_for_later_context(tmp_pa
     assert str(project) not in content
 
 
-def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointing(
+def test_stop_after_a_mutation_defers_the_parse_and_the_worker_stores_the_change(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "repo"
@@ -3064,7 +3084,7 @@ def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointi
     source_file.write_text("def initial():\n    return 1\n")
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
     initial = SQLiteSourceStructureRepository(data / "mnemo.sqlite3").get_active_snapshot(
         binding.scope
@@ -3086,14 +3106,19 @@ def test_stop_after_a_mutation_refreshes_the_static_structure_before_checkpointi
     )
 
     assert result["decision"] == "block"
-    assert refreshed is not None
-    assert refreshed.snapshot_id != initial.snapshot_id
     reason = str(result["reason"])
-    assert "Mnemo observed a structural change" in reason
-    assert "service.py:service.current" in reason
-    assert "service.py:service.initial" in reason
-    assert "return 2" not in reason
-    assert str(project) not in reason
+    assert reason.splitlines()[-1] == SOURCE_REFRESH_PENDING_NOTICE
+    assert "Mnemo observed a structural change" not in reason
+    assert refreshed is not None
+    assert refreshed.snapshot_id != initial.snapshot_id  # the worker ran after the output
+
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    recorded = _checkpoint_instruction(binding.checkpoint_scope.to_dict(), lagged)
+    assert "Mnemo observed a structural change" in recorded
+    assert "service.py:service.current" in recorded
+    assert "service.py:service.initial" in recorded
+    assert "return 2" not in recorded
+    assert str(project) not in recorded
 
 
 def test_source_index_storage_failure_during_stop_is_fail_open(
@@ -3118,7 +3143,7 @@ def test_source_index_storage_failure_during_stop_is_fail_open(
     def unavailable(*_: object) -> object:
         raise SourceIndexStorageFailure("source index storage operation failed")
 
-    monkeypatch.setattr(SQLiteSourceStructureRepository, "store_and_activate", unavailable)
+    monkeypatch.setattr(SQLiteSourceStructureRepository, "get_active_snapshot", unavailable)
 
     result = hook.handle({"hook_event_name": "Stop", "session_id": "s1", "cwd": str(project)})
 
@@ -3136,7 +3161,7 @@ def test_checkpoint_save_refreshes_changed_structure_without_waiting_for_stop_or
     source_file.write_text("def initial():\n    return 1\n")
     data = tmp_path / "data"
     binding = LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": str(project)})
     repository = SQLiteSourceStructureRepository(data / "mnemo.sqlite3")
     initial = repository.get_active_snapshot(binding.scope)
@@ -3181,7 +3206,7 @@ def test_checkpoint_save_refreshes_changed_structure_without_waiting_for_stop_or
     assert str(project) not in state
 
 
-def test_session_start_reports_a_bounded_prior_structural_change_without_source_text(
+def test_session_start_defers_a_changed_tree_and_keeps_the_bounded_transition_on_record(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "repo"
@@ -3189,8 +3214,8 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     source_file = project / "service.py"
     source_file.write_text("def initial():\n    return 'private initial body'\n")
     data = tmp_path / "data"
-    LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
 
     source_file.write_text("def current():\n    return 'private changed body'\n")
@@ -3201,12 +3226,19 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     context = result["hookSpecificOutput"]
     assert isinstance(context, dict)
     instruction = str(context["additionalContext"])
-    assert "Mnemo observed a structural change" in instruction
-    assert "service.py:service.current" in instruction
-    assert "service.py:service.initial" in instruction
-    assert "private initial body" not in instruction
+    assert "Mnemo observed a structural change" not in instruction
+    assert "current_source_digest" not in instruction  # an unproven map is never called current
     assert "private changed body" not in instruction
     assert str(project) not in instruction
+
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    recorded = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
+    assert "Mnemo observed a structural change" in recorded
+    assert "service.py:service.current" in recorded
+    assert "service.py:service.initial" in recorded
+    assert "private initial body" not in recorded
+    assert "private changed body" not in recorded
+    assert str(project) not in recorded
 
     later = hook.handle(
         {"hook_event_name": "SessionStart", "session_id": "third", "cwd": str(project)}
@@ -3216,30 +3248,27 @@ def test_session_start_reports_a_bounded_prior_structural_change_without_source_
     later_instruction = str(later_output["additionalContext"])
     assert "most recent saved transition" not in later_instruction
     assert "source_changes" in later_instruction
+    assert "current_source_digest" in later_instruction
     assert "private initial body" not in later_instruction
     assert "private changed body" not in later_instruction
+    assert str(project) not in later_instruction
 
 
-def test_session_start_reports_a_body_only_file_transition_without_source_text(
-    tmp_path: Path,
-) -> None:
+def test_a_body_only_file_transition_is_recorded_without_source_text(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()
     source_file = project / "pricing.py"
     source_file.write_text("def price():\n    return 'private first implementation'\n")
     data = tmp_path / "data"
-    LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
 
     source_file.write_text("def price():\n    return 'private corrected implementation'\n")
-    result = hook.handle(
-        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
-    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)})
 
-    output = result["hookSpecificOutput"]
-    assert isinstance(output, dict)
-    instruction = str(output["additionalContext"])
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    instruction = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
     assert "1 modified" in instruction
     assert "Modified files: pricing.py." in instruction
     assert "private first implementation" not in instruction
@@ -3247,7 +3276,7 @@ def test_session_start_reports_a_body_only_file_transition_without_source_text(
     assert str(project) not in instruction
 
 
-def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_file(
+def test_a_recorded_transition_carries_bounded_static_dependents_for_an_exact_changed_file(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "repo"
@@ -3258,18 +3287,15 @@ def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_f
         "import core\n\ndef serve():\n    return core.calculate()\n", encoding="utf-8"
     )
     data = tmp_path / "data"
-    LocalMemoryProjectBindingStore(data).enable(project)
-    hook = AutomaticMemoryHook(data, "codex")
+    binding = LocalMemoryProjectBindingStore(data).enable(project)
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
 
     core.write_text("def calculate():\n    return 2\n", encoding="utf-8")
-    result = hook.handle(
-        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
-    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)})
 
-    output = result["hookSpecificOutput"]
-    assert isinstance(output, dict)
-    instruction = str(output["additionalContext"])
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    instruction = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
     assert "static dependent candidates" in instruction
     assert "source snapshot " in instruction
     assert "core.py" in instruction
@@ -3278,7 +3304,7 @@ def test_session_start_attaches_bounded_static_dependents_for_an_exact_changed_f
     assert "return 2" not in instruction
 
 
-def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_model(
+def test_a_recorded_transition_carries_the_authoritative_dbt_downstream_cue(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "dbt repo"
@@ -3297,17 +3323,14 @@ def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_mod
             datetime(2026, 8, 4, tzinfo=UTC),
         )
     )
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
 
     model.write_text("select 2\n", encoding="utf-8")
-    result = hook.handle(
-        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
-    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)})
 
-    output = result["hookSpecificOutput"]
-    assert isinstance(output, dict)
-    instruction = str(output["additionalContext"])
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    instruction = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
     assert "authoritative dbt-manifest downstream facts" in instruction
     assert "models/marts/fct_orders.sql" in instruction
     assert "model.mnemo_analytics.mart_customer_value" in instruction
@@ -3317,7 +3340,7 @@ def test_session_start_attaches_authoritative_dbt_downstream_cue_for_changed_mod
     assert "select 2" not in instruction
 
 
-def test_session_start_uses_new_path_of_digest_proven_renamed_dbt_model(
+def test_a_recorded_transition_uses_the_new_path_of_a_digest_proven_renamed_dbt_model(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "dbt repo"
@@ -3336,17 +3359,14 @@ def test_session_start_uses_new_path_of_digest_proven_renamed_dbt_model(
             datetime(2026, 8, 4, tzinfo=UTC),
         )
     )
-    hook = AutomaticMemoryHook(data, "codex")
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=_inline_source_refresh)
     hook.handle({"hook_event_name": "SessionStart", "session_id": "first", "cwd": str(project)})
 
     legacy.rename(project / "models" / "marts" / "fct_orders.sql")
-    result = hook.handle(
-        {"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)}
-    )
+    hook.handle({"hook_event_name": "SessionStart", "session_id": "second", "cwd": str(project)})
 
-    output = result["hookSpecificOutput"]
-    assert isinstance(output, dict)
-    instruction = str(output["additionalContext"])
+    lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
+    instruction = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
     assert (
         "Renamed files: models/marts/legacy_orders.sql → models/marts/fct_orders.sql."
         in instruction

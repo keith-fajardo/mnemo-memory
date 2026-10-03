@@ -530,6 +530,8 @@ def _family_rows(
         )
         events_by_session[session_number].append(event)
 
+    # The offline eval must never start a real detached background source-refresh worker.
+    os.environ["MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH"] = "1"
     hook = build_automatic_memory_hook(config, "codex")
     cumulative_tokens = {condition: 0 for condition in _CONDITIONS}
     prompt_counts = {condition: 0 for condition in _CONDITIONS}

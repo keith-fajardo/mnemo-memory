@@ -15,11 +15,13 @@ import pytest
 
 from mnemo_memory.connectors.automatic_memory.source_observation import (
     refresh_registered_project_source,
+    source_snapshot_is_fresh,
 )
 from mnemo_memory.packages.application.automatic_memory import (
     LocalMemoryProjectBindingStore,
     MemoryProjectBinding,
 )
+from mnemo_memory.packages.domain import CodeSnapshotId
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 from mnemo_memory.packages.storage.contracts import SourceStructureRepository
@@ -105,3 +107,43 @@ def test_no_cache_dir_still_refreshes_every_time(
     refresh_registered_project_source(binding, repo)
 
     assert calls["n"] == 2
+
+
+def test_freshness_matches_only_the_cached_fingerprint_and_the_active_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binding_and_repo: tuple[MemoryProjectBinding, SourceStructureRepository],
+) -> None:
+    binding, repo = binding_and_repo
+    cache_dir = tmp_path / "scan-cache"
+    assert not source_snapshot_is_fresh(binding, None, cache_dir=cache_dir)
+    stored = refresh_registered_project_source(binding, repo, cache_dir=cache_dir)
+    assert stored is not None
+    calls = {"n": 0}
+    _install_counting_parse(monkeypatch, calls)
+
+    assert source_snapshot_is_fresh(binding, stored.snapshot_id, cache_dir=cache_dir)
+    assert not source_snapshot_is_fresh(binding, CodeSnapshotId.new(), cache_dir=cache_dir)
+    (binding.project_root / "added.py").write_text("z = 3\n", encoding="utf-8")
+    assert not source_snapshot_is_fresh(binding, stored.snapshot_id, cache_dir=cache_dir)
+    assert calls["n"] == 0  # the check never parses
+
+
+def test_freshness_treats_an_unreadable_tree_or_missing_cache_as_stale(
+    tmp_path: Path,
+    binding_and_repo: tuple[MemoryProjectBinding, SourceStructureRepository],
+) -> None:
+    binding, repo = binding_and_repo
+    cache_dir = tmp_path / "scan-cache"
+    stored = refresh_registered_project_source(binding, repo, cache_dir=cache_dir)
+    assert stored is not None
+
+    def unreadable(_: Path) -> str:
+        raise OSError("tree is unreadable")
+
+    assert not source_snapshot_is_fresh(
+        binding, stored.snapshot_id, cache_dir=cache_dir, fingerprint=unreadable
+    )
+    assert not source_snapshot_is_fresh(
+        binding, stored.snapshot_id, cache_dir=tmp_path / "other-cache"
+    )

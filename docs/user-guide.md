@@ -195,8 +195,10 @@ depth, snapshot identity, and a clear `unknown` currentness label when no fresh 
 was supplied. It is a useful change-planning aid, not a promise that every runtime effect was found.
 An agent can also request an exact immutable snapshot ID through `get_context` when it needs to
 compare a past structural state rather than the active one; otherwise Mnemo uses the active snapshot.
-When automatic memory refreshes a repository at session start, its private agent instruction carries
-the exact source digest for that refresh. A freshly started local MCP process also performs one
+When the saved map is current at session start and no task context is attached, its private agent
+instruction carries the exact source digest (when the map is still being refreshed in the
+background, the digest is withheld). A
+freshly started local MCP process also performs one
 fail-open refresh for its registered project before serving structural requests. An impact request
 that supplies that same digest is labeled
 `current`; a different digest is labeled `stale`; without comparable evidence it remains `unknown`.
@@ -207,9 +209,13 @@ saved declaration in that exact relative path and never falls back to a same-nam
 Use `mnemo scan` for a simple register-or-refresh workflow, or the narrower
 `memory refresh` after edits when the project is already enabled and you are not using an automatic
 client lifecycle hook. With
-automatic memory enabled, Mnemo refreshes at MCP startup, session start, after a checkpoint save,
-and before an unsaved changed session is stopped. It rebuilds the bounded structural snapshot from
-current local syntax and preserves the previous snapshot for comparison.
+automatic memory enabled, the hook (at session start, after a checkpoint save, on a prompt in a
+changed unsaved session, and at stop or compact) only compares file metadata with the saved map
+and starts a background rebuild when the map is stale. Only the MCP server's first structural
+request (it defers the refresh until then),
+`memory refresh` and `mnemo scan` rebuild in the foreground. A rebuild produces a
+bounded structural snapshot from current local syntax and preserves the previous snapshot for
+comparison.
 
 When the question is specifically “what changed in this model or file?”, an agent can request a
 small `source_changes` history for a path such as `models/orders.sql`. Mnemo returns the newest
@@ -226,14 +232,18 @@ mnemo memory changes --path models/orders.sql --history-limit 4
 The path is relative to the enabled repository. Mnemo rejects absolute paths and parent traversal,
 and it returns no other project’s history.
 
-With automatic task memory, Mnemo also keeps the most recent proved structural transition. At a
-fresh session, the connected agent receives a short list of added/removed/renamed/modified **relative
-files**, declarations, and resolved relationships, tied to the source snapshot Mnemo just
-refreshed. That includes a body-only edit even when a file kept the same functions. Mnemo stores a
-SHA-256 fingerprint for this purpose—not source bodies. When exactly one removed and one added path
-share that fingerprint, it reports a rename; copied or ambiguous content remains add/remove rather
-than a guessed move. For an enabled dbt project, Mnemo can use the new path of a proven renamed
-`.sql` file for its normal exact manifest lookup; it never infers lineage from the SQL file itself.
+With automatic task memory, Mnemo also keeps each proved structural transition. The attached
+session-start packet includes the latest recorded transition when one exists (it may be one
+background refresh behind the working tree, and it is not marked current while a refresh is
+pending). The agent can ask for `source_changes`, or you can run `mnemo memory changes`, for more
+history. The result is a short list of added/removed/renamed/modified **relative files**,
+declarations, and resolved relationships, tied to the source snapshot that proves them.
+That includes a body-only edit even
+when a file kept the same functions. Mnemo stores a SHA-256 fingerprint for this purpose—not
+source bodies. When exactly one removed and one added path share that fingerprint, it reports a
+rename; copied or ambiguous content remains add/remove rather than a guessed move. For an enabled
+dbt project, Mnemo can use the new path of a proven renamed `.sql` file for its normal exact
+manifest lookup; it never infers lineage from the SQL file itself.
 Mnemo does not pretend it can infer the
 reason from a diff. The checkpoint is where the agent records why the change was made, what failed,
 and what was verified. When it corrects a reasoning mistake, it should also save a compact
@@ -244,8 +254,8 @@ records it explicitly. If a later revision focuses on fresh progress and omits a
 Mnemo still returns the bounded lesson as historical episodic evidence, with the exact original
 revision and evidence references.
 
-When there is no recent transition, Mnemo still gives the fresh session a small **source overview**:
-one cited graph projection containing the immutable snapshot ID, exact indexed counts, component
+Independently of change history, the attached packet may contain a small **source overview** of
+the saved map: one cited graph projection containing the immutable snapshot ID, exact indexed counts, component
 counts, bounded relative-file/module/declaration identities, and bounded static relationships. It
 is a compact map of the registered repository, not a copy of its source code. Mnemo never sends the
 whole graph as dozens of separate facts. The packet never includes source bodies, chat prompts,
@@ -257,20 +267,22 @@ do they connect?” selects that graph overview automatically and does not searc
 targeted implementation question instead selects matching saved symbols and nearby static edges,
 allowing the agent to read only the relevant files when source-level detail is actually needed.
 
-At session start, Mnemo has just refreshed the snapshot it attaches, so that attached source map
-is explicitly labeled **current** for the captured digest. Later manual requests still require
-comparable source-state evidence before Mnemo calls a saved snapshot current; active alone is not
-enough.
+Mnemo never rebuilds the code map inside a client hook, so a large repository cannot make a
+session wait or time out. At the lifecycle boundaries where it refreshes, the hook only compares
+file sizes and modification times with the last saved map, which is cheap. When nothing changed, the saved map is
+used as before and its digest is offered as **current**. When something changed, the hook answers
+at once with the last saved map (and does not call it current). It then starts a quiet background
+refresh that re-parses, saves and activates the new map. Agent reminders then add one fixed line:
+“Code map refresh running in background; use source_changes for structural change details.” Later
+manual requests still require comparable source-state evidence before Mnemo calls a saved
+snapshot current; active alone is not enough.
 
-During an active session, Mnemo does not scan after every edit. It marks project work as changed,
-then refreshes once at the next user-turn boundary and attaches the same small file/impact cue.
-That gives the agent relevant structural facts while it is analyzing the next request without
-capturing the user’s prompt or source body.
-
-For an exact changed file in a supported parsed language, that fresh-session cue also includes a
-small list of proven **static dependent candidates** and the immutable source snapshot that proves
-them. This is a practical “what might be affected?” starting point, not a runtime promise: the
-agent should still inspect the cited structure and run the appropriate verification.
+Hook reminders no longer include a per-change summary. To see what changed and which code
+statically depends on it, ask for `source_changes` (optionally with one `relative_path`). Each
+recorded transition still lists exact changed files, declarations and a small set of proven
+**static dependent candidates** with the immutable snapshot that proves them. This is a
+practical “what might be affected?” starting point, not a runtime promise: the agent should
+still inspect the cited structure and run the appropriate verification.
 
 For a JavaScript or TypeScript monorepo with a strict JSON root `package.json` and local
 `workspaces`, Mnemo also recognizes a narrow package-level relationship: a local package's runtime
@@ -279,6 +291,35 @@ package. This lets the same impact cue say that a saved local package depends on
 local package. Mnemo does not run npm, pnpm, or Yarn; inspect a lockfile; or guess package
 resolution. External packages and ordinary version ranges, plus development, peer, and optional
 dependencies, remain outside this evidence boundary.
+
+#### Keeping the saved code map small
+
+Each background refresh also deletes a few old snapshots (at most four per run). It always keeps
+the active map and every map from the 17 most recent refreshes, which is everything
+`source_changes` can ask for. A map that a saved checkpoint points to keeps a one-line record
+(its digest and counts) so that checkpoint still resolves, but its detailed rows are removed.
+Asking for a removed snapshot by its id answers “source snapshot was not found”.
+
+A database that grew before this cleanup existed can be shrunk once, by hand:
+
+```bash
+mnemo-memory maintenance prune-source --dry-run      # counts only; changes nothing
+mnemo-memory maintenance prune-source                # this project, no per-run limit
+mnemo-memory maintenance prune-source --all-projects --compact
+```
+
+`--compact` then rebuilds the database file (SQLite `VACUUM`) so the freed space returns to the
+disk. It refuses (`MNEMO_COMPACT_INSUFFICIENT_DISK_SPACE`) when the free disk space is smaller
+than the database file, and nothing is changed in that case. The command prints the file size
+before and after. It also refuses (`MNEMO_SOURCE_REFRESH_RUNNING`) while a background refresh is
+running; run it again a moment later. Close other Mnemo sessions before `--compact`, because a
+busy database cannot be rebuilt (`MNEMO_COMPACT_UNAVAILABLE`). The pruning is already done by
+then, so that output still shows how many snapshots were pruned, with `"compacted": false`.
+
+To turn the background refresh off, set `MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH=1` in the
+environment of your coding client. The hook then never starts the refresh, so the map is refreshed
+only when the MCP server serves its first structural request, or by `memory refresh` or
+`mnemo scan`.
 
 ### Finding a structural starting point
 
@@ -1029,7 +1070,7 @@ by Codex or Claude Code.
 
 With automatic task memory enabled, you work normally. At a fresh session Mnemo attaches the
 bounded saved handoff, a recent-work ledger (checkpoint revisions, lessons, and approved facts),
-and the latest bounded source-change summary
+and, when a prior transition exists, the latest bounded source-change summary
 automatically. This automatic attachment has a 1,750-token total budget and happens only when a
 supported client starts a new session—not
 continuously while you work. Mnemo's hook still prompts the agent to save a fresh handoff when

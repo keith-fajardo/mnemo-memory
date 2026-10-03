@@ -17,7 +17,11 @@ from mnemo_memory.packages.application.automatic_memory import (
     MemoryProjectBinding,
 )
 from mnemo_memory.packages.application.checkpoints import CheckpointView
-from mnemo_memory.packages.domain import CheckpointSourceObservation, CodeSnapshot
+from mnemo_memory.packages.domain import (
+    CheckpointSourceObservation,
+    CodeSnapshot,
+    CodeSnapshotId,
+)
 from mnemo_memory.packages.project_index import SourceStructureParser, SourceStructureParseRequest
 from mnemo_memory.packages.storage.contracts import (
     CheckpointSourceObservationRepository,
@@ -45,6 +49,35 @@ def _write_cache(path: Path, fingerprint: str, snapshot_id: str) -> None:
         pass  # cache is an optimization; never fail the refresh
 
 
+def _cache_matches(cached: tuple[str, str] | None, fingerprint: str, snapshot_id: str) -> bool:
+    return cached is not None and cached == (fingerprint, snapshot_id)
+
+
+def source_snapshot_is_fresh(
+    binding: MemoryProjectBinding,
+    active_snapshot_id: CodeSnapshotId | None,
+    *,
+    cache_dir: Path,
+    fingerprint: Callable[[Path], str] = working_tree_fingerprint,
+) -> bool:
+    """Whether the active snapshot still matches the working tree, by file metadata only.
+
+    True only when the scan-cache entry exists, its fingerprint equals a fresh stat-only
+    fingerprint of the tree, and it names the active snapshot. It never parses. A missing cache,
+    no active snapshot, or an unreadable tree counts as stale (spec 2026-10-03 §2).
+    """
+    if active_snapshot_id is None:
+        return False
+    cached = _read_cache(_cache_path(cache_dir, binding))
+    if cached is None:
+        return False
+    try:
+        current = fingerprint(binding.project_root)
+    except OSError:
+        return False
+    return _cache_matches(cached, current, str(active_snapshot_id))
+
+
 def refresh_registered_project_source(
     binding: MemoryProjectBinding,
     source_repository: SourceStructureRepository,
@@ -68,9 +101,8 @@ def refresh_registered_project_source(
             cached = _read_cache(cache_file)
             if (
                 active is not None
-                and cached is not None
-                and cached[0] == current_fp
-                and cached[1] == str(active.snapshot_id)
+                and current_fp is not None
+                and _cache_matches(cached, current_fp, str(active.snapshot_id))
             ):
                 return active  # nothing changed — skip parse + store
         snapshot = source_repository.store_and_activate(

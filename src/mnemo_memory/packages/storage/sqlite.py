@@ -9,7 +9,7 @@ import struct
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -251,6 +251,23 @@ from .source_search import source_search_terms, source_symbol_matches, source_sy
 
 LATEST_SCHEMA_VERSION = 32
 BUSY_TIMEOUT_MS = 5000
+# The one kept-activation count (spec §4). It must stay >= the ``source_changes`` maximum
+# transitions + 1 (16 + 1 = 17): N transitions need N + 1 activations' snapshots.
+DEFAULT_KEPT_SOURCE_ACTIVATIONS = 17
+# Whether a snapshot still has its projection rows (a pruned, checkpoint-named one keeps only its
+# header). Every file yields at least one module symbol, so symbols or files decide it.
+_SOURCE_SNAPSHOT_POPULATED_SQL = (
+    "SELECT 1 FROM source_structure_symbols WHERE snapshot_id = ? "
+    "UNION ALL SELECT 1 FROM source_structure_files WHERE snapshot_id = ? LIMIT 1"
+)
+# The active snapshot plus every snapshot among one scope's newest N activations (spec §4).
+_KEPT_SOURCE_SNAPSHOTS_SQL = (
+    "SELECT snapshot_id FROM source_structure_snapshots WHERE owner_id = ? "
+    "AND workspace_id IS ? AND project_id = ? AND is_active = 1 "
+    "UNION SELECT snapshot_id FROM (SELECT snapshot_id FROM source_snapshot_activations "
+    "WHERE owner_id = ? AND workspace_id IS ? AND project_id = ? "
+    "ORDER BY activation_id DESC LIMIT ?)"
+)
 
 
 class SQLiteMigrationError(RuntimeError):
@@ -890,6 +907,16 @@ class SQLiteCheckpointRepository:
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
             ).fetchone()
             return int(version[0])
+
+    def schema_is_current(self) -> bool:
+        """Whether the schema is already at the latest version, by a read alone.
+
+        It takes no write lock, so a caller that must never wait behind a busy writer (a lifecycle
+        hook) can skip ``migrate``. A missing database is never created here; it is not current.
+        """
+        if not self.path.exists():
+            return False
+        return self.schema_version() == LATEST_SCHEMA_VERSION
 
     def connection_settings(self) -> dict[str, int]:
         with self._connect() as connection:
@@ -4515,6 +4542,25 @@ class SQLiteCheckpointRepository:
                 ).fetchone()
                 if duplicate is not None:
                     snapshot_id = CodeSnapshotId.from_string(duplicate["snapshot_id"])
+                    if self._source_snapshot_is_hollow(connection, duplicate):
+                        # A prune kept only this header because a checkpoint names it. The tree is
+                        # back at the same digest, so restore the projection before activating it;
+                        # an empty map must never become active (2026-10-03 plan, review focus 1).
+                        self._insert_source_projection(connection, snapshot_id, artifact)
+                        connection.execute(
+                            "UPDATE source_structure_snapshots SET file_count = ?, "
+                            "symbol_count = ?, edge_count = ? WHERE snapshot_id = ?",
+                            (
+                                artifact.snapshot.file_count,
+                                artifact.snapshot.symbol_count,
+                                artifact.snapshot.edge_count,
+                                str(snapshot_id),
+                            ),
+                        )
+                        duplicate = connection.execute(
+                            "SELECT * FROM source_structure_snapshots WHERE snapshot_id = ?",
+                            (str(snapshot_id),),
+                        ).fetchone()
                     active = self._active_source_snapshot_row(connection, scope)
                     connection.execute(
                         "UPDATE source_structure_snapshots SET is_active = 0 WHERE owner_id = ? "
@@ -4555,64 +4601,7 @@ class SQLiteCheckpointRepository:
                         0,
                     ),
                 )
-                connection.executemany(
-                    "INSERT INTO source_structure_files VALUES (?, ?, ?)",
-                    [
-                        (
-                            str(artifact.snapshot.snapshot_id),
-                            item.relative_path,
-                            item.content_digest,
-                        )
-                        for item in artifact.files
-                    ],
-                )
-                connection.executemany(
-                    "INSERT INTO source_structure_symbols VALUES (?, ?, ?, ?, ?, ?)",
-                    [
-                        (
-                            str(artifact.snapshot.snapshot_id),
-                            str(symbol.symbol_id),
-                            symbol.relative_path,
-                            symbol.qualified_name,
-                            symbol.kind.value,
-                            symbol.line,
-                        )
-                        for symbol in artifact.symbols
-                    ],
-                )
-                connection.executemany(
-                    "INSERT INTO source_structure_edges VALUES (?, ?, ?, ?, ?)",
-                    [
-                        (
-                            str(artifact.snapshot.snapshot_id),
-                            str(edge.source_symbol_id),
-                            edge.target,
-                            edge.kind.value,
-                            str(edge.target_symbol_id)
-                            if edge.target_symbol_id is not None
-                            else None,
-                        )
-                        for edge in artifact.edges
-                    ],
-                )
-                counts = connection.execute(
-                    "SELECT (SELECT COUNT(*) FROM source_structure_files WHERE snapshot_id = ?) "
-                    "AS files, (SELECT COUNT(*) FROM source_structure_symbols "
-                    "WHERE snapshot_id = ?) AS symbols, (SELECT COUNT(*) FROM "
-                    "source_structure_edges WHERE snapshot_id = ?) AS edges",
-                    (
-                        str(artifact.snapshot.snapshot_id),
-                        str(artifact.snapshot.snapshot_id),
-                        str(artifact.snapshot.snapshot_id),
-                    ),
-                ).fetchone()
-                if (
-                    counts is None
-                    or int(counts["files"]) != len(artifact.files)
-                    or int(counts["symbols"]) != len(artifact.symbols)
-                    or int(counts["edges"]) != len(artifact.edges)
-                ):
-                    raise SourceIndexStorageFailure("source snapshot projection count mismatch")
+                self._insert_source_projection(connection, artifact.snapshot.snapshot_id, artifact)
                 connection.execute(
                     "UPDATE source_structure_snapshots SET is_active = 0 WHERE owner_id = ? "
                     "AND workspace_id IS ? AND project_id = ? AND is_active = 1",
@@ -4639,6 +4628,68 @@ class SQLiteCheckpointRepository:
             raise
         except sqlite3.Error as error:
             raise SourceIndexStorageFailure("source index storage operation failed") from error
+
+    @staticmethod
+    def _insert_source_projection(
+        connection: sqlite3.Connection,
+        snapshot_id: CodeSnapshotId,
+        artifact: CodeStructureArtifact,
+    ) -> None:
+        """Insert one snapshot's files, symbols and edges, then prove every row landed."""
+        key = str(snapshot_id)
+        connection.executemany(
+            "INSERT INTO source_structure_files VALUES (?, ?, ?)",
+            [(key, item.relative_path, item.content_digest) for item in artifact.files],
+        )
+        connection.executemany(
+            "INSERT INTO source_structure_symbols VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    key,
+                    str(symbol.symbol_id),
+                    symbol.relative_path,
+                    symbol.qualified_name,
+                    symbol.kind.value,
+                    symbol.line,
+                )
+                for symbol in artifact.symbols
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO source_structure_edges VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    key,
+                    str(edge.source_symbol_id),
+                    edge.target,
+                    edge.kind.value,
+                    str(edge.target_symbol_id) if edge.target_symbol_id is not None else None,
+                )
+                for edge in artifact.edges
+            ],
+        )
+        counts = connection.execute(
+            "SELECT (SELECT COUNT(*) FROM source_structure_files WHERE snapshot_id = ?) "
+            "AS files, (SELECT COUNT(*) FROM source_structure_symbols "
+            "WHERE snapshot_id = ?) AS symbols, (SELECT COUNT(*) FROM "
+            "source_structure_edges WHERE snapshot_id = ?) AS edges",
+            (key, key, key),
+        ).fetchone()
+        if (
+            counts is None
+            or int(counts["files"]) != len(artifact.files)
+            or int(counts["symbols"]) != len(artifact.symbols)
+            or int(counts["edges"]) != len(artifact.edges)
+        ):
+            raise SourceIndexStorageFailure("source snapshot projection count mismatch")
+
+    @staticmethod
+    def _source_snapshot_is_hollow(connection: sqlite3.Connection, row: sqlite3.Row) -> bool:
+        """A header whose counts promise rows that a prune removed."""
+        if int(row["symbol_count"]) == 0 and int(row["file_count"]) == 0:
+            return False
+        key = str(row["snapshot_id"])
+        return connection.execute(_SOURCE_SNAPSHOT_POPULATED_SQL, (key, key)).fetchone() is None
 
     def get_active_source_snapshot(self, scope: MemoryScope) -> CodeSnapshot | None:
         self._require_project_scope(scope)
@@ -6842,6 +6893,21 @@ def _maybe(value: object | None) -> str | None:
     return None if value is None else str(value)
 
 
+def _source_scope_values(scope: MemoryScope) -> tuple[str, str | None, str]:
+    return (str(scope.owner_id), _maybe(scope.workspace_id), str(scope.project_id))
+
+
+def _validate_prune_bounds(keep_activations: int, max_snapshots: int | None) -> None:
+    if isinstance(keep_activations, bool) or not isinstance(keep_activations, int):
+        raise ValueError("kept source activations must be a positive integer")
+    if keep_activations < 1:
+        raise ValueError("kept source activations must be a positive integer")
+    if max_snapshots is not None and (
+        isinstance(max_snapshots, bool) or not isinstance(max_snapshots, int) or max_snapshots < 1
+    ):
+        raise ValueError("source prune limit must be a positive integer or None")
+
+
 def _pack_embedding_vector(vector: tuple[float, ...]) -> bytes:
     """Serialize bounded finite floats without a pickle or architecture-dependent payload."""
     return struct.pack(f"!{len(vector)}f", *vector)
@@ -7702,6 +7768,22 @@ class SQLiteKnowledgeDocumentRepository:
             ) from error
 
 
+@dataclass(frozen=True, slots=True)
+class SourceSnapshotPrunePlan:
+    """Counts only (no ids, paths or names): what one scope's prune would remove."""
+
+    full_snapshots: int
+    header_only_snapshots: int
+    symbols: int
+    edges: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SourcePruneCandidate:
+    snapshot_id: str
+    keep_header: bool
+
+
 class SQLiteSourceStructureRepository:
     """Scoped SQLite adapter for immutable multi-language source-structure snapshots.
 
@@ -7714,6 +7796,10 @@ class SQLiteSourceStructureRepository:
 
     def migrate(self, *, fail_after_version: int | None = None) -> None:
         self._backend.migrate(fail_after_version=fail_after_version)
+
+    def schema_is_current(self) -> bool:
+        """A read-only check that ``migrate`` has nothing to do; it never takes the write lock."""
+        return self._backend.schema_is_current()
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
         return self._backend.store_source_and_activate(artifact)
@@ -7731,6 +7817,23 @@ class SQLiteSourceStructureRepository:
     def get_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
         return self._backend.get_source_snapshot(scope, snapshot_id)
 
+    def _populated_snapshot(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> CodeSnapshot:
+        """The snapshot header, or ``SourceSnapshotNotFound`` when a prune emptied it (spec §4)."""
+        snapshot = self._backend.get_source_snapshot(scope, snapshot_id)
+        if snapshot.symbol_count == 0 and snapshot.file_count == 0:
+            return snapshot
+        key = str(snapshot_id)
+        try:
+            with self._backend._connect() as connection:
+                populated = connection.execute(
+                    _SOURCE_SNAPSHOT_POPULATED_SQL, (key, key)
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        if populated is None:
+            raise SourceSnapshotNotFound("source snapshot was not found")
+        return snapshot
+
     def latest_transition(self, scope: MemoryScope) -> tuple[CodeSnapshot, CodeSnapshot] | None:
         return self._backend.latest_source_transition(scope)
 
@@ -7739,10 +7842,190 @@ class SQLiteSourceStructureRepository:
     ) -> tuple[CodeSnapshot, ...]:
         return self._backend.list_source_activation_history(scope, limit=limit)
 
+    def prune_source_snapshots(
+        self,
+        scope: MemoryScope,
+        *,
+        keep_activations: int = DEFAULT_KEPT_SOURCE_ACTIVATIONS,
+        max_snapshots: int | None,
+    ) -> int:
+        """Delete snapshots this project no longer needs; return how many were pruned.
+
+        Kept: the active snapshot and every snapshot among the newest ``keep_activations``
+        activations. A snapshot a checkpoint observation names keeps its header and activation
+        rows but loses its files, symbols and edges. Any other snapshot is deleted with its
+        activation rows. Each snapshot is one short transaction, children before parents (every
+        foreign key is ``ON DELETE RESTRICT``), re-checked under the write lock so a concurrent
+        activation or observation is never broken. ``max_snapshots=None`` means no limit (the
+        maintenance command only).
+        """
+        _validate_prune_bounds(keep_activations, max_snapshots)
+        pruned = 0
+        for candidate in self._prune_candidates(scope, keep_activations):
+            if max_snapshots is not None and pruned >= max_snapshots:
+                break
+            if self._prune_one(scope, candidate.snapshot_id, keep_activations):
+                pruned += 1
+        return pruned
+
+    def plan_source_snapshot_prune(
+        self, scope: MemoryScope, *, keep_activations: int = DEFAULT_KEPT_SOURCE_ACTIVATIONS
+    ) -> SourceSnapshotPrunePlan:
+        """Count what ``prune_source_snapshots`` would remove; change nothing."""
+        _validate_prune_bounds(keep_activations, None)
+        candidates = self._prune_candidates(scope, keep_activations)
+        symbols = 0
+        edges = 0
+        try:
+            with self._backend._connect() as connection:
+                for candidate in candidates:
+                    symbols += int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM source_structure_symbols WHERE snapshot_id = ?",
+                            (candidate.snapshot_id,),
+                        ).fetchone()[0]
+                    )
+                    edges += int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM source_structure_edges WHERE snapshot_id = ?",
+                            (candidate.snapshot_id,),
+                        ).fetchone()[0]
+                    )
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        header_only = sum(1 for candidate in candidates if candidate.keep_header)
+        return SourceSnapshotPrunePlan(len(candidates) - header_only, header_only, symbols, edges)
+
+    def list_source_scopes(self) -> tuple[MemoryScope, ...]:
+        """Every project scope that has source snapshots, for an all-projects cleanup."""
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT DISTINCT owner_id, visibility, workspace_id, project_id "
+                    "FROM source_structure_snapshots ORDER BY owner_id, workspace_id, project_id"
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            MemoryScope(
+                OwnerId.from_string(row["owner_id"]),
+                ScopeLevel.PROJECT,
+                Visibility(row["visibility"]),
+                None
+                if row["workspace_id"] is None
+                else WorkspaceId.from_string(row["workspace_id"]),
+                ProjectId.from_string(row["project_id"]),
+            )
+            for row in rows
+        )
+
+    def vacuum(self) -> None:
+        """Rebuild the file so pages freed by a prune return to the disk (maintenance only)."""
+        try:
+            connection = self._backend._connect()
+            try:
+                connection.execute("VACUUM")
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index compaction failed") from error
+
+    def _prune_candidates(
+        self, scope: MemoryScope, keep_activations: int
+    ) -> tuple[_SourcePruneCandidate, ...]:
+        """Oldest first: unkept snapshots that still have rows to delete."""
+        self._backend._require_project_scope(scope)
+        values = _source_scope_values(scope)
+        try:
+            with self._backend._connect() as connection:
+                rows = connection.execute(
+                    "SELECT snapshot.snapshot_id, EXISTS (SELECT 1 FROM "
+                    "checkpoint_source_observations AS observation "
+                    "WHERE observation.source_snapshot_id = snapshot.snapshot_id) AS referenced, "
+                    "(EXISTS (SELECT 1 FROM source_structure_symbols AS symbol "
+                    "WHERE symbol.snapshot_id = snapshot.snapshot_id) OR EXISTS (SELECT 1 FROM "
+                    "source_structure_files AS file "
+                    "WHERE file.snapshot_id = snapshot.snapshot_id)) "
+                    "AS populated, COALESCE((SELECT MAX(activation.activation_id) FROM "
+                    "source_snapshot_activations AS activation "
+                    "WHERE activation.snapshot_id = snapshot.snapshot_id), 0) AS last_activation "
+                    "FROM source_structure_snapshots AS snapshot WHERE snapshot.owner_id = ? "
+                    "AND snapshot.workspace_id IS ? AND snapshot.project_id = ? "
+                    "AND snapshot.snapshot_id NOT IN (" + _KEPT_SOURCE_SNAPSHOTS_SQL + ") "
+                    "ORDER BY last_activation ASC, snapshot.snapshot_id ASC",
+                    (*values, *values, *values, keep_activations),
+                ).fetchall()
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+        return tuple(
+            _SourcePruneCandidate(str(row["snapshot_id"]), bool(row["referenced"]))
+            for row in rows
+            if row["populated"] or not row["referenced"]
+        )
+
+    def _prune_one(self, scope: MemoryScope, snapshot_id: str, keep_activations: int) -> bool:
+        """Delete one snapshot in its own short transaction; re-check it under the write lock."""
+        values = _source_scope_values(scope)
+        try:
+            with self._backend._transaction() as connection:
+                kept = {
+                    str(row["snapshot_id"])
+                    for row in connection.execute(
+                        _KEPT_SOURCE_SNAPSHOTS_SQL, (*values, *values, keep_activations)
+                    )
+                }
+                present = connection.execute(
+                    "SELECT 1 FROM source_structure_snapshots WHERE snapshot_id = ? "
+                    "AND owner_id = ? AND workspace_id IS ? AND project_id = ? AND is_active = 0",
+                    (snapshot_id, *values),
+                ).fetchone()
+                if present is None or snapshot_id in kept:
+                    return False
+                referenced = (
+                    connection.execute(
+                        "SELECT 1 FROM checkpoint_source_observations "
+                        "WHERE source_snapshot_id = ? LIMIT 1",
+                        (snapshot_id,),
+                    ).fetchone()
+                    is not None
+                )
+                populated = (
+                    connection.execute(
+                        _SOURCE_SNAPSHOT_POPULATED_SQL, (snapshot_id, snapshot_id)
+                    ).fetchone()
+                    is not None
+                )
+                if referenced and not populated:
+                    return False  # already header-only
+                # Children before parents: every foreign key here is ON DELETE RESTRICT, and the
+                # edges also reference symbols through a composite key.
+                connection.execute(
+                    "DELETE FROM source_structure_edges WHERE snapshot_id = ?", (snapshot_id,)
+                )
+                connection.execute(
+                    "DELETE FROM source_structure_symbols WHERE snapshot_id = ?", (snapshot_id,)
+                )
+                connection.execute(
+                    "DELETE FROM source_structure_files WHERE snapshot_id = ?", (snapshot_id,)
+                )
+                if not referenced:
+                    connection.execute(
+                        "DELETE FROM source_snapshot_activations WHERE snapshot_id = ?",
+                        (snapshot_id,),
+                    )
+                    connection.execute(
+                        "DELETE FROM source_structure_snapshots WHERE snapshot_id = ?",
+                        (snapshot_id,),
+                    )
+                return True
+        except sqlite3.Error as error:
+            raise SourceIndexStorageFailure("source index storage operation failed") from error
+
     def iter_symbols(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId
     ) -> tuple[CodeSymbol, ...]:
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         try:
             with self._backend._connect() as connection:
                 rows = connection.execute(
@@ -7775,7 +8058,7 @@ class SQLiteSourceStructureRepository:
         )
 
     def iter_files(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeFile, ...]:
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         try:
             with self._backend._connect() as connection:
                 rows = connection.execute(
@@ -7801,7 +8084,7 @@ class SQLiteSourceStructureRepository:
     def get_file(
         self, scope: MemoryScope, snapshot_id: CodeSnapshotId, relative_path: str
     ) -> CodeFile | None:
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         try:
             with self._backend._connect() as connection:
                 row = connection.execute(
@@ -7828,7 +8111,7 @@ class SQLiteSourceStructureRepository:
         )
 
     def iter_edges(self, scope: MemoryScope, snapshot_id: CodeSnapshotId) -> tuple[CodeEdge, ...]:
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         try:
             with self._backend._connect() as connection:
                 rows = connection.execute(
@@ -7866,7 +8149,7 @@ class SQLiteSourceStructureRepository:
         terms = source_search_terms(query)
         if not terms or limit < 1:
             return ()
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         escaped_terms = tuple(
             term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") for term in terms
         )
@@ -7916,7 +8199,7 @@ class SQLiteSourceStructureRepository:
     ) -> tuple[CodeSymbol, ...]:
         if not relative_paths:
             return ()
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         values = tuple(dict.fromkeys(relative_paths))
         placeholders = ", ".join("?" for _ in values)
         try:
@@ -7947,7 +8230,7 @@ class SQLiteSourceStructureRepository:
     ) -> tuple[CodeSymbol, ...]:
         if not symbol_ids:
             return ()
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
         placeholders = ", ".join("?" for _ in values)
         try:
@@ -7979,7 +8262,7 @@ class SQLiteSourceStructureRepository:
     ) -> tuple[CodeEdge, ...]:
         if not symbol_ids:
             return ()
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
         placeholders = ", ".join("?" for _ in values)
         try:
@@ -8022,7 +8305,7 @@ class SQLiteSourceStructureRepository:
         """Fetch a bounded frontier of resolved internal reverse relationships."""
         if not symbol_ids:
             return ()
-        self._backend.get_source_snapshot(scope, snapshot_id)
+        self._populated_snapshot(scope, snapshot_id)
         values = tuple(dict.fromkeys(str(symbol_id) for symbol_id in symbol_ids))
         placeholders = ", ".join("?" for _ in values)
         try:
