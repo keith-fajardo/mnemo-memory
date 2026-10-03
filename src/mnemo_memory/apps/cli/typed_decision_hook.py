@@ -352,7 +352,7 @@ def _note_source_text(item: ContextItem) -> str | None:
 def cached_filler_drops(
     candidates: Sequence[FillerCandidate], verdicts: Sequence[float | None]
 ) -> tuple[str, ...]:
-    """Item IDs whose cached p(filler) is at least 0.7; a missing verdict keeps the note."""
+    """Item IDs whose cached p(filler) meets the drop bar; a missing verdict keeps the note."""
 
     return tuple(
         candidate.item_id

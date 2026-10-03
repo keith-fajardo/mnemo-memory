@@ -478,8 +478,8 @@ def test_filler_candidates_are_bounded_to_sixteen_notes_of_300_characters() -> N
 
 def test_cached_filler_drops_only_drop_confident_filler() -> None:
     candidates = tuple(FillerCandidate(_knowledge_id(index), "note") for index in range(4))
-    assert cached_filler_drops(candidates, (0.95, 0.65, 0.05, None)) == (_knowledge_id(0),)
-    assert cached_filler_drops(candidates, (0.7, 0.7, 0.7, 0.7)) == tuple(
+    assert cached_filler_drops(candidates, (0.95, 0.45, 0.05, None)) == (_knowledge_id(0),)
+    assert cached_filler_drops(candidates, (0.5, 0.5, 0.5, 0.5)) == tuple(
         candidate.item_id for candidate in candidates
     )
     with pytest.raises(ValueError):

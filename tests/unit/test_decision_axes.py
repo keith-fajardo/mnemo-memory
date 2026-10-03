@@ -13,6 +13,7 @@ from mnemo_memory.packages.model_gateway.cascade_router import (
 from mnemo_memory.packages.model_gateway.decision_axes import (
     EPISODIC_KIND,
     FILLER_CHECK_BUDGET_SECONDS,
+    FILLER_DROP_AT,
     FILLER_QUESTION_VERSION,
     FRONT_DOOR_AXES,
     HINT_TEXT,
@@ -99,8 +100,9 @@ def test_note_substance_scores_filler_as_the_escalation_side() -> None:
 
 def test_filler_is_dropped_only_at_a_confident_score() -> None:
     assert should_drop_note(None) is False
-    assert should_drop_note(_result("note_substance", "filler", 0.69)) is False
-    assert should_drop_note(_result("note_substance", "filler", 0.7)) is True
+    assert should_drop_note(_result("note_substance", "filler", 0.49)) is False
+    assert should_drop_note(_result("note_substance", "filler", 0.5)) is True
+    assert should_drop_note(_result("note_substance", "filler", 0.01)) is False
 
 
 def test_worth_extracting_skips_only_a_confident_no() -> None:
@@ -206,6 +208,9 @@ def test_the_filler_question_version_pins_its_wording() -> None:
 
 def test_a_cached_filler_probability_drops_only_at_the_bar() -> None:
     assert should_drop_filler(None) is False
-    assert should_drop_filler(0.69) is False
-    assert should_drop_filler(0.7) is True
-    assert should_drop_note(_result("note_substance", "filler", 0.7)) is True
+    assert FILLER_DROP_AT == 0.5
+    assert should_drop_filler(0.49) is False
+    assert should_drop_filler(0.5) is True
+    assert should_drop_filler(0.54) is True  # headed synthetic filler scored 0.54-0.76
+    assert should_drop_filler(0.01) is False  # relevant notes scored about 0.00-0.01
+    assert should_drop_note(_result("note_substance", "filler", 0.5)) is True

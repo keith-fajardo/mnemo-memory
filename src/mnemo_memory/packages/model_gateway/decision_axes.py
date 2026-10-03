@@ -27,7 +27,9 @@ from .cascade_router import (
 )
 from .rule_axes import RISK_AXIS
 
-FILLER_DROP_AT = 0.7
+# Lowered from 0.7 on 2026-10-03: stored notes are judged with their heading, and headed filler
+# scored 0.54-0.76 while relevant notes scored about 0.00-0.01.
+FILLER_DROP_AT = 0.5
 # Bump when NOTE_SUBSTANCE's wording, labels or scores change: verdicts cached for the old
 # question then stop counting (spec 2026-10-03 §5).
 FILLER_QUESTION_VERSION = 1

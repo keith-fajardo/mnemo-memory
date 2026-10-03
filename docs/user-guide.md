@@ -891,7 +891,7 @@ request is denied and `status` shows the counter as `unavailable`; delete the fi
 
 The filler check does not ask Jev while you wait for a prompt. Mnemo keeps a small local cache of
 note verdicts (`typed-decision-note-verdicts.json` in the data directory). A note whose verdict is
-less than 30 days old is judged straight from the cache: a cached verdict of 0.7 or above drops
+less than 30 days old is judged straight from the cache: a cached verdict of 0.5 or above drops
 the note only in `live` mode, and in `shadow` mode it is only recorded as a would-drop. A note
 with no verdict is always kept. Notes that still need a verdict are queued by ID only
 (`typed-decision-judge-queue.json`, up to 256 notes) for a background judge,

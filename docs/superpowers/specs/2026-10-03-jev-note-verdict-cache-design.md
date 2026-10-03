@@ -36,7 +36,8 @@ The first two live synthetic replays (`2026-10-03-replay-a`, `-replay-b`) passed
 - **Filler decisions come from the cache.**
   - The candidate set is unchanged from the hook spec §4.2 and later rulings: rendered notes only, fetchable IDs only, plus every existing exemption.
   - For each candidate, the hook looks up the verdict cache (§5).
-  - A cached `p_filler ≥ FILLER_DROP_AT` (0.7) means drop in live mode, or "would drop" in shadow mode.
+  - A cached `p_filler ≥ FILLER_DROP_AT` (0.5) means drop in live mode, or "would drop" in shadow mode.
+  - **Note (2026-10-03):** lowered to 0.5 after the live probe; headed notes score lower than bare text. Phase 1 calibrated 0.7 on bare note text, where synthetic filler scored 0.75-0.90. The hook and judge score the stored note text including its heading, where filler scored 0.54-0.76 and relevant notes about 0.00-0.01.
   - A missing, stale or unreadable verdict means **keep**.
   - Everything downstream is unchanged: the pinned re-render (`only_item_ids`), the per-note `lower_rank` omission, the fit rule, and "a changed route stays unfiltered".
 - **Queueing.** Candidates with no usable verdict are appended to the judge queue (§4), as IDs only. This happens only when relevance mode is not `off`.
