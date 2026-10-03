@@ -3,9 +3,10 @@
 The prompt hook queues note IDs, never text, and starts ``typed-decisions judge-notes`` in a new
 session. ``run_note_judge`` drains that queue under a single-instance lock: it re-reads each
 note through a caller-supplied scoped reader, skips notes that already have a usable verdict or
-three failed attempts on the same text, and asks Jev through a caller-built guard, four
-requests in flight and at most 32 notes per run. ``judge_candidates`` is the shared core; the
-replay's priming pass uses it with the synthetic guard. This module never imports the Jev
+three failed attempts on the same text, and asks Jev through a caller-built guard: at most four
+requests sent per batch (timed-out threads from an earlier batch may still be open), and at
+most 32 notes per run (it may take up to 256 queue entries). ``judge_candidates`` is the shared
+core; the replay's priming pass uses it with the synthetic guard. This module never imports the Jev
 connector, builds a guard, prints, or touches any file but the two stores.
 """
 

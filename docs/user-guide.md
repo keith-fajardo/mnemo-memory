@@ -895,8 +895,8 @@ less than 30 days old is judged straight from the cache: a cached verdict of 0.7
 the note only in `live` mode, and in `shadow` mode it is only recorded as a would-drop. A note
 with no verdict is always kept. Notes that still need a verdict are queued by ID only
 (`typed-decision-judge-queue.json`, up to 256 notes) for a background judge,
-`mnemo-memory typed-decisions judge-notes`. The hook starts it after it has answered and never
-waits for it. The judge prints nothing, runs one at a time, and gives up on a note after three
+`mnemo-memory typed-decisions judge-notes`. The hook starts it after it has built its output,
+just before that output is printed, and never waits for it. The judge prints nothing, runs one at a time, and gives up on a note after three
 failed attempts until the note changes. Neither file holds note or prompt text, and deleting
 either one is safe. The hook starts the judge only when the data route could actually send
 something and the prompt queued a note. While the data route is `synthetic_only` the judge is

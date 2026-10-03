@@ -198,12 +198,12 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     then 0.44 (typed step p50 656 ms and 752 ms).
   - **Why.** Each prompt waited on the slowest of up to 17 fresh HTTPS requests: the front door
     plus one filler check per note. Each request pays its own TCP, TLS and server wait, so the
-    slowest of 17 often ran past the cap (cap-hit share 0.38 and 0.44 of prompts). The hedged TCP connect (f3cd236) removed one
-    of those waits and did not help on its own.
+    slowest of 17 often ran past the cap. The hedged TCP connect (f3cd236) removed one of those
+    waits and did not help on its own.
   - **The fix.** Whether a note is filler depends only on the note, not on the prompt, so the
-    answer can be remembered. The prompt hook now sends at most one Jev request, the front door (none when no question is asked),
-    and reads each candidate note's verdict from a local cache,
-    `typed-decision-note-verdicts.json`.
+    answer can be remembered. The prompt hook now sends at most one Jev request, the front door
+    (none when no question is asked), and reads each candidate note's verdict from a local
+    cache, `typed-decision-note-verdicts.json`.
     - A verdict is keyed by one hash of the item ID, the judged text, the pinned model version
       and `FILLER_QUESTION_VERSION`. The file is content-free: no note text, prompt text or
       skill name. A verdict is fresh for 30 days, and the file holds at most 5,000 entries and
@@ -212,9 +212,10 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   - **The background judge.** Notes without a verdict are queued by item ID
     (`typed-decision-judge-queue.json`, at most 256) and judged after the prompt by a detached
     `typed-decisions judge-notes` process. It runs one at a time, uses a `RUNTIME` guard with a
-    5 s deadline, keeps at most 4 requests in flight, takes at most 32 notes per run, and stops
-    retrying a note after 3 failed attempts on the same text. It prints nothing and exits 0 on
-    any failure.
+    5 s deadline and sends at most 4 requests per batch (timed-out threads from an earlier
+    batch may still be open). It asks about at most 32 notes per run (it may take up to 256
+    queue entries), and stops retrying a note after 3 failed attempts on the same text. It
+    prints nothing and exits 0 on any failure.
   - **When the judge starts.** The hook starts it only when the data route could actually send
     something AND this prompt queued a note. This deviates from the spec's "if the queue is
     non-empty", and the maintainer approved it (see the dated note in spec section 3). Under
@@ -224,8 +225,9 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     `typed-decisions status` shows the cache (`note_verdicts`) and the queue and whether a judge
     is running (`note_judge`).
   - **Replay priming.** Before the prompts, the replay warms each seed's cache by judging every
-    seeded note except the pinned event once through the synthetic guard, then gates on a priming answered-share of at
-    least 0.95. A priming pass that cannot run is recorded as blocked, with only the exception
+    seeded note except the pinned event through the synthetic guard (a note left unanswered is
+    judged again, up to 3 passes in all), then gates on a priming answered-share of at least
+    0.95. A priming pass that cannot run is recorded as blocked, with only the exception
     class name (`error_type`), and the run goes on.
   - **Gap 4.** The prompt path now makes at most one budget reservation per prompt (none when no
     question is asked), not up to 17. Gap 4 stays open. The reservation still runs on the
