@@ -123,6 +123,23 @@ def _run_git(arguments: tuple[str, ...], root: Path) -> str | None:
     return completed.stdout if completed.returncode == 0 else None
 
 
+def observe_and_store_git(
+    data_directory: Path,
+    project_root: Path,
+    scope: MemoryScope,
+    source_digest: str,
+    observer: GitSourceObserver | None = None,
+) -> GitSourceObservation | None:
+    """Observe Git state for one stored source digest and cache it.
+
+    The hook and the background refresh worker share this, so both record the same evidence.
+    """
+    observation = (observer or GitSourceObserver()).observe(project_root, source_digest)
+    if observation is not None:
+        GitObservationStore(data_directory).put(scope, observation)
+    return observation
+
+
 class GitObservationStore:
     """Atomic bounded local cache keyed by hashed scope and immutable source digest."""
 
