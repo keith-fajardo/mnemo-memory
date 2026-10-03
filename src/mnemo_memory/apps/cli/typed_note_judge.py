@@ -1,6 +1,6 @@
 """Background note judge: fills the verdict cache after the prompt (spec 2026-10-03 §4).
 
-The prompt hook queues note IDs, never text, and starts ``typed-decisions judge-notes`` in a new
+The prompt hook queues note IDs, never text, and starts the light ``judge_entry`` module in a new
 session. ``run_note_judge`` drains that queue under a single-instance lock: it re-reads each
 note through a caller-supplied scoped reader, skips notes that already have a usable verdict or
 three failed attempts on the same text, and asks Jev through a caller-built guard: at most four
@@ -21,6 +21,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     FillerCandidate,
     filler_probability,
     filler_verdict_key,
+    is_pinned_model_id,
 )
 from mnemo_memory.packages.domain import MemoryScope, TypedDecisionUnavailableReason
 from mnemo_memory.packages.model_gateway.decision_axes import NOTE_SUBSTANCE
@@ -138,9 +139,12 @@ def run_note_judge(
     failing). No guard (the master switch is off) means nothing is read or taken. The run ends
     when the queue is empty, ``limit`` notes were asked, a policy block stops it, it has taken
     a whole queue's worth of entries, or the queue or cache files fail; an ``OSError`` from
-    them never escapes, so the judge exits silently (spec §4).
+    them never escapes, so the judge exits silently (spec §4). An unpinned ``model_version``
+    (not ``jev-X.Y.Z``) asks nothing and takes nothing: the hook never queues for one.
     """
 
+    if not is_pinned_model_id(model_version):
+        return JudgeTally(blocked=True)
     try:
         queue = LocalNoteJudgeQueue(data_directory)
         with queue.run_lock() as acquired:

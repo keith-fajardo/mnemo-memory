@@ -895,12 +895,15 @@ less than 30 days old is judged straight from the cache: a cached verdict of 0.5
 the note only in `live` mode, and in `shadow` mode it is only recorded as a would-drop. A note
 with no verdict is always kept. Notes that still need a verdict are queued by ID only
 (`typed-decision-judge-queue.json`, up to 256 notes) for a background judge,
-`mnemo-memory typed-decisions judge-notes`. The hook starts it after it has built its output,
+a light `python -P -m mnemo_memory.apps.cli.judge_entry` process (the same work as the hidden
+`mnemo-memory typed-decisions judge-notes` command). The hook starts it after it has built its output,
 just before that output is printed, and never waits for it. The judge prints nothing, runs one at a time, and gives up on a note after three
 failed attempts until the note changes. Neither file holds note or prompt text, and deleting
 either one is safe. The hook starts the judge only when the data route could actually send
 something and the prompt queued a note. While the data route is `synthetic_only` the judge is
-never started, so the queue only fills and no note leaves your machine. `status` also shows
+never started, so the queue only fills and no note leaves your machine. Nothing is queued
+when `typed_decision_model_id` is not a pinned `jev-X.Y.Z` version, or when the queue is busy
+at that moment (the note is queued on a later prompt). `status` also shows
 `note_verdicts` (whether the cache is readable, and how many entries it holds) and `note_judge`
 (how many notes wait, and whether a judge is running).
 
@@ -908,6 +911,17 @@ Upgrade note: the locks are also checked when `settings.json` is loaded. A file 
 hand-edited to `live` no longer loads, and the hook then runs on default settings (all of them,
 not just Jev's) until it is fixed. `typed-decisions status` prints `settings_invalid` with the
 lock's message; change that mode back to `shadow` or `off` in `settings.json`.
+
+Downgrade note: with route diagnostics on, a typed prompt now records `typed_notes_cached` and
+`typed_notes_queued` in `automatic-route-telemetry.json`. A build older than the note-verdict
+cache does not know those two keys, so it reads that whole file as corrupt: its diagnostics
+commands report the route state as unavailable. Your memory is not touched; only this route
+telemetry is affected. While the
+file is corrupt the older build ignores tool and delivery updates for it. The next route event
+it records starts a fresh file and replaces the old events (kept for 7 days by default), so the
+file heals itself. You can also delete `automatic-route-telemetry.json` yourself; it holds no
+note or prompt text. Going the other way is safe: a newer build reads older records and counts
+the missing cache fields as 0.
 
 When the filler check is live and drops a note, the attached context keeps one standard
 `MNEMO_OMISSION` line for that note: its `item_id` is the note's own ID, the reason is

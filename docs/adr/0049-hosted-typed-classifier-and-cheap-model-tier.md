@@ -211,7 +211,9 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     - A missing, stale or unreadable verdict keeps the note, which is today's behaviour.
   - **The background judge.** Notes without a verdict are queued by item ID
     (`typed-decision-judge-queue.json`, at most 256) and judged after the prompt by a detached
-    `typed-decisions judge-notes` process. It runs one at a time, uses a `RUNTIME` guard with a
+    `python -P -m mnemo_memory.apps.cli.judge_entry` process (the hidden `typed-decisions
+    judge-notes` command runs the same code). Nothing is queued for an unpinned model id or
+    while the queue lock is busy. It runs one at a time, uses a `RUNTIME` guard with a
     5 s deadline and sends at most 4 requests per batch (timed-out threads from an earlier
     batch may still be open). It asks about at most 32 notes per run (it may take up to 256
     queue entries), and stops retrying a note after 3 failed attempts on the same text. It
@@ -224,6 +226,14 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   - **Telemetry and `status`.** Telemetry adds `typed_notes_cached` and `typed_notes_queued`.
     `typed-decisions status` shows the cache (`note_verdicts`) and the queue and whether a judge
     is running (`note_judge`).
+    **Compatibility.** `AutomaticRouteEvent.from_dict` accepts a `typed_v1` record with neither
+    cache key (older records) or with both (new records). A build older than the cache accepts
+    only the first form, so after a downgrade it treats the whole `automatic-route-telemetry.json`
+    as corrupt: its diagnostics commands report the route state as unavailable, and its tool and
+    delivery updates are skipped. Its next recorded route event replaces the file with a fresh
+    one holding only that event, so the earlier route events (7 days by default) are dropped.
+    No memory data is affected; only the route telemetry is. Upgrading is safe, since old records
+    read with both counts as 0.
   - **Replay priming.** Before the prompts, the replay warms each seed's cache by judging every
     seeded note except the pinned event through the synthetic guard (a note left unanswered is
     judged again, up to 3 passes in all), then gates on a priming answered-share of at least

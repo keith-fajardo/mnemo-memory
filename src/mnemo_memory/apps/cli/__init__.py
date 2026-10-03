@@ -1,5 +1,4 @@
-"""CLI adapter package."""
+"""CLI adapter package.
 
-from . import main
-
-__all__ = ["main"]
+Submodules are imported on demand: the background judge must not load ``main``.
+"""

@@ -118,14 +118,34 @@ class AllowBudget:
         return None
 
 
+class LimitedBudget:
+    """Allow the first ``allowed`` reservations, then deny every later one."""
+
+    def __init__(self, allowed: int) -> None:
+        self.allowed = allowed
+        self.calls = 0
+
+    def reserve(
+        self,
+        workspace_id: WorkspaceId,
+        task_type: ModelTaskType,
+        reservation: ModelBudgetReservation,
+    ) -> None:
+        self.calls += 1
+        if self.calls > self.allowed:
+            raise RuntimeError("synthetic budget exhausted")
+
+
 def _guard(
-    adapter: NoteAdapter, source: TypedDecisionSource = TypedDecisionSource.SYNTHETIC_FIXTURE
+    adapter: NoteAdapter,
+    source: TypedDecisionSource = TypedDecisionSource.SYNTHETIC_FIXTURE,
+    budget: AllowBudget | LimitedBudget | None = None,
 ) -> GuardedTypedDecisionClassifier:
     return GuardedTypedDecisionClassifier(
         adapter,
         data_route=TypedDecisionDataRoute.SYNTHETIC_ONLY,
         source=source,
-        budget=AllowBudget(),
+        budget=AllowBudget() if budget is None else budget,
         workspace_id=WorkspaceId(UUID(int=0)),
         reservation=ModelBudgetReservation(input_tokens=1_000, output_tokens=1, cost_microusd=0),
         deadline_seconds=JUDGE_DEADLINE_SECONDS,
@@ -238,6 +258,40 @@ def test_a_policy_block_stops_the_run_and_counts_no_attempt(tmp_path: Path) -> N
     assert adapter.texts == []
     assert _state(tmp_path, _id(1), "one") == NoteVerdictState(None, 0)
     assert LocalNoteVerdictCache(tmp_path).entry_count() == 0
+
+
+def test_a_budget_that_runs_out_mid_batch_stops_the_run_and_charges_no_attempt(
+    tmp_path: Path,
+) -> None:
+    """Six of ten notes are allowed: batch 1 (4 notes) is answered, batch 2 has 2 answered and
+    2 denied, and the run stops. The denied notes are not charged an attempt and a later hook
+    prompt can queue them again; the notes never taken stay queued."""
+
+    texts = {_id(index): f"note {index}" for index in range(10)}
+    queue = LocalNoteJudgeQueue(tmp_path)
+    queue.append(SCOPE, tuple(texts))
+    adapter = NoteAdapter()
+    budget = LimitedBudget(allowed=6)
+    tally = run_note_judge(
+        tmp_path,
+        model_version=MODEL,
+        read_notes=Notes(texts),
+        build_guard=lambda: _guard(adapter, budget=budget),
+    )
+    assert tally is not None and tally.blocked
+    assert (tally.answered, tally.failed) == (6, 0)
+    assert len(adapter.texts) == 6 and budget.calls == 8  # the third batch was never started
+    states = {item_id: _state(tmp_path, item_id, text) for item_id, text in texts.items()}
+    answered = [item_id for item_id, state in states.items() if state.p_filler is not None]
+    unanswered = [item_id for item_id in texts if item_id not in answered]
+    assert sorted(texts[item_id] for item_id in answered) == sorted(adapter.texts)
+    assert len(unanswered) == 4
+    assert all(states[item_id] == NoteVerdictState(None, 0) for item_id in unanswered)
+    assert all(states[item_id].needs_judging for item_id in unanswered)
+    assert LocalNoteVerdictCache(tmp_path).entry_count() == 6  # no failed-attempt entry
+    # Taken notes (the 2 denied) leave the queue, as after a policy block; the rest wait.
+    assert queue.length() == 2
+    assert [note.item_id for note in queue.take(10)] == [_id(8), _id(9)]
 
 
 def test_a_missing_guard_reads_and_takes_nothing(tmp_path: Path) -> None:
