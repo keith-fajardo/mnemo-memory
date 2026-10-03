@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from mnemo_memory.apps.cli import judge_entry, typed_decision_composition
 from mnemo_memory.apps.cli import main as cli
-from mnemo_memory.apps.cli import typed_decision_composition
 from mnemo_memory.apps.cli.typed_decision_hook import TypedHookModes, TypedHookOverrides
 from mnemo_memory.connectors.typesafe import jev_provider
 from mnemo_memory.packages.application import PersonalSettings, PersonalSettingsStore
@@ -202,9 +202,7 @@ def test_the_start_is_detached_names_only_the_data_directory_and_never_waits(
         sys.executable,
         "-P",
         "-m",
-        "mnemo_memory.cli",
-        "typed-decisions",
-        "judge-notes",
+        "mnemo_memory.apps.cli.judge_entry",
         "--data-dir",
         str(data),
     ]
@@ -302,3 +300,57 @@ def test_the_judge_command_builds_a_five_second_runtime_guard_and_sends_nothing(
     assert calls == []
     assert LocalNoteVerdictCache(fixture.data).entry_count() == 0
     assert not (fixture.data / "typed_decision-budget.json").exists()
+
+
+def test_the_judge_entry_point_loads_neither_typer_nor_the_cli_main_module() -> None:
+    """The spawned judge pays for what it needs only (about 0.4 s of CPU saved per start)."""
+
+    code = (
+        "import mnemo_memory.apps.cli.judge_entry, sys; "
+        "print('typer' in sys.modules, 'mnemo_memory.apps.cli.main' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", code], capture_output=True, text=True, check=True
+    )
+    assert done.stdout.strip() == "False False"
+
+
+def test_the_judge_entry_prints_nothing_and_returns_zero_when_it_cannot_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "settings.json").write_text("{not json", encoding="utf-8")
+    assert judge_entry.main(["--data-dir", str(tmp_path)]) == 0
+    assert judge_entry.main(["--unknown", "x"]) == 0
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_the_judge_entry_stays_silent_when_building_the_guard_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    built: list[float] = []
+
+    def broken(*args: Any, deadline_seconds: float, **kwargs: Any) -> None:
+        built.append(deadline_seconds)
+        raise RuntimeError("synthetic guard failure")
+
+    monkeypatch.setattr(
+        typed_decision_composition, "build_runtime_typed_decision_classifier", broken
+    )
+    assert judge_entry.main(["--data-dir", str(tmp_path)]) == 0
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err, built) == ("", "", [5.0])
+
+
+def test_the_judge_entry_runs_the_same_judge_as_the_hidden_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[Path | None] = []
+    monkeypatch.setattr(
+        "mnemo_memory.apps.cli.typed_note_judge_runner.run_queued_note_judge", ran.append
+    )
+    assert judge_entry.main(["--data-dir", str(tmp_path)]) == 0
+    assert judge_entry.main([f"--data-dir={tmp_path}"]) == 0
+    result = runner.invoke(cli.app, ["typed-decisions", "judge-notes", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert ran == [tmp_path, tmp_path, tmp_path]

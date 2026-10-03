@@ -1,6 +1,6 @@
 """Background note judge: fills the verdict cache after the prompt (spec 2026-10-03 §4).
 
-The prompt hook queues note IDs, never text, and starts ``typed-decisions judge-notes`` in a new
+The prompt hook queues note IDs, never text, and starts the light ``judge_entry`` module in a new
 session. ``run_note_judge`` drains that queue under a single-instance lock: it re-reads each
 note through a caller-supplied scoped reader, skips notes that already have a usable verdict or
 three failed attempts on the same text, and asks Jev through a caller-built guard: at most four

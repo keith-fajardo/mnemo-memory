@@ -24,6 +24,11 @@ from uuid import UUID, uuid4, uuid5
 
 import typer
 
+from mnemo_memory.apps.cli.typed_note_reader import (
+    automatic_prompt_context_service,
+    note_candidates_by_id,
+    pinned_approved_item_ids,
+)
 from mnemo_memory.connectors.automatic_memory.client_config import (
     AutomaticMemoryClientConfigError,
     ClientName,
@@ -158,7 +163,6 @@ from mnemo_memory.packages.application.unified_context import (
     ContextSourceOverviewQuery,
     GetUnifiedContext,
     UnifiedContextService,
-    is_requestable_item_id,
 )
 from mnemo_memory.packages.context_engine import (
     UnifiedContextEngine,
@@ -263,6 +267,12 @@ if TYPE_CHECKING:
 # Rough frontier tokens one escalated extraction would spend; the local-vs-frontier split is
 # exact, this multiplier is a labelled estimate until per-call token measurement lands.
 _ESTIMATED_TOKENS_PER_LOCAL_EXTRACTION = 297
+
+# The note reader lives in ``typed_note_reader`` so the judge process need not load this module;
+# these names stay here for the hook and for tests that patch them.
+_automatic_prompt_context_service = automatic_prompt_context_service
+_note_candidates_by_id = note_candidates_by_id
+_pinned_approved_item_ids = pinned_approved_item_ids
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -795,26 +805,6 @@ def _automatic_route_query(prompt: str, decision: AutomaticContextRouteDecision)
     return " ".join(searchable) if searchable else selected
 
 
-def _automatic_prompt_context_service(
-    runtime: CheckpointRuntime,
-    semantic: LocalSemanticKnowledgeRetriever | None,
-    *,
-    include_semantic_memory: bool = False,
-) -> UnifiedContextEngine:
-    return UnifiedContextEngine(
-        UnifiedContextService(
-            runtime.checkpoint_service,
-            runtime.dbt_manifest_service,
-            runtime.source_structure_repository,
-            runtime.repository,
-            runtime.knowledge_document_repository,
-            semantic_knowledge=semantic,
-            semantic_memory=(runtime.semantic_memory_service if include_semantic_memory else None),
-        ),
-        runtime.repository,
-    )
-
-
 def _is_architecture_overview(decision: AutomaticContextRouteDecision) -> bool:
     return (
         decision.route is AutomaticContextRoute.STRUCTURE
@@ -1249,84 +1239,6 @@ def _typed_local_inputs(
     return _TypedLocalInputs(listing.skills, listing.more_than_limit, pinned)
 
 
-def _pinned_approved_item_ids(runtime: CheckpointRuntime, packet: ContextPacket) -> frozenset[str]:
-    """Pinned approved events in ``packet``; an unreadable pin state counts as pinned.
-
-    Each scope's pin states are read in one pass. If that read fails, each event is read on its
-    own, so one unreadable event never hides the others' pin states.
-    """
-
-    pinned: set[str] = set()
-    by_scope: dict[MemoryScope, list[tuple[str, EventId]]] = {}
-    for item in packet.episodic_memories:
-        if not item.item_id.startswith("approved-episodic:"):
-            continue
-        try:
-            event_id = EventId.from_string(item.item_id.removeprefix("approved-episodic:"))
-        except Exception:
-            pinned.add(item.item_id)  # keep is the safe side
-            continue
-        by_scope.setdefault(item.source_scope, []).append((item.item_id, event_id))
-    for scope, items in by_scope.items():
-        event_ids = tuple(event_id for _, event_id in items)
-        try:
-            states = [
-                record.pinned
-                for record in runtime.repository.get_approved_event_records(scope, event_ids)
-            ]
-        except Exception:
-            states = [_pin_state(runtime, scope, event_id) for event_id in event_ids]
-        pinned.update(item_id for (item_id, _), state in zip(items, states, strict=True) if state)
-    return frozenset(pinned)
-
-
-def _pin_state(runtime: CheckpointRuntime, scope: MemoryScope, event_id: EventId) -> bool:
-    try:
-        return runtime.repository.get_approved_event_record(scope, event_id).pinned
-    except Exception:
-        return True  # keep is the safe side
-
-
-_NOTE_READ_BATCH = 4
-
-
-def _note_candidates_by_id(
-    data_directory: Path, scope: MemoryScope, item_ids: Sequence[str]
-) -> tuple[FillerCandidate, ...]:
-    """Re-read notes by ID through the scoped ``get_context item_ids`` lookup (spec §4).
-
-    The lookup rechecks scope, currentness and sensitivity. The hook's own
-    ``filler_candidates`` then applies every exemption it can see in its own small packet (pinned
-    events, conflicts among the packet's notes, non-normal sensitivity, the secret scan,
-    unreadable text) and builds the 300-character judged text, so the judge keys verdicts on
-    exactly the text the hook looks up. Conflicts with notes outside that packet are only applied
-    by the hook. An ID the lookup cannot
-    serve (gone, changed, foreign, malformed) is skipped. Nothing is sent anywhere.
-    """
-
-    from mnemo_memory.apps.cli import typed_decision_hook as typed
-
-    requested = tuple(
-        dict.fromkeys(item_id for item_id in item_ids if is_requestable_item_id(item_id))
-    )
-    if not requested:
-        return ()
-    candidates: list[FillerCandidate] = []
-    with build_checkpoint_runtime(resolve_local_config(data_directory)) as runtime:
-        service = _automatic_prompt_context_service(runtime, None)
-        for start in range(0, len(requested), _NOTE_READ_BATCH):
-            chunk = requested[start : start + _NOTE_READ_BATCH]
-            packet = service.get_context(GetUnifiedContext(scope, item_ids=chunk))
-            candidates.extend(
-                typed.filler_candidates(
-                    packet,
-                    pinned_item_ids=_pinned_approved_item_ids(runtime, packet),
-                    rendered_item_ids=frozenset(chunk),
-                )
-            )
-    return tuple(candidates)
-
-
 def _runtime_guard_factory(
     settings: PersonalSettings, data_directory: Path
 ) -> Callable[[TypedDecisionRecorder], GuardedTypedDecisionClassifier | None]:
@@ -1424,13 +1336,13 @@ def _judge_route_open(settings: PersonalSettings) -> bool:
 
 
 def _start_note_judge(data_directory: Path) -> None:
-    """Start ``typed-decisions judge-notes`` detached: a new session, no pipes, no waiting.
+    """Start the background judge detached: a new session, no pipes, no waiting.
 
     The command line names only the data directory, as one argument and without a shell. Note
     text and the API key never appear on it; the child inherits the hook's environment. It runs
-    the console-entry module, which imports ``main`` once and keeps the child's stderr clean.
-    ``-P`` keeps the working directory off ``sys.path``, so a ``mnemo_memory/`` folder in the
-    project cannot shadow the installed package.
+    the light ``judge_entry`` module, which loads neither typer nor this CLI module (that costs
+    about 0.4 s of CPU per start). ``-P`` keeps the working directory off ``sys.path``, so a
+    ``mnemo_memory/`` folder in the project cannot shadow the installed package.
     """
 
     # The handle is dropped on purpose; without this Python warns that the child still runs.
@@ -1441,9 +1353,7 @@ def _start_note_judge(data_directory: Path) -> None:
                 sys.executable,
                 "-P",
                 "-m",
-                "mnemo_memory.cli",
-                "typed-decisions",
-                "judge-notes",
+                "mnemo_memory.apps.cli.judge_entry",
                 "--data-dir",
                 str(data_directory),
             ],
@@ -4304,33 +4214,10 @@ def typed_decisions_judge_notes(
     It prints nothing and exits 0 whatever happens, so a broken judge never reaches a session.
     """
 
+    from mnemo_memory.apps.cli.typed_note_judge_runner import run_queued_note_judge
+
     with suppress(Exception):
-        _judge_queued_notes(data_dir)
-
-
-def _judge_queued_notes(data_dir: Path | None) -> None:
-    from mnemo_memory.apps.cli.typed_decision_composition import (
-        build_runtime_typed_decision_classifier,
-    )
-    from mnemo_memory.apps.cli.typed_note_judge import JUDGE_DEADLINE_SECONDS, run_note_judge
-
-    data_directory = resolve_local_config(data_dir).data_directory
-    settings = PersonalSettingsStore(data_directory).load()
-
-    def read(scope: MemoryScope, item_ids: tuple[str, ...]) -> tuple[FillerCandidate, ...]:
-        return _note_candidates_by_id(data_directory, scope, item_ids)
-
-    def guard() -> GuardedTypedDecisionClassifier | None:
-        return build_runtime_typed_decision_classifier(
-            settings, data_directory=data_directory, deadline_seconds=JUDGE_DEADLINE_SECONDS
-        )
-
-    run_note_judge(
-        data_directory,
-        model_version=settings.typed_decision_model_id,
-        read_notes=read,
-        build_guard=guard,
-    )
+        run_queued_note_judge(data_dir)
 
 
 def _route_event_view(event: AutomaticRouteEvent) -> dict[str, object]:
