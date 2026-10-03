@@ -172,6 +172,7 @@ from .reference import (
 )
 from .semantic_reference import ReferenceSemanticCheckpointRepository
 from .sqlite import (
+    SourceSnapshotPrunePlan,
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
     SQLiteMigrationError,
@@ -337,6 +338,7 @@ __all__ = [
     "SemanticCheckpointNotFound",
     "SemanticCheckpointRepository",
     "SemanticCheckpointStorageFailure",
+    "SourceSnapshotPrunePlan",
     "SourceStructureRepository",
     "SupplementalArtifactConflict",
     "SupplementalArtifactStoreResult",
