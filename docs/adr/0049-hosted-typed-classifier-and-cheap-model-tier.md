@@ -198,10 +198,10 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     then 0.44 (typed step p50 656 ms and 752 ms).
   - **Why.** Each prompt waited on the slowest of up to 17 fresh HTTPS requests: the front door
     plus one filler check per note. Each request pays its own TCP, TLS and server wait, so the
-    slowest of 17 nearly always ran past the cap. The hedged TCP connect (f3cd236) removed one
+    slowest of 17 often ran past the cap (cap-hit share 0.38 and 0.44 of prompts). The hedged TCP connect (f3cd236) removed one
     of those waits and did not help on its own.
   - **The fix.** Whether a note is filler depends only on the note, not on the prompt, so the
-    answer can be remembered. The prompt hook now sends exactly one Jev request, the front door,
+    answer can be remembered. The prompt hook now sends at most one Jev request, the front door (none when no question is asked),
     and reads each candidate note's verdict from a local cache,
     `typed-decision-note-verdicts.json`.
     - A verdict is keyed by one hash of the item ID, the judged text, the pinned model version
@@ -224,11 +224,14 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
     `typed-decisions status` shows the cache (`note_verdicts`) and the queue and whether a judge
     is running (`note_judge`).
   - **Replay priming.** Before the prompts, the replay warms each seed's cache by judging every
-    seeded note once through the synthetic guard, then gates on a priming answered-share of at
+    seeded note except the pinned event once through the synthetic guard, then gates on a priming answered-share of at
     least 0.95. A priming pass that cannot run is recorded as blocked, with only the exception
     class name (`error_type`), and the run goes on.
-  - **Gap 4.** The budget work now runs once per prompt (one request), not up to 17 times. It
-    is still on the event-loop thread.
+  - **Gap 4.** The prompt path now makes at most one budget reservation per prompt (none when no
+    question is asked), not up to 17. Gap 4 stays open. The reservation still runs on the
+    event-loop thread. Once a route opens, the background judge reserves once per judged note
+    against the same counter file, so the prompt's reservation can briefly wait on the judge's
+    lock.
   - **Unchanged.** The 0.8 s cap stays until the next live replay shows whether the
     answered-share gate now passes. Shadow and off stay byte-identical to `main`.
 

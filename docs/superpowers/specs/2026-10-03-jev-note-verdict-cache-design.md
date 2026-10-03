@@ -9,17 +9,17 @@
 
 ## 1. Why
 
-The first two live synthetic replays (`2026-10-03-replay-a`, `-replay-b`) passed no gates. When Jev answered, its quality was strong. Too many answers arrived after the 0.8 s cap. Live probes found the cause:
+The first two live synthetic replays (`2026-10-03-replay-a`, `-replay-b`) passed only the `steps` and `tokens` gates and failed every decision gate. When Jev answered, its quality was strong. Too many answers arrived after the 0.8 s cap. Live probes found the cause:
 
 - **The hook waits on the slowest of many requests.** It sends up to **17 requests per prompt**: one front-door request plus one filler request per note. The prompt therefore waits on the *slowest of 17* fresh HTTPS requests.
 - **Each request has three independent tails:**
   - TCP SYN loss: about 10–15% of new connections wait a 1 s retransmit
   - TLS handshake: p90 about 440 ms at 17-way concurrency
   - Jev server time: p95 about 600 ms
-- **So the slowest of 17 nearly always exceeds 0.8 s.** The hedged connect removes only the first tail, and replay-b did not improve: its cap-hit share was 0.44.
+- **So the slowest of 17 often exceeds 0.8 s** (cap-hit share 0.38 and 0.44 of prompts). The hedged connect removes only the first tail, and replay-b did not improve: its cap-hit share was 0.44.
 - **The filler check does not depend on the prompt.** Since the 2026-10-01 redesign it judges each note *alone*, as task information or filler. A note's verdict is therefore a property of the note, so it can be computed once and reused.
 
-**Goal:** each prompt sends exactly **one** Jev request, the front door. Filler verdicts come from a local cache, filled in the background after the prompt.
+**Goal:** each prompt sends at most **one** Jev request, the front door (none when no question is asked). Filler verdicts come from a local cache, filled in the background after the prompt.
 
 ## 2. Decisions (maintainer, 2026-10-03)
 
@@ -32,7 +32,7 @@ The first two live synthetic replays (`2026-10-03-replay-a`, `-replay-b`) passed
 
 ## 3. Hook changes
 
-- **One request per prompt.** The typed step's `ask_each` carries only the front-door request (memory need, complexity, tool need, skill). The per-note filler requests are removed from the prompt path. The cap is unchanged: it starts at the mode read, and is 0.8 s minus local time, never below 0.1 s.
+- **At most one request per prompt.** The typed step's `ask_each` carries only the front-door request (memory need, complexity, tool need, skill). The per-note filler requests are removed from the prompt path. The cap is unchanged: it starts at the mode read, and is 0.8 s minus local time, never below 0.1 s.
 - **Filler decisions come from the cache.**
   - The candidate set is unchanged from the hook spec §4.2 and later rulings: rendered notes only, fetchable IDs only, plus every existing exemption.
   - For each candidate, the hook looks up the verdict cache (§5).
