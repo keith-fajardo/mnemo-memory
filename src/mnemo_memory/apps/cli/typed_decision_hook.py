@@ -609,16 +609,18 @@ class RuntimeTypedDecisionRecorder:
         self.records.append(record)
 
 
+def is_pinned_model_id(model_id: str) -> bool:
+    """Whether ``model_id`` is a fully pinned Jev version such as ``jev-1.13.0``."""
+
+    return TYPED_MODEL_VERSION.fullmatch(model_id) is not None
+
+
 def pinned_model_version(records: Sequence[TypedDecisionRecord]) -> str | None:
     """Fold per-request records into the one model version telemetry may hold."""
 
     for record in records:
         version = record.model_version
-        if (
-            record.outcome == "answered"
-            and version is not None
-            and TYPED_MODEL_VERSION.fullmatch(version) is not None
-        ):
+        if record.outcome == "answered" and version is not None and is_pinned_model_id(version):
             return version
     return None
 

@@ -1382,13 +1382,20 @@ def _queue_unjudged_notes(
     scope: MemoryScope,
     candidates: Sequence[FillerCandidate],
     states: Sequence[NoteVerdictState],
+    model_id: str,
 ) -> int:
     """Queue the IDs (never text) of candidates that still need a verdict; return how many.
 
     A note with a usable verdict, or with three failed attempts on this exact text, is not
-    queued. A failed write queues nothing and changes nothing else (spec 2026-10-03 §3).
+    queued. A failed write queues nothing and changes nothing else (spec 2026-10-03 §3). An
+    unpinned ``model_id`` (not ``jev-X.Y.Z``) queues nothing: no verdict could be recorded for
+    it, so the judge would only be started to do nothing.
     """
 
+    from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+    if not typed.is_pinned_model_id(model_id):
+        return 0
     unjudged = tuple(
         candidate.item_id
         for candidate, state in zip(candidates, states, strict=True)
@@ -1573,7 +1580,9 @@ def _typed_prompt_render(
         applied = _apply_typed_decisions(
             data_directory, scope, prompt, client, trace, rules, decisions, local, step
         )
-        queued = _queue_unjudged_notes(data_directory, scope, candidates, verdicts)
+        queued = _queue_unjudged_notes(
+            data_directory, scope, candidates, verdicts, settings.typed_decision_model_id
+        )
     except Exception:
         return rules, trace, _typed_step_error_telemetry(modes, started)
     try:

@@ -36,11 +36,13 @@ OFF, SHADOW = TypedDecisionMode.OFF, TypedDecisionMode.SHADOW
 runner = CliRunner()
 
 
-def _relevance_shadow(fixture: HookFixture) -> None:
+def _relevance_shadow(fixture: HookFixture, model_id: str = "jev-1.13.0") -> None:
     """The real hook's own settings: master switch on, relevance in shadow."""
 
     base = PersonalSettings(
-        experimental_semantic_memory_enabled=True, experimental_typed_decisions_enabled=True
+        experimental_semantic_memory_enabled=True,
+        experimental_typed_decisions_enabled=True,
+        typed_decision_model_id=model_id,
     )
     PersonalSettingsStore(fixture.data).save(
         with_typed_decision_mode(base, TypedDecisionKind.RELEVANCE, SHADOW)
@@ -115,6 +117,52 @@ def test_the_real_hook_never_starts_the_judge_while_the_route_is_synthetic_only(
     run_hook(fixture, KNOWLEDGE_PROMPT)
     assert started == []
     assert LocalNoteJudgeQueue(fixture.data).length() == 3  # queued, waiting for a route
+
+
+@pytest.mark.parametrize(
+    ("model_id", "queued"),
+    [("jev-1.13.0", 3), ("jev-latest", 0), ("jev-1.13", 0), ("jev-1.13.0-beta", 0)],
+)
+def test_the_hook_queues_and_spawns_only_for_a_pinned_model_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_id: str, queued: int
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    _relevance_shadow(fixture, model_id)
+    started: list[Path] = []
+    monkeypatch.setattr(cli, "_judge_route_open", lambda settings: True)
+    monkeypatch.setattr(cli, "_start_note_judge", started.append)
+    run_hook(fixture, KNOWLEDGE_PROMPT)
+    assert LocalNoteJudgeQueue(fixture.data).length() == queued
+    assert len(started) == (1 if queued else 0)
+
+
+def test_the_judge_command_asks_nothing_for_an_unpinned_model_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    PersonalSettingsStore(fixture.data).save(
+        PersonalSettings(
+            experimental_semantic_memory_enabled=True,
+            experimental_typed_decisions_enabled=True,
+            typed_decision_model_id="jev-latest",
+        )
+    )
+    item_ids = knowledge_note_item_ids(fixture.data, fixture.binding)
+    LocalNoteJudgeQueue(fixture.data).append(fixture.binding.checkpoint_scope, item_ids)
+    built: list[object] = []
+    monkeypatch.setattr(
+        typed_decision_composition,
+        "build_runtime_typed_decision_classifier",
+        lambda *args, **kwargs: built.append(args),
+    )
+    result = runner.invoke(
+        cli.app,
+        ["typed-decisions", "judge-notes", "--data-dir", str(fixture.data)],
+        env={"TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY},
+    )
+    assert (result.exit_code, result.stdout, result.stderr) == (0, "", "")
+    assert built == []
+    assert LocalNoteJudgeQueue(fixture.data).length() == len(item_ids)  # nothing taken
 
 
 def test_a_failed_start_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
