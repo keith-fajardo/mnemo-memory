@@ -179,6 +179,7 @@ class ReplayResult:
     counts checked notes Jev gave no answer for, and ``skill_comparison`` is the telemetry's
     closed skill value (``skipped`` or ``not_asked`` when no skill question was sent). A case
     that could not run carries only its identity and a content-free ``error_type``.
+    ``notes_cached`` counts checked notes that had a usable cached verdict.
     """
 
     set_name: str
@@ -201,6 +202,7 @@ class ReplayResult:
     notes_unanswered: int
     skill_comparison: str | None
     error_type: str | None = None
+    notes_cached: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -642,6 +644,7 @@ def run_replay_case(
         hard_rule=hard_rule,
         notes_unanswered=0 if typed is None or step is None else typed.notes_unanswered,
         skill_comparison=None if typed is None else typed.skill,
+        notes_cached=0 if typed is None or step is None else typed.notes_cached,
     )
 
 
@@ -950,7 +953,9 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
 
     Every seeded Markdown note must be checked at least once: a drop rate over the few notes
     a probe happened to render says nothing about the notes no probe ever showed. Approved
-    events are reported, not gated; the pinned one is never sent.
+    events are reported, not gated; the pinned one is never sent. Verdicts come from the local
+    cache (spec 2026-10-03 §3): ``answered`` is the share of checked notes that had a cached
+    verdict.
     """
 
     rows: list[tuple[str, bool]] = []
@@ -974,7 +979,7 @@ def _score_filler(results: Sequence[ReplayResult], seed: ReplaySeed) -> dict[str
     judged = sum(len(result.dropped_item_ids) for result in results)
     applied = sum(len(result.applied_drop_item_ids) for result in results)
     sent = sum(len(result.checked_item_ids) for result in results)
-    answered = _answered_share(sent, sent - sum(result.notes_unanswered for result in results))
+    answered = _answered_share(sent, sum(result.notes_cached for result in results))
     return {
         "checks": len(rows),
         "drops_judged": judged,

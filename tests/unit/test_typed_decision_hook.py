@@ -28,6 +28,7 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     TypedHookModes,
     TypedPromptDecisions,
     TypedStepInput,
+    cached_filler_drops,
     combine_typed_decisions,
     confidence_bucket,
     decide_typed_prompt,
@@ -38,7 +39,6 @@ from mnemo_memory.apps.cli.typed_decision_hook import (
     filler_verdict_key,
     front_door_axes,
     memory_need_outcome,
-    notes_to_drop,
     omission_line,
     pinned_model_version,
     skill_comparison,
@@ -160,6 +160,7 @@ BASE_STEP = TypedStepInput(
         FillerCandidate(FILLER_EVENT, "FILLER chatter about lunch."),
     ),
 )
+CACHED_STEP = replace(BASE_STEP, filler_verdicts=(0.05, 0.95))
 
 
 def _choice(axis: str, label: str, confidence: float, score: float = 0.0) -> ClassifierResult:
@@ -475,15 +476,14 @@ def test_filler_candidates_are_bounded_to_sixteen_notes_of_300_characters() -> N
     assert all(len(candidate.text) <= 300 for candidate in candidates)
 
 
-def test_notes_to_drop_only_drops_confident_filler() -> None:
+def test_cached_filler_drops_only_drop_confident_filler() -> None:
     candidates = tuple(FillerCandidate(_knowledge_id(index), "note") for index in range(4))
-    outcomes = (
-        FILLER,
-        _answered(_choice("note_substance", "filler", 0.65, 0.65)),
-        KEEP,
-        _blocked(TypedDecisionUnavailableReason.TIMEOUT),
+    assert cached_filler_drops(candidates, (0.95, 0.65, 0.05, None)) == (_knowledge_id(0),)
+    assert cached_filler_drops(candidates, (0.7, 0.7, 0.7, 0.7)) == tuple(
+        candidate.item_id for candidate in candidates
     )
-    assert notes_to_drop(candidates, outcomes) == (_knowledge_id(0),)
+    with pytest.raises(ValueError):
+        cached_filler_drops(candidates, (0.95,))
 
 
 def test_filler_notes_leave_one_lower_rank_omission_each() -> None:
@@ -562,10 +562,7 @@ def test_task_size_hint_is_appended_or_attached_alone() -> None:
 
 def test_shadow_records_every_answer_and_changes_nothing() -> None:
     decisions = combine_typed_decisions(
-        BASE_STEP,
-        TypedAnswers(FRONT, (KEEP, FILLER), LIGHT),
-        step_ms=310,
-        model_version="jev-1.13.0",
+        CACHED_STEP, TypedAnswers(FRONT, LIGHT), step_ms=310, model_version="jev-1.13.0"
     )
     assert decisions.typed_needs is None and decisions.memory_route is None
     assert decisions.drop_item_ids == () and decisions.skill is None
@@ -588,13 +585,15 @@ def test_shadow_records_every_answer_and_changes_nothing() -> None:
         "tier": "light",
         "hint": "would_show",
         "skill": "differs",
+        "notes_cached": 2,
+        "notes_queued": 0,
     }
 
 
 def test_live_returns_only_the_decisions_to_apply() -> None:
     decisions = combine_typed_decisions(
-        replace(BASE_STEP, modes=ALL_LIVE),
-        TypedAnswers(FRONT, (KEEP, FILLER), LIGHT),
+        replace(CACHED_STEP, modes=ALL_LIVE),
+        TypedAnswers(FRONT, LIGHT),
         step_ms=310,
         model_version="jev-1.13.0",
     )
@@ -610,7 +609,7 @@ def test_hard_rule_leaves_memory_need_to_the_rules() -> None:
     skill_only = _answered(_choice("skill_pick", "none", 0.9))
     decisions = combine_typed_decisions(
         replace(BASE_STEP, modes=ALL_LIVE, hard_rule=True, filler_candidates=()),
-        TypedAnswers(skill_only, (), None),
+        TypedAnswers(skill_only, None),
         step_ms=5,
         model_version=None,
     )
@@ -625,11 +624,7 @@ def test_an_unavailable_front_door_falls_back_everywhere() -> None:
     blocked = _blocked(TypedDecisionUnavailableReason.DATA_ROUTE_BLOCKED)
     decisions = combine_typed_decisions(
         replace(BASE_STEP, modes=ALL_LIVE),
-        TypedAnswers(
-            blocked,
-            (blocked, blocked),
-            TierDecision("heavy", "unavailable:data_route_blocked", None),
-        ),
+        TypedAnswers(blocked, TierDecision("heavy", "unavailable:data_route_blocked", None)),
         step_ms=2,
         model_version=None,
     )
@@ -638,19 +633,34 @@ def test_an_unavailable_front_door_falls_back_everywhere() -> None:
     telemetry = decisions.telemetry
     assert telemetry.front_door_outcome == "data_route_blocked"
     assert telemetry.memory_label == "unsure" and telemetry.memory_confidence_bucket is None
-    assert (telemetry.notes_checked, telemetry.notes_dropped, telemetry.notes_unanswered) == (
-        2,
-        0,
-        2,
-    )
+    assert (
+        telemetry.notes_checked,
+        telemetry.notes_dropped,
+        telemetry.notes_unanswered,
+        telemetry.notes_cached,
+    ) == (2, 0, 0, 0)
     assert (telemetry.tier, telemetry.hint, telemetry.skill) == ("heavy", "none", "unsure")
+
+
+def test_cached_drops_do_not_depend_on_the_front_door() -> None:
+    """A verdict belongs to the note, so a front-door timeout keeps cached drops (§3)."""
+
+    timed_out = _blocked(TypedDecisionUnavailableReason.TIMEOUT)
+    decisions = combine_typed_decisions(
+        replace(CACHED_STEP, modes=ALL_LIVE),
+        TypedAnswers(timed_out, None),
+        step_ms=2,
+        model_version=None,
+    )
+    assert decisions.drop_item_ids == (FILLER_EVENT,)
+    assert (decisions.telemetry.notes_cached, decisions.telemetry.notes_dropped) == (2, 1)
 
 
 def test_below_bar_memory_answer_is_unsure_and_keeps_the_rules_needs() -> None:
     unsure = _answered(_choice("memory_need", "past_sessions", 0.58))
     decisions = combine_typed_decisions(
         replace(BASE_STEP, modes=TypedHookModes(front_door=LIVE), filler_candidates=()),
-        TypedAnswers(unsure, (), None),
+        TypedAnswers(unsure, None),
         step_ms=5,
         model_version="jev-1.13.0",
     )
@@ -663,7 +673,7 @@ def test_below_bar_memory_answer_is_unsure_and_keeps_the_rules_needs() -> None:
 def test_no_front_door_request_is_not_asked() -> None:
     decisions = combine_typed_decisions(
         replace(BASE_STEP, modes=TypedHookModes(relevance=SHADOW)),
-        TypedAnswers(None, (KEEP, FILLER), None),
+        TypedAnswers(None, None),
         step_ms=5,
         model_version=None,
     )
@@ -682,6 +692,34 @@ def test_typed_step_error_changes_nothing() -> None:
     assert typed_step_error_decisions(TypedHookModes(), 0).telemetry.skill == "not_asked"
 
 
+def test_route_telemetry_carries_the_cached_and_queued_counts() -> None:
+    """The two verdict-cache counts reach the persisted group, and are zero when off."""
+
+    cached = combine_typed_decisions(
+        CACHED_STEP, TypedAnswers(FRONT, LIGHT), step_ms=1, model_version="jev-1.13.0"
+    )
+    record = typed_decision_hook.route_telemetry(cached.telemetry)
+    assert (record.notes_checked, record.notes_cached, record.notes_queued) == (2, 2, 0)
+    uncached = combine_typed_decisions(
+        BASE_STEP, TypedAnswers(FRONT, LIGHT), step_ms=1, model_version="jev-1.13.0"
+    )
+    queued = typed_decision_hook.route_telemetry(replace(uncached.telemetry, notes_queued=2))
+    assert (queued.notes_cached, queued.notes_queued) == (0, 2)
+    assert (queued.to_dict()["typed_notes_cached"], queued.to_dict()["typed_notes_queued"]) == (
+        0,
+        2,
+    )
+    off = combine_typed_decisions(
+        replace(BASE_STEP, modes=TypedHookModes(), filler_candidates=()),
+        TypedAnswers(None, None),
+        step_ms=1,
+        model_version=None,
+    )
+    for values in (off.telemetry, typed_step_error_decisions(ALL_LIVE, 1).telemetry):
+        zero = typed_decision_hook.route_telemetry(values)
+        assert (zero.notes_checked, zero.notes_cached, zero.notes_queued) == (0, 0, 0)
+
+
 def test_telemetry_values_never_carry_prompt_note_or_skill_text() -> None:
     step = replace(
         BASE_STEP,
@@ -689,10 +727,11 @@ def test_telemetry_values_never_carry_prompt_note_or_skill_text() -> None:
         skill_names=("private-skill-9b1d", "test-plan"),
         keyword_skill_names=("private-skill-9b1d",),
         filler_candidates=(FillerCandidate(_knowledge_id(9), "private-note-21c9 FILLER"),),
+        filler_verdicts=(0.95,),
     )
     decisions = combine_typed_decisions(
         step,
-        TypedAnswers(FRONT, (FILLER,), LIGHT),
+        TypedAnswers(FRONT, LIGHT),
         step_ms=1,
         model_version="jev-1.13.0",
     )
@@ -805,28 +844,34 @@ def _decide(factory: GuardFactory, step: TypedStepInput = STEP) -> TypedPromptDe
     return decide_typed_prompt(factory, step, started=time.monotonic())
 
 
-def test_one_front_door_request_and_one_request_per_note_run_concurrently() -> None:
-    adapter = ScriptedAdapter(SCRIPT, delay=0.3)
-    started = time.monotonic()
-    decisions = _decide(_factory(adapter))
-    elapsed = time.monotonic() - started
-    assert elapsed < 1.3  # five 0.3 s requests in series would take 1.5 s
-    assert sorted(adapter.requests) == sorted(
-        [
-            (("memory_need", "complexity", "tool_need", "skill_pick"), STEP.prompt),
-            *((("note_substance",), candidate.text) for candidate in STEP.filler_candidates),
-        ]
-    )
+def test_the_prompt_path_sends_only_the_front_door_request() -> None:
+    adapter = ScriptedAdapter(SCRIPT)
+    step = replace(STEP, filler_verdicts=(0.05, 0.95, None, 0.95))
+    decisions = _decide(_factory(adapter), step)
+    assert adapter.requests == [
+        (("memory_need", "complexity", "tool_need", "skill_pick"), STEP.prompt)
+    ]
     telemetry = decisions.telemetry
     assert telemetry.front_door_outcome == "answered"
-    assert (telemetry.notes_checked, telemetry.notes_dropped, telemetry.notes_unanswered) == (
-        4,
-        2,
-        0,
-    )
+    assert (
+        telemetry.notes_checked,
+        telemetry.notes_dropped,
+        telemetry.notes_unanswered,
+        telemetry.notes_cached,
+    ) == (4, 2, 0, 3)
+    assert decisions.drop_item_ids == ()  # shadow records the drops and applies none
+    live = _decide(_factory(ScriptedAdapter(SCRIPT)), replace(step, modes=ALL_LIVE))
+    assert live.drop_item_ids == ("knowledge:1", "knowledge:3")
     assert telemetry.memory_label == "project_docs"
     assert telemetry.tier == "light" and telemetry.hint == "would_show"
     assert telemetry.model_version == "jev-1.13.0"
+
+
+def test_verdicts_that_do_not_match_the_candidates_are_a_step_error() -> None:
+    step = replace(STEP, filler_verdicts=(0.95,))
+    assert _decide(_factory(ScriptedAdapter(SCRIPT)), step).telemetry.front_door_outcome == (
+        "typed_step_error"
+    )
 
 
 def test_requests_still_running_at_the_cap_count_as_timeouts() -> None:
@@ -836,7 +881,7 @@ def test_requests_still_running_at_the_cap_count_as_timeouts() -> None:
     assert time.monotonic() - started < 1.45
     telemetry = decisions.telemetry
     assert telemetry.front_door_outcome == "timeout"
-    assert telemetry.notes_unanswered == 4 and telemetry.notes_dropped == 0
+    assert telemetry.notes_unanswered == 0 and telemetry.notes_dropped == 0
     assert telemetry.tier == "heavy" and telemetry.hint == "none"
     assert telemetry.model_version is None
 
@@ -866,7 +911,7 @@ def test_the_cap_counts_from_the_start_of_the_typed_step() -> None:
         ScriptedAdapter(SCRIPT, delay=1.5), started=start, clock=lambda: start + 0.3
     )
     assert decisions.telemetry.front_door_outcome == "timeout"
-    assert len(records) == 1 + len(STEP.filler_candidates)
+    assert len(records) == 1
     assert {record.outcome for record in records} == {"timeout"}
     assert {record.duration_ms for record in records} == {500}
 
@@ -926,7 +971,7 @@ def test_runtime_source_is_blocked_and_a_missing_guard_is_disabled() -> None:
     adapter = ScriptedAdapter(SCRIPT)
     blocked = _decide(_factory(adapter, source=TypedDecisionSource.RUNTIME))
     assert blocked.telemetry.front_door_outcome == "data_route_blocked"
-    assert blocked.telemetry.notes_unanswered == 4
+    assert blocked.telemetry.notes_unanswered == 0
     assert adapter.requests == []
     disabled = _decide(lambda recorder: None)
     assert disabled.telemetry.front_door_outcome == "disabled"

@@ -1,8 +1,10 @@
 """Per-prompt typed-decision step for the automatic-memory hook (spec 2026-10-02 §3-§4).
 
-The functions here turn guard outcomes into plain values and never read or write files.
-``main.py`` prepares the local inputs, runs the step, and applies live answers on top of
-today's rules result. Prompt text, note text and skill names never enter
+The functions here turn guard outcomes and cached note verdicts into plain values and never
+read or write files. ``main.py`` prepares the local inputs (including the verdict-cache read),
+runs the step, applies live answers on top of today's rules result, and queues the notes that
+still need a verdict. Since the note-verdict cache (spec 2026-10-03 §3), the prompt path sends
+exactly one Jev request, the front door. Prompt text, note text and skill names never enter
 ``TypedTelemetryValues``.
 """
 
@@ -60,7 +62,7 @@ from mnemo_memory.packages.model_gateway.decision_axes import (
     accepted_skill,
     hint_eligible,
     note_text,
-    should_drop_note,
+    should_drop_filler,
     skill_pick_axis,
     tier_committee,
 )
@@ -152,14 +154,16 @@ class TypedStepInput:
     skills_over_limit: bool = False
     keyword_skill_names: tuple[str, ...] = ()
     filler_candidates: tuple[FillerCandidate, ...] = ()
+    # Cached p(filler) per candidate, in the same order; ``None`` (or an empty tuple) means no
+    # usable verdict, so the note is kept (spec 2026-10-03 §3).
+    filler_verdicts: tuple[float | None, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class TypedAnswers:
-    """Guard outcomes for one prompt: the front door (or not asked), each note, the tier."""
+    """Guard outcomes for one prompt: the front door (or not asked) and the tier."""
 
     front_door: TypedDecisionOutcome | None
-    fillers: tuple[TypedDecisionOutcome, ...] = ()
     tier: TierDecision | None = None
 
 
@@ -203,6 +207,8 @@ class TypedTelemetryValues:
     tier: str | None
     hint: str
     skill: str
+    notes_cached: int = 0
+    notes_queued: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,19 +349,16 @@ def _note_source_text(item: ContextItem) -> str | None:
     return summary if isinstance(summary, str) else None
 
 
-def notes_to_drop(
-    candidates: Sequence[FillerCandidate], outcomes: Sequence[TypedDecisionOutcome]
+def cached_filler_drops(
+    candidates: Sequence[FillerCandidate], verdicts: Sequence[float | None]
 ) -> tuple[str, ...]:
-    """Item IDs judged confident filler (p(filler) >= 0.7); unanswered or unsure notes stay."""
+    """Item IDs whose cached p(filler) is at least 0.7; a missing verdict keeps the note."""
 
-    drops: list[str] = []
-    for candidate, outcome in zip(candidates, outcomes, strict=True):
-        result = next(
-            (value for value in outcome.results if value.axis_name == NOTE_SUBSTANCE.name), None
-        )
-        if should_drop_note(result):
-            drops.append(candidate.item_id)
-    return tuple(drops)
+    return tuple(
+        candidate.item_id
+        for candidate, p_filler in zip(candidates, verdicts, strict=True)
+        if should_drop_filler(p_filler)
+    )
 
 
 def filler_probability(outcome: TypedDecisionOutcome) -> float | None:
@@ -492,10 +495,14 @@ def combine_typed_decisions(
             step.prompt, learned_phrases=step.learned_phrases, typed_needs=memory.needs
         ).action
 
-    drops = (
-        notes_to_drop(step.filler_candidates, answers.fillers) if modes.relevance is not OFF else ()
+    # Filler verdicts come from the local cache, never from this prompt's requests (spec
+    # 2026-10-03 §3); a missing verdict keeps its note, whatever the front door answered.
+    verdicts: tuple[float | None, ...] = step.filler_verdicts or tuple(
+        None for _ in step.filler_candidates
     )
-    unanswered = sum(outcome.unavailable_reason is not None for outcome in answers.fillers)
+    drops = (
+        cached_filler_drops(step.filler_candidates, verdicts) if modes.relevance is not OFF else ()
+    )
 
     tier = None if answers.tier is None else answers.tier.route
     eligible = tier is not None and hint_eligible(tier, results.get(TOOL_NEED.name))
@@ -538,12 +545,13 @@ def combine_typed_decisions(
         agrees_with_rules=(
             None if typed_action is None else typed_action is step.rules_plan.action
         ),
-        notes_checked=len(answers.fillers),
+        notes_checked=len(step.filler_candidates),
         notes_dropped=len(drops),
-        notes_unanswered=unanswered,
+        notes_unanswered=0,
         tier=tier,
         hint=hint,
         skill=comparison.value,
+        notes_cached=sum(verdict is not None for verdict in verdicts),
     )
     live_needs = memory.needs if modes.front_door is LIVE else None
     return TypedPromptDecisions(
@@ -621,22 +629,23 @@ async def ask_typed_questions(
     *,
     total_deadline_seconds: float = FILLER_CHECK_BUDGET_SECONDS,
 ) -> TypedAnswers:
-    """Send the front-door request and every note request at once under one total cap."""
+    """Send the one front-door request under the cap (spec 2026-10-03 §3).
+
+    Filler verdicts are not asked here: they come from the local cache, which the background
+    judge fills after the prompt.
+    """
 
     axes = front_door_axes(step)
-    requests: list[tuple[Sequence[ClassifierAxis], str]] = []
+    front: TypedDecisionOutcome | None = None
     if axes:
-        requests.append((axes, step.prompt))
-    requests.extend(((NOTE_SUBSTANCE,), candidate.text) for candidate in step.filler_candidates)
-    outcomes: tuple[TypedDecisionOutcome, ...] = ()
-    if requests:
-        outcomes = await guard.ask_each(requests, total_deadline_seconds=total_deadline_seconds)
-    front = outcomes[0] if axes else None
-    fillers = outcomes[1:] if axes else outcomes
+        outcomes = await guard.ask_each(
+            [(axes, step.prompt)], total_deadline_seconds=total_deadline_seconds
+        )
+        front = outcomes[0]
     tier: TierDecision | None = None
     if front is not None and step.modes.tier_hint is not OFF and not step.hard_rule:
         tier = await _tier(front, step.prompt)
-    return TypedAnswers(front, tuple(fillers), tier)
+    return TypedAnswers(front, tier)
 
 
 async def _tier(front: TypedDecisionOutcome, prompt: str) -> TierDecision:
@@ -712,7 +721,7 @@ def _unavailable_answers(
     tier: TierDecision | None = None
     if front is not None and step.modes.tier_hint is not OFF and not step.hard_rule:
         tier = TierDecision("heavy", f"unavailable:{reason.value}", None)
-    return TypedAnswers(front, tuple(unavailable for _ in step.filler_candidates), tier)
+    return TypedAnswers(front, tier)
 
 
 def _elapsed_ms(started: float, clock: Callable[[], float]) -> int:

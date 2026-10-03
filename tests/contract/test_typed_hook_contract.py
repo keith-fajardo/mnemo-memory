@@ -16,6 +16,7 @@ from mnemo_memory.packages.telemetry import LocalAutomaticRouteTelemetryStore
 from scripts.typed_decision_test_support import (
     KNOWLEDGE_PROMPT,
     ScriptedJevTransport,
+    prime_note_verdicts,
     run_hook,
     seed_hook_fixture,
     synthetic_overrides,
@@ -100,6 +101,7 @@ def test_live_filler_omission_lines_fit_the_unchanged_v1_schema(tmp_path: Path) 
     )
     definition = schema["$defs"]["omission"]
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(
         fixture, ScriptedJevTransport(), TypedHookModes(relevance=TypedDecisionMode.LIVE)
     )

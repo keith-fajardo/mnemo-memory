@@ -218,6 +218,9 @@ from mnemo_memory.packages.skills_registry import (
 from mnemo_memory.packages.storage import (
     ApprovedEpisodicEventRecord,
     LocalDailyModelBudget,
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+    NoteVerdictState,
     SQLiteKnowledgeDocumentRepository,
     SQLiteSourceStructureRepository,
 )
@@ -1349,6 +1352,51 @@ def _rendered_item_ids(rendered: str | None) -> frozenset[str]:
     return frozenset(item_ids)
 
 
+def _note_verdict_states(
+    data_directory: Path, settings: PersonalSettings, candidates: Sequence[FillerCandidate]
+) -> tuple[NoteVerdictState, ...]:
+    """Each candidate's cached verdict state; any failure reads as no verdict (keep)."""
+
+    if not candidates:
+        return ()
+    try:
+        from mnemo_memory.apps.cli import typed_decision_hook as typed
+
+        keys = tuple(
+            typed.filler_verdict_key(candidate, settings.typed_decision_model_id)
+            for candidate in candidates
+        )
+        return LocalNoteVerdictCache(data_directory).states(keys)
+    except Exception:
+        return tuple(NoteVerdictState(None, 0) for _ in candidates)
+
+
+def _queue_unjudged_notes(
+    data_directory: Path,
+    scope: MemoryScope,
+    candidates: Sequence[FillerCandidate],
+    states: Sequence[NoteVerdictState],
+) -> int:
+    """Queue the IDs (never text) of candidates that still need a verdict; return how many.
+
+    A note with a usable verdict, or with three failed attempts on this exact text, is not
+    queued. A failed write queues nothing and changes nothing else (spec 2026-10-03 §3).
+    """
+
+    unjudged = tuple(
+        candidate.item_id
+        for candidate, state in zip(candidates, states, strict=True)
+        if state.needs_judging
+    )
+    if not unjudged:
+        return 0
+    try:
+        LocalNoteJudgeQueue(data_directory).append(scope, unjudged)
+    except Exception:
+        return 0
+    return len(unjudged)
+
+
 @dataclass(frozen=True, slots=True)
 class _TypedApplication:
     render: _PromptRender
@@ -1371,10 +1419,12 @@ def _typed_prompt_render(
 ) -> tuple[_PromptRender, _AutomaticShadowTrace | None, AutomaticRouteTypedDecisions | None]:
     """Run the typed step on top of today's result; any exception keeps today's result.
 
-    The whole step is wrapped (spec §7): the module import, the local preparation, the Jev
-    requests, the combine and the live application. The hook's own outer catch would attach
-    no context at all. ``started`` is the step's clock, taken before the mode read: the Jev
-    requests get what is left of the 0.8 s cap, and ``step_ms`` counts from it.
+    The whole step is wrapped (spec 2026-10-02 §7): the module import, the local preparation,
+    the verdict-cache read, the one Jev request, the combine, the live application and the
+    judge-queue write. The hook's own outer catch would attach no context at all. ``started``
+    is the step's clock, taken before the mode read: the Jev request gets what is left of the
+    0.8 s cap, and ``step_ms`` counts from it. Filler verdicts come from the local cache (spec
+    2026-10-03 §3); notes without one are kept and their IDs queued for the background judge.
     """
 
     try:
@@ -1391,9 +1441,9 @@ def _typed_prompt_render(
             if trace is not None
             else plan_automatic_context_needs(bounded, learned_phrases=learned)
         )
-        # Filler checks run only on the notes a push action pre-fetched (spec §4.2). Without
-        # the semantic gate (no trace) nothing gates on the plan, so a retrieved packet is the
-        # push. Skill discovery and hard routes retrieve none.
+        # Filler verdicts apply only to the notes a push action pre-fetched (spec §4.2).
+        # Without the semantic gate (no trace) nothing gates on the plan, so a retrieved packet
+        # is the push. Skill discovery and hard routes retrieve none.
         checked = (
             rules.result.packet
             if modes.relevance is not TypedDecisionMode.OFF
@@ -1408,6 +1458,16 @@ def _typed_prompt_render(
             list_skills=modes.skill is not TypedDecisionMode.OFF,
             listing=rules.result.skill_listing,
         )
+        candidates = (
+            ()
+            if checked is None
+            else typed.filler_candidates(
+                checked,
+                pinned_item_ids=local.pinned_item_ids,
+                rendered_item_ids=_rendered_item_ids(rules.rendered),
+            )
+        )
+        verdicts = _note_verdict_states(data_directory, settings, candidates)
         step = typed.TypedStepInput(
             prompt=bounded,
             modes=modes,
@@ -1420,15 +1480,8 @@ def _typed_prompt_render(
             keyword_skill_names=tuple(
                 candidate.skill.name for candidate in rules.result.discovered_skills
             ),
-            filler_candidates=(
-                ()
-                if checked is None
-                else typed.filler_candidates(
-                    checked,
-                    pinned_item_ids=local.pinned_item_ids,
-                    rendered_item_ids=_rendered_item_ids(rules.rendered),
-                )
-            ),
+            filler_candidates=candidates,
+            filler_verdicts=tuple(state.p_filler for state in verdicts),
         )
         guard_factory = (
             overrides.guard_factory
@@ -1442,10 +1495,17 @@ def _typed_prompt_render(
         applied = _apply_typed_decisions(
             data_directory, scope, prompt, client, trace, rules, decisions, local, step
         )
+        queued = _queue_unjudged_notes(data_directory, scope, candidates, verdicts)
     except Exception:
         return rules, trace, _typed_step_error_telemetry(modes, started)
     try:
         values = decisions.telemetry
+        # A step error reports no checked notes, so the queued count is clamped to keep the
+        # record valid (cached + queued <= checked); the notes themselves are still queued.
+        values = replace(
+            values,
+            notes_queued=min(queued, max(0, values.notes_checked - values.notes_cached)),
+        )
         if modes.relevance is TypedDecisionMode.LIVE:
             values = replace(values, notes_dropped=applied.notes_dropped)
         telemetry: AutomaticRouteTypedDecisions | None = typed.route_telemetry(

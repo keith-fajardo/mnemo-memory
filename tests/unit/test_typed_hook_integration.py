@@ -6,8 +6,9 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,9 @@ from mnemo_memory.packages.model_gateway.decision_axes import HINT_TEXT
 from mnemo_memory.packages.model_gateway.typed_decisions import GuardedTypedDecisionClassifier
 from mnemo_memory.packages.storage import (
     ApprovedEpisodicEventRecord,
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+    NoteVerdictState,
     SQLiteCheckpointRepository,
     SQLiteKnowledgeDocumentRepository,
 )
@@ -65,7 +69,6 @@ from mnemo_memory.packages.telemetry import (
 )
 from scripts.typed_decision_test_support import (
     FAKE_TYPESAFE_KEY,
-    FILLER_EVENT,
     FILLER_MARKER,
     GREETING_PROMPT,
     HANDOFF_OBJECTIVE,
@@ -76,12 +79,13 @@ from scripts.typed_decision_test_support import (
     SKILL_PROMPT,
     HookFixture,
     ScriptedJevTransport,
+    prime_note_verdicts,
     run_hook,
     seed_hook_fixture,
     synthetic_overrides,
 )
 
-SHADOW, LIVE = TypedDecisionMode.SHADOW, TypedDecisionMode.LIVE
+OFF, SHADOW, LIVE = TypedDecisionMode.OFF, TypedDecisionMode.SHADOW, TypedDecisionMode.LIVE
 ARCHITECTURE_PROMPT = "Explain the architecture of this repository."
 EVERYTHING = {
     "memory_need": ("nothing", 0.95),
@@ -137,11 +141,14 @@ def test_shadow_answers_change_nothing(tmp_path: Path, semantic_gate: bool) -> N
 def test_each_live_filler_drop_leaves_its_own_lower_rank_omission(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     transport = ScriptedJevTransport()
+    prime_note_verdicts(fixture, transport)
+    primed = transport.calls
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
 
     off = run_hook(fixture, KNOWLEDGE_PROMPT)
     dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live)
 
+    assert transport.calls == primed  # relevance alone sends nothing on the prompt path
     assert _filler_omission_ids(off.context) == []
     ids = _filler_omission_ids(dropped.context)
     assert len(ids) == 2
@@ -156,6 +163,7 @@ def test_a_drop_is_cancelled_when_its_omission_line_does_not_fit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     original = typed_decision_hook.filler_omission
 
     def oversized_for_the_note(item_id: str) -> OmissionNotice:
@@ -191,6 +199,7 @@ def test_live_nothing_attaches_nothing(tmp_path: Path) -> None:
 
 def test_a_changed_route_is_fetched_after_the_answer_unfiltered(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True, with_handoff=True)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(
         fixture,
         ScriptedJevTransport({"memory_need": ("past_sessions", 0.95)}),
@@ -301,6 +310,7 @@ def test_drops_never_apply_to_a_route_fetched_after_the_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
 
     def same_notes(
         data_directory: Path,
@@ -336,6 +346,7 @@ def test_a_failed_post_answer_fetch_keeps_todays_render_and_trace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     off = run_hook(fixture, KNOWLEDGE_PROMPT)
     rules_event = _latest_event(fixture)
 
@@ -533,6 +544,7 @@ def _seed_overflowing_project(root: Path) -> HookFixture:
 
 def test_filler_work_covers_only_rendered_notes_and_never_refills(tmp_path: Path) -> None:
     fixture = _seed_overflowing_project(tmp_path)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     today = cli._automatic_prompt_context_result(
         fixture.data, fixture.binding.checkpoint_scope, KNOWLEDGE_PROMPT, "codex"
     )
@@ -578,6 +590,7 @@ def test_filler_work_covers_only_rendered_notes_and_never_refills(tmp_path: Path
 
 def test_skill_none_lets_live_memory_need_decide_retrieval(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True, with_handoff=True)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     prompt = "Create the changelog entry the release docs describe."
     assert _skill_names(run_hook(fixture, prompt).context) == ["release-notes"]
     live = synthetic_overrides(
@@ -597,23 +610,26 @@ def test_an_unreadable_pin_state_keeps_the_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    transport = ScriptedJevTransport()
+    prime_note_verdicts(fixture, transport)  # the event has a cached filler verdict
+    primed = transport.calls
 
     def unreadable(*args: object, **kwargs: object) -> None:
         raise RuntimeError("synthetic storage failure")
 
     monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_records", unreadable)
     monkeypatch.setattr(SQLiteCheckpointRepository, "get_approved_event_record", unreadable)
-    transport = ScriptedJevTransport()
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
     ids = _filler_omission_ids(run_hook(fixture, KNOWLEDGE_PROMPT, live).context)
     assert len(ids) == 1 and ids[0].startswith(fixture.filler_note_prefix)
-    assert all(FILLER_EVENT not in state for state in transport.states)
+    assert transport.calls == primed  # nothing about any note is sent on the prompt path
 
 
 def test_pin_states_are_read_in_one_pass_and_one_by_one_only_after_a_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
     together_reads: list[int] = []
     one_reads: list[EventId] = []
@@ -649,24 +665,33 @@ def test_pin_states_are_read_in_one_pass_and_one_by_one_only_after_a_failure(
 def test_without_the_gate_every_retrieved_packet_is_filler_checked(tmp_path: Path) -> None:
     """With the semantic gate off there is no plan to gate on, so "push" means the rules
     retrieved a packet (spec §4.2): this router-uncertain prompt plans ``lazy_pull`` but today's
-    hook still attaches its notes, so they are checked."""
+    hook still attaches its notes, so they are looked up in the cache."""
 
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
     off = run_hook(fixture, LAZY_PROMPT).context
     assert off is not None and fixture.filler_event_id in _item_ids(off)
     transport = ScriptedJevTransport()
+    prime_note_verdicts(fixture, transport)
+    primed = transport.calls
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
     context = run_hook(fixture, LAZY_PROMPT, live).context
-    assert transport.calls > 0
+    assert transport.calls == primed
     assert _filler_omission_ids(context) == [fixture.filler_event_id]
     assert _item_ids(context) == _item_ids(off) - {fixture.filler_event_id}
     typed = _latest_event(fixture).typed
-    assert typed is not None and (typed.notes_checked, typed.notes_dropped) == (1, 1)
-    # Shadow checks the same notes and still changes nothing.
-    watched = ScriptedJevTransport()
-    shadow = synthetic_overrides(fixture, watched, TypedHookModes(relevance=SHADOW))
+    assert typed is not None
+    assert (typed.notes_checked, typed.notes_dropped, typed.notes_cached, typed.notes_queued) == (
+        1,
+        1,
+        1,
+        0,
+    )
+    # Shadow looks up the same notes and still changes nothing.
+    shadow = synthetic_overrides(fixture, transport, TypedHookModes(relevance=SHADOW))
     assert run_hook(fixture, LAZY_PROMPT, shadow).context == off
-    assert watched.calls > 0
+    shadowed = _latest_event(fixture).typed
+    assert shadowed is not None and shadowed.notes_dropped == 1
+    assert transport.calls == primed
 
 
 def test_behind_the_gate_filler_checks_run_only_on_push_actions(tmp_path: Path) -> None:
@@ -676,6 +701,9 @@ def test_behind_the_gate_filler_checks_run_only_on_push_actions(tmp_path: Path) 
     live = synthetic_overrides(fixture, transport, TypedHookModes(relevance=LIVE))
     assert run_hook(fixture, LAZY_PROMPT, live).context == off
     assert transport.calls == 0
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.notes_checked == 0
+    assert not LocalNoteJudgeQueue(fixture.data).path.exists()
 
 
 def test_the_step_adds_no_local_work_its_modes_do_not_need(
@@ -817,6 +845,7 @@ def test_a_confirmed_live_route_keeps_its_prefetched_notes_and_their_drops(
     tmp_path: Path,
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(
         fixture,
         ScriptedJevTransport({"memory_need": ("project_docs", 0.95)}),
@@ -867,9 +896,9 @@ def test_the_real_hook_path_builds_the_runtime_guard_and_keeps_todays_output(
 
 def test_shadow_writes_the_typed_v1_group(tmp_path: Path) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
-    shadow = synthetic_overrides(
-        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW)
-    )
+    transport = ScriptedJevTransport(EVERYTHING)
+    prime_note_verdicts(fixture, transport)
+    shadow = synthetic_overrides(fixture, transport, TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW))
     run_hook(fixture, KNOWLEDGE_PROMPT, shadow)
     typed = _latest_event(fixture).typed
     assert typed is not None
@@ -882,6 +911,7 @@ def test_shadow_writes_the_typed_v1_group(tmp_path: Path) -> None:
     )
     assert typed.agrees_with_rules is False
     assert (typed.notes_checked, typed.notes_dropped, typed.notes_unanswered) == (3, 2, 0)
+    assert (typed.notes_cached, typed.notes_queued) == (3, 0)
     assert (typed.tier, typed.hint, typed.skill) == ("light", "would_show", "differs")
     assert 0 <= typed.step_ms <= 10_000
 
@@ -904,6 +934,7 @@ def test_live_notes_dropped_counts_only_drops_that_happened(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
     run_hook(fixture, KNOWLEDGE_PROMPT, live)
     applied = _latest_event(fixture).typed
@@ -957,6 +988,7 @@ def test_invalid_typed_telemetry_never_costs_the_context_or_the_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
     dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
     assert len(_filler_omission_ids(dropped)) == 2
@@ -983,6 +1015,7 @@ def test_unusable_typed_values_never_cost_the_applied_context(
     there keeps the applied render and records the event without a typed group."""
 
     fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
     live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
     dropped = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
     assert len(_filler_omission_ids(dropped)) == 2
@@ -1060,3 +1093,163 @@ def test_hook_telemetry_never_holds_prompt_note_or_skill_text(tmp_path: Path) ->
         "test-plan",
     ):
         assert marker not in encoded
+
+
+def test_the_prompt_path_sends_exactly_one_request(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    transport = ScriptedJevTransport(EVERYTHING)
+    prime_note_verdicts(fixture, transport)
+    for modes in (
+        TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW),
+        TypedHookModes(LIVE, LIVE, LIVE, LIVE),
+    ):
+        before = transport.calls
+        run_hook(fixture, KNOWLEDGE_PROMPT, synthetic_overrides(fixture, transport, modes))
+        assert transport.calls - before == 1
+        assert transport.questions[-1] == ("memory_need", "complexity", "tool_need", "skill_pick")
+
+
+def test_a_missing_or_stale_verdict_keeps_the_note_and_queues_its_id(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    off = run_hook(fixture, KNOWLEDGE_PROMPT).context
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == off  # nothing cached: keep all
+    typed = _latest_event(fixture).typed
+    assert typed is not None
+    assert (typed.notes_checked, typed.notes_cached, typed.notes_queued, typed.notes_dropped) == (
+        3,
+        0,
+        3,
+        0,
+    )
+    queue = LocalNoteJudgeQueue(fixture.data)
+    assert queue.length() == 3
+    encoded = queue.path.read_text("utf-8")
+    for text in ("invoice", "ledger", FILLER_MARKER, "lunch"):
+        assert text not in encoded
+
+    prime_note_verdicts(fixture, ScriptedJevTransport())
+    cache = LocalNoteVerdictCache(fixture.data)
+    stored = json.loads(cache.path.read_text("utf-8"))
+    month_ago = int((datetime.now(UTC) - timedelta(days=31)).timestamp())
+    stored["entries"] = {
+        key: [value[0], month_ago, value[2]] for key, value in stored["entries"].items()
+    }
+    cache.path.write_text(json.dumps(stored), encoding="utf-8")
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == off  # stale: keep all
+    stale = _latest_event(fixture).typed
+    assert stale is not None and (stale.notes_cached, stale.notes_queued) == (0, 3)
+    assert queue.length() == 3  # deduplicated, not doubled
+
+
+def test_an_edited_note_is_kept_until_its_new_text_is_judged(tmp_path: Path) -> None:
+    """Review focus 2: an old verdict never drops a note whose text changed."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    prime_note_verdicts(fixture, ScriptedJevTransport())
+    (fixture.project / "notes" / "chatter.md").write_text(
+        "# Invoice export chatter\nFILLER: the invoice export chatter moved to Friday's lunch.\n",
+        "utf-8",
+    )
+    cli._refresh_project_knowledge(fixture.data, fixture.binding)
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    context = run_hook(fixture, KNOWLEDGE_PROMPT, live).context
+    assert _filler_omission_ids(context) == [fixture.filler_event_id]
+    typed = _latest_event(fixture).typed
+    assert typed is not None and (typed.notes_cached, typed.notes_queued) == (2, 1)
+
+
+def test_a_note_that_failed_three_times_is_not_queued_again(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    steps: list[TypedStepInput] = []
+
+    def observe(step: TypedStepInput, decisions: TypedPromptDecisions) -> None:
+        steps.append(step)
+
+    live = synthetic_overrides(
+        fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE), observe
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    keys = [
+        typed_decision_hook.filler_verdict_key(candidate, "jev-1.13.0")
+        for candidate in steps[0].filler_candidates
+    ]
+    cache = LocalNoteVerdictCache(fixture.data)
+    for _ in range(3):
+        cache.record([(key, None) for key in keys])
+    queue = LocalNoteJudgeQueue(fixture.data)
+    queue.take(256)
+    run_hook(fixture, KNOWLEDGE_PROMPT, live)
+    typed = _latest_event(fixture).typed
+    assert typed is not None
+    assert (typed.notes_checked, typed.notes_cached, typed.notes_queued) == (3, 0, 0)
+    assert queue.length() == 0
+
+
+def test_an_unreadable_cache_keeps_every_note(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    off = run_hook(fixture, KNOWLEDGE_PROMPT).context
+    prime_note_verdicts(fixture, ScriptedJevTransport())
+    LocalNoteVerdictCache(fixture.data).path.write_text('{"version": 1, "entries": ', "utf-8")
+    live = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=LIVE))
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, live).context == off
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.front_door_outcome != "typed_step_error"
+    assert (typed.notes_cached, typed.notes_queued) == (0, 3)
+
+
+def test_a_failed_queue_write_keeps_the_answers_and_queues_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+
+    def broken(self: LocalNoteJudgeQueue, scope: MemoryScope, item_ids: Sequence[str]) -> int:
+        raise OSError("synthetic queue failure")
+
+    monkeypatch.setattr(LocalNoteJudgeQueue, "append", broken)
+    shadow = synthetic_overrides(
+        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW)
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, shadow)
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.front_door_outcome == "answered"
+    assert (typed.notes_checked, typed.notes_queued) == (3, 0)
+
+
+def test_relevance_off_reads_and_queues_no_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    reads: list[int] = []
+
+    def counted(self: LocalNoteVerdictCache, keys: Sequence[str]) -> tuple[NoteVerdictState, ...]:
+        reads.append(len(keys))
+        return ()
+
+    monkeypatch.setattr(LocalNoteVerdictCache, "states", counted)
+    quiet = synthetic_overrides(
+        fixture, ScriptedJevTransport(EVERYTHING), TypedHookModes(SHADOW, OFF, SHADOW, SHADOW)
+    )
+    run_hook(fixture, KNOWLEDGE_PROMPT, quiet)
+    assert reads == []
+    assert not LocalNoteJudgeQueue(fixture.data).path.exists()
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.front_door_outcome == "answered"
+    assert (typed.notes_checked, typed.notes_cached, typed.notes_queued) == (0, 0, 0)
+
+
+def test_a_step_error_with_queued_notes_keeps_its_typed_record(tmp_path: Path) -> None:
+    """The queued count is clamped to the checked notes, so a step error is still recorded."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+
+    def broken(recorder: object) -> GuardedTypedDecisionClassifier:
+        raise RuntimeError("synthetic guard failure")
+
+    shadow = TypedHookOverrides(broken, TypedHookModes(relevance=SHADOW))
+    off = run_hook(fixture, KNOWLEDGE_PROMPT).context
+    assert run_hook(fixture, KNOWLEDGE_PROMPT, shadow).context == off
+    typed = _latest_event(fixture).typed
+    assert typed is not None and typed.front_door_outcome == "typed_step_error"
+    assert (typed.notes_checked, typed.notes_cached, typed.notes_queued) == (0, 0, 0)
+    assert LocalNoteJudgeQueue(fixture.data).length() == 3  # the unjudged notes still wait

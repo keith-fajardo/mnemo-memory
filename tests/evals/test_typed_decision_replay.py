@@ -287,6 +287,7 @@ def _result(
     hard_rule: bool | None = False,
     unanswered: int = 0,
     skill: str = "agreed",
+    cached: int = 0,
 ) -> ReplayResult:
     typed = arm == "typed"
     return ReplayResult(
@@ -309,6 +310,7 @@ def _result(
         hard_rule if typed else None,
         unanswered if typed else 0,
         skill if typed else None,
+        notes_cached=cached if typed else 0,
     )
 
 
@@ -336,6 +338,7 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
             checked=("knowledge:good:r:section:0", "knowledge:noise:r:section:0"),
             dropped=("knowledge:noise:r:section:0",),
             applied=("knowledge:noise:r:section:0",),
+            cached=2,
         ),
     ]
     report = score_replay(cases, passing, {"dev": seed})
@@ -373,12 +376,12 @@ def test_score_replay_applies_the_section_8_3_gates() -> None:
 
     unchecked = [
         *passing[:-1],
-        replace_result(passing[-1], checked_item_ids=(), dropped_item_ids=()),
+        replace_result(passing[-1], checked_item_ids=(), dropped_item_ids=(), notes_cached=0),
     ]
     assert score_replay(cases, unchecked, {"dev": seed})["gates"]["filler_dev"] is False
 
-    unanswered = [*passing[:-1], replace_result(passing[-1], notes_unanswered=1)]
-    filler = score_replay(cases, unanswered, {"dev": seed})["sets"]["dev"]["filler"]
+    uncached = [*passing[:-1], replace_result(passing[-1], notes_cached=1)]
+    filler = score_replay(cases, uncached, {"dev": seed})["sets"]["dev"]["filler"]
     assert filler["answered"] == {"asked": 2, "answered": 1, "share": 0.5}
     assert filler["gates"]["answered_share"] is False
 
@@ -411,6 +414,7 @@ def test_filler_gate_needs_every_seeded_note_checked() -> None:
             tokens=100,
             checked=("knowledge:good:r:section:0", "knowledge:noise:r:section:0"),
             dropped=("knowledge:noise:r:section:0",),
+            cached=2,
         ),
     ]
     report = score_replay([notes], results, {"dev": seed})
