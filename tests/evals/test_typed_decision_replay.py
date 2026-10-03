@@ -155,6 +155,9 @@ def test_seed_keeps_events_apart_from_notes_and_maps_every_category(tmp_path: Pa
     assert len(events) == 4
     assert set(seed.categories.values()) == {"relevant", "noise"}
     assert (seed.data_directory / "settings.json").exists()
+    settings = PersonalSettingsStore(seed.data_directory).load()
+    # The seed never turns the typed step on, so nothing in the replay can start the judge.
+    assert settings.experimental_typed_decisions_enabled is False
     assert (seed.data_directory / SEED_MARKER).exists()
     assert seed.project_directory != seed.notes_project_directory
     assert not (seed.notes_project_directory / "skills").exists()
@@ -1028,7 +1031,13 @@ def test_priming_judges_every_seeded_note_and_never_the_pinned_one(tmp_path: Pat
     assert (priming.notes, priming.answered, priming.blocked) == (27, 27, False)
     assert oracle.calls == 27
     assert LocalNoteVerdictCache(seed.data_directory).entry_count() == 27
-    assert priming.to_dict() == {"notes": 27, "answered": 27, "share": 1.0, "blocked": False}
+    assert priming.to_dict() == {
+        "notes": 27,
+        "answered": 27,
+        "share": 1.0,
+        "blocked": False,
+        "error_type": None,
+    }
 
 
 def test_a_seeded_note_the_reader_skips_still_counts_against_priming(
@@ -1146,5 +1155,7 @@ def test_a_priming_failure_is_recorded_and_the_run_goes_on(
         "answered": 0,
         "share": 0.0,
         "blocked": True,
+        "error_type": "RuntimeError",  # the class name only, never the message
     }
+    assert "synthetic priming failure" not in json.dumps(report)
     assert report["sets"]["holdout"]["filler"]["gates"]["priming_answered_share"] is False

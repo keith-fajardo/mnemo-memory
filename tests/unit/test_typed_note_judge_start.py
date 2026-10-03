@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -159,9 +160,26 @@ def test_the_start_is_detached_names_only_the_data_directory_and_never_waits(
         str(data),
     ]
     assert seen["start_new_session"] is True
+    assert seen["close_fds"] is True
     assert seen["stdin"] == seen["stdout"] == seen["stderr"] == subprocess.DEVNULL
     assert "shell" not in seen and "env" not in seen
     assert FAKE_TYPESAFE_KEY not in json.dumps(seen["command"])
+
+
+def test_dropping_the_child_handle_raises_no_resource_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hook drops the handle on purpose, so Python's "still running" warning is silenced."""
+
+    class WarningProcess:
+        def __init__(self, command: list[str], **kwargs: Any) -> None:
+            warnings.warn("subprocess 123 is still running", ResourceWarning, stacklevel=2)
+
+    monkeypatch.setattr(subprocess, "Popen", WarningProcess)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cli._start_note_judge(tmp_path)
+    assert caught == []
 
 
 def test_the_judge_command_prints_nothing_and_exits_zero_when_it_cannot_run(

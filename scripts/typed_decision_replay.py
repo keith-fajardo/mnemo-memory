@@ -521,12 +521,16 @@ def _pinned_event_item_ids(data: Path, binding: MemoryProjectBinding) -> frozens
 
 @dataclass(frozen=True, slots=True)
 class PrimingResult:
-    """One set's priming pass: seeded notes read, and how many got a cached verdict."""
+    """One set's priming pass: seeded notes read, and how many got a cached verdict.
+
+    ``error_type`` is only the exception class name of a pass that could not run, never its text.
+    """
 
     set_name: str
     notes: int
     answered: int
     blocked: bool
+    error_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -534,13 +538,14 @@ class PrimingResult:
             "answered": self.answered,
             "share": share(self.answered, self.notes),
             "blocked": self.blocked,
+            "error_type": self.error_type,
         }
 
     @classmethod
-    def failed(cls, set_name: str) -> PrimingResult:
+    def failed(cls, set_name: str, error_type: str | None = None) -> PrimingResult:
         """A priming pass that could not run: nothing judged, so its gate fails."""
 
-        return cls(set_name, 0, 0, True)
+        return cls(set_name, 0, 0, True, error_type)
 
 
 Primer = Callable[[ReplaySeed], PrimingResult]

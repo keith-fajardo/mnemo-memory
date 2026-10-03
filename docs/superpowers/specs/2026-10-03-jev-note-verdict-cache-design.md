@@ -43,6 +43,8 @@ The first two live synthetic replays (`2026-10-03-replay-a`, `-replay-b`) passed
 - **Spawning the judge.** If the queue is non-empty, the hook starts the background judge (§4) **after** it has built its output. The start is fire-and-forget: a detached process in a new session, with no waiting. Any failure to start is ignored, and the hook's output never depends on the judge.
 - **Failure handling.** Every cache read, queue write and spawn sits inside the existing typed-step guard. Any failure means today's behaviour, which is keep.
 
+> **Dated note (2026-10-03):** the spawn rule above says "if the queue is non-empty". The implemented rule is narrower, and the maintainer approved the deviation: the hook starts the judge only when the data route could actually send something AND this prompt queued a note. It is also never started under replay overrides, with relevance `off`, or with the master switch off. Under `synthetic_only` the real hook therefore never starts the judge, because every judge request would only be `data_route_blocked`. Queued notes wait until a route opens.
+
 ## 4. Background judge
 
 - **Entry point.** A hidden CLI command, `mnemo-memory typed-decisions judge-notes --data-dir <d>`. It is started only by the hook.

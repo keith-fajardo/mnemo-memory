@@ -889,6 +889,20 @@ locked change with a plain reason: any mode needs the master switch, `front_door
 budget counter file (`typed_decision-budget.json` in the data directory) is ever damaged, every
 request is denied and `status` shows the counter as `unavailable`; delete the file to reset it.
 
+The filler check does not ask Jev while you wait for a prompt. Mnemo keeps a small local cache of
+note verdicts (`typed-decision-note-verdicts.json` in the data directory). A note whose verdict is
+less than 30 days old is dropped or kept straight from the cache, and a note with no verdict is
+always kept. Notes that still need a verdict are queued by ID only
+(`typed-decision-judge-queue.json`, up to 256 notes) for a background judge,
+`mnemo-memory typed-decisions judge-notes`. The hook starts it after it has answered and never
+waits for it. The judge prints nothing, runs one at a time, and gives up on a note after three
+failed attempts until the note changes. Neither file holds note or prompt text, and deleting
+either one is safe. The hook starts the judge only when the data route could actually send
+something and the prompt queued a note. While the data route is `synthetic_only` the judge is
+never started, so the queue only fills and no note leaves your machine. `status` also shows
+`note_verdicts` (whether the cache is readable, and how many entries it holds) and `note_judge`
+(how many notes wait, and whether a judge is running).
+
 Upgrade note: the locks are also checked when `settings.json` is loaded. A file where a mode was
 hand-edited to `live` no longer loads, and the hook then runs on default settings (all of them,
 not just Jev's) until it is fixed. `typed-decisions status` prints `settings_invalid` with the

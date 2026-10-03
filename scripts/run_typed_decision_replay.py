@@ -156,12 +156,15 @@ def _child(
 
 
 def _primed(primer: Primer, seed: ReplaySeed) -> PrimingResult:
-    """One set's priming pass; a failure is recorded as a blocked, empty pass, never fatal."""
+    """One set's priming pass; a failure is recorded as a blocked, empty pass, never fatal.
+
+    Only the exception's class name is kept: its message could carry note text.
+    """
 
     try:
         return primer(seed)
-    except Exception:
-        return PrimingResult.failed(seed.set_name)
+    except Exception as error:
+        return PrimingResult.failed(seed.set_name, type(error).__name__)
 
 
 def _refuse(message: str) -> int:

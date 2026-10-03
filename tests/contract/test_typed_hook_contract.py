@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from mnemo_memory.apps.cli import main as cli
 from mnemo_memory.apps.cli.typed_decision_hook import FILLER_OMISSION_DETAIL, TypedHookModes
 from mnemo_memory.packages.application import PersonalSettings, PersonalSettingsStore
 from mnemo_memory.packages.domain import TypedDecisionMode
+from mnemo_memory.packages.storage import (
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+    NoteVerdictState,
+)
 from mnemo_memory.packages.telemetry import LocalAutomaticRouteTelemetryStore
 from scripts.typed_decision_test_support import (
     KNOWLEDGE_PROMPT,
@@ -118,3 +124,47 @@ def test_live_filler_omission_lines_fit_the_unchanged_v1_schema(tmp_path: Path) 
     for omission in omissions:
         assert set(omission) == set(definition["required"]) == set(definition["properties"])
         assert omission["reason"] in definition["properties"]["reason"]["enum"]
+
+
+def test_shadow_with_a_warm_cache_is_byte_identical_to_off(tmp_path: Path) -> None:
+    """Shadow records the cached drops and changes no output (spec 2026-10-03 §3)."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=False)
+    transport = ScriptedJevTransport(ANSWER_EVERYTHING)
+    prime_note_verdicts(fixture, transport)
+    shadow = synthetic_overrides(fixture, transport, TypedHookModes(SHADOW, SHADOW, SHADOW, SHADOW))
+    for prompt in (*PROMPTS[::4], KNOWLEDGE_PROMPT):
+        off = run_hook(fixture, prompt)
+        seen = run_hook(fixture, prompt, shadow)
+        assert (seen.context, seen.delivery_keys) == (off.context, off.delivery_keys), prompt
+    typed = (
+        LocalAutomaticRouteTelemetryStore(fixture.data)
+        .events(cli._automatic_route_scope(fixture.binding.checkpoint_scope), limit=1)[0]
+        .typed
+    )
+    assert typed is not None and (typed.notes_cached, typed.notes_dropped) == (3, 2)
+
+
+def test_off_reads_and_writes_no_verdict_cache_or_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    reads: list[int] = []
+
+    def counted(self: LocalNoteVerdictCache, keys: Sequence[str]) -> tuple[NoteVerdictState, ...]:
+        reads.append(len(keys))
+        return ()
+
+    monkeypatch.setattr(LocalNoteVerdictCache, "states", counted)
+    for prompt in PROMPTS[::5]:
+        run_hook(fixture, prompt)
+    PersonalSettingsStore(fixture.data).save(
+        PersonalSettings(
+            experimental_semantic_memory_enabled=True, experimental_typed_decisions_enabled=True
+        )
+    )
+    for prompt in PROMPTS[::5]:
+        run_hook(fixture, prompt)
+    assert reads == []
+    assert not LocalNoteVerdictCache(fixture.data).path.exists()
+    assert not LocalNoteJudgeQueue(fixture.data).path.exists()

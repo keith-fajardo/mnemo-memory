@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -23,7 +26,18 @@ from mnemo_memory.packages.model_gateway.typed_decisions import (
     GuardedTypedDecisionClassifier,
     TypedDecisionRecorder,
 )
-from scripts.typed_decision_test_support import FAKE_TYPESAFE_KEY, run_hook, seed_hook_fixture
+from mnemo_memory.packages.storage import LocalNoteJudgeQueue, LocalNoteVerdictCache
+from scripts.typed_decision_replay import approved_event_item_ids, knowledge_note_item_ids
+from scripts.typed_decision_test_support import (
+    FAKE_TYPESAFE_KEY,
+    FILLER_MARKER,
+    KNOWLEDGE_PROMPT,
+    ScriptedJevTransport,
+    prime_note_verdicts,
+    run_hook,
+    seed_hook_fixture,
+    synthetic_overrides,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "evals"
@@ -124,3 +138,69 @@ def test_no_production_call_passes_replay_overrides() -> None:
     for call in calls:
         assert all(keyword.arg != "replay_overrides" for keyword in call.keywords)
         assert len(call.args) <= 4
+
+
+def test_the_judge_process_stays_silent_and_sends_nothing_under_synthetic_only(
+    tmp_path: Path,
+) -> None:
+    """The real ``python -m`` command the hook would start, in a child with a fake key only."""
+
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    PersonalSettingsStore(fixture.data).save(
+        PersonalSettings(
+            experimental_semantic_memory_enabled=True, experimental_typed_decisions_enabled=True
+        )
+    )
+    item_ids = (
+        *knowledge_note_item_ids(fixture.data, fixture.binding),
+        *approved_event_item_ids(fixture.data, fixture.binding),
+    )
+    LocalNoteJudgeQueue(fixture.data).append(fixture.binding.checkpoint_scope, item_ids)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mnemo_memory.cli",
+            "typed-decisions",
+            "judge-notes",
+            "--data-dir",
+            str(fixture.data),
+        ],
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(tmp_path),
+            "TYPESAFE_API_KEY": FAKE_TYPESAFE_KEY,
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert (completed.returncode, completed.stdout, completed.stderr) == (0, "", "")
+    # Blocked before the budget and the network: nothing reserved, nothing judged.
+    assert not (fixture.data / "typed_decision-budget.json").exists()
+    assert LocalNoteVerdictCache(fixture.data).entry_count() == 0
+    # A crash in the child would also print nothing; a real run drains 4 notes and keeps the rest.
+    assert LocalNoteJudgeQueue(fixture.data).length() == len(item_ids) - 4
+
+
+def test_the_verdict_cache_and_judge_queue_never_hold_note_or_prompt_text(tmp_path: Path) -> None:
+    fixture = seed_hook_fixture(tmp_path, semantic_gate=True)
+    shadow = synthetic_overrides(fixture, ScriptedJevTransport(), TypedHookModes(relevance=SHADOW))
+    run_hook(fixture, KNOWLEDGE_PROMPT + " private-marker-91aa", shadow)  # queues the notes
+    prime_note_verdicts(fixture, ScriptedJevTransport())
+    cache = LocalNoteVerdictCache(fixture.data).path.read_text("utf-8")
+    queue = LocalNoteJudgeQueue(fixture.data).path.read_text("utf-8")
+    for marker in (
+        "private-marker-91aa",
+        "invoice",
+        "Invoice",
+        "ledger",
+        FILLER_MARKER,
+        "lunch",
+        "idempotent",
+        "release-notes",
+        "test-plan",
+    ):
+        assert marker not in cache and marker not in queue
+    assert "knowledge:" not in cache and "approved-episodic:" not in cache

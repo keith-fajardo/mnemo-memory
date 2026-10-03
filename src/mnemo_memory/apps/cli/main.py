@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -1421,22 +1422,25 @@ def _start_note_judge(data_directory: Path) -> None:
     the console-entry module, which imports ``main`` once and keeps the child's stderr clean.
     """
 
-    subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "mnemo_memory.cli",
-            "typed-decisions",
-            "judge-notes",
-            "--data-dir",
-            str(data_directory),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+    # The handle is dropped on purpose; without this Python warns that the child still runs.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "mnemo_memory.cli",
+                "typed-decisions",
+                "judge-notes",
+                "--data-dir",
+                str(data_directory),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
 
 
 def _maybe_start_note_judge(

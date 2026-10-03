@@ -190,6 +190,47 @@ Outside this decision: routing or proxying the coding agent's own model (ADR 004
   4. **Budget work on the event-loop thread.** The per-request budget lock and fsync run on the
      event-loop thread inside the cap, up to 17 times per prompt. Reserve once per prompt before
      a ZDR route exists.
+- *Dated note (2026-10-03): note-verdict cache* (spec
+  `docs/superpowers/specs/2026-10-03-jev-note-verdict-cache-design.md`).
+  - **What the evidence said.** The first two live synthetic replays, `2026-10-03-replay-a` and
+    `2026-10-03-replay-b`, passed only the `steps` and `tokens` gates. Jev's answers were good
+    when they arrived, but too many arrived after the 0.8 s cap: the cap-hit share was 0.38 and
+    then 0.44 (typed step p50 656 ms and 752 ms).
+  - **Why.** Each prompt waited on the slowest of up to 17 fresh HTTPS requests: the front door
+    plus one filler check per note. Each request pays its own TCP, TLS and server wait, so the
+    slowest of 17 nearly always ran past the cap. The hedged TCP connect (f3cd236) removed one
+    of those waits and did not help on its own.
+  - **The fix.** Whether a note is filler depends only on the note, not on the prompt, so the
+    answer can be remembered. The prompt hook now sends exactly one Jev request, the front door,
+    and reads each candidate note's verdict from a local cache,
+    `typed-decision-note-verdicts.json`.
+    - A verdict is keyed by one hash of the item ID, the judged text, the pinned model version
+      and `FILLER_QUESTION_VERSION`. The file is content-free: no note text, prompt text or
+      skill name. A verdict is fresh for 30 days, and the file holds at most 5,000 entries and
+      1 MB.
+    - A missing, stale or unreadable verdict keeps the note, which is today's behaviour.
+  - **The background judge.** Notes without a verdict are queued by item ID
+    (`typed-decision-judge-queue.json`, at most 256) and judged after the prompt by a detached
+    `typed-decisions judge-notes` process. It runs one at a time, uses a `RUNTIME` guard with a
+    5 s deadline, keeps at most 4 requests in flight, takes at most 32 notes per run, and stops
+    retrying a note after 3 failed attempts on the same text. It prints nothing and exits 0 on
+    any failure.
+  - **When the judge starts.** The hook starts it only when the data route could actually send
+    something AND this prompt queued a note. This deviates from the spec's "if the queue is
+    non-empty", and the maintainer approved it (see the dated note in spec section 3). Under
+    `synthetic_only` the real hook never starts the judge, and queued notes simply wait until a
+    route opens. No real note leaves the machine.
+  - **Telemetry and `status`.** Telemetry adds `typed_notes_cached` and `typed_notes_queued`.
+    `typed-decisions status` shows the cache (`note_verdicts`) and the queue and whether a judge
+    is running (`note_judge`).
+  - **Replay priming.** Before the prompts, the replay warms each seed's cache by judging every
+    seeded note once through the synthetic guard, then gates on a priming answered-share of at
+    least 0.95. A priming pass that cannot run is recorded as blocked, with only the exception
+    class name (`error_type`), and the run goes on.
+  - **Gap 4.** The budget work now runs once per prompt (one request), not up to 17 times. It
+    is still on the event-loop thread.
+  - **Unchanged.** The 0.8 s cap stays until the next live replay shows whether the
+    answered-share gate now passes. Shadow and off stay byte-identical to `main`.
 
 ## Security and privacy implications
 
