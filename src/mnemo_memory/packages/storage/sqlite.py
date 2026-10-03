@@ -251,6 +251,8 @@ from .source_search import source_search_terms, source_symbol_matches, source_sy
 
 LATEST_SCHEMA_VERSION = 32
 BUSY_TIMEOUT_MS = 5000
+# The one kept-activation count (spec §4). It must stay >= the ``source_changes`` maximum
+# transitions + 1 (16 + 1 = 17): N transitions need N + 1 activations' snapshots.
 DEFAULT_KEPT_SOURCE_ACTIVATIONS = 17
 # Whether a snapshot still has its projection rows (a pruned, checkpoint-named one keeps only its
 # header). Every file yields at least one module symbol, so symbols or files decide it.
@@ -905,6 +907,16 @@ class SQLiteCheckpointRepository:
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
             ).fetchone()
             return int(version[0])
+
+    def schema_is_current(self) -> bool:
+        """Whether the schema is already at the latest version, by a read alone.
+
+        It takes no write lock, so a caller that must never wait behind a busy writer (a lifecycle
+        hook) can skip ``migrate``. A missing database is never created here; it is not current.
+        """
+        if not self.path.exists():
+            return False
+        return self.schema_version() == LATEST_SCHEMA_VERSION
 
     def connection_settings(self) -> dict[str, int]:
         with self._connect() as connection:
@@ -7784,6 +7796,10 @@ class SQLiteSourceStructureRepository:
 
     def migrate(self, *, fail_after_version: int | None = None) -> None:
         self._backend.migrate(fail_after_version=fail_after_version)
+
+    def schema_is_current(self) -> bool:
+        """A read-only check that ``migrate`` has nothing to do; it never takes the write lock."""
+        return self._backend.schema_is_current()
 
     def store_and_activate(self, artifact: CodeStructureArtifact) -> SourceSnapshotStoreResult:
         return self._backend.store_source_and_activate(artifact)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from typer.testing import CliRunner
 
 from mnemo_memory.apps.cli import main as cli
 from mnemo_memory.connectors.automatic_memory.git_observation import GitSourceObserver
@@ -382,3 +384,90 @@ def test_a_stale_tree_is_never_called_current_in_the_session_start_attachment(
 
     assert stale
     assert "current" not in stale
+
+
+def test_a_held_write_lock_never_stalls_or_breaks_a_hook_on_a_current_schema(
+    tmp_path: Path,
+) -> None:
+    """Final review: a worker or CLI holding the SQLite write lock must not stall the hook."""
+    project, data, binding = _project(tmp_path)
+    _prime(data, project)
+    (project / "service.py").write_text("def changed():\n    return 2\n", encoding="utf-8")
+    starts = _Starts()
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=starts)
+    holder = sqlite3.connect(data / "mnemo.sqlite3", isolation_level=None)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+        started = time.perf_counter()
+        result = hook.handle(_event("SessionStart", project))
+        elapsed = time.perf_counter() - started
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert elapsed < 1.0  # far below the 5 s busy timeout a queued migration would wait
+    assert json.loads(json.dumps(result)) == result
+    assert "current_source_digest" not in _context(result)
+    assert starts.calls == [(data, binding.project_root)]
+
+
+def test_a_storage_error_while_migrating_fails_the_hook_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, data, _ = _project(tmp_path)
+
+    def locked(self: SQLiteSourceStructureRepository, **_: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(SQLiteSourceStructureRepository, "migrate", locked)
+    starts = _Starts()
+    hook = AutomaticMemoryHook(data, "codex", source_refresh_starter=starts)
+
+    result = hook.handle(_event("SessionStart", project))
+
+    assert "database is locked" not in json.dumps(result)
+    assert "current_source_digest" not in _context(result)
+    assert starts.calls == []
+
+
+def test_the_schema_check_is_read_only_and_never_waits_for_the_write_lock(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "data" / "mnemo.sqlite3"
+    repository = SQLiteSourceStructureRepository(database)
+
+    assert repository.schema_is_current() is False
+    assert not database.exists()  # a check never creates the database
+
+    repository.migrate()
+    holder = sqlite3.connect(database, isolation_level=None)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+        started = time.perf_counter()
+        assert repository.schema_is_current() is True
+        assert time.perf_counter() - started < 1.0
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+@pytest.mark.parametrize(
+    "failure", [sqlite3.OperationalError("database is locked"), RuntimeError("unexpected")]
+)
+def test_the_cli_hook_prints_the_unavailable_output_on_any_unexpected_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    class _Broken:
+        def handle(self, event: object) -> dict[str, object]:
+            raise failure
+
+    monkeypatch.setattr(cli, "build_automatic_memory_hook", lambda *_: _Broken())
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["automatic-memory-hook", "--client", "codex", "--data-dir", str(tmp_path / "data")],
+        input=json.dumps(_event("SessionStart", tmp_path)),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"systemMessage": "MNEMO_MEMORY_HOOK_UNAVAILABLE"}

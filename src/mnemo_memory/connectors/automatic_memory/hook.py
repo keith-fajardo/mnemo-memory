@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -254,8 +255,9 @@ class AutomaticMemoryHook:
             self._refresh_project_knowledge(binding)
             # The current snapshot is sufficient for a fresh-session hint. Replaying the last
             # transition here can diff every historical edge again even when the cached current
-            # snapshot is unchanged. Agents that need prior changes receive the bounded
-            # ``source_changes`` retrieval hint below and can request that evidence explicitly.
+            # snapshot is unchanged. When a context attachment is produced, its packet carries the
+            # latest stored transition; only when none is attached do agents receive the bounded
+            # ``source_changes`` retrieval hint below to request prior changes explicitly.
             refreshed = self._refresh_source_structure(binding)
             _note_pending_refresh(refreshed, binding, refresh_requests)
             git_source_digest, git_clean_commit_id = _clean_git_baseline(refreshed)
@@ -534,7 +536,9 @@ class AutomaticMemoryHook:
         """
         try:
             repository = SQLiteSourceStructureRepository(self.data_directory / "mnemo.sqlite3")
-            repository.migrate()
+            if not repository.schema_is_current():
+                # Migrating takes the write lock; never queue behind a busy writer for nothing.
+                repository.migrate()
             active = repository.get_active_snapshot(binding.scope)
             fresh = active is not None and source_snapshot_is_fresh(
                 binding, active.snapshot_id, cache_dir=self.data_directory / "scan-cache"
@@ -567,7 +571,7 @@ class AutomaticMemoryHook:
                 git_observation=git_observation,
                 refresh_pending=False,
             )
-        except (ProjectIndexRepositoryError, OSError, ValueError, RuntimeError):
+        except (ProjectIndexRepositoryError, OSError, ValueError, RuntimeError, sqlite3.Error):
             return _SourceRefresh(None)
 
     def _transition_refresh(

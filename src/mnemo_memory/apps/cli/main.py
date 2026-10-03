@@ -4640,21 +4640,25 @@ def maintenance_prune_source(
             pruned = sum(
                 repository.prune_source_snapshots(scope, max_snapshots=None) for scope in scopes
             )
+            summary: dict[str, object] = {
+                "dry_run": False,
+                "projects": len(scopes),
+                "pruned_snapshots": pruned,
+                "compacted": compact,
+                "database_bytes_before": before,
+            }
             if compact:
                 try:
                     repository.vacuum()
                 except ProjectIndexRepositoryError as error:
-                    raise typer.BadParameter("MNEMO_COMPACT_UNAVAILABLE") from error
-            _show(
-                {
-                    "dry_run": False,
-                    "projects": len(scopes),
-                    "pruned_snapshots": pruned,
-                    "compacted": compact,
-                    "database_bytes_before": before,
-                    "database_bytes_after": _database_file_bytes(database_path),
-                }
-            )
+                    # The prune is already committed; report it with the failure code.
+                    summary["compacted"] = False
+                    summary["error"] = "MNEMO_COMPACT_UNAVAILABLE"
+                    summary["database_bytes_after"] = _database_file_bytes(database_path)
+                    _show(summary)
+                    raise typer.Exit(1) from error
+            summary["database_bytes_after"] = _database_file_bytes(database_path)
+            _show(summary)
     except (AutomaticMemoryBindingError, ProjectIndexRepositoryError, OSError, ValueError) as error:
         raise typer.BadParameter("MNEMO_PRUNE_SOURCE_UNAVAILABLE") from error
 
@@ -4735,7 +4739,7 @@ def automatic_memory_hook(
         config = resolve_local_config(data_dir)
         hook = build_automatic_memory_hook(config, cast(ClientName, client))
         result = hook.handle(raw)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except Exception:  # A lifecycle hook fails open: a stable code, never a traceback.
         result = {"systemMessage": "MNEMO_MEMORY_HOOK_UNAVAILABLE"}
     typer.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
 

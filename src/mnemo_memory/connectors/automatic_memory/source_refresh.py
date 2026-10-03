@@ -36,8 +36,6 @@ from mnemo_memory.packages.storage import SQLiteSourceStructureRepository
 SOURCE_REFRESH_LOCK_FILE = ".source-refresh.lock"
 MAXIMUM_PARSES_PER_RUN = 3
 PRUNE_SNAPSHOTS_PER_RUN = 4
-# ``source_changes`` reads at most 16 transitions, which is 17 activations (spec §4).
-KEPT_SOURCE_ACTIVATIONS = 17
 
 
 class SourceRefreshLock:
@@ -142,9 +140,7 @@ def run_source_refresh(
                 git_observer,
             )
         pruned = repository.prune_source_snapshots(
-            binding.scope,
-            keep_activations=KEPT_SOURCE_ACTIVATIONS,
-            max_snapshots=PRUNE_SNAPSHOTS_PER_RUN,
+            binding.scope, max_snapshots=PRUNE_SNAPSHOTS_PER_RUN
         )
         return SourceRefreshOutcome(ran=True, parses=parses, pruned=pruned)
 

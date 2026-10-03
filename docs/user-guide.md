@@ -313,7 +313,8 @@ disk. It refuses (`MNEMO_COMPACT_INSUFFICIENT_DISK_SPACE`) when the free disk sp
 than the database file, and nothing is changed in that case. The command prints the file size
 before and after. It also refuses (`MNEMO_SOURCE_REFRESH_RUNNING`) while a background refresh is
 running; run it again a moment later. Close other Mnemo sessions before `--compact`, because a
-busy database cannot be rebuilt (`MNEMO_COMPACT_UNAVAILABLE`).
+busy database cannot be rebuilt (`MNEMO_COMPACT_UNAVAILABLE`). The pruning is already done by
+then, so that output still shows how many snapshots were pruned, with `"compacted": false`.
 
 To turn the background refresh off, set `MNEMO_DISABLE_BACKGROUND_SOURCE_REFRESH=1` in the
 environment of your coding client. The hook then never starts the refresh, so the map is refreshed

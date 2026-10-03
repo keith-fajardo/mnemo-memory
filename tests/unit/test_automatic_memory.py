@@ -3229,6 +3229,7 @@ def test_session_start_defers_a_changed_tree_and_keeps_the_bounded_transition_on
     assert "Mnemo observed a structural change" not in instruction
     assert "current_source_digest" not in instruction  # an unproven map is never called current
     assert "private changed body" not in instruction
+    assert str(project) not in instruction
 
     lagged = hook._refresh_source_structure(binding, include_latest_transition=True)
     recorded = _resume_instruction(binding.checkpoint_scope.to_dict(), lagged)
@@ -3250,6 +3251,7 @@ def test_session_start_defers_a_changed_tree_and_keeps_the_bounded_transition_on
     assert "current_source_digest" in later_instruction
     assert "private initial body" not in later_instruction
     assert "private changed body" not in later_instruction
+    assert str(project) not in later_instruction
 
 
 def test_a_body_only_file_transition_is_recorded_without_source_text(tmp_path: Path) -> None:

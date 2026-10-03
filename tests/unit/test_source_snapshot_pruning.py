@@ -19,6 +19,7 @@ from mnemo_memory.packages.application.automatic_memory import (
 from mnemo_memory.packages.application.bootstrap import build_checkpoint_runtime
 from mnemo_memory.packages.application.checkpoints import CreateCheckpoint
 from mnemo_memory.packages.application.config import LocalConfig
+from mnemo_memory.packages.application.unified_context import ContextSourceChangeQuery
 from mnemo_memory.packages.domain import (
     CheckpointContent,
     CheckpointSourceObservation,
@@ -41,7 +42,11 @@ from mnemo_memory.packages.storage import (
     SQLiteCheckpointRepository,
     SQLiteSourceStructureRepository,
 )
-from mnemo_memory.packages.storage.contracts import SourceSnapshotNotFound
+from mnemo_memory.packages.storage.contracts import (
+    SourceIndexStorageFailure,
+    SourceSnapshotNotFound,
+)
+from mnemo_memory.packages.storage.sqlite import DEFAULT_KEPT_SOURCE_ACTIVATIONS
 
 
 def _project(tmp_path: Path, name: str = "repo") -> tuple[Path, Path, MemoryProjectBinding]:
@@ -315,6 +320,22 @@ def test_prune_bounds_must_be_positive(tmp_path: Path) -> None:
         repository.prune_source_snapshots(binding.scope, max_snapshots=0)
 
 
+def _accepts_transitions(maximum: int) -> bool:
+    try:
+        ContextSourceChangeQuery(maximum_transitions=maximum)
+    except ValueError:
+        return False
+    return True
+
+
+def test_kept_activations_cover_the_largest_source_changes_request() -> None:
+    """N transitions need N + 1 activations' snapshots, so the one kept count must cover it."""
+    largest = max(n for n in range(1, 101) if _accepts_transitions(n))
+
+    assert largest == 16
+    assert largest + 1 <= DEFAULT_KEPT_SOURCE_ACTIVATIONS
+
+
 runner = CliRunner()
 
 
@@ -446,6 +467,48 @@ def test_compact_shrinks_a_seeded_database_file(tmp_path: Path) -> None:
     assert shown["compacted"] is True
     assert shown["database_bytes_after"] < shown["database_bytes_before"]
     assert _footprint(data) < before
+
+
+def test_a_failed_compaction_still_reports_what_was_pruned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, data, binding = _project(tmp_path)
+    repository = _repository(data)
+    ids = _seed(repository, binding, 20)
+
+    def busy(self: SQLiteSourceStructureRepository) -> None:
+        raise SourceIndexStorageFailure("source index compaction failed")
+
+    monkeypatch.setattr(SQLiteSourceStructureRepository, "vacuum", busy)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "maintenance",
+            "prune-source",
+            "--project-root",
+            str(project),
+            "--compact",
+            "--data-dir",
+            str(data),
+        ],
+    )
+
+    assert result.exit_code == 1
+    shown = json.loads(result.output)
+    assert shown == {
+        "dry_run": False,
+        "projects": 1,
+        "pruned_snapshots": 3,
+        "compacted": False,
+        "error": "MNEMO_COMPACT_UNAVAILABLE",
+        "database_bytes_before": shown["database_bytes_before"],
+        "database_bytes_after": shown["database_bytes_after"],
+    }
+    assert str(project) not in result.output
+    assert "compaction failed" not in result.output
+    with pytest.raises(SourceSnapshotNotFound):
+        repository.iter_symbols(binding.scope, ids[0])  # the prune itself stays done
 
 
 def test_all_projects_prunes_every_scope(tmp_path: Path) -> None:
