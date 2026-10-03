@@ -186,12 +186,15 @@ from mnemo_memory.packages.domain import (
     SourceFileRename,
     SourceId,
     SourceTrustClass,
+    TypedDecisionDataRoute,
     TypedDecisionMode,
+    TypedDecisionSource,
     VerificationStatus,
     Visibility,
     WorkspaceId,
     normalize_agent_client,
     normalize_knowledge_query,
+    typed_decision_source_permitted,
 )
 from mnemo_memory.packages.knowledge import (
     LocalEmbeddingError,
@@ -1397,6 +1400,72 @@ def _queue_unjudged_notes(
     return len(unjudged)
 
 
+def _judge_route_open(settings: PersonalSettings) -> bool:
+    """Whether the data route lets runtime note text leave the machine (never on synthetic_only).
+
+    Starting a judge that could only be ``data_route_blocked`` would cost a Python process per
+    prompt and judge nothing, so the hook does not start one (plan decision, maintainer-approved;
+    spec §3 queues regardless).
+    """
+
+    return typed_decision_source_permitted(
+        TypedDecisionDataRoute(settings.typed_decision_data_route), TypedDecisionSource.RUNTIME
+    )
+
+
+def _start_note_judge(data_directory: Path) -> None:
+    """Start ``typed-decisions judge-notes`` detached: a new session, no pipes, no waiting.
+
+    The command line names only the data directory, as one argument and without a shell. Note
+    text and the API key never appear on it; the child inherits the hook's environment. It runs
+    the console-entry module, which imports ``main`` once and keeps the child's stderr clean.
+    """
+
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "mnemo_memory.cli",
+            "typed-decisions",
+            "judge-notes",
+            "--data-dir",
+            str(data_directory),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _maybe_start_note_judge(
+    data_directory: Path,
+    settings: PersonalSettings,
+    modes: TypedHookModes,
+    overrides: TypedHookOverrides | None,
+    queued: int,
+) -> None:
+    """Start the background judge after the hook's output is built (spec 2026-10-03 §3).
+
+    Only the real hook starts it (never under replay overrides), and only when this prompt
+    queued a note, relevance is on, the master switch is on and the route is open. Nothing
+    waits on it, and a failure to start is ignored.
+    """
+
+    try:
+        if (
+            overrides is None
+            and queued > 0
+            and modes.relevance is not TypedDecisionMode.OFF
+            and settings.experimental_typed_decisions_enabled
+            and _judge_route_open(settings)
+        ):
+            _start_note_judge(data_directory)
+    except Exception:
+        return
+
+
 @dataclass(frozen=True, slots=True)
 class _TypedApplication:
     render: _PromptRender
@@ -1515,6 +1584,7 @@ def _typed_prompt_render(
             telemetry = None
     except Exception:
         telemetry = None  # losing the record is acceptable; losing the applied context is not
+    _maybe_start_note_judge(data_directory, settings, modes, overrides, queued)
     return applied.render, applied.trace, telemetry
 
 
@@ -4193,6 +4263,44 @@ def typed_decisions_disable(
             "master_switch": settings.experimental_typed_decisions_enabled,
             "modes": {kind.value: settings.typed_decision_mode(kind).value for kind in HOOK_KINDS},
         }
+    )
+
+
+@typed_decisions_app.command("judge-notes", hidden=True)
+def typed_decisions_judge_notes(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),  # noqa: B008
+) -> None:
+    """Judge queued notes in the background; the prompt hook starts it (spec 2026-10-03 §4).
+
+    It prints nothing and exits 0 whatever happens, so a broken judge never reaches a session.
+    """
+
+    with suppress(Exception):
+        _judge_queued_notes(data_dir)
+
+
+def _judge_queued_notes(data_dir: Path | None) -> None:
+    from mnemo_memory.apps.cli.typed_decision_composition import (
+        build_runtime_typed_decision_classifier,
+    )
+    from mnemo_memory.apps.cli.typed_note_judge import JUDGE_DEADLINE_SECONDS, run_note_judge
+
+    data_directory = resolve_local_config(data_dir).data_directory
+    settings = PersonalSettingsStore(data_directory).load()
+
+    def read(scope: MemoryScope, item_ids: tuple[str, ...]) -> tuple[FillerCandidate, ...]:
+        return _note_candidates_by_id(data_directory, scope, item_ids)
+
+    def guard() -> GuardedTypedDecisionClassifier | None:
+        return build_runtime_typed_decision_classifier(
+            settings, data_directory=data_directory, deadline_seconds=JUDGE_DEADLINE_SECONDS
+        )
+
+    run_note_judge(
+        data_directory,
+        model_version=settings.typed_decision_model_id,
+        read_notes=read,
+        build_guard=guard,
     )
 
 
