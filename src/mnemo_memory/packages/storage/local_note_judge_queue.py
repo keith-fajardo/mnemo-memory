@@ -66,7 +66,7 @@ class LocalNoteJudgeQueue:
             present = set(entries)
             merged = [*entries, *(note for note in added if note not in present)]
             merged = merged[-MAXIMUM_QUEUED_NOTES:]
-            if added:
+            if merged != entries:
                 self._write(merged)
             return len(merged)
 

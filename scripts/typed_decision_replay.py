@@ -179,11 +179,11 @@ class ReplayResult:
     """One prompt, one arm. ``front_door_outcome`` and ``hard_rule`` describe the typed step.
 
     When the hook fell back to the rules (``typed_step_error``), nothing Jev decided was applied,
-    so no checks, drops or Jev skill pick are recorded for that prompt. ``notes_unanswered``
-    counts checked notes Jev gave no answer for, and ``skill_comparison`` is the telemetry's
-    closed skill value (``skipped`` or ``not_asked`` when no skill question was sent). A case
-    that could not run carries only its identity and a content-free ``error_type``.
-    ``notes_cached`` counts checked notes that had a usable cached verdict.
+    so no checks, drops or Jev skill pick are recorded for that prompt. ``notes_unanswered`` is
+    always 0 on the prompt path now (it never asks about a note); filler coverage comes from
+    ``notes_cached``, the checked notes that had a usable cached verdict. ``skill_comparison`` is
+    the telemetry's closed skill value (``skipped`` or ``not_asked`` when no skill question was
+    sent). A case that could not run carries only its identity and a content-free ``error_type``.
     """
 
     set_name: str
@@ -558,7 +558,10 @@ def prime_replay_seed(
     jev_transport: JevTransport | None = None,
     live_calls_authorized: bool = False,
 ) -> PrimingResult:
-    """Warm the seed's verdict cache by judging every seeded note once (spec 2026-10-03 §7).
+    """Warm the seed's verdict cache by judging every seeded note (spec 2026-10-03 §7).
+
+    A note a pass leaves unanswered is judged again, up to ``MAXIMUM_NOTE_VERDICT_ATTEMPTS``
+    passes in all; the loop stops early when none is left or a policy block stops a pass.
 
     The notes are the notes project's Markdown sections and the main project's approved events;
     the pinned event is never sent and skills are not notes. Both projects are first verified to
@@ -576,8 +579,9 @@ def prime_replay_seed(
     from mnemo_memory.apps.cli.typed_decision_composition import (
         build_synthetic_typed_decision_classifier,
     )
+    from mnemo_memory.apps.cli.typed_decision_hook import filler_verdict_key
     from mnemo_memory.apps.cli.typed_note_judge import JUDGE_DEADLINE_SECONDS, judge_candidates
-    from mnemo_memory.packages.storage import LocalNoteVerdictCache
+    from mnemo_memory.packages.storage import MAXIMUM_NOTE_VERDICT_ATTEMPTS, LocalNoteVerdictCache
 
     data = seed.data_directory
     notes = _verified_binding(_priming_request(seed, seed.notes_project_directory, "notes"))
@@ -599,15 +603,26 @@ def prime_replay_seed(
         jev_transport=jev_transport,
         deadline_seconds=JUDGE_DEADLINE_SECONDS,
     )
-    tally = judge_candidates(
-        guard,
-        candidates,
-        cache=LocalNoteVerdictCache(data),
-        model_version=settings.typed_decision_model_id,
-    )
-    return PrimingResult(
-        seed.set_name, len(note_ids) + len(event_ids), tally.answered, tally.blocked
-    )
+    cache = LocalNoteVerdictCache(data)
+    model_version = settings.typed_decision_model_id
+    answered = 0
+    blocked = False
+    pending = candidates
+    for _ in range(MAXIMUM_NOTE_VERDICT_ATTEMPTS):
+        if not pending:
+            break
+        tally = judge_candidates(guard, pending, cache=cache, model_version=model_version)
+        answered += tally.answered
+        if tally.blocked:
+            blocked = True
+            break
+        keys = tuple(filler_verdict_key(candidate, model_version) for candidate in pending)
+        pending = tuple(
+            candidate
+            for candidate, state in zip(pending, cache.states(keys), strict=True)
+            if state.needs_judging
+        )
+    return PrimingResult(seed.set_name, len(note_ids) + len(event_ids), answered, blocked)
 
 
 def _priming_request(seed: ReplaySeed, project: Path, group: str) -> ReplayRequest:

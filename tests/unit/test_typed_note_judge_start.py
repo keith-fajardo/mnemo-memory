@@ -152,6 +152,7 @@ def test_the_start_is_detached_names_only_the_data_directory_and_never_waits(
     cli._start_note_judge(data)
     assert seen["command"] == [
         sys.executable,
+        "-P",
         "-m",
         "mnemo_memory.cli",
         "typed-decisions",

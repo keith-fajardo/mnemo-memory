@@ -24,7 +24,11 @@ from mnemo_memory.packages.application import (
 )
 from mnemo_memory.packages.application.automatic_memory import LocalMemoryProjectBindingStore
 from mnemo_memory.packages.domain import ApprovedEventKind
-from mnemo_memory.packages.storage import LocalNoteJudgeQueue, LocalNoteVerdictCache
+from mnemo_memory.packages.storage import (
+    MAXIMUM_NOTE_VERDICT_ATTEMPTS,
+    LocalNoteJudgeQueue,
+    LocalNoteVerdictCache,
+)
 from scripts.typed_decision_evaluation import relevance_notes
 from scripts.typed_decision_replay import (
     NOTE_BATCH,
@@ -1038,6 +1042,39 @@ def test_priming_judges_every_seeded_note_and_never_the_pinned_one(tmp_path: Pat
         "blocked": False,
         "error_type": None,
     }
+
+
+class _FailsEachNoteOnce:
+    """Fail the first request about each distinct note at the transport, then answer."""
+
+    def __init__(self, inner: ReplayOracle) -> None:
+        self.inner = inner
+        self.calls = 0
+        self.seen: set[bytes] = set()
+
+    def __call__(self, url: str, body: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+        self.calls += 1
+        if body not in self.seen:
+            self.seen.add(body)
+            raise OSError("synthetic transport failure")
+        return self.inner(url, body, headers, timeout)
+
+
+def test_priming_retries_the_notes_a_pass_left_unanswered(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    flaky = _FailsEachNoteOnce(ReplayOracle())
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=flaky)
+    assert (priming.notes, priming.answered, priming.blocked) == (27, 27, False)
+    assert flaky.calls == 54  # one failed request and one retry per note
+    assert LocalNoteVerdictCache(seed.data_directory).entry_count() == 27
+
+
+def test_priming_stops_retrying_after_the_attempt_cap(tmp_path: Path) -> None:
+    seed = seed_replay_set(tmp_path, "holdout")
+    failing = _HttpErrors()
+    priming = prime_replay_seed(seed, environ=FAKE_ENVIRON, jev_transport=failing)
+    assert (priming.notes, priming.answered) == (27, 0)
+    assert failing.calls == 27 * MAXIMUM_NOTE_VERDICT_ATTEMPTS
 
 
 def test_a_seeded_note_the_reader_skips_still_counts_against_priming(

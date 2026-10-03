@@ -159,6 +159,7 @@ def test_the_judge_process_stays_silent_and_sends_nothing_under_synthetic_only(
     completed = subprocess.run(
         [
             sys.executable,
+            "-P",
             "-m",
             "mnemo_memory.cli",
             "typed-decisions",

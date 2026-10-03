@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -63,6 +64,15 @@ def test_append_queues_each_note_once_and_take_returns_the_oldest_first(tmp_path
     assert queue.take(10) == (QueuedNote(_id(3), SCOPE), QueuedNote(_id(1), OTHER))
     assert queue.take(1) == ()
     assert queue.length() == 0
+
+
+def test_appending_notes_already_queued_leaves_the_file_untouched(tmp_path: Path) -> None:
+    queue = LocalNoteJudgeQueue(tmp_path)
+    queue.append(SCOPE, (_id(1), _id(2)))
+    os.utime(queue.path, ns=(1_000_000_000, 1_000_000_000))
+    before = (queue.path.read_bytes(), queue.path.stat().st_mtime_ns)
+    assert queue.append(SCOPE, (_id(2), _id(1), _id(2))) == 2
+    assert (queue.path.read_bytes(), queue.path.stat().st_mtime_ns) == before
 
 
 def test_the_queue_keeps_the_newest_256_notes(tmp_path: Path) -> None:

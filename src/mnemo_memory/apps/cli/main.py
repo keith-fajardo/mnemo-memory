@@ -1296,9 +1296,11 @@ def _note_candidates_by_id(
     """Re-read notes by ID through the scoped ``get_context item_ids`` lookup (spec §4).
 
     The lookup rechecks scope, currentness and sensitivity. The hook's own
-    ``filler_candidates`` then applies every exemption (pinned events, conflicts, non-normal
-    sensitivity, the secret scan, unreadable text) and builds the 300-character judged text, so
-    the judge keys verdicts on exactly the text the hook looks up. An ID the lookup cannot
+    ``filler_candidates`` then applies every exemption it can see in its own small packet (pinned
+    events, conflicts among the packet's notes, non-normal sensitivity, the secret scan,
+    unreadable text) and builds the 300-character judged text, so the judge keys verdicts on
+    exactly the text the hook looks up. Conflicts with notes outside that packet are only applied
+    by the hook. An ID the lookup cannot
     serve (gone, changed, foreign, malformed) is skipped. Nothing is sent anywhere.
     """
 
@@ -1420,6 +1422,8 @@ def _start_note_judge(data_directory: Path) -> None:
     The command line names only the data directory, as one argument and without a shell. Note
     text and the API key never appear on it; the child inherits the hook's environment. It runs
     the console-entry module, which imports ``main`` once and keeps the child's stderr clean.
+    ``-P`` keeps the working directory off ``sys.path``, so a ``mnemo_memory/`` folder in the
+    project cannot shadow the installed package.
     """
 
     # The handle is dropped on purpose; without this Python warns that the child still runs.
@@ -1428,6 +1432,7 @@ def _start_note_judge(data_directory: Path) -> None:
         subprocess.Popen(
             [
                 sys.executable,
+                "-P",
                 "-m",
                 "mnemo_memory.cli",
                 "typed-decisions",
